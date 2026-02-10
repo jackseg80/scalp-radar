@@ -1,0 +1,32 @@
+assets:
+  - symbol: "BTC/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1m", "5m", "15m", "1h"]
+    max_leverage: 20
+    min_order_size: 0.001
+    tick_size: 0.1
+    correlation_group: crypto_major
+
+  - symbol: "ETH/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1m", "5m", "15m", "1h"]
+    max_leverage: 20
+    min_order_size: 0.01
+    tick_size: 0.01
+    correlation_group: crypto_major
+
+  - symbol: "SOL/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1m", "5m", "15m", "1h"]
+    max_leverage: 20
+    min_order_size: 0.1
+    tick_size: 0.001
+    correlation_group: crypto_major
+
+correlation_groups:
+  crypto_major:
+    max_concurrent_same_direction: 2
+    max_exposure_percent: 60

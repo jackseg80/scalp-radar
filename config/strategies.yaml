@@ -1,0 +1,63 @@
+# Stratégies de scalping
+vwap_rsi:
+  enabled: true
+  timeframe: "5m"
+  trend_filter_timeframe: "15m"
+  rsi_period: 14
+  rsi_long_threshold: 25
+  rsi_short_threshold: 75
+  volume_spike_multiplier: 3.0
+  vwap_deviation_entry: 0.5
+  tp_percent: 0.5
+  sl_percent: 0.25
+  weight: 0.25
+
+liquidation:
+  enabled: false
+  timeframe: "5m"
+  oi_change_threshold: 5.0
+  leverage_estimate: 15
+  zone_buffer_percent: 0.5
+  tp_percent: 0.8
+  sl_percent: 0.4
+  weight: 0.20
+
+orderflow:
+  enabled: false
+  timeframe: "1m"
+  imbalance_threshold: 2.0
+  large_order_multiplier: 5.0
+  absorption_threshold: 0.7
+  # Filtre de confirmation, pas de TP/SL propre
+  confirmation_only: true
+  weight: 0.20
+
+momentum:
+  enabled: false
+  timeframe: "5m"
+  trend_filter_timeframe: "15m"
+  breakout_lookback: 20
+  volume_confirmation_multiplier: 2.0
+  atr_multiplier_tp: 2.0
+  atr_multiplier_sl: 1.0
+  tp_percent: 0.6
+  sl_percent: 0.3
+  weight: 0.20
+
+funding:
+  enabled: false
+  timeframe: "15m"
+  extreme_positive_threshold: 0.03
+  extreme_negative_threshold: -0.03
+  entry_delay_minutes: 5
+  tp_percent: 0.4
+  sl_percent: 0.2
+  weight: 0.15
+
+# Stratégies custom (swing existantes, baseline pour l'Arena)
+custom_strategies:
+  swing_baseline:
+    enabled: false
+    timeframe: "1h"
+    description: "Stratégies swing existantes importées comme baseline Arena"
+    # Paramètres à définir en Sprint 2 lors du branchement

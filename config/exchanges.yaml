@@ -1,0 +1,21 @@
+bitget:
+  name: "Bitget"
+  sandbox: false
+  websocket:
+    url: "wss://ws.bitget.com/v2/ws/public"
+    ping_interval: 25
+    reconnect_delay: 5
+    max_reconnect_attempts: 10
+  rate_limits:
+    market_data:
+      requests_per_second: 20
+    trade:
+      requests_per_second: 10
+    account:
+      requests_per_second: 10
+    position:
+      requests_per_second: 10
+  api:
+    base_url: "https://api.bitget.com"
+    futures_type: "USDT-M"
+    price_type: "mark_price"

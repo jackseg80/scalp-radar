@@ -1,0 +1,30 @@
+kill_switch:
+  max_session_loss_percent: 5.0
+  max_daily_loss_percent: 10.0
+
+position:
+  max_risk_per_trade_percent: 2.0
+  max_concurrent_positions: 3
+  default_leverage: 15
+  max_leverage: 30
+
+fees:
+  maker_percent: 0.02
+  taker_percent: 0.06
+  use_bgb_discount: false
+
+slippage:
+  default_estimate_percent: 0.05
+  high_volatility_multiplier: 2.0
+
+margin:
+  mode: cross  # cross ou isolated
+  min_free_margin_percent: 20
+
+sl_tp:
+  mode: server_side  # SL/TP toujours sur l'exchange
+  sl_type: market     # SL = market order (réaliste)
+  sl_real_cost_includes:
+    - distance
+    - taker_fee
+    - slippage
