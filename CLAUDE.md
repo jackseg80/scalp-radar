@@ -82,12 +82,17 @@ scalp-radar/
 │   │   ├── models.py             # Enums + 15 modèles Pydantic (Candle, Signal, Trade, Position...)
 │   │   ├── config.py             # YAML loader + validation croisée (Pydantic)
 │   │   ├── database.py           # SQLite async (aiosqlite, WAL mode)
+│   │   ├── indicators.py          # RSI, VWAP, ADX+DI, ATR, SMA, EMA, régime (pur numpy)
 │   │   ├── data_engine.py        # ccxt Pro WebSocket + DataValidator + buffer rolling
 │   │   ├── rate_limiter.py       # Token bucket par catégorie d'endpoint
 │   │   └── logging_setup.py      # loguru: console + fichier JSON + fichier erreurs
 │   │
-│   ├── strategies/               # (Sprint 2)
-│   ├── backtesting/              # (Sprint 2)
+│   ├── strategies/
+│   │   ├── base.py               # BaseStrategy ABC, StrategyContext, StrategySignal
+│   │   └── vwap_rsi.py           # VWAP+RSI mean reversion strategy
+│   ├── backtesting/
+│   │   ├── engine.py             # Moteur event-driven (OHLC heuristique, sizing SL réel)
+│   │   └── metrics.py            # BacktestMetrics + format table console
 │   ├── execution/                # (Sprint 5)
 │   │
 │   ├── api/
@@ -109,15 +114,21 @@ scalp-radar/
 │   ├── conftest.py               # Fixtures partagées (config_dir temporaire)
 │   ├── test_models.py            # 17 tests : enums, Candle, OrderBook, Trade, Signal, SessionState
 │   ├── test_config.py            # 11 tests : chargement, validation, erreurs
-│   └── test_database.py          # 12 tests : CRUD candles, session state, signals, trades (async)
+│   ├── test_database.py          # 12 tests : CRUD candles, session state, signals, trades (async)
+│   ├── test_indicators.py        # 22 tests : RSI, VWAP, ADX, ATR, SMA, EMA, régime
+│   ├── test_strategy_vwap_rsi.py # 11 tests : signaux, filtres, check_exit, compute_indicators
+│   └── test_backtesting.py       # 17 tests : engine, métriques, OHLC, sizing, Sortino
 │
 ├── scripts/
 │   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto)
+│   ├── run_backtest.py           # CLI backtest runner (--symbol, --days, --json)
 │   └── __main__.py               # python -m scripts support
 │
 ├── data/                         # SQLite DB + données (gitignored)
 │
 └── docs/
+    ├── plans/
+    │   └── sprint-2-backtesting.md  # Plan détaillé Sprint 2 (décisions arch, corrections)
     └── prototypes/
         └── Scalp radar v2.jsx    # Prototype React (référence design Sprint 3)
 ```
@@ -234,15 +245,27 @@ Complet. Infrastructure de base : scaffold, configs YAML, modèles Pydantic, dat
 DataEngine WebSocket (ccxt Pro), API FastAPI avec health check, rate limiter, logging loguru,
 script fetch_history, frontend scaffold, 40 tests passants.
 
-### Sprint 2 — Backtesting & First Strategy (next)
+### Sprint 2 — Backtesting & First Strategy ✅
 
-- backtesting/engine.py + metrics.py (fee-aware, slippage model)
-- strategies/base.py — abstract class with multi-timeframe input
-- strategies/vwap_rsi.py — first strategy (VWAP + RSI mean reversion)
-- scripts/run_backtest.py — CLI runner
-- Market regime detection (ADX-based)
-- Tests pour stratégies et backtester
-- Run backtests, analyze results, tune parameters
+Complet. Moteur de backtesting event-driven + stratégie VWAP+RSI mean reversion.
+Plan détaillé : `docs/plans/sprint-2-backtesting.md`
+
+**Fichiers créés :**
+- `backend/core/indicators.py` — RSI (Wilder), VWAP rolling 24h, ADX+DI+/DI-, ATR, SMA, EMA, détection régime
+- `backend/strategies/base.py` — BaseStrategy ABC, StrategyContext, StrategySignal, OpenPosition
+- `backend/strategies/vwap_rsi.py` — Stratégie VWAP+RSI (entry/exit/compute_indicators)
+- `backend/backtesting/engine.py` — Moteur event-driven (OHLC heuristique, sizing SL réel, multi-TF alignment)
+- `backend/backtesting/metrics.py` — Métriques (Sharpe, Sortino, profit factor net+gross, fee drag)
+- `scripts/run_backtest.py` — CLI runner (`uv run python -m scripts.run_backtest`)
+- 95 tests passants (44 Sprint 2 + 51 Sprint 1)
+
+**Décisions clés :**
+- Indicateurs pré-calculés une seule fois via `compute_indicators()` (numpy)
+- Alignement multi-TF géré par le moteur (`last_available_before()`)
+- Heuristique OHLC pour résolution TP/SL intra-bougie
+- Position sizing intègre le coût SL réel (distance + taker_fee + slippage)
+- Dual profit factor : net (scalping) + gross (benchmarks)
+- Equity curve par bougie (pas par trade) pour drawdown duration fiable
 
 ### Sprint 3 — API & Frontend
 

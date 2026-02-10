@@ -196,6 +196,16 @@ class Database:
             return datetime.fromisoformat(row["ts"])
         return None
 
+    async def delete_candles(self, symbol: str, timeframe: str) -> int:
+        """Supprime toutes les candles pour un (symbol, timeframe). Retourne le nombre supprimé."""
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "DELETE FROM candles WHERE symbol = ? AND timeframe = ?",
+            (symbol, timeframe),
+        )
+        await self._conn.commit()
+        return cursor.rowcount
+
     # ─── SIGNALS ────────────────────────────────────────────────────────────
 
     async def insert_signal(self, signal: Signal) -> None:

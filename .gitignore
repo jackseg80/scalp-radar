@@ -9,6 +9,9 @@ dist/
 build/
 .eggs/
 
+# Claude Code
+.claude/
+
 # Virtual environment
 .venv/
 venv/

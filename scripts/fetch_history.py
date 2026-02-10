@@ -29,7 +29,7 @@ async def fetch_ohlcv(
     symbol: str,
     timeframe: str,
     since_ms: int,
-    limit: int = 200,
+    limit: int = 1000,
 ) -> list[list]:
     """Fetch OHLCV data depuis l'API REST (synchrone ccxt)."""
     return exchange.fetch_ohlcv(
@@ -80,7 +80,7 @@ async def fetch_symbol_timeframe(
     while current_ms < end_ms:
         try:
             ohlcv_list = await fetch_ohlcv(
-                exchange, symbol, timeframe, current_ms, limit=200
+                exchange, symbol, timeframe, current_ms, limit=1000
             )
         except Exception as e:
             logger.error("Erreur fetch {} {} : {}", symbol, timeframe, e)
@@ -130,6 +130,7 @@ async def main() -> None:
     parser.add_argument("--symbol", type=str, help="Symbol spécifique (ex: BTC/USDT)")
     parser.add_argument("--timeframe", type=str, help="Timeframe spécifique (ex: 5m)")
     parser.add_argument("--days", type=int, default=180, help="Nombre de jours (défaut: 180)")
+    parser.add_argument("--force", action="store_true", help="Supprimer les données existantes et re-fetcher")
     args = parser.parse_args()
 
     config = get_config()
@@ -164,6 +165,13 @@ async def main() -> None:
         end_date.strftime("%Y-%m-%d"),
     )
 
+    # --force : supprimer les données existantes
+    if args.force:
+        for symbol, tf in pairs:
+            deleted = await db.delete_candles(symbol, tf)
+            if deleted:
+                logger.info("Supprimé {} candles existantes pour {} {}", deleted, symbol, tf)
+
     total = 0
     for symbol, tf in pairs:
         count = await fetch_symbol_timeframe(
@@ -173,7 +181,6 @@ async def main() -> None:
         logger.info("{} {} : {} candles insérées", symbol, tf, count)
 
     await db.close()
-    exchange.close()
 
     logger.info("Terminé : {} candles au total", total)
 
