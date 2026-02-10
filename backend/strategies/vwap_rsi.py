@@ -153,6 +153,10 @@ class VwapRsiStrategy(BaseStrategy):
         filter_di_minus = filter_ind.get("di_minus", float("nan"))
         filter_adx = filter_ind.get("adx", float("nan"))
 
+        # Filtre principal : ADX 15m > seuil = marché en tendance → pas de mean reversion
+        if not np.isnan(filter_adx) and filter_adx > self._config.trend_adx_threshold:
+            return None
+
         is_15m_bearish = (
             not np.isnan(filter_adx)
             and filter_adx > 20
@@ -177,8 +181,12 @@ class VwapRsiStrategy(BaseStrategy):
         # VWAP deviation
         vwap_dev = (close_val - vwap_val) / vwap_val * 100 if vwap_val > 0 else 0
 
-        # Régime de marché
+        # Régime de marché (5m)
         regime = detect_market_regime(adx_val, di_plus, di_minus, atr_val, atr_sma_val)
+
+        # Filtre régime 5m : mean reversion = range ou low vol uniquement
+        if regime not in (MarketRegime.RANGING, MarketRegime.LOW_VOLATILITY):
+            return None
 
         # Conditions LONG
         long_signal = (
@@ -295,6 +303,7 @@ class VwapRsiStrategy(BaseStrategy):
             "rsi_short_threshold": self._config.rsi_short_threshold,
             "volume_spike_multiplier": self._config.volume_spike_multiplier,
             "vwap_deviation_entry": self._config.vwap_deviation_entry,
+            "trend_adx_threshold": self._config.trend_adx_threshold,
             "tp_percent": self._config.tp_percent,
             "sl_percent": self._config.sl_percent,
         }

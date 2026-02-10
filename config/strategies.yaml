@@ -4,12 +4,13 @@ vwap_rsi:
   timeframe: "5m"
   trend_filter_timeframe: "15m"
   rsi_period: 14
-  rsi_long_threshold: 25
-  rsi_short_threshold: 75
-  volume_spike_multiplier: 3.0
-  vwap_deviation_entry: 0.5
-  tp_percent: 0.5
-  sl_percent: 0.25
+  rsi_long_threshold: 30
+  rsi_short_threshold: 70
+  volume_spike_multiplier: 2.0
+  vwap_deviation_entry: 0.3
+  trend_adx_threshold: 25.0  # ADX 15m > seuil = tendance, pas de trade (mean reversion = range only)
+  tp_percent: 0.8
+  sl_percent: 0.3
   weight: 0.25
 
 liquidation:

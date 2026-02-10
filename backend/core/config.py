@@ -42,12 +42,13 @@ class VwapRsiConfig(BaseModel):
     timeframe: str = "5m"
     trend_filter_timeframe: str = "15m"
     rsi_period: int = Field(default=14, ge=2)
-    rsi_long_threshold: float = Field(default=25, ge=0, le=100)
-    rsi_short_threshold: float = Field(default=75, ge=0, le=100)
-    volume_spike_multiplier: float = Field(default=3.0, gt=0)
-    vwap_deviation_entry: float = Field(default=0.5, gt=0)
-    tp_percent: float = Field(default=0.5, gt=0)
-    sl_percent: float = Field(default=0.25, gt=0)
+    rsi_long_threshold: float = Field(default=30, ge=0, le=100)
+    rsi_short_threshold: float = Field(default=70, ge=0, le=100)
+    volume_spike_multiplier: float = Field(default=2.0, gt=0)
+    vwap_deviation_entry: float = Field(default=0.3, gt=0)
+    trend_adx_threshold: float = Field(default=25.0, ge=0)
+    tp_percent: float = Field(default=0.8, gt=0)
+    sl_percent: float = Field(default=0.3, gt=0)
     weight: float = Field(default=0.25, ge=0, le=1)
 
 

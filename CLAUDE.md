@@ -267,6 +267,19 @@ Plan détaillé : `docs/plans/sprint-2-backtesting.md`
 - Dual profit factor : net (scalping) + gross (benchmarks)
 - Equity curve par bougie (pas par trade) pour drawdown duration fiable
 
+**Résultats backtest baseline (180j, 3 paires) :**
+
+- 85 trades total (BTC:20, ETH:25, SOL:40), PF gross 1.44-2.11
+- Edge solide en RANGING (+$2,457, 53% WR sur 45 trades)
+- Pertes en TRENDING_DOWN (-$2,517 sur 28 trades) annulent les gains
+- Net global ~breakeven (+$11) — baseline fonctionnelle
+
+**TODO quick fix (Sprint 3 ou hotfix) :**
+
+- `check_exit()` devrait couper la position quand le régime bascule de RANGING → TRENDING
+- Ajouterait une sortie anticipée sur changement de régime pendant le trade
+- Aurait éliminé une bonne partie des 28 trades trending perdants
+
 ### Sprint 3 — API & Frontend
 
 - API endpoints REST + WebSocket vers frontend

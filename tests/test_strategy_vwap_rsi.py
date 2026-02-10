@@ -19,12 +19,13 @@ def _make_config(**overrides) -> VwapRsiConfig:
         "timeframe": "5m",
         "trend_filter_timeframe": "15m",
         "rsi_period": 14,
-        "rsi_long_threshold": 25,
-        "rsi_short_threshold": 75,
-        "volume_spike_multiplier": 3.0,
-        "vwap_deviation_entry": 0.5,
-        "tp_percent": 0.5,
-        "sl_percent": 0.25,
+        "rsi_long_threshold": 30,
+        "rsi_short_threshold": 70,
+        "volume_spike_multiplier": 2.0,
+        "vwap_deviation_entry": 0.3,
+        "trend_adx_threshold": 25.0,
+        "tp_percent": 0.8,
+        "sl_percent": 0.3,
         "weight": 0.25,
     }
     defaults.update(overrides)
@@ -142,8 +143,33 @@ class TestEvaluate:
         )
         assert strategy.evaluate(ctx) is None
 
+    def test_filtered_by_15m_trending(self):
+        """ADX 15m > 25 = marché en tendance → bloque TOUT (mean reversion = range only)."""
+        strategy = VwapRsiStrategy(_make_config())
+        ctx = _make_context(
+            main_indicators={
+                "rsi": 20.0,
+                "vwap": 100_000.0,
+                "close": 99_400.0,
+                "volume": 1500.0,
+                "volume_sma": 400.0,
+                "adx": 15.0,
+                "di_plus": 12.0,
+                "di_minus": 12.0,
+                "atr": 100.0,
+                "atr_sma": 100.0,
+            },
+            filter_indicators={
+                "rsi": 50.0,
+                "adx": 30.0,  # ADX > 25 → trending → bloqué
+                "di_plus": 15.0,
+                "di_minus": 15.0,
+            },
+        )
+        assert strategy.evaluate(ctx) is None
+
     def test_filtered_by_15m_bearish(self):
-        """15m bearish (DI- > DI+, ADX > 20) filtre les LONG."""
+        """15m bearish (DI- > DI+, ADX 20-25) filtre les LONG."""
         strategy = VwapRsiStrategy(_make_config())
         ctx = _make_context(
             main_indicators={
@@ -160,7 +186,7 @@ class TestEvaluate:
             },
             filter_indicators={
                 "rsi": 30.0,
-                "adx": 30.0,  # Tendance forte
+                "adx": 22.0,  # Entre 20-25 : filtre directionnel actif, pas le filtre ADX global
                 "di_plus": 10.0,
                 "di_minus": 25.0,  # Bearish
             },
@@ -168,7 +194,7 @@ class TestEvaluate:
         assert strategy.evaluate(ctx) is None
 
     def test_not_filtered_by_15m_bullish(self):
-        """15m bullish ne filtre pas les LONG."""
+        """15m bullish ne filtre pas les LONG (ADX entre 20-25)."""
         strategy = VwapRsiStrategy(_make_config())
         ctx = _make_context(
             main_indicators={
@@ -185,7 +211,7 @@ class TestEvaluate:
             },
             filter_indicators={
                 "rsi": 60.0,
-                "adx": 30.0,
+                "adx": 22.0,  # Entre 20-25 : filtre directionnel actif mais bullish → OK pour LONG
                 "di_plus": 25.0,  # Bullish
                 "di_minus": 10.0,
             },
@@ -194,6 +220,31 @@ class TestEvaluate:
         assert signal is not None
         assert signal.direction == Direction.LONG
         assert signal.signals_detail["trend_score"] == 1.0
+
+    def test_filtered_by_5m_trending_regime(self):
+        """Regime 5m trending (ADX > 25) → pas de trade (mean reversion = range only)."""
+        strategy = VwapRsiStrategy(_make_config())
+        ctx = _make_context(
+            main_indicators={
+                "rsi": 20.0,
+                "vwap": 100_000.0,
+                "close": 99_400.0,
+                "volume": 1500.0,
+                "volume_sma": 400.0,
+                "adx": 30.0,  # Trending sur 5m
+                "di_plus": 25.0,
+                "di_minus": 10.0,
+                "atr": 100.0,
+                "atr_sma": 100.0,
+            },
+            filter_indicators={
+                "rsi": 50.0,
+                "adx": 15.0,  # 15m en range
+                "di_plus": 12.0,
+                "di_minus": 12.0,
+            },
+        )
+        assert strategy.evaluate(ctx) is None
 
     def test_score_has_components(self):
         """Le signal doit avoir des sous-scores détaillés."""
@@ -352,4 +403,5 @@ class TestMisc:
         strategy = VwapRsiStrategy(config)
         params = strategy.get_params()
         assert params["rsi_period"] == 14
-        assert params["tp_percent"] == 0.5
+        assert params["tp_percent"] == 0.8
+        assert params["trend_adx_threshold"] == 25.0
