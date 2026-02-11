@@ -242,6 +242,7 @@ class SecretsConfig(BaseSettings):
     database_url: str = "sqlite:///data/scalp_radar.db"
     log_level: str = "DEBUG"
     enable_websocket: bool = True
+    heartbeat_interval: int = 3600  # secondes (1h par défaut, overridable via .env)
 
 
 # ─── APP CONFIG (agrégation) ────────────────────────────────────────────────

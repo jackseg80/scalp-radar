@@ -47,9 +47,14 @@ async def health_check(request: Request) -> dict:
     else:
         status = "ok"
 
+    # Statut Watchdog
+    watchdog = getattr(request.app.state, "watchdog", None)
+    watchdog_status = watchdog.get_status() if watchdog else None
+
     return {
         "status": status,
         "data_engine": engine_status,
         "database": {"connected": db_connected},
+        "watchdog": watchdog_status,
         "uptime_seconds": int(uptime),
     }

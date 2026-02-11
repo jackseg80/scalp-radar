@@ -65,7 +65,13 @@ scalp-radar/
 ├── pyproject.toml                # Python deps (à la RACINE, géré par uv)
 ├── .env.example                  # API keys template (never commit real .env)
 ├── .gitignore
+├── .dockerignore                 # Exclut .venv, node_modules, data, logs, .git
 ├── dev.bat                       # Windows: lance backend + frontend ensemble
+├── Dockerfile.backend            # python:3.12-slim + uv
+├── Dockerfile.frontend           # node:18 build → nginx:alpine
+├── docker-compose.yml            # 2 services : backend (8000) + frontend (80)
+├── nginx.conf                    # Proxy /api, /health, /ws → backend:8000
+├── deploy.sh                     # Déploiement : graceful shutdown + rollback
 │
 ├── config/                       # ALL tunable parameters — no hardcoding in code
 │   ├── assets.yaml               # Traded pairs + correlation groups
@@ -85,6 +91,7 @@ scalp-radar/
 │   │   ├── indicators.py          # RSI, VWAP, ADX+DI, ATR, SMA, EMA, régime (pur numpy)
 │   │   ├── incremental_indicators.py # Buffers rolling pour indicateurs live (Simulator)
 │   │   ├── position_manager.py   # Sizing, fees, slippage, TP/SL (réutilisé par engine + simulator)
+│   │   ├── state_manager.py      # Crash recovery : save/load état runners (JSON atomique)
 │   │   ├── data_engine.py        # ccxt Pro WebSocket + polling OI/funding + buffer rolling
 │   │   ├── rate_limiter.py       # Token bucket par catégorie d'endpoint
 │   │   └── logging_setup.py      # loguru: console + fichier JSON + fichier erreurs
@@ -104,15 +111,19 @@ scalp-radar/
 │   ├── execution/                # (Sprint 5)
 │   │
 │   ├── api/
-│   │   ├── server.py             # FastAPI + lifespan (DataEngine + Simulator + Arena)
-│   │   ├── health.py             # GET /health → status, data_engine, database, uptime
+│   │   ├── server.py             # FastAPI + lifespan (DataEngine, Simulator, Arena, StateManager, Watchdog, Heartbeat)
+│   │   ├── health.py             # GET /health → status, data_engine, database, uptime, watchdog
 │   │   ├── simulator_routes.py   # GET /api/simulator/* (status, positions, trades, performance)
 │   │   ├── arena_routes.py       # GET /api/arena/* (ranking, strategy detail)
 │   │   ├── signals_routes.py     # GET /api/signals/recent
 │   │   └── websocket_routes.py   # WS /ws/live (push temps réel)
 │   │
-│   ├── alerts/                   # (Sprint 4)
-│   └── monitoring/               # (Sprint 4)
+│   ├── alerts/
+│   │   ├── telegram.py           # Client Telegram via httpx (API Bot directe)
+│   │   ├── notifier.py           # Notifier centralisé + AnomalyType enum
+│   │   └── heartbeat.py          # Heartbeat Telegram périodique (intervalle configurable)
+│   └── monitoring/
+│       └── watchdog.py           # Surveillance WS, data freshness, stratégies (dépendances explicites)
 │
 ├── frontend/                     # React + Vite (dashboard dark theme)
 │   ├── package.json
@@ -147,7 +158,11 @@ scalp-radar/
 │   ├── test_strategy_liquidation.py # 7 tests : zones, OI threshold, proximity score
 │   ├── test_simulator.py         # 14 tests : runner, on_candle, kill switch, regime change
 │   ├── test_arena.py             # 9 tests : ranking, profit factor, drawdown, detail
-│   └── test_api_simulator.py     # 7 tests : endpoints status, trades, ranking, signals
+│   ├── test_api_simulator.py     # 7 tests : endpoints status, trades, ranking, signals
+│   ├── test_state_manager.py    # 16 tests : save, load, restore, round-trip, periodic save
+│   ├── test_telegram.py         # 7 tests : send_message, trade alert, kill switch, notifier
+│   ├── test_heartbeat.py        # 3 tests : format message, no trades, stop
+│   └── test_watchdog.py         # 8 tests : all ok, WS down, data stale, cooldown, lifecycle
 │
 ├── scripts/
 │   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto)
@@ -158,7 +173,10 @@ scalp-radar/
 │
 └── docs/
     ├── plans/
-    │   └── sprint-2-backtesting.md  # Plan détaillé Sprint 2 (décisions arch, corrections)
+    │   ├── sprint-1-foundations.md
+    │   ├── sprint-2-backtesting.md
+    │   ├── sprint-3-simulator-arena.md
+    │   └── sprint-4-production.md  # Plan détaillé Sprint 4 (crash recovery, Telegram, Docker)
     └── prototypes/
         └── Scalp radar v2.jsx    # Prototype React (référence design Sprint 3)
 ```
@@ -359,13 +377,47 @@ Complet. Paper trading live, 4 stratégies, Arena, API REST+WS, frontend dashboa
 - Funding et Liquidation non backtestables (pas de données historiques OI/funding)
 - `zone_buffer_percent` élargi de 0.5% à 1.5% (estimation levier trop grossière)
 
-### Sprint 4 — Production
+### Sprint 4 — Production ✅
 
-- docker-compose.yml, Dockerfiles, deploy.sh
-- State manager (crash recovery)
-- monitoring/watchdog.py
-- alerts/telegram.py + alerts/heartbeat.py
-- First deployment on 192.168.1.200
+Complet. Crash recovery, alertes Telegram, monitoring Watchdog, Docker Compose.
+Plan détaillé : `docs/plans/sprint-4-production.md`
+
+**Crash Recovery (StateManager) :**
+
+- `StateManager` — sauvegarde périodique (60s) + restauration au boot
+- Écriture atomique (tmp + `os.replace`), lecture robuste (fichier absent/corrompu → fresh start)
+- `saved_state` passé à `simulator.start()` — runners créés avec le bon capital AVANT le callback `on_candle`
+- `LiveStrategyRunner.restore_state()` — restaure capital, stats, kill_switch, position ouverte
+
+**Alertes Telegram :**
+
+- `TelegramClient` — httpx (pas de dépendance supplémentaire), retry 1x
+- `Notifier` — point d'entrée unique, graceful si telegram=None (log only)
+- `AnomalyType` enum — types structurés (WS_DISCONNECTED, DATA_STALE, ALL_STRATEGIES_STOPPED, KILL_SWITCH_GLOBAL)
+- `Heartbeat` — intervalle configurable (défaut 3600s, env `HEARTBEAT_INTERVAL`)
+- Notifications : startup, shutdown, trade, kill switch, anomalies
+
+**Monitoring (Watchdog) :**
+
+- Dépendances explicites (data_engine, simulator, notifier) — pas app.state — testable unitairement
+- Checks toutes les 30s : WS connecté, data freshness < 5min, stratégies actives
+- Anti-spam : cooldown 5 min par type d'anomalie
+- Status intégré dans `/health`
+
+**Docker & Déploiement :**
+
+- `Dockerfile.backend` — python:3.12-slim + uv
+- `Dockerfile.frontend` — node:18 build → nginx:alpine
+- `nginx.conf` — proxy vers `http://backend:8000` (service Docker Compose, pas localhost)
+- `docker-compose.yml` — 2 services + healthcheck + volumes persistants
+- `deploy.sh` — graceful shutdown (`docker compose down --timeout 30`) + rollback sur health check échoué
+
+**Lifespan complet :**
+
+Startup : DB → Telegram/Notifier → DataEngine → StateManager load → Simulator.start(saved_state) → periodic save → Arena → Watchdog → Heartbeat → notify_startup
+Shutdown : notify_shutdown → heartbeat → watchdog → state save → simulator → engine → db
+
+- 200 tests passants (166 existants + 34 nouveaux)
 
 ### Sprint 5 — Live Trading
 

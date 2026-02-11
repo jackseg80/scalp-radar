@@ -62,7 +62,7 @@ uv run python -m scripts.fetch_history --symbol BTC/USDT --timeframe 5m --days 7
 uv run pytest tests/ -v
 ```
 
-166 tests couvrant : modèles, config, database, indicateurs, 4 stratégies, backtesting, simulator, arena, API.
+200 tests couvrant : modèles, config, database, indicateurs, 4 stratégies, backtesting, simulator, arena, API, state manager, telegram, watchdog.
 
 ## Endpoints
 
@@ -99,9 +99,11 @@ backend/core/        # Modèles, config, database, data engine, indicateurs, pos
 backend/strategies/  # 4 stratégies (vwap_rsi, momentum, funding, liquidation) + factory
 backend/backtesting/ # Engine, metrics, simulator (paper trading), arena (classement)
 backend/api/         # FastAPI + endpoints simulator/arena/signals + WebSocket
+backend/alerts/      # Telegram client, Notifier, Heartbeat
+backend/monitoring/  # Watchdog (data freshness, WS, stratégies)
 scripts/             # fetch_history, run_backtest
 frontend/src/        # React dashboard (5 composants, hooks polling + WS)
-tests/               # pytest (166 tests)
+tests/               # pytest (200 tests)
 ```
 
 ## Avancement
@@ -109,5 +111,5 @@ tests/               # pytest (166 tests)
 - [x] Sprint 1 — Fondations (config, modèles, database, data engine, API, tests)
 - [x] Sprint 2 — Backtesting & stratégie VWAP+RSI
 - [x] Sprint 3 — Simulator, 4 stratégies, Arena, API, frontend MVP
-- [ ] Sprint 4 — Production (Docker, monitoring, Telegram)
+- [x] Sprint 4 — Production (Docker, crash recovery, monitoring, Telegram)
 - [ ] Sprint 5 — Trading live

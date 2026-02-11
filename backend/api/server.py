@@ -2,6 +2,7 @@
 
 Un seul process gère l'API REST + le DataEngine WebSocket.
 Le flag ENABLE_WEBSOCKET permet de désactiver le DataEngine en dev.
+Sprint 4 : StateManager, Notifier, Watchdog, Heartbeat.
 """
 
 from __future__ import annotations
@@ -13,6 +14,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from backend.alerts.heartbeat import Heartbeat
+from backend.alerts.notifier import Notifier
+from backend.alerts.telegram import TelegramClient
 from backend.api.arena_routes import router as arena_router
 from backend.api.health import router as health_router
 from backend.api.signals_routes import router as signals_router
@@ -24,21 +28,33 @@ from backend.core.config import get_config
 from backend.core.data_engine import DataEngine
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
+from backend.core.state_manager import StateManager
+from backend.monitoring.watchdog import Watchdog
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Démarre le DataEngine et la DB au lancement, les arrête proprement."""
+    """Démarre tous les composants au lancement, les arrête proprement."""
     config = get_config()
     setup_logging(level=config.secrets.log_level)
 
-    # Database
+    # 1. Database
     db = Database()
     await db.init()
     app.state.db = db
     app.state.start_time = datetime.now(tz=timezone.utc)
 
-    # DataEngine (optionnel via ENABLE_WEBSOCKET)
+    # 2. Telegram + Notifier (si token configuré)
+    telegram: TelegramClient | None = None
+    if config.secrets.telegram_bot_token:
+        telegram = TelegramClient(
+            config.secrets.telegram_bot_token,
+            config.secrets.telegram_chat_id,
+        )
+    notifier = Notifier(telegram)
+    app.state.notifier = notifier
+
+    # 3. DataEngine (optionnel via ENABLE_WEBSOCKET)
     engine: DataEngine | None = None
     if config.secrets.enable_websocket:
         engine = DataEngine(config, db)
@@ -50,11 +66,22 @@ async def lifespan(app: FastAPI):
     app.state.engine = engine
     app.state.config = config
 
-    # Simulator + Arena (après DataEngine)
+    # 4. Simulator + Arena (avec crash recovery)
     simulator: Simulator | None = None
+    state_manager: StateManager | None = None
     if engine is not None:
         simulator = Simulator(data_engine=engine, config=config)
-        await simulator.start()
+
+        # Crash recovery : charger l'état AVANT start
+        state_manager = StateManager(db)
+        saved_state = await state_manager.load_runner_state()
+
+        # start() crée les runners avec le bon état ET enregistre le callback on_candle
+        await simulator.start(saved_state=saved_state)
+
+        # Sauvegardes périodiques
+        await state_manager.start_periodic_save(simulator)
+
         app.state.simulator = simulator
         app.state.arena = StrategyArena(simulator)
         logger.info("Simulator + Arena démarrés")
@@ -62,9 +89,42 @@ async def lifespan(app: FastAPI):
         app.state.simulator = None
         app.state.arena = None
 
+    # 5. Watchdog + Heartbeat (dépendances explicites)
+    watchdog: Watchdog | None = None
+    heartbeat: Heartbeat | None = None
+    if engine is not None and simulator is not None:
+        watchdog = Watchdog(
+            data_engine=engine, simulator=simulator, notifier=notifier
+        )
+        await watchdog.start()
+
+        if telegram:
+            heartbeat = Heartbeat(
+                telegram,
+                simulator,
+                interval_seconds=config.secrets.heartbeat_interval,
+            )
+            await heartbeat.start()
+
+    app.state.watchdog = watchdog
+
+    # Notification startup
+    if simulator:
+        strategies = [r.name for r in simulator.runners]
+        await notifier.notify_startup(strategies)
+
     yield
 
-    # Shutdown
+    # Shutdown (ordre inverse)
+    if simulator:
+        await notifier.notify_shutdown()
+    if heartbeat:
+        await heartbeat.stop()
+    if watchdog:
+        await watchdog.stop()
+    if state_manager and simulator:
+        await state_manager.save_runner_state(simulator.runners)
+        await state_manager.stop()
     if simulator:
         await simulator.stop()
     if engine:

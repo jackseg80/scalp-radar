@@ -15,7 +15,7 @@ from backend.core.config import AppConfig
 from backend.core.data_engine import DataEngine
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.core.indicators import detect_market_regime
-from backend.core.models import Candle, MarketRegime
+from backend.core.models import Candle, Direction, MarketRegime
 from backend.core.position_manager import (
     PositionManager,
     PositionManagerConfig,
@@ -221,6 +221,41 @@ class LiveStrategyRunner:
                 self.name, session_loss_pct, max_session,
             )
 
+    def restore_state(self, state: dict) -> None:
+        """Restaure l'état du runner depuis un snapshot sauvegardé."""
+        self._capital = state.get("capital", self._initial_capital)
+        self._kill_switch_triggered = state.get("kill_switch", False)
+
+        self._stats.capital = self._capital
+        self._stats.net_pnl = state.get("net_pnl", 0.0)
+        self._stats.total_trades = state.get("total_trades", 0)
+        self._stats.wins = state.get("wins", 0)
+        self._stats.losses = state.get("losses", 0)
+        self._stats.is_active = state.get("is_active", True)
+
+        # Restaurer la position ouverte si présente
+        pos_data = state.get("position")
+        if pos_data is not None:
+            from datetime import datetime
+
+            self._position = OpenPosition(
+                direction=Direction(pos_data["direction"]),
+                entry_price=pos_data["entry_price"],
+                quantity=pos_data["quantity"],
+                entry_time=datetime.fromisoformat(pos_data["entry_time"]),
+                tp_price=pos_data["tp_price"],
+                sl_price=pos_data["sl_price"],
+                entry_fee=pos_data["entry_fee"],
+            )
+
+        logger.info(
+            "[{}] État restauré : capital={:.2f}, trades={}, kill_switch={}",
+            self.name,
+            self._capital,
+            self._stats.total_trades,
+            self._kill_switch_triggered,
+        )
+
     def get_status(self) -> dict:
         return {
             "name": self.name,
@@ -260,8 +295,12 @@ class Simulator:
         self._indicator_engine: IncrementalIndicatorEngine | None = None
         self._running = False
 
-    async def start(self) -> None:
-        """Démarre le simulateur : crée les runners et s'enregistre sur le DataEngine."""
+    async def start(self, saved_state: dict | None = None) -> None:
+        """Démarre le simulateur : crée les runners et s'enregistre sur le DataEngine.
+
+        Si saved_state est fourni, restaure l'état des runners AVANT
+        d'enregistrer le callback on_candle (évite la race condition).
+        """
         strategies = get_enabled_strategies(self._config)
         if not strategies:
             logger.warning("Simulator: aucune stratégie activée")
@@ -293,13 +332,21 @@ class Simulator:
             self._runners.append(runner)
             logger.info("Simulator: stratégie '{}' ajoutée", strategy.name)
 
-        # Câblage DataEngine → Simulator
+        # Restaurer l'état AVANT d'enregistrer le callback on_candle
+        if saved_state is not None:
+            runners_state = saved_state.get("runners", {})
+            for runner in self._runners:
+                if runner.name in runners_state:
+                    runner.restore_state(runners_state[runner.name])
+
+        # Câblage DataEngine → Simulator (APRÈS restauration)
         self._data_engine.on_candle(self._dispatch_candle)
         self._running = True
 
         logger.info(
-            "Simulator: démarré avec {} stratégies",
+            "Simulator: démarré avec {} stratégies{}",
             len(self._runners),
+            " (état restauré)" if saved_state else "",
         )
 
     async def _dispatch_candle(
