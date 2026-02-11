@@ -263,6 +263,65 @@ class VwapRsiStrategy(BaseStrategy):
             },
         )
 
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        """Conditions d'entrée VWAP+RSI pour le dashboard."""
+        main_tf = self._config.timeframe
+        main_ind = ctx.indicators.get(main_tf, {})
+
+        rsi_val = main_ind.get("rsi", float("nan"))
+        vwap_val = main_ind.get("vwap", float("nan"))
+        close_val = main_ind.get("close", float("nan"))
+        vol_val = main_ind.get("volume", 0.0)
+        vol_sma_val = main_ind.get("volume_sma", float("nan"))
+        adx_val = main_ind.get("adx", float("nan"))
+        di_plus = main_ind.get("di_plus", float("nan"))
+        di_minus = main_ind.get("di_minus", float("nan"))
+        atr_val = main_ind.get("atr", float("nan"))
+        atr_sma_val = main_ind.get("atr_sma", float("nan"))
+
+        # VWAP deviation
+        vwap_dev = abs((close_val - vwap_val) / vwap_val * 100) if (
+            not np.isnan(close_val) and not np.isnan(vwap_val) and vwap_val > 0
+        ) else float("nan")
+
+        # Volume ratio
+        vol_ratio = vol_val / vol_sma_val if (
+            not np.isnan(vol_sma_val) and vol_sma_val > 0
+        ) else float("nan")
+
+        # Regime
+        regime = detect_market_regime(adx_val, di_plus, di_minus, atr_val, atr_sma_val)
+
+        return [
+            {
+                "name": "rsi_extreme",
+                "met": not np.isnan(rsi_val) and (
+                    rsi_val < self._config.rsi_long_threshold
+                    or rsi_val > self._config.rsi_short_threshold
+                ),
+                "value": round(rsi_val, 1) if not np.isnan(rsi_val) else None,
+                "threshold": f"{self._config.rsi_long_threshold}/{self._config.rsi_short_threshold}",
+            },
+            {
+                "name": "vwap_proximity",
+                "met": not np.isnan(vwap_dev) and vwap_dev >= self._config.vwap_deviation_entry,
+                "value": round(vwap_dev, 2) if not np.isnan(vwap_dev) else None,
+                "threshold": self._config.vwap_deviation_entry,
+            },
+            {
+                "name": "volume_spike",
+                "met": not np.isnan(vol_ratio) and vol_ratio >= self._config.volume_spike_multiplier,
+                "value": round(vol_ratio, 1) if not np.isnan(vol_ratio) else None,
+                "threshold": self._config.volume_spike_multiplier,
+            },
+            {
+                "name": "regime_ok",
+                "met": regime in (MarketRegime.RANGING, MarketRegime.LOW_VOLATILITY),
+                "value": regime.value,
+                "threshold": "RANGING",
+            },
+        ]
+
     def check_exit(self, ctx: StrategyContext, position: OpenPosition) -> str | None:
         """Sortie anticipée si RSI revient à 50 et trade en profit."""
         main_tf = self._config.timeframe

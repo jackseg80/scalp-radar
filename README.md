@@ -76,10 +76,13 @@ uv run pytest tests/ -v
 | `GET /api/arena/ranking` | Classement des stratégies par return % |
 | `GET /api/arena/strategy/{name}` | Détail d'une stratégie (status + trades + perf) |
 | `GET /api/signals/recent` | Derniers signaux (paginé, ?limit=20) |
+| `GET /api/simulator/conditions` | Indicateurs courants + conditions par stratégie/asset |
+| `GET /api/signals/matrix` | Matrice simplifiée heatmap (stratégie × asset) |
+| `GET /api/simulator/equity` | Courbe d'equity (depuis trades, ?since= filter) |
 | `GET /api/executor/status` | Statut executor (position, SL/TP, kill switch) |
 | `POST /api/executor/test-trade` | Ouvre un trade test LONG BTC (capital minimal) |
 | `POST /api/executor/test-close` | Ferme la position ouverte par market close |
-| `WS /ws/live` | WebSocket push temps réel (status, ranking) |
+| `WS /ws/live` | WebSocket push temps réel (status, ranking, prix, executor) |
 
 ## Stack technique
 
@@ -106,7 +109,7 @@ backend/api/         # FastAPI + endpoints simulator/arena/signals/executor + We
 backend/alerts/      # Telegram client, Notifier, Heartbeat
 backend/monitoring/  # Watchdog (data freshness, WS, stratégies)
 scripts/             # fetch_history, run_backtest
-frontend/src/        # React dashboard (5 composants, hooks polling + WS)
+frontend/src/        # React dashboard V2 (15 composants, Scanner/Heatmap/Risque, hooks polling + WS)
 tests/               # pytest (252 tests)
 ```
 
@@ -123,6 +126,22 @@ bash deploy.sh
 Le bot tourne H24 en Docker Compose : backend (port 8000) + frontend nginx (port 80).
 Alertes Telegram : startup/shutdown, heartbeat horaire, trades live, anomalies watchdog.
 
+### Logs production
+
+```bash
+# Logs temps réel du backend
+docker compose logs -f backend
+
+# 100 dernières lignes
+docker compose logs --tail 100 backend
+
+# Fichiers de logs persistants (volume Docker)
+ls ~/scalp-radar/logs/
+
+# Diagnostic rapide
+curl http://localhost:8000/health | python3 -m json.tool
+```
+
 ### Variables d'environnement (production)
 
 ```bash
@@ -138,3 +157,4 @@ BITGET_SANDBOX=false    # Mainnet (true = demo trading, non fonctionnel actuelle
 - [x] Sprint 4 — Production (Docker, crash recovery, monitoring, Telegram)
 - [x] Sprint 5a — Trading live (executor, risk manager, pipeline validé mainnet)
 - [ ] Sprint 5b — Scaling (adaptive selector, 3 paires, 4 stratégies)
+- [x] Sprint 6 Phase 1 — Dashboard V2 (Scanner/Heatmap/Risque, conditions live, executor panel, equity curve, 15 composants)

@@ -127,6 +127,36 @@ class FundingStrategy(BaseStrategy):
             },
         )
 
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        """Conditions d'entrée Funding pour le dashboard."""
+        funding_rate = ctx.extra_data.get(EXTRA_FUNDING_RATE)
+
+        # Delay tracking
+        delay_minutes = self._config.entry_delay_minutes
+        elapsed = 0.0
+        if ctx.symbol in self._signal_detected_at:
+            elapsed = (ctx.timestamp - self._signal_detected_at[ctx.symbol]).total_seconds() / 60
+
+        is_extreme = funding_rate is not None and (
+            funding_rate < self._config.extreme_negative_threshold
+            or funding_rate > self._config.extreme_positive_threshold
+        )
+
+        return [
+            {
+                "name": "funding_extreme",
+                "met": is_extreme,
+                "value": round(funding_rate, 4) if funding_rate is not None else None,
+                "threshold": f"{self._config.extreme_negative_threshold}/{self._config.extreme_positive_threshold}",
+            },
+            {
+                "name": "delay_ok",
+                "met": is_extreme and elapsed >= delay_minutes,
+                "value": round(elapsed, 1) if is_extreme else 0,
+                "threshold": delay_minutes,
+            },
+        ]
+
     def check_exit(self, ctx: StrategyContext, position: OpenPosition) -> str | None:
         """Funding revient à neutre → sortie."""
         funding_rate = ctx.extra_data.get(EXTRA_FUNDING_RATE)

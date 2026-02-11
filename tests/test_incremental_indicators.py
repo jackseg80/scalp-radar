@@ -27,6 +27,9 @@ class _DummyStrategy(BaseStrategy):
     def check_exit(self, ctx: StrategyContext, position: OpenPosition) -> str | None:
         return None
 
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        return []
+
     def compute_indicators(self, candles_by_tf):
         return {}
 

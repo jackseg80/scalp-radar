@@ -137,6 +137,43 @@ class LiquidationStrategy(BaseStrategy):
             },
         )
 
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        """Conditions d'entrée Liquidation pour le dashboard."""
+        main_tf = self._config.timeframe
+        main_ind = ctx.indicators.get(main_tf, {})
+        close = main_ind.get("close", float("nan"))
+
+        oi_change = ctx.extra_data.get(EXTRA_OI_CHANGE_PCT, 0.0)
+
+        # Zone proximity
+        leverage = self._config.leverage_estimate
+        buffer_pct = self._config.zone_buffer_percent / 100
+        zone_dist = None
+        near_zone = False
+        if not np.isnan(close) and close > 0:
+            liq_long_zone = close * (1 - 1 / leverage)
+            liq_short_zone = close * (1 + 1 / leverage)
+            dist_to_long = (close - liq_long_zone) / close
+            dist_to_short = (liq_short_zone - close) / close
+            zone_dist = round(min(dist_to_long, dist_to_short) * 100, 2)
+            near_zone = min(dist_to_long, dist_to_short) < buffer_pct
+
+        # Volume — on n'a pas volume_sma pour liquidation, on utilise juste OI
+        return [
+            {
+                "name": "zone_proximity",
+                "met": near_zone,
+                "value": zone_dist,
+                "threshold": round(buffer_pct * 100, 2),
+            },
+            {
+                "name": "oi_threshold",
+                "met": oi_change >= self._config.oi_change_threshold,
+                "value": round(oi_change, 2),
+                "threshold": self._config.oi_change_threshold,
+            },
+        ]
+
     def check_exit(self, ctx: StrategyContext, position: OpenPosition) -> str | None:
         """OI chute brutalement → cascade terminée → sortie."""
         oi_change = ctx.extra_data.get(EXTRA_OI_CHANGE_PCT, 0.0)

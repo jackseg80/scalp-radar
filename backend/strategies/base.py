@@ -101,6 +101,15 @@ class BaseStrategy(ABC):
         Le moteur gère l'alignement multi-TF (last_available_before).
         """
 
+    @abstractmethod
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        """Retourne les conditions d'entrée avec leur état actuel.
+
+        Chaque condition : {"name": str, "met": bool, "value": float|str, "threshold": float|str}
+        Ne modifie PAS la logique de trading (check_entry reste le point d'entrée).
+        Méthode read-only pour le dashboard.
+        """
+
     @property
     @abstractmethod
     def min_candles(self) -> dict[str, int]:

@@ -1,0 +1,47 @@
+"""API endpoints pour les conditions live et l'equity curve (Sprint 6)."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Request, Query
+
+router = APIRouter(tags=["conditions"])
+
+
+@router.get("/api/simulator/conditions")
+async def get_conditions(request: Request) -> dict:
+    """Indicateurs courants par asset + conditions par stratégie.
+
+    Retourne des données brutes structurées — le frontend formate.
+    Cache côté Simulator, invalidé à chaque nouvelle bougie.
+    """
+    simulator = getattr(request.app.state, "simulator", None)
+    if simulator is None:
+        return {"assets": {}, "timestamp": None}
+
+    return simulator.get_conditions()
+
+
+@router.get("/api/signals/matrix")
+async def get_signal_matrix(request: Request) -> dict:
+    """Matrice simplifiée pour la Heatmap : dernier score par (stratégie, asset)."""
+    simulator = getattr(request.app.state, "simulator", None)
+    if simulator is None:
+        return {"matrix": {}}
+
+    return simulator.get_signal_matrix()
+
+
+@router.get("/api/simulator/equity")
+async def get_equity_curve(
+    request: Request,
+    since: str | None = Query(default=None, description="ISO8601 timestamp filter"),
+) -> dict:
+    """Courbe d'equity calculée depuis les trades.
+
+    ?since= pour ne retourner que les nouveaux points (polling incrémental).
+    """
+    simulator = getattr(request.app.state, "simulator", None)
+    if simulator is None:
+        return {"equity": [], "current_capital": 10000.0, "initial_capital": 10000.0}
+
+    return simulator.get_equity_curve(since=since)

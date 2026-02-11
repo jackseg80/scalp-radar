@@ -1,12 +1,7 @@
-import { useApi } from '../hooks/useApi'
+export default function SessionStats({ wsData }) {
+  const strategies = wsData?.strategies || {}
+  const killSwitch = wsData?.kill_switch || false
 
-export default function SessionStats() {
-  const { data } = useApi('/api/simulator/status', 3000)
-
-  const strategies = data?.strategies || {}
-  const killSwitch = data?.kill_switch_triggered || false
-
-  // Agréger les stats de toutes les stratégies
   let totalPnl = 0
   let totalTrades = 0
   let totalWins = 0
@@ -22,31 +17,38 @@ export default function SessionStats() {
   })
 
   const winRate = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0
+  const longCount = 0 // TODO: compter depuis les trades
+  const shortCount = 0
+
+  if (!wsData) {
+    return (
+      <div className="card">
+        <h2>Session</h2>
+        <div className="empty-state">En attente de données...</div>
+      </div>
+    )
+  }
 
   return (
     <div className="card">
       <h2>Session</h2>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <StatRow label="P&L Net" value={`${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}$`}
-          color={totalPnl >= 0 ? 'var(--accent)' : 'var(--red)'} />
-        <StatRow label="Capital Total" value={`${totalCapital.toFixed(2)}$`} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <StatRow
+          label="P&L Net"
+          value={`${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}$`}
+          color={totalPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
+        />
+        <StatRow label="Capital" value={`${totalCapital.toFixed(0)}$`} />
         <StatRow label="Trades" value={totalTrades} />
-        <StatRow label="Win Rate" value={`${winRate.toFixed(1)}%`}
-          color={winRate >= 50 ? 'var(--accent)' : 'var(--red)'} />
-        <StatRow label="Wins / Losses" value={`${totalWins} / ${totalLosses}`} />
+        <StatRow
+          label="Win Rate"
+          value={`${winRate.toFixed(1)}%`}
+          color={winRate >= 50 ? 'var(--accent)' : winRate > 0 ? 'var(--red)' : undefined}
+        />
+        <StatRow label="W / L" value={`${totalWins} / ${totalLosses}`} />
 
         {killSwitch && (
-          <div style={{
-            marginTop: 8,
-            padding: '8px 12px',
-            background: 'var(--red-dim)',
-            borderRadius: 6,
-            color: 'var(--red)',
-            fontSize: 12,
-            fontWeight: 600,
-            textAlign: 'center',
-          }}>
+          <div className="badge badge-stopped" style={{ textAlign: 'center', marginTop: 4, padding: '6px 8px' }}>
             KILL SWITCH ACTIF
           </div>
         )}
@@ -57,9 +59,9 @@ export default function SessionStats() {
 
 function StatRow({ label, value, color }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: color || 'var(--text-primary)' }}>
+    <div className="flex-between" style={{ fontSize: 12 }}>
+      <span className="muted">{label}</span>
+      <span className="mono" style={{ fontWeight: 600, color: color || 'var(--text-primary)' }}>
         {value}
       </span>
     </div>

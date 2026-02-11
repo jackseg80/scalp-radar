@@ -690,6 +690,11 @@ class Executor:
 
     async def _reconcile_on_boot(self) -> None:
         """Synchronise l'état local avec les positions Bitget réelles."""
+        # TODO(fix): Ajouter fetch_open_orders() pour détecter les ordres trigger
+        # orphelins (TP/SL) qui ne sont pas trackés localement. Actuellement on ne
+        # vérifie que les positions via fetch_positions(), mais des trigger orders
+        # peuvent rester pendants après un crash ou un arrêt non propre.
+        # → Annuler les ordres orphelins non trackés + alerter via Telegram.
         futures_sym = to_futures_symbol("BTC/USDT")
         positions = await self._fetch_positions_safe(futures_sym)
 

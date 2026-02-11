@@ -116,9 +116,10 @@ scalp-radar/
 │   │   ├── server.py             # FastAPI + lifespan (DataEngine, Simulator, Executor, Arena, StateManager, Watchdog, Heartbeat)
 │   │   ├── health.py             # GET /health → status, data_engine, database, uptime, watchdog, executor
 │   │   ├── simulator_routes.py   # GET /api/simulator/* (status, positions, trades, performance)
+│   │   ├── conditions_routes.py  # GET /api/simulator/conditions, /signals/matrix, /simulator/equity
 │   │   ├── arena_routes.py       # GET /api/arena/* (ranking, strategy detail)
 │   │   ├── signals_routes.py     # GET /api/signals/recent
-│   │   └── websocket_routes.py   # WS /ws/live (push temps réel)
+│   │   └── websocket_routes.py   # WS /ws/live (push temps réel + prix + executor)
 │   │
 │   ├── alerts/
 │   │   ├── telegram.py           # Client Telegram via httpx (API Bot directe)
@@ -139,11 +140,21 @@ scalp-radar/
 │       │   ├── useApi.js         # Polling hook (configurable interval)
 │       │   └── useWebSocket.js   # WS avec reconnexion auto (backoff exponentiel)
 │       └── components/
-│           ├── Header.jsx        # Logo, status indicators (Engine/DB/WS)
-│           ├── ArenaRanking.jsx  # Table classement stratégies (poll 30s)
-│           ├── SignalFeed.jsx    # Stratégies live via WebSocket
-│           ├── SessionStats.jsx  # Sidebar PnL, trades, win rate (poll 3s)
-│           └── TradeHistory.jsx  # Trades récents (poll 10s)
+│           ├── Header.jsx         # Logo, tabs Scanner/Heatmap/Risque, status dots
+│           ├── Scanner.jsx        # Table principale assets (conditions, indicateurs, détail extensible)
+│           ├── SignalDots.jsx     # Grille de dots colorés par stratégie
+│           ├── SignalDetail.jsx   # Panneau extensible (ScoreRing + breakdown + indicateurs)
+│           ├── SignalBreakdown.jsx # Barres de progression par stratégie
+│           ├── ScoreRing.jsx     # Anneau SVG score global
+│           ├── Spark.jsx         # Sparkline SVG minimaliste
+│           ├── Heatmap.jsx       # Matrice assets × stratégies (conditions colorées)
+│           ├── RiskCalc.jsx      # Calculatrice de risque client-side
+│           ├── ExecutorPanel.jsx # Statut executor + position ouverte
+│           ├── SessionStats.jsx  # Sidebar P&L, trades, win rate (via WS)
+│           ├── EquityCurve.jsx   # Courbe d'equity SVG (poll 30s)
+│           ├── AlertFeed.jsx     # Timeline signaux chronologique
+│           ├── TradeHistory.jsx  # Trades récents collapsible (poll 10s)
+│           └── ArenaRankingMini.jsx # Classement compact arena (via WS)
 │
 ├── tests/
 │   ├── conftest.py               # Fixtures partagées (config_dir temporaire)
@@ -474,6 +485,47 @@ Après validation Sprint 5a :
 - 3 paires (BTC, ETH, SOL)
 - 4 stratégies en parallèle
 - Rollout progressif du capital
+
+### Sprint 6 Phase 1 — Dashboard V2 ✅
+
+Refonte complète du frontend. Plan détaillé : `docs/plans/sprint-6-dashboard-v2.md`
+
+**Backend (5 fichiers modifiés, 1 créé) :**
+
+- `base.py` : méthode abstraite `get_current_conditions()` — read-only pour le dashboard
+- 4 stratégies : implémentation `get_current_conditions()` (VWAP+RSI: 4 conditions, Momentum: 3, Funding: 2, Liquidation: 2)
+- `simulator.py` : `get_conditions()`, `get_signal_matrix()`, `get_equity_curve()` avec cache invalidé par candle
+- `conditions_routes.py` : 3 endpoints (`/api/simulator/conditions`, `/api/signals/matrix`, `/api/simulator/equity`)
+- `websocket_routes.py` : enrichi avec prix live et statut executor
+- `server.py` : ajout conditions_router
+
+**Frontend (12 créés, 5 modifiés, 2 supprimés) :**
+
+- Layout 2 colonnes : zone principale (tabs Scanner/Heatmap/Risque) + sidebar
+- Scanner : table assets avec prix, régime, RSI, VWAP dist, SignalDots + détail extensible (ScoreRing, SignalBreakdown, indicateurs)
+- Heatmap : matrice assets × stratégies, cellules colorées par ratio conditions met/total
+- RiskCalc : calculateur interactif (capital, levier slider, SL%, résultats: taille position, perte max, distance liquidation)
+- ExecutorPanel : badge PAPER/LIVE, position ouverte, P&L non réalisé
+- EquityCurve : courbe SVG avec aire sous la courbe, baseline capital initial
+- AlertFeed : timeline signaux chronologique inverse
+- ArenaRankingMini : classement compact sidebar (remplace ArenaRanking)
+- ScoreRing : anneau SVG score global (couleur par ratio)
+- Spark : sparkline SVG minimaliste
+- SignalDots/SignalBreakdown : visualisations conditions par stratégie
+- SessionStats : réécrit pour utiliser wsData (pas de polling)
+- TradeHistory : collapsible (5 visible, expandable)
+- styles.css : refonte complète (471 lignes, CSS variables, dark theme)
+- Supprimés : SignalFeed.jsx, ArenaRanking.jsx
+
+**Décisions clés Sprint 6 :**
+
+- `get_current_conditions()` séparé de `check_entry()` — read-only, pas d'impact sur le trading
+- Backend renvoie données brutes structurées, frontend formate (noms français côté frontend)
+- SVG inline pour tous les graphiques (pas de dépendance chart.js/recharts)
+- Cache conditions invalidé par candle dans `_dispatch_candle()`
+- CSS classes (pas d'inline styles), CSS variables dark theme existantes
+
+- 252 tests passants (0 régression)
 
 ## Dev Workflow
 

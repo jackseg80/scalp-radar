@@ -230,6 +230,58 @@ class MomentumStrategy(BaseStrategy):
             },
         )
 
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        """Conditions d'entrée Momentum pour le dashboard."""
+        main_tf = self._config.timeframe
+        filter_tf = self._config.trend_filter_timeframe
+        main_ind = ctx.indicators.get(main_tf, {})
+        filter_ind = ctx.indicators.get(filter_tf, {})
+
+        close = main_ind.get("close", float("nan"))
+        vol = main_ind.get("volume", 0.0)
+        vol_sma = main_ind.get("volume_sma", float("nan"))
+        rolling_high = main_ind.get("rolling_high", float("nan"))
+        rolling_low = main_ind.get("rolling_low", float("nan"))
+        filter_adx = filter_ind.get("adx", float("nan"))
+
+        # Breakout distance (% au-delà du range)
+        breakout_dist = 0.0
+        if not any(np.isnan(v) for v in [close, rolling_high, rolling_low]):
+            range_size = rolling_high - rolling_low
+            if range_size > 0:
+                if close > rolling_high:
+                    breakout_dist = (close - rolling_high) / range_size * 100
+                elif close < rolling_low:
+                    breakout_dist = (rolling_low - close) / range_size * 100
+
+        # Volume ratio
+        vol_ratio = vol / vol_sma if (
+            not np.isnan(vol_sma) and vol_sma > 0
+        ) else float("nan")
+
+        return [
+            {
+                "name": "adx_strong",
+                "met": not np.isnan(filter_adx) and filter_adx >= 25,
+                "value": round(filter_adx, 1) if not np.isnan(filter_adx) else None,
+                "threshold": 25,
+            },
+            {
+                "name": "breakout",
+                "met": not np.isnan(close) and not np.isnan(rolling_high) and (
+                    close > rolling_high or close < rolling_low
+                ),
+                "value": round(breakout_dist, 1),
+                "threshold": 0,
+            },
+            {
+                "name": "volume_confirm",
+                "met": not np.isnan(vol_ratio) and vol_ratio >= self._config.volume_confirmation_multiplier,
+                "value": round(vol_ratio, 1) if not np.isnan(vol_ratio) else None,
+                "threshold": self._config.volume_confirmation_multiplier,
+            },
+        ]
+
     def check_exit(self, ctx: StrategyContext, position: OpenPosition) -> str | None:
         """ADX chute sous 20 → momentum essoufflé."""
         main_tf = self._config.timeframe

@@ -33,6 +33,19 @@ from backend.strategies.base import (
 from backend.strategies.factory import get_enabled_strategies
 
 
+def _safe_round(val: Any, decimals: int = 1) -> float | None:
+    """Arrondi safe — retourne None si NaN ou None."""
+    if val is None:
+        return None
+    try:
+        import math
+        if math.isnan(val):
+            return None
+        return round(val, decimals)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class RunnerStats:
     """Stats d'un LiveStrategyRunner."""
@@ -306,6 +319,44 @@ class LiveStrategyRunner:
             self._kill_switch_triggered,
         )
 
+    @property
+    def strategy(self) -> BaseStrategy:
+        return self._strategy
+
+    @property
+    def current_regime(self) -> MarketRegime:
+        return self._current_regime
+
+    def build_context(self, symbol: str) -> StrategyContext | None:
+        """Construit un StrategyContext pour un symbol (pour le dashboard)."""
+        if not self._indicator_engine:
+            return None
+
+        indicators = self._indicator_engine.get_indicators(symbol)
+        if not indicators:
+            return None
+
+        extra_data: dict[str, Any] = {}
+        funding = self._data_engine.get_funding_rate(symbol)
+        if funding is not None:
+            extra_data[EXTRA_FUNDING_RATE] = funding
+
+        oi_snapshots = self._data_engine.get_open_interest(symbol)
+        if oi_snapshots:
+            extra_data[EXTRA_OPEN_INTEREST] = oi_snapshots
+            extra_data[EXTRA_OI_CHANGE_PCT] = oi_snapshots[-1].change_pct
+
+        return StrategyContext(
+            symbol=symbol,
+            timestamp=datetime.now(tz=timezone.utc),
+            candles={},
+            indicators=indicators,
+            current_position=self._position,
+            capital=self._capital,
+            config=self._config,
+            extra_data=extra_data,
+        )
+
     def get_status(self) -> dict:
         return {
             "name": self.name,
@@ -345,6 +396,12 @@ class Simulator:
         self._indicator_engine: IncrementalIndicatorEngine | None = None
         self._running = False
         self._trade_event_callback: Callable | None = None
+
+        # Sprint 6 : caches pour le dashboard
+        self._conditions_cache: dict | None = None
+        self._conditions_cache_time: float = 0.0
+        self._equity_cache: list[dict] | None = None
+        self._trade_count_at_cache: int = 0
 
     def set_trade_event_callback(self, callback: Callable) -> None:
         """Enregistre le callback de l'Executor pour recevoir les TradeEvent."""
@@ -414,6 +471,9 @@ class Simulator:
         # Mettre à jour les indicateurs (une seule fois pour tous les runners)
         self._indicator_engine.update(symbol, timeframe, candle)
 
+        # Invalider le cache conditions à chaque bougie (indicateurs changent)
+        self._conditions_cache = None
+
         # Dispatcher à chaque runner
         for runner in self._runners:
             try:
@@ -471,6 +531,173 @@ class Simulator:
     def is_kill_switch_triggered(self) -> bool:
         """Vérifie si au moins un runner a déclenché le kill switch."""
         return any(r.is_kill_switch_triggered for r in self._runners)
+
+    def get_conditions(self) -> dict:
+        """Indicateurs courants par asset + conditions par stratégie.
+
+        Cache invalidé à chaque nouvelle bougie (dans _dispatch_candle).
+        """
+        if self._conditions_cache is not None:
+            return self._conditions_cache
+
+        symbols = self._data_engine.get_all_symbols()
+        assets: dict[str, dict] = {}
+
+        for symbol in symbols:
+            asset_data: dict[str, Any] = {
+                "price": None,
+                "change_pct": None,
+                "regime": None,
+                "indicators": {},
+                "strategies": {},
+                "position": None,
+            }
+
+            # Prix courant depuis le buffer 1m du DataEngine
+            data = self._data_engine.get_data(symbol)
+            if data.candles.get("1m"):
+                last_candle = data.candles["1m"][-1]
+                asset_data["price"] = last_candle.close
+                if len(data.candles["1m"]) >= 2:
+                    prev_close = data.candles["1m"][-2].close
+                    if prev_close > 0:
+                        asset_data["change_pct"] = round(
+                            (last_candle.close - prev_close) / prev_close * 100, 2
+                        )
+
+            # Indicateurs et conditions par runner/stratégie
+            for runner in self._runners:
+                ctx = runner.build_context(symbol)
+                if ctx is None:
+                    continue
+
+                # Régime (du runner, mis à jour à chaque candle)
+                if asset_data["regime"] is None:
+                    asset_data["regime"] = runner.current_regime.value
+
+                # Indicateurs bruts depuis le context
+                main_tf = list(runner.strategy.min_candles.keys())[0]
+                main_ind = ctx.indicators.get(main_tf, {})
+                if main_ind and not asset_data["indicators"]:
+                    asset_data["indicators"] = {
+                        "rsi_14": _safe_round(main_ind.get("rsi"), 1),
+                        "vwap_distance_pct": None,
+                        "adx": _safe_round(main_ind.get("adx"), 1),
+                        "atr_pct": None,
+                    }
+                    # VWAP distance
+                    close = main_ind.get("close")
+                    vwap = main_ind.get("vwap")
+                    if close and vwap and vwap > 0:
+                        asset_data["indicators"]["vwap_distance_pct"] = round(
+                            (close - vwap) / vwap * 100, 2
+                        )
+                    # ATR %
+                    atr_val = main_ind.get("atr")
+                    if close and atr_val and close > 0:
+                        asset_data["indicators"]["atr_pct"] = round(
+                            atr_val / close * 100, 2
+                        )
+
+                # Conditions de la stratégie
+                try:
+                    conditions = runner.strategy.get_current_conditions(ctx)
+                except Exception:
+                    conditions = []
+
+                # Dernier signal (trade le plus récent de ce runner pour ce symbol)
+                last_signal = None
+                for trade_dict in self.get_all_trades():
+                    if trade_dict["strategy"] == runner.name:
+                        last_signal = {
+                            "score": trade_dict.get("score"),
+                            "direction": trade_dict["direction"],
+                            "timestamp": trade_dict["entry_time"],
+                        }
+                        break
+
+                asset_data["strategies"][runner.name] = {
+                    "last_signal": last_signal,
+                    "conditions": conditions,
+                }
+
+                # Position ouverte sur cet asset
+                if runner._position is not None:
+                    asset_data["position"] = {
+                        "direction": runner._position.direction.value,
+                        "entry_price": runner._position.entry_price,
+                        "strategy": runner.name,
+                    }
+
+            assets[symbol] = asset_data
+
+        result = {
+            "assets": assets,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        self._conditions_cache = result
+        return result
+
+    def get_signal_matrix(self) -> dict:
+        """Matrice simplifiée pour la Heatmap : dernier score par (strategy, asset)."""
+        symbols = self._data_engine.get_all_symbols()
+        matrix: dict[str, dict[str, float | None]] = {}
+
+        for symbol in symbols:
+            matrix[symbol] = {}
+            for runner in self._runners:
+                # Chercher le dernier trade de ce runner pour ce symbol
+                last_score = None
+                for trade in runner.get_trades():
+                    if hasattr(trade, "entry_price"):
+                        # TradeResult n'a pas de score — on utilise les conditions
+                        break
+                matrix[symbol][runner.name] = last_score
+
+        return {"matrix": matrix}
+
+    def get_equity_curve(self, since: str | None = None) -> dict:
+        """Courbe d'equity depuis les trades. Cache invalidé quand un trade est enregistré."""
+        total_trades = sum(len(r.get_trades()) for r in self._runners)
+
+        # Cache valide ?
+        if self._equity_cache is not None and self._trade_count_at_cache == total_trades:
+            equity = self._equity_cache
+        else:
+            # Recalculer
+            all_trades = []
+            for runner in self._runners:
+                for trade in runner.get_trades():
+                    all_trades.append(trade)
+            all_trades.sort(key=lambda t: t.exit_time)
+
+            capital = 10_000.0  # Capital initial par convention
+            equity = []
+            for trade in all_trades:
+                capital += trade.net_pnl
+                equity.append({
+                    "timestamp": trade.exit_time.isoformat(),
+                    "capital": round(capital, 2),
+                    "trade_pnl": round(trade.net_pnl, 2),
+                })
+
+            self._equity_cache = equity
+            self._trade_count_at_cache = total_trades
+
+        # Filtre since
+        if since:
+            equity = [p for p in equity if p["timestamp"] > since]
+
+        # Capital courant (somme de tous les runners)
+        current_capital = sum(r._capital for r in self._runners) if self._runners else 10_000.0
+        # Si un seul runner, capital initial = 10k. Si multiple, somme.
+        initial_capital = sum(r._initial_capital for r in self._runners) if self._runners else 10_000.0
+
+        return {
+            "equity": equity,
+            "current_capital": round(current_capital, 2),
+            "initial_capital": round(initial_capital, 2),
+        }
 
     @property
     def runners(self) -> list[LiveStrategyRunner]:

@@ -11,6 +11,23 @@ from loguru import logger
 router = APIRouter()
 
 
+def _get_current_prices(engine) -> dict:
+    """Extrait le dernier prix et variation depuis les buffers du DataEngine."""
+    prices = {}
+    for symbol in engine.get_all_symbols():
+        data = engine.get_data(symbol)
+        candles_1m = data.candles.get("1m", [])
+        if candles_1m:
+            last = candles_1m[-1]
+            change_pct = None
+            if len(candles_1m) >= 2:
+                prev = candles_1m[-2].close
+                if prev > 0:
+                    change_pct = round((last.close - prev) / prev * 100, 2)
+            prices[symbol] = {"last": last.close, "change_pct": change_pct}
+    return prices
+
+
 class ConnectionManager:
     """Gère les connexions WebSocket du frontend."""
 
@@ -58,6 +75,8 @@ async def live_feed(websocket: WebSocket) -> None:
 
     simulator = getattr(websocket.app.state, "simulator", None)
     arena = getattr(websocket.app.state, "arena", None)
+    executor = getattr(websocket.app.state, "executor", None)
+    engine = getattr(websocket.app.state, "engine", None)
 
     try:
         while True:
@@ -80,6 +99,14 @@ async def live_feed(websocket: WebSocket) -> None:
                     }
                     for p in ranking
                 ]
+
+            # Sprint 6 : executor status
+            if executor is not None:
+                data["executor"] = executor.get_status()
+
+            # Sprint 6 : prix live des assets
+            if engine is not None:
+                data["prices"] = _get_current_prices(engine)
 
             await websocket.send_json(data)
             await asyncio.sleep(3)
