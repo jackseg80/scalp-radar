@@ -18,6 +18,7 @@ from backend.alerts.heartbeat import Heartbeat
 from backend.alerts.notifier import Notifier
 from backend.alerts.telegram import TelegramClient
 from backend.api.arena_routes import router as arena_router
+from backend.api.executor_routes import router as executor_router
 from backend.api.health import router as health_router
 from backend.api.signals_routes import router as signals_router
 from backend.api.simulator_routes import router as simulator_router
@@ -184,3 +185,4 @@ app.include_router(simulator_router)
 app.include_router(arena_router)
 app.include_router(signals_router)
 app.include_router(ws_router)
+app.include_router(executor_router)

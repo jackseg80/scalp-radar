@@ -493,7 +493,8 @@ class TestLeverageSetup:
         executor._exchange.fetch_positions = AsyncMock(return_value=[])
         await executor._setup_leverage_and_margin("BTC/USDT:USDT")
         executor._exchange.set_leverage.assert_called_once_with(
-            15, "BTC/USDT:USDT", params={"productType": "SUSDT-FUTURES"},
+            15, "BTC/USDT:USDT",
+            params={"productType": "SUSDT-FUTURES", "marginCoin": "SUSDT"},
         )
 
     @pytest.mark.asyncio

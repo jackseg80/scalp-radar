@@ -150,9 +150,9 @@ class Executor:
 
     @property
     def _sandbox_params(self) -> dict[str, str]:
-        """Params productType pour le demo trading Bitget."""
+        """Params productType + marginCoin pour le demo trading Bitget."""
         if self._config.secrets.bitget_sandbox:
-            return {"productType": "SUSDT-FUTURES"}
+            return {"productType": "SUSDT-FUTURES", "marginCoin": "SUSDT"}
         return {}
 
     @property
@@ -252,6 +252,18 @@ class Executor:
                 "Executor: position ouverte détectée — leverage/margin inchangés",
             )
             return
+
+        # Position mode : one-way (pas de hedge long/short séparé)
+        # Forcer l'option ccxt pour que create_order n'envoie pas tradeSide
+        self._exchange.options["hedged"] = False
+        try:
+            await self._exchange.set_position_mode(
+                False, futures_symbol, params=self._sandbox_params,
+            )
+            logger.info("Executor: position mode set à 'one-way' pour {}", futures_symbol)
+        except Exception as e:
+            # Bitget renvoie une erreur si le mode est déjà celui demandé
+            logger.debug("Executor: set_position_mode: {}", e)
 
         try:
             await self._exchange.set_leverage(
