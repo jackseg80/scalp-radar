@@ -28,3 +28,9 @@ sl_tp:
     - distance
     - taker_fee
     - slippage
+
+# Adaptive selector (Sprint 5b) — contrôle quelles stratégies tradent en live
+adaptive_selector:
+  min_trades: 3               # Trades simulation minimum avant autorisation live
+  min_profit_factor: 1.0      # PF minimum (gross_wins / gross_losses)
+  eval_interval_seconds: 300  # Réévaluation toutes les 5 minutes

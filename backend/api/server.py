@@ -31,6 +31,7 @@ from backend.core.data_engine import DataEngine
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
 from backend.core.state_manager import StateManager
+from backend.execution.adaptive_selector import AdaptiveSelector
 from backend.execution.executor import Executor
 from backend.execution.risk_manager import LiveRiskManager
 from backend.monitoring.watchdog import Watchdog
@@ -93,26 +94,31 @@ async def lifespan(app: FastAPI):
         app.state.simulator = None
         app.state.arena = None
 
-    # 4b. Executor live (Sprint 5a) — après Simulator, avant Watchdog
+    # 4b. Executor live (Sprint 5b) — après Simulator/Arena, avant Watchdog
     executor: Executor | None = None
     risk_mgr: LiveRiskManager | None = None
+    selector: AdaptiveSelector | None = None
     if config.secrets.live_trading and engine and simulator:
         risk_mgr = LiveRiskManager(config)
-        executor = Executor(config, risk_mgr, notifier)
+        arena = app.state.arena
+        selector = AdaptiveSelector(arena, config)
+        executor = Executor(config, risk_mgr, notifier, selector=selector)
 
         # Restaurer l'état avant start
         executor_state = await state_manager.load_executor_state()
         if executor_state:
             risk_mgr.restore_state(executor_state.get("risk_manager", {}))
-            executor.restore_position(executor_state)
+            executor.restore_positions(executor_state)
 
         await executor.start()
+        await selector.start()
         simulator.set_trade_event_callback(executor.handle_event)
         logger.info("Executor live démarré (sandbox={})", config.secrets.bitget_sandbox)
     elif config.secrets.live_trading:
         logger.warning("LIVE_TRADING=true mais DataEngine/Simulator absents — executor non créé")
 
     app.state.executor = executor
+    app.state.selector = selector
 
     # 5. Watchdog + Heartbeat (dépendances explicites)
     watchdog: Watchdog | None = None
@@ -149,7 +155,9 @@ async def lifespan(app: FastAPI):
     if watchdog:
         await watchdog.stop()
 
-    # Executor : sauvegarder état + stop AVANT simulator
+    # Executor + Selector : sauvegarder état + stop AVANT simulator
+    if selector:
+        await selector.stop()
     if executor and state_manager and risk_mgr:
         await state_manager.save_executor_state(executor, risk_mgr)
         await executor.stop()

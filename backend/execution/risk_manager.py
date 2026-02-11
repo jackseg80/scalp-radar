@@ -78,7 +78,19 @@ class LiveRiskManager:
         if len(self._open_positions) >= max_pos:
             return False, "max_concurrent_positions"
 
-        # 4. Marge disponible suffisante ?
+        # 4. Limite direction dans le groupe de corrélation (assets.yaml)
+        group = self._get_correlation_group(symbol)
+        if group:
+            max_same_dir = self._get_max_same_direction(group)
+            same_dir_count = sum(
+                1 for pos in self._open_positions
+                if pos["direction"] == direction
+                and self._get_correlation_group(pos["symbol"]) == group
+            )
+            if same_dir_count >= max_same_dir:
+                return False, f"correlation_group_limit ({group})"
+
+        # 5. Marge disponible suffisante ?
         leverage = self._config.risk.position.default_leverage
         required_margin = quantity * entry_price / leverage
         min_free_pct = self._config.risk.margin.min_free_margin_percent / 100
@@ -173,6 +185,28 @@ class LiveRiskManager:
             self._kill_switch_triggered,
             self._total_orders,
         )
+
+    # ─── Status ────────────────────────────────────────────────────────
+
+    # ─── Correlation groups ─────────────────────────────────────────────
+
+    def _get_correlation_group(self, symbol: str) -> str | None:
+        """Retourne le groupe de corrélation d'un symbole, ou None."""
+        # Le symbole dans _open_positions est au format futures (BTC/USDT:USDT)
+        # mais dans config.assets c'est le format spot (BTC/USDT).
+        # On compare en enlevant le suffixe :USDT si présent.
+        spot_symbol = symbol.split(":")[0] if ":" in symbol else symbol
+        for asset in self._config.assets:
+            if asset.symbol == spot_symbol:
+                return asset.correlation_group
+        return None
+
+    def _get_max_same_direction(self, group_name: str) -> int:
+        """Retourne max_concurrent_same_direction pour un groupe."""
+        group_cfg = self._config.correlation_groups.get(group_name)
+        if group_cfg is None:
+            return 999  # Pas de limite si groupe non configuré
+        return group_cfg.max_concurrent_same_direction
 
     # ─── Status ────────────────────────────────────────────────────────
 

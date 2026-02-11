@@ -226,3 +226,85 @@ class TestStatePersistence:
         rm2 = _make_rm()
         rm2.restore_state(state)
         assert rm2.is_kill_switch_triggered is True
+
+
+# ─── Correlation groups ──────────────────────────────────────────────────
+
+
+def _make_config_with_correlation() -> MagicMock:
+    """Config mock avec groupes de corrélation comme dans assets.yaml."""
+    config = _make_config()
+
+    # Assets avec correlation_group
+    btc = MagicMock()
+    btc.symbol = "BTC/USDT"
+    btc.correlation_group = "crypto_major"
+    eth = MagicMock()
+    eth.symbol = "ETH/USDT"
+    eth.correlation_group = "crypto_major"
+    sol = MagicMock()
+    sol.symbol = "SOL/USDT"
+    sol.correlation_group = "crypto_major"
+
+    config.assets = [btc, eth, sol]
+
+    # Correlation group config
+    group_cfg = MagicMock()
+    group_cfg.max_concurrent_same_direction = 2
+    config.correlation_groups = {"crypto_major": group_cfg}
+
+    return config
+
+
+class TestCorrelationGroups:
+    def test_3eme_long_meme_groupe_rejete(self):
+        """2 LONG déjà ouverts dans crypto_major → 3ème LONG rejeté."""
+        config = _make_config_with_correlation()
+        rm = LiveRiskManager(config)
+        rm.set_initial_capital(10_000.0)
+
+        # Ouvrir 2 positions LONG dans le même groupe
+        rm.register_position({"symbol": "BTC/USDT:USDT", "direction": "LONG"})
+        rm.register_position({"symbol": "ETH/USDT:USDT", "direction": "LONG"})
+
+        # 3ème LONG SOL → rejeté
+        ok, reason = rm.pre_trade_check(
+            "SOL/USDT:USDT", "LONG", 1.0, 150.0, 5_000.0, 10_000.0,
+        )
+        assert ok is False
+        assert "correlation_group_limit" in reason
+
+    def test_direction_differente_ok(self):
+        """2 LONG + 1 SHORT dans le même groupe → OK (directions différentes)."""
+        config = _make_config_with_correlation()
+        rm = LiveRiskManager(config)
+        rm.set_initial_capital(10_000.0)
+
+        rm.register_position({"symbol": "BTC/USDT:USDT", "direction": "LONG"})
+        rm.register_position({"symbol": "ETH/USDT:USDT", "direction": "LONG"})
+
+        # SHORT SOL → OK car c'est une direction différente
+        ok, reason = rm.pre_trade_check(
+            "SOL/USDT:USDT", "SHORT", 1.0, 150.0, 5_000.0, 10_000.0,
+        )
+        assert ok is True
+        assert reason == "ok"
+
+    def test_sans_groupe_pas_de_limite(self):
+        """Asset sans correlation_group → pas de limite de corrélation."""
+        config = _make_config()
+        # Assets sans correlation_group
+        asset_no_group = MagicMock()
+        asset_no_group.symbol = "DOGE/USDT"
+        asset_no_group.correlation_group = None
+        config.assets = [asset_no_group]
+        config.correlation_groups = {}
+
+        rm = LiveRiskManager(config)
+        rm.set_initial_capital(10_000.0)
+
+        ok, reason = rm.pre_trade_check(
+            "DOGE/USDT:USDT", "LONG", 100.0, 0.1, 5_000.0, 10_000.0,
+        )
+        assert ok is True
+        assert reason == "ok"

@@ -39,6 +39,7 @@ class CorrelationGroupConfig(BaseModel):
 
 class VwapRsiConfig(BaseModel):
     enabled: bool = True
+    live_eligible: bool = True
     timeframe: str = "5m"
     trend_filter_timeframe: str = "15m"
     rsi_period: int = Field(default=14, ge=2)
@@ -54,6 +55,7 @@ class VwapRsiConfig(BaseModel):
 
 class LiquidationConfig(BaseModel):
     enabled: bool = False
+    live_eligible: bool = False
     timeframe: str = "5m"
     oi_change_threshold: float = Field(default=5.0, gt=0)
     leverage_estimate: int = Field(default=15, ge=1)
@@ -75,6 +77,7 @@ class OrderflowConfig(BaseModel):
 
 class MomentumConfig(BaseModel):
     enabled: bool = False
+    live_eligible: bool = True
     timeframe: str = "5m"
     trend_filter_timeframe: str = "15m"
     breakout_lookback: int = Field(default=20, ge=2)
@@ -88,6 +91,7 @@ class MomentumConfig(BaseModel):
 
 class FundingConfig(BaseModel):
     enabled: bool = False
+    live_eligible: bool = False
     timeframe: str = "15m"
     extreme_positive_threshold: float = Field(default=0.03)
     extreme_negative_threshold: float = Field(default=-0.03)
@@ -167,6 +171,12 @@ class SlTpConfig(BaseModel):
     )
 
 
+class AdaptiveSelectorConfig(BaseModel):
+    min_trades: int = Field(default=3, ge=1)
+    min_profit_factor: float = Field(default=1.0, ge=0)
+    eval_interval_seconds: int = Field(default=300, ge=30)
+
+
 class RiskConfig(BaseModel):
     kill_switch: KillSwitchConfig = Field(default_factory=KillSwitchConfig)
     position: PositionConfig = Field(default_factory=PositionConfig)
@@ -174,6 +184,9 @@ class RiskConfig(BaseModel):
     slippage: SlippageConfig = Field(default_factory=SlippageConfig)
     margin: MarginConfig = Field(default_factory=MarginConfig)
     sl_tp: SlTpConfig = Field(default_factory=SlTpConfig)
+    adaptive_selector: AdaptiveSelectorConfig = Field(
+        default_factory=AdaptiveSelectorConfig,
+    )
 
     @model_validator(mode="after")
     def validate_leverage(self) -> RiskConfig:

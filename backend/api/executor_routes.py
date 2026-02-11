@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.execution.executor import TradeEvent, TradeEventType, to_futures_symbol
 
@@ -26,50 +26,55 @@ async def executor_status(request: Request) -> dict:
 
 
 @router.post("/test-trade")
-async def test_trade(request: Request) -> dict:
+async def test_trade(
+    request: Request,
+    symbol: str = Query(default="BTC/USDT", description="Symbole spot (ex: BTC/USDT, ETH/USDT)"),
+) -> dict:
     """Injecte un TradeEvent OPEN dans l'executor.
 
-    Récupère le prix BTC actuel, calcule SL/TP, et envoie un ordre réel
-    avec la quantité minimale (0.001 BTC).
+    Récupère le prix actuel, calcule SL/TP, et envoie un ordre réel
+    avec la quantité minimale.
     """
     executor = getattr(request.app.state, "executor", None)
     if executor is None:
         raise HTTPException(status_code=400, detail="Executor non actif")
 
-    if executor.position is not None:
+    futures_sym = to_futures_symbol(symbol)
+
+    if futures_sym in executor._positions:
+        pos = executor._positions[futures_sym]
         raise HTTPException(
             status_code=409,
-            detail=f"Position déjà ouverte: {executor.position.direction} "
-                   f"{executor.position.symbol} @ {executor.position.entry_price}",
+            detail=f"Position déjà ouverte: {pos.direction} "
+                   f"{pos.symbol} @ {pos.entry_price}",
         )
 
-    # Récupérer le prix actuel du BTC via le DataEngine
+    # Récupérer le prix actuel via le DataEngine
     engine = request.app.state.engine
     if engine is None:
         raise HTTPException(status_code=400, detail="DataEngine non actif")
 
-    # Tenter d'obtenir le prix depuis le buffer du DataEngine
-    data = engine.get_data("BTC/USDT")
+    data = engine.get_data(symbol)
     current_price = _get_current_price(data)
 
     if current_price is None or current_price <= 0:
         # Fallback: fetch ticker via l'exchange de l'executor
         try:
-            ticker = await executor._exchange.fetch_ticker(
-                to_futures_symbol("BTC/USDT"),
-            )
+            ticker = await executor._exchange.fetch_ticker(futures_sym)
             current_price = float(ticker.get("last", 0))
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"Impossible d'obtenir le prix BTC: {e}",
+                detail=f"Impossible d'obtenir le prix {symbol}: {e}",
             )
 
     if current_price <= 0:
-        raise HTTPException(status_code=500, detail="Prix BTC invalide")
+        raise HTTPException(status_code=500, detail=f"Prix {symbol} invalide")
 
-    # Paramètres du trade test — quantité minimale
-    quantity = 0.001
+    # Quantité minimale selon l'asset
+    min_quantities = {"BTC/USDT": 0.001, "ETH/USDT": 0.01, "SOL/USDT": 0.1}
+    quantity = min_quantities.get(symbol, 0.001)
+
     direction = "LONG"
     sl_pct = 0.3 / 100  # 0.3%
     tp_pct = 0.8 / 100  # 0.8%
@@ -80,7 +85,7 @@ async def test_trade(request: Request) -> dict:
     event = TradeEvent(
         event_type=TradeEventType.OPEN,
         strategy_name="vwap_rsi",
-        symbol="BTC/USDT",
+        symbol=symbol,
         direction=direction,
         entry_price=current_price,
         quantity=quantity,
@@ -95,21 +100,22 @@ async def test_trade(request: Request) -> dict:
     await executor.handle_event(event)
 
     # Vérifier si la position a bien été ouverte
-    if executor.position is not None:
+    pos = executor._positions.get(futures_sym)
+    if pos is not None:
         return {
             "status": "ok",
-            "message": "Trade test ouvert",
+            "message": f"Trade test ouvert ({symbol})",
             "trade": {
                 "direction": direction,
-                "symbol": "BTC/USDT:USDT",
+                "symbol": futures_sym,
                 "entry_price_target": current_price,
-                "entry_price_real": executor.position.entry_price,
-                "quantity": executor.position.quantity,
+                "entry_price_real": pos.entry_price,
+                "quantity": pos.quantity,
                 "sl_price": sl_price,
                 "tp_price": tp_price,
-                "entry_order_id": executor.position.entry_order_id,
-                "sl_order_id": executor.position.sl_order_id,
-                "tp_order_id": executor.position.tp_order_id,
+                "entry_order_id": pos.entry_order_id,
+                "sl_order_id": pos.sl_order_id,
+                "tp_order_id": pos.tp_order_id,
             },
         }
 
@@ -118,6 +124,7 @@ async def test_trade(request: Request) -> dict:
         "message": "Trade rejeté (voir logs pour la raison)",
         "event": {
             "direction": direction,
+            "symbol": symbol,
             "price": current_price,
             "quantity": quantity,
             "sl": sl_price,
@@ -127,20 +134,24 @@ async def test_trade(request: Request) -> dict:
 
 
 @router.post("/test-close")
-async def test_close(request: Request) -> dict:
+async def test_close(
+    request: Request,
+    symbol: str = Query(default="BTC/USDT", description="Symbole spot (ex: BTC/USDT, ETH/USDT)"),
+) -> dict:
     """Ferme la position ouverte par test-trade."""
     executor = getattr(request.app.state, "executor", None)
     if executor is None:
         raise HTTPException(status_code=400, detail="Executor non actif")
 
-    if executor.position is None:
-        raise HTTPException(status_code=404, detail="Aucune position ouverte")
+    futures_sym = to_futures_symbol(symbol)
+    pos = executor._positions.get(futures_sym)
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"Aucune position ouverte sur {symbol}")
 
-    pos = executor.position
     event = TradeEvent(
         event_type=TradeEventType.CLOSE,
         strategy_name=pos.strategy_name,
-        symbol="BTC/USDT",
+        symbol=symbol,
         direction=pos.direction,
         entry_price=pos.entry_price,
         quantity=pos.quantity,
@@ -156,7 +167,7 @@ async def test_close(request: Request) -> dict:
 
     return {
         "status": "ok",
-        "message": "Position fermée (market close)",
+        "message": f"Position {symbol} fermée (market close)",
     }
 
 

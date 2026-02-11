@@ -1,6 +1,7 @@
 # Stratégies de scalping
 vwap_rsi:
   enabled: true
+  live_eligible: true  # Peut être répliquée en live par l'executor
   timeframe: "5m"
   trend_filter_timeframe: "15m"
   rsi_period: 14
@@ -14,7 +15,8 @@ vwap_rsi:
   weight: 0.25
 
 liquidation:
-  enabled: false
+  enabled: true
+  live_eligible: false  # Données OI approximatives, paper trading only
   timeframe: "5m"
   oi_change_threshold: 5.0
   leverage_estimate: 15
@@ -34,7 +36,8 @@ orderflow:
   weight: 0.20
 
 momentum:
-  enabled: false
+  enabled: true
+  live_eligible: true  # Peut être répliquée en live par l'executor
   timeframe: "5m"
   trend_filter_timeframe: "15m"
   breakout_lookback: 20
@@ -46,7 +49,8 @@ momentum:
   weight: 0.20
 
 funding:
-  enabled: false
+  enabled: true
+  live_eligible: false  # Données funding approximatives, paper trading only
   timeframe: "15m"
   extreme_positive_threshold: 0.03
   extreme_negative_threshold: -0.03

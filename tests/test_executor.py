@@ -1,4 +1,4 @@
-"""Tests pour l'Executor (Sprint 5a) — mock ccxt."""
+"""Tests pour l'Executor (Sprint 5b) — mock ccxt."""
 
 from __future__ import annotations
 
@@ -36,8 +36,11 @@ def _make_config() -> MagicMock:
     config.risk.fees.maker_percent = 0.02
     config.risk.kill_switch.max_session_loss_percent = 5.0
     config.assets = [
-        MagicMock(symbol="BTC/USDT", min_order_size=0.001, tick_size=0.1),
+        MagicMock(symbol="BTC/USDT", min_order_size=0.001, tick_size=0.1, correlation_group=None),
+        MagicMock(symbol="ETH/USDT", min_order_size=0.01, tick_size=0.01, correlation_group=None),
+        MagicMock(symbol="SOL/USDT", min_order_size=0.1, tick_size=0.001, correlation_group=None),
     ]
+    config.correlation_groups = {}
     return config
 
 
@@ -47,6 +50,14 @@ def _make_mock_exchange() -> AsyncMock:
         "BTC/USDT:USDT": {
             "limits": {"amount": {"min": 0.001}},
             "precision": {"amount": 3, "price": 1},
+        },
+        "ETH/USDT:USDT": {
+            "limits": {"amount": {"min": 0.01}},
+            "precision": {"amount": 2, "price": 2},
+        },
+        "SOL/USDT:USDT": {
+            "limits": {"amount": {"min": 0.1}},
+            "precision": {"amount": 1, "price": 3},
         },
     })
     exchange.fetch_balance = AsyncMock(return_value={
@@ -69,6 +80,7 @@ def _make_mock_exchange() -> AsyncMock:
     ])
     exchange.watch_orders = AsyncMock(return_value=[])
     exchange.close = AsyncMock()
+    exchange.fetch_open_orders = AsyncMock(return_value=[])
     # Méthodes de precision ccxt (simule DECIMAL_PLACES mode)
     exchange.amount_to_precision = MagicMock(
         side_effect=lambda sym, qty: f"{int(qty * 1000) / 1000:.3f}",
@@ -88,8 +100,21 @@ def _make_notifier() -> AsyncMock:
     return notifier
 
 
+def _make_selector(allowed: bool = True) -> MagicMock:
+    """Crée un mock AdaptiveSelector."""
+    selector = MagicMock()
+    selector.is_allowed = MagicMock(return_value=allowed)
+    selector.set_active_symbols = MagicMock()
+    selector.get_status = MagicMock(return_value={
+        "allowed_strategies": ["vwap_rsi"],
+        "active_symbols": ["BTC/USDT"],
+    })
+    return selector
+
+
 def _make_executor(
     config=None, risk_manager=None, notifier=None, exchange=None,
+    selector=None,
 ) -> Executor:
     if config is None:
         config = _make_config()
@@ -99,7 +124,7 @@ def _make_executor(
     if notifier is None:
         notifier = _make_notifier()
 
-    executor = Executor(config, risk_manager, notifier)
+    executor = Executor(config, risk_manager, notifier, selector=selector)
     if exchange is None:
         exchange = _make_mock_exchange()
     executor._exchange = exchange
@@ -175,24 +200,61 @@ class TestSymbolMapping:
             to_futures_symbol("DOGE/USDT")
 
 
-# ─── Event filtering ──────────────────────────────────────────────────────
+# ─── Event filtering (via selector) ──────────────────────────────────────
 
 
 class TestEventFiltering:
     @pytest.mark.asyncio
-    async def test_ignores_non_vwap_rsi_strategy(self):
-        executor = _make_executor()
+    async def test_selector_blocks_disallowed_strategy(self):
+        """Selector retourne False → event OPEN ignoré."""
+        selector = _make_selector(allowed=False)
+        executor = _make_executor(selector=selector)
         event = _make_open_event(strategy="momentum")
         await executor.handle_event(event)
-        # Pas d'appel create_order
         executor._exchange.create_order.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_ignores_non_btc_symbol(self):
-        executor = _make_executor()
-        event = _make_open_event(symbol="ETH/USDT")
+    async def test_selector_allows_strategy(self):
+        """Selector retourne True → event OPEN traité."""
+        selector = _make_selector(allowed=True)
+        executor = _make_executor(selector=selector)
+        event = _make_open_event()
         await executor.handle_event(event)
-        executor._exchange.create_order.assert_not_called()
+        assert executor._exchange.create_order.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_no_selector_accepts_all(self):
+        """Sans selector → tous les events OPEN passent."""
+        executor = _make_executor(selector=None)
+        event = _make_open_event()
+        await executor.handle_event(event)
+        assert executor._exchange.create_order.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_close_bypasses_selector(self):
+        """CLOSE event passe toujours, même si selector bloquerait."""
+        selector = _make_selector(allowed=False)
+        executor = _make_executor(selector=selector)
+        # Ouvrir manuellement une position
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="existing",
+            strategy_name="vwap_rsi",
+        )
+        executor._risk_manager.register_position({
+            "symbol": "BTC/USDT:USDT", "direction": "LONG",
+        })
+        executor._exchange.create_order = AsyncMock(return_value={
+            "id": "close_1", "average": 100_500.0,
+        })
+
+        event = _make_close_event()
+        await executor.handle_event(event)
+
+        # Close exécuté malgré selector=False
+        executor._exchange.create_order.assert_called_once()
+        assert "BTC/USDT:USDT" not in executor._positions
 
     @pytest.mark.asyncio
     async def test_ignores_when_not_running(self):
@@ -201,14 +263,6 @@ class TestEventFiltering:
         event = _make_open_event()
         await executor.handle_event(event)
         executor._exchange.create_order.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_accepts_vwap_rsi_btc(self):
-        executor = _make_executor()
-        event = _make_open_event()
-        await executor.handle_event(event)
-        # create_order appelé au moins pour l'entry
-        assert executor._exchange.create_order.call_count >= 1
 
 
 # ─── Open position ─────────────────────────────────────────────────────────
@@ -278,8 +332,9 @@ class TestOpenPosition:
         assert sl_call[1]["params"]["triggerPrice"] == 67773.6
         assert tp_call[1]["params"]["triggerPrice"] == 68521.4
         # LivePosition stocke les prix arrondis
-        assert executor._position.sl_price == 67773.6
-        assert executor._position.tp_price == 68521.4
+        pos = executor._positions["BTC/USDT:USDT"]
+        assert pos.sl_price == 67773.6
+        assert pos.tp_price == 68521.4
 
     @pytest.mark.asyncio
     async def test_open_registers_live_position(self):
@@ -287,9 +342,10 @@ class TestOpenPosition:
         event = _make_open_event()
         await executor._open_position(event)
 
-        assert executor._position is not None
-        assert executor._position.symbol == "BTC/USDT:USDT"
-        assert executor._position.direction == "LONG"
+        assert "BTC/USDT:USDT" in executor._positions
+        pos = executor._positions["BTC/USDT:USDT"]
+        assert pos.symbol == "BTC/USDT:USDT"
+        assert pos.direction == "LONG"
 
     @pytest.mark.asyncio
     async def test_open_notifies_telegram(self):
@@ -309,12 +365,12 @@ class TestOpenPosition:
 
         # Aucun appel create_order (rejeté par pre_trade_check)
         executor._exchange.create_order.assert_not_called()
-        assert executor._position is None
+        assert "BTC/USDT:USDT" not in executor._positions
 
     @pytest.mark.asyncio
     async def test_open_skipped_if_already_has_position(self):
         executor = _make_executor()
-        executor._position = LivePosition(
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
             symbol="BTC/USDT:USDT", direction="LONG",
             entry_price=99_000, quantity=0.001,
             entry_order_id="existing",
@@ -332,7 +388,7 @@ class TestOpenPosition:
         event = _make_open_event()
         await executor._open_position(event)
 
-        assert executor._position is None
+        assert "BTC/USDT:USDT" not in executor._positions
         assert executor._exchange.create_order.call_count == 1  # Seul l'entry
 
 
@@ -359,7 +415,7 @@ class TestSLRollback:
         await executor._open_position(event)
 
         # Position NON enregistrée (close market déclenché)
-        assert executor._position is None
+        assert "BTC/USDT:USDT" not in executor._positions
         # Notification urgente envoyée
         notifier.notify_live_sl_failed.assert_called_once()
 
@@ -375,8 +431,8 @@ class TestSLRollback:
         event = _make_open_event()
         await executor._open_position(event)
 
-        assert executor._position is not None
-        assert executor._position.sl_order_id == "sl_1"
+        assert "BTC/USDT:USDT" in executor._positions
+        assert executor._positions["BTC/USDT:USDT"].sl_order_id == "sl_1"
 
     @pytest.mark.asyncio
     async def test_tp_failed_position_kept(self):
@@ -390,9 +446,10 @@ class TestSLRollback:
         event = _make_open_event()
         await executor._open_position(event)
 
-        assert executor._position is not None
-        assert executor._position.sl_order_id == "sl_1"
-        assert executor._position.tp_order_id is None
+        assert "BTC/USDT:USDT" in executor._positions
+        pos = executor._positions["BTC/USDT:USDT"]
+        assert pos.sl_order_id == "sl_1"
+        assert pos.tp_order_id is None
 
 
 # ─── Close position ────────────────────────────────────────────────────────
@@ -402,7 +459,7 @@ class TestClosePosition:
     @pytest.mark.asyncio
     async def test_close_cancels_sl_tp_and_market_close(self):
         executor = _make_executor()
-        executor._position = LivePosition(
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
             symbol="BTC/USDT:USDT", direction="LONG",
             entry_price=100_000.0, quantity=0.001,
             entry_order_id="entry_1",
@@ -428,7 +485,7 @@ class TestClosePosition:
         assert close_call[0][1] == "market"
         assert close_call[1]["params"]["reduceOnly"] is True
         # Position nettoyée
-        assert executor._position is None
+        assert "BTC/USDT:USDT" not in executor._positions
 
     @pytest.mark.asyncio
     async def test_close_no_position_noop(self):
@@ -494,28 +551,44 @@ class TestReconciliation:
         executor = _make_executor(notifier=notifier)
         executor._exchange.fetch_positions = AsyncMock(return_value=[])
         await executor._reconcile_on_boot()
-        assert executor._position is None
+        assert not executor._positions
 
     @pytest.mark.asyncio
     async def test_position_on_exchange_no_local(self):
         """Cas 2 : position orpheline sur exchange."""
         notifier = _make_notifier()
         executor = _make_executor(notifier=notifier)
-        executor._exchange.fetch_positions = AsyncMock(return_value=[
-            {"contracts": 0.001, "side": "long", "entryPrice": 100_000.0,
-             "symbol": "BTC/USDT:USDT"},
-        ])
+
+        async def _fake_fetch_positions(*args, **kwargs):
+            params = kwargs.get("params", {})
+            symbols = args[0] if args else None
+            if isinstance(symbols, list) and "BTC/USDT:USDT" in symbols:
+                return [
+                    {"contracts": 0.001, "side": "long", "entryPrice": 100_000.0,
+                     "symbol": "BTC/USDT:USDT"},
+                ]
+            if params:  # sandbox
+                return [
+                    {"contracts": 0.001, "side": "long", "entryPrice": 100_000.0,
+                     "symbol": "BTC/USDT:USDT"},
+                ]
+            return []
+
+        executor._exchange.fetch_positions = AsyncMock(side_effect=_fake_fetch_positions)
         await executor._reconcile_on_boot()
-        notifier.notify_reconciliation.assert_called_once()
-        call_arg = notifier.notify_reconciliation.call_args[0][0]
-        assert "orpheline" in call_arg
+        notifier.notify_reconciliation.assert_called()
+        orphan_calls = [
+            c for c in notifier.notify_reconciliation.call_args_list
+            if "orpheline" in c[0][0]
+        ]
+        assert len(orphan_calls) >= 1
 
     @pytest.mark.asyncio
     async def test_local_position_closed_during_downtime(self):
         """Cas 3 : position locale mais fermée sur exchange."""
         notifier = _make_notifier()
         executor = _make_executor(notifier=notifier)
-        executor._position = LivePosition(
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
             symbol="BTC/USDT:USDT", direction="LONG",
             entry_price=100_000.0, quantity=0.001,
             entry_order_id="old_entry",
@@ -531,10 +604,12 @@ class TestReconciliation:
 
         await executor._reconcile_on_boot()
 
-        assert executor._position is None
-        notifier.notify_reconciliation.assert_called_once()
-        call_arg = notifier.notify_reconciliation.call_args[0][0]
-        assert "downtime" in call_arg
+        assert "BTC/USDT:USDT" not in executor._positions
+        downtime_calls = [
+            c for c in notifier.notify_reconciliation.call_args_list
+            if "downtime" in c[0][0]
+        ]
+        assert len(downtime_calls) >= 1
 
 
 # ─── Orphan trigger orders ────────────────────────────────────────────────
@@ -546,10 +621,8 @@ class TestOrphanOrders:
         """Ordres trigger sans position associée → annulés."""
         notifier = _make_notifier()
         executor = _make_executor(notifier=notifier)
-        # Pas de position locale ni exchange
-        executor._position = None
+        executor._positions.clear()
         executor._exchange.fetch_positions = AsyncMock(return_value=[])
-        # Deux ordres orphelins sur l'exchange
         executor._exchange.fetch_open_orders = AsyncMock(return_value=[
             {"id": "orphan_sl_1", "symbol": "BTC/USDT:USDT", "type": "limit"},
             {"id": "orphan_tp_2", "symbol": "BTC/USDT:USDT", "type": "limit"},
@@ -559,7 +632,6 @@ class TestOrphanOrders:
 
         assert executor._exchange.cancel_order.call_count == 2
         notifier.notify_reconciliation.assert_called()
-        # Le dernier appel concerne les orphelins
         last_call = notifier.notify_reconciliation.call_args_list[-1][0][0]
         assert "orphelin" in last_call.lower()
         assert "2" in last_call
@@ -569,8 +641,7 @@ class TestOrphanOrders:
         """Ordres trackés par la position locale → pas annulés."""
         notifier = _make_notifier()
         executor = _make_executor(notifier=notifier)
-        # Position locale avec SL/TP connus
-        executor._position = LivePosition(
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
             symbol="BTC/USDT:USDT", direction="LONG",
             entry_price=100_000.0, quantity=0.001,
             entry_order_id="entry_1",
@@ -580,11 +651,18 @@ class TestOrphanOrders:
         executor._risk_manager.register_position({
             "symbol": "BTC/USDT:USDT", "direction": "LONG",
         })
-        # Position confirmée sur exchange
-        executor._exchange.fetch_positions = AsyncMock(return_value=[
-            {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
-        ])
-        # Les 2 ordres ouverts SONT trackés localement
+
+        async def _fake_fetch_positions(*args, **kwargs):
+            params = kwargs.get("params", {})
+            if params:
+                return [
+                    {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
+                ]
+            return [
+                {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
+            ]
+
+        executor._exchange.fetch_positions = AsyncMock(side_effect=_fake_fetch_positions)
         executor._exchange.fetch_open_orders = AsyncMock(return_value=[
             {"id": "sl_tracked", "symbol": "BTC/USDT:USDT"},
             {"id": "tp_tracked", "symbol": "BTC/USDT:USDT"},
@@ -592,7 +670,6 @@ class TestOrphanOrders:
 
         await executor._reconcile_on_boot()
 
-        # Aucun ordre annulé (tous trackés)
         executor._exchange.cancel_order.assert_not_called()
 
     @pytest.mark.asyncio
@@ -600,7 +677,7 @@ class TestOrphanOrders:
         """Mix d'ordres trackés et orphelins → seuls les orphelins annulés."""
         notifier = _make_notifier()
         executor = _make_executor(notifier=notifier)
-        executor._position = LivePosition(
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
             symbol="BTC/USDT:USDT", direction="LONG",
             entry_price=100_000.0, quantity=0.001,
             entry_order_id="entry_1",
@@ -610,10 +687,18 @@ class TestOrphanOrders:
         executor._risk_manager.register_position({
             "symbol": "BTC/USDT:USDT", "direction": "LONG",
         })
-        executor._exchange.fetch_positions = AsyncMock(return_value=[
-            {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
-        ])
-        # 2 trackés + 1 orphelin
+
+        async def _fake_fetch_positions(*args, **kwargs):
+            params = kwargs.get("params", {})
+            if params:
+                return [
+                    {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
+                ]
+            return [
+                {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
+            ]
+
+        executor._exchange.fetch_positions = AsyncMock(side_effect=_fake_fetch_positions)
         executor._exchange.fetch_open_orders = AsyncMock(return_value=[
             {"id": "sl_tracked", "symbol": "BTC/USDT:USDT"},
             {"id": "tp_tracked", "symbol": "BTC/USDT:USDT"},
@@ -622,7 +707,6 @@ class TestOrphanOrders:
 
         await executor._reconcile_on_boot()
 
-        # Seul l'orphelin annulé
         executor._exchange.cancel_order.assert_called_once_with(
             "old_tp_from_crash", "BTC/USDT:USDT",
             params=executor._sandbox_params,
@@ -634,15 +718,14 @@ class TestOrphanOrders:
     async def test_fetch_open_orders_failure_non_blocking(self):
         """Échec fetch_open_orders → log warning, pas de crash."""
         executor = _make_executor()
-        executor._position = None
+        executor._positions.clear()
         executor._exchange.fetch_positions = AsyncMock(return_value=[])
         executor._exchange.fetch_open_orders = AsyncMock(
             side_effect=Exception("API down"),
         )
 
-        # Ne doit pas crasher
         await executor._reconcile_on_boot()
-        assert executor._position is None
+        assert not executor._positions
 
 
 # ─── Leverage setup ────────────────────────────────────────────────────────
@@ -676,13 +759,12 @@ class TestLifecycle:
     @pytest.mark.asyncio
     async def test_stop_does_not_close_positions(self):
         executor = _make_executor()
-        executor._position = LivePosition(
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
             symbol="BTC/USDT:USDT", direction="LONG",
             entry_price=100_000.0, quantity=0.001,
             entry_order_id="test",
         )
         await executor.stop()
-        # Pas de create_order (pas de close market)
         executor._exchange.create_order.assert_not_called()
         assert executor._connected is False
 
@@ -693,10 +775,11 @@ class TestLifecycle:
         assert status["connected"] is True
         assert status["sandbox"] is True
         assert status["position"] is None
+        assert status["positions"] == []
 
     def test_get_status_with_position(self):
         executor = _make_executor()
-        executor._position = LivePosition(
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
             symbol="BTC/USDT:USDT", direction="LONG",
             entry_price=100_000.0, quantity=0.001,
             entry_order_id="test",
@@ -705,3 +788,255 @@ class TestLifecycle:
         status = executor.get_status()
         assert status["position"]["symbol"] == "BTC/USDT:USDT"
         assert status["position"]["sl_price"] == 99_700.0
+        assert len(status["positions"]) == 1
+
+    def test_get_status_with_selector(self):
+        selector = _make_selector()
+        executor = _make_executor(selector=selector)
+        status = executor.get_status()
+        assert "selector" in status
+        assert "allowed_strategies" in status["selector"]
+
+
+# ─── Persistence ──────────────────────────────────────────────────────────
+
+
+class TestPersistence:
+    def test_get_state_for_persistence(self):
+        executor = _make_executor()
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="entry_1",
+            sl_order_id="sl_1", tp_order_id="tp_1",
+            strategy_name="vwap_rsi",
+            sl_price=99_700.0, tp_price=100_800.0,
+        )
+        state = executor.get_state_for_persistence()
+        assert "positions" in state
+        assert "BTC/USDT:USDT" in state["positions"]
+        pos_data = state["positions"]["BTC/USDT:USDT"]
+        assert pos_data["direction"] == "LONG"
+        assert pos_data["sl_order_id"] == "sl_1"
+
+    def test_restore_positions_new_format(self):
+        executor = _make_executor()
+        state = {
+            "positions": {
+                "BTC/USDT:USDT": {
+                    "symbol": "BTC/USDT:USDT",
+                    "direction": "LONG",
+                    "entry_price": 100_000.0,
+                    "quantity": 0.001,
+                    "entry_order_id": "entry_1",
+                    "sl_order_id": "sl_1",
+                    "tp_order_id": "tp_1",
+                    "entry_time": "2024-01-01T00:00:00+00:00",
+                    "strategy_name": "vwap_rsi",
+                    "sl_price": 99_700.0,
+                    "tp_price": 100_800.0,
+                },
+            },
+        }
+        executor.restore_positions(state)
+        assert "BTC/USDT:USDT" in executor._positions
+        pos = executor._positions["BTC/USDT:USDT"]
+        assert pos.direction == "LONG"
+        assert pos.sl_order_id == "sl_1"
+
+    def test_restore_positions_old_format_backward_compat(self):
+        """Ancien format single position → migré en dict."""
+        executor = _make_executor()
+        state = {
+            "position": {
+                "symbol": "BTC/USDT:USDT",
+                "direction": "LONG",
+                "entry_price": 100_000.0,
+                "quantity": 0.001,
+                "entry_order_id": "entry_1",
+                "sl_order_id": "sl_1",
+                "tp_order_id": "tp_1",
+                "entry_time": "2024-01-01T00:00:00+00:00",
+                "strategy_name": "vwap_rsi",
+                "sl_price": 99_700.0,
+                "tp_price": 100_800.0,
+            },
+        }
+        executor.restore_positions(state)
+        assert "BTC/USDT:USDT" in executor._positions
+        pos = executor._positions["BTC/USDT:USDT"]
+        assert pos.direction == "LONG"
+
+    def test_restore_positions_empty(self):
+        executor = _make_executor()
+        executor.restore_positions({})
+        assert not executor._positions
+
+    def test_persistence_roundtrip(self):
+        """save → restore → positions identiques."""
+        executor = _make_executor()
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="entry_1",
+            sl_order_id="sl_1", tp_order_id="tp_1",
+            strategy_name="vwap_rsi",
+            sl_price=99_700.0, tp_price=100_800.0,
+        )
+        state = executor.get_state_for_persistence()
+
+        executor2 = _make_executor()
+        executor2.restore_positions(state)
+        assert "BTC/USDT:USDT" in executor2._positions
+        pos = executor2._positions["BTC/USDT:USDT"]
+        assert pos.entry_price == 100_000.0
+        assert pos.sl_order_id == "sl_1"
+        assert pos.strategy_name == "vwap_rsi"
+
+
+# ─── Multi-position ──────────────────────────────────────────────────────
+
+
+class TestMultiPosition:
+    @pytest.mark.asyncio
+    async def test_open_two_positions_different_symbols(self):
+        """Ouvrir 2 positions sur des symboles différents."""
+        executor = _make_executor()
+        executor._exchange.create_order = AsyncMock(side_effect=[
+            # BTC entry + SL + TP
+            {"id": "btc_entry", "status": "closed", "filled": 0.001, "average": 100_000.0},
+            {"id": "btc_sl", "status": "open"},
+            {"id": "btc_tp", "status": "open"},
+            # ETH entry + SL + TP
+            {"id": "eth_entry", "status": "closed", "filled": 0.01, "average": 3_500.0},
+            {"id": "eth_sl", "status": "open"},
+            {"id": "eth_tp", "status": "open"},
+        ])
+
+        await executor._open_position(_make_open_event(symbol="BTC/USDT"))
+        await executor._open_position(_make_open_event(
+            symbol="ETH/USDT", entry_price=3_500.0, quantity=0.01,
+            sl_price=3_400.0, tp_price=3_600.0,
+        ))
+
+        assert len(executor._positions) == 2
+        assert "BTC/USDT:USDT" in executor._positions
+        assert "ETH/USDT:USDT" in executor._positions
+
+    @pytest.mark.asyncio
+    async def test_same_symbol_rejected(self):
+        """Même symbole déjà ouvert → rejeté."""
+        executor = _make_executor()
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="existing",
+        )
+        await executor._open_position(_make_open_event())
+        executor._exchange.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_close_one_keeps_other(self):
+        """Fermer une position garde l'autre."""
+        executor = _make_executor()
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="btc_entry",
+            sl_order_id="btc_sl", tp_order_id="btc_tp",
+            strategy_name="vwap_rsi",
+        )
+        executor._positions["ETH/USDT:USDT"] = LivePosition(
+            symbol="ETH/USDT:USDT", direction="SHORT",
+            entry_price=3_500.0, quantity=0.01,
+            entry_order_id="eth_entry",
+            sl_order_id="eth_sl", tp_order_id="eth_tp",
+            strategy_name="momentum",
+        )
+        executor._risk_manager.register_position({"symbol": "BTC/USDT:USDT", "direction": "LONG"})
+        executor._risk_manager.register_position({"symbol": "ETH/USDT:USDT", "direction": "SHORT"})
+
+        executor._exchange.create_order = AsyncMock(return_value={
+            "id": "close_btc", "average": 100_500.0,
+        })
+
+        event = _make_close_event(symbol="BTC/USDT", exit_reason="tp")
+        await executor._close_position(event)
+
+        assert "BTC/USDT:USDT" not in executor._positions
+        assert "ETH/USDT:USDT" in executor._positions
+        assert executor._positions["ETH/USDT:USDT"].direction == "SHORT"
+
+    @pytest.mark.asyncio
+    async def test_orphan_cleanup_multi_position(self):
+        """Tracked IDs de TOUTES les positions sont préservées lors du cleanup orphelins."""
+        notifier = _make_notifier()
+        executor = _make_executor(notifier=notifier)
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="btc_entry",
+            sl_order_id="btc_sl", tp_order_id="btc_tp",
+        )
+        executor._positions["ETH/USDT:USDT"] = LivePosition(
+            symbol="ETH/USDT:USDT", direction="SHORT",
+            entry_price=3_500.0, quantity=0.01,
+            entry_order_id="eth_entry",
+            sl_order_id="eth_sl", tp_order_id="eth_tp",
+        )
+
+        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
+            {"id": "btc_sl", "symbol": "BTC/USDT:USDT"},
+            {"id": "btc_tp", "symbol": "BTC/USDT:USDT"},
+            {"id": "eth_sl", "symbol": "ETH/USDT:USDT"},
+            {"id": "eth_tp", "symbol": "ETH/USDT:USDT"},
+            {"id": "old_orphan", "symbol": "SOL/USDT:USDT"},
+        ])
+
+        await executor._cancel_orphan_orders()
+
+        # Seul l'orphelin SOL annulé
+        executor._exchange.cancel_order.assert_called_once_with(
+            "old_orphan", "SOL/USDT:USDT",
+            params=executor._sandbox_params,
+        )
+
+    def test_persistence_multi_position_roundtrip(self):
+        """Persistence multi-position: save + restore."""
+        executor = _make_executor()
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="btc_entry",
+            sl_order_id="btc_sl", tp_order_id="btc_tp",
+            strategy_name="vwap_rsi",
+        )
+        executor._positions["ETH/USDT:USDT"] = LivePosition(
+            symbol="ETH/USDT:USDT", direction="SHORT",
+            entry_price=3_500.0, quantity=0.01,
+            entry_order_id="eth_entry",
+            strategy_name="momentum",
+        )
+
+        state = executor.get_state_for_persistence()
+
+        executor2 = _make_executor()
+        executor2.restore_positions(state)
+        assert len(executor2._positions) == 2
+        assert executor2._positions["BTC/USDT:USDT"].direction == "LONG"
+        assert executor2._positions["ETH/USDT:USDT"].strategy_name == "momentum"
+
+    def test_backward_compat_position_property(self):
+        """Property 'position' retourne la première position ou None."""
+        executor = _make_executor()
+        assert executor.position is None
+        assert executor.positions == []
+
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="test",
+        )
+        assert executor.position is not None
+        assert executor.position.symbol == "BTC/USDT:USDT"
+        assert len(executor.positions) == 1

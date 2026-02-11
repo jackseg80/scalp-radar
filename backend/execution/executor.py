@@ -1,6 +1,6 @@
 """Executor : exécution d'ordres réels sur Bitget via ccxt Pro.
 
-Sprint 5a : 1 stratégie (VWAP+RSI), 1 paire (BTC/USDT:USDT), capital minimal.
+Sprint 5b : multi-stratégie, multi-paire, adaptive selector.
 Pattern observer : reçoit les TradeEvent du Simulator via callback,
 réplique en ordres réels sur Bitget.
 
@@ -20,6 +20,7 @@ from loguru import logger
 if TYPE_CHECKING:
     from backend.alerts.notifier import Notifier
     from backend.core.config import AppConfig
+    from backend.execution.adaptive_selector import AdaptiveSelector
     from backend.execution.risk_manager import LiveRiskManager
 
 
@@ -87,10 +88,6 @@ def to_futures_symbol(spot_symbol: str) -> str:
 
 # ─── CONSTANTES ────────────────────────────────────────────────────────────
 
-# Sprint 5a : seuls ces filtres sont acceptés
-_ALLOWED_STRATEGIES = {"vwap_rsi"}
-_ALLOWED_SYMBOLS = {"BTC/USDT"}
-
 _SL_MAX_RETRIES = 3  # Nombre de tentatives pour placer le SL
 _SL_RETRY_DELAY = 0.2  # Délai entre retries SL
 _ORDER_DELAY = 0.1  # Délai entre ordres séquentiels (rate limiting)
@@ -106,7 +103,7 @@ class Executor:
 
     Responsabilités :
     1. Recevoir les TradeEvent du Simulator (via callback)
-    2. Vérifier les pré-conditions (RiskManager)
+    2. Vérifier les pré-conditions (RiskManager + AdaptiveSelector)
     3. Passer les ordres via ccxt (entry market + SL/TP server-side)
     4. Surveiller les positions ouvertes (watchOrders + polling fallback)
     5. Détecter les fills TP/SL et synchroniser l'état
@@ -117,13 +114,15 @@ class Executor:
         config: AppConfig,
         risk_manager: LiveRiskManager,
         notifier: Notifier,
+        selector: AdaptiveSelector | None = None,
     ) -> None:
         self._config = config
         self._risk_manager = risk_manager
         self._notifier = notifier
+        self._selector = selector
 
         self._exchange: Any = None  # ccxt.pro.bitget (créé dans start)
-        self._position: LivePosition | None = None
+        self._positions: dict[str, LivePosition] = {}
         self._running = False
         self._connected = False
         self._watch_task: asyncio.Task[None] | None = None
@@ -146,7 +145,15 @@ class Executor:
 
     @property
     def position(self) -> LivePosition | None:
-        return self._position
+        """Backward compat : première position ou None."""
+        if not self._positions:
+            return None
+        return next(iter(self._positions.values()))
+
+    @property
+    def positions(self) -> list[LivePosition]:
+        """Toutes les positions ouvertes."""
+        return list(self._positions.values())
 
     @property
     def _sandbox_params(self) -> dict[str, str]:
@@ -193,9 +200,21 @@ class Executor:
                 "Executor: balance USDT — libre={:.2f}, total={:.2f}", free, total,
             )
 
-            # 3. Vérifier positions et set leverage
-            futures_sym = to_futures_symbol("BTC/USDT")
-            await self._setup_leverage_and_margin(futures_sym)
+            # 3. Setup leverage pour tous les symboles configurés
+            active_symbols: set[str] = set()
+            for asset in self._config.assets:
+                futures_sym = to_futures_symbol(asset.symbol)
+                try:
+                    await self._setup_leverage_and_margin(futures_sym)
+                    active_symbols.add(asset.symbol)
+                except Exception as e:
+                    logger.warning(
+                        "Executor: setup échoué pour {} — désactivé: {}",
+                        futures_sym, e,
+                    )
+
+            if self._selector:
+                self._selector.set_active_symbols(active_symbols)
 
             # 4. Réconciliation au boot
             await self._reconcile_on_boot()
@@ -207,7 +226,10 @@ class Executor:
             self._poll_task = asyncio.create_task(self._poll_positions_loop())
 
             mode = "SANDBOX" if sandbox else "MAINNET"
-            logger.info("Executor: démarré en mode {} ({})", mode, futures_sym)
+            logger.info(
+                "Executor: démarré en mode {} ({} symboles actifs)",
+                mode, len(active_symbols),
+            )
 
         except Exception as e:
             logger.error("Executor: échec démarrage: {}", e)
@@ -289,15 +311,15 @@ class Executor:
         if not self._running or not self._connected:
             return
 
-        # Filtrage Sprint 5a : seuls VWAP+RSI et BTC
-        if event.strategy_name not in _ALLOWED_STRATEGIES:
-            return
-        if event.symbol not in _ALLOWED_SYMBOLS:
-            return
-
         if event.event_type == TradeEventType.OPEN:
+            # Gate OPEN via AdaptiveSelector (si configuré)
+            if self._selector and not self._selector.is_allowed(
+                event.strategy_name, event.symbol,
+            ):
+                return
             await self._open_position(event)
         elif event.event_type == TradeEventType.CLOSE:
+            # CLOSE passe toujours (on doit pouvoir fermer)
             await self._close_position(event)
 
     # ─── Ouverture de position ─────────────────────────────────────────
@@ -306,8 +328,8 @@ class Executor:
         """Ouvre une position réelle avec SL/TP server-side."""
         futures_sym = to_futures_symbol(event.symbol)
 
-        # Déjà une position ouverte ?
-        if self._position is not None:
+        # Déjà une position ouverte sur ce symbole ?
+        if futures_sym in self._positions:
             logger.warning(
                 "Executor: position déjà ouverte sur {}, ignore OPEN", futures_sym,
             )
@@ -397,7 +419,7 @@ class Executor:
         )
 
         # 4. Enregistrer la position
-        self._position = LivePosition(
+        self._positions[futures_sym] = LivePosition(
             symbol=futures_sym,
             direction=event.direction,
             entry_price=avg_price,
@@ -488,19 +510,20 @@ class Executor:
 
     async def _close_position(self, event: TradeEvent) -> None:
         """Ferme la position réelle (signal_exit ou regime_change)."""
-        if self._position is None:
+        futures_sym = to_futures_symbol(event.symbol)
+        pos = self._positions.get(futures_sym)
+        if pos is None:
             return
 
-        futures_sym = self._position.symbol
-        close_side = "sell" if self._position.direction == "LONG" else "buy"
+        close_side = "sell" if pos.direction == "LONG" else "buy"
 
         # 1. Annuler SL/TP en attente
-        await self._cancel_pending_orders()
+        await self._cancel_pending_orders(futures_sym)
 
         # 2. Market close
         try:
             close_order = await self._exchange.create_order(
-                futures_sym, "market", close_side, self._position.quantity,
+                futures_sym, "market", close_side, pos.quantity,
                 params={"reduceOnly": True, **self._sandbox_params},
             )
             exit_price = float(close_order.get("average") or event.exit_price or 0)
@@ -510,15 +533,12 @@ class Executor:
 
         # 3. Calculer P&L
         net_pnl = self._calculate_pnl(
-            self._position.direction,
-            self._position.entry_price,
-            exit_price,
-            self._position.quantity,
+            pos.direction, pos.entry_price, exit_price, pos.quantity,
         )
 
         logger.info(
             "Executor: CLOSE {} {} @ {:.2f} net={:+.2f} ({})",
-            self._position.direction, futures_sym, exit_price,
+            pos.direction, futures_sym, exit_price,
             net_pnl, event.exit_reason,
         )
 
@@ -529,33 +549,34 @@ class Executor:
             net_pnl=net_pnl,
             timestamp=datetime.now(tz=timezone.utc),
             symbol=futures_sym,
-            direction=self._position.direction,
+            direction=pos.direction,
             exit_reason=event.exit_reason or "signal_exit",
         ))
         self._risk_manager.unregister_position(futures_sym)
 
         await self._notifier.notify_live_order_closed(
-            futures_sym, self._position.direction,
-            self._position.entry_price, exit_price,
+            futures_sym, pos.direction,
+            pos.entry_price, exit_price,
             net_pnl, event.exit_reason or "signal_exit",
-            self._position.strategy_name,
+            pos.strategy_name,
         )
 
-        self._position = None
+        del self._positions[futures_sym]
 
-    async def _cancel_pending_orders(self) -> None:
-        """Annule les ordres SL/TP en attente."""
-        if self._position is None:
+    async def _cancel_pending_orders(self, symbol: str) -> None:
+        """Annule les ordres SL/TP en attente pour un symbole."""
+        pos = self._positions.get(symbol)
+        if pos is None:
             return
 
         for order_id, label in [
-            (self._position.sl_order_id, "SL"),
-            (self._position.tp_order_id, "TP"),
+            (pos.sl_order_id, "SL"),
+            (pos.tp_order_id, "TP"),
         ]:
             if order_id:
                 try:
                     await self._exchange.cancel_order(
-                        order_id, self._position.symbol,
+                        order_id, pos.symbol,
                         params=self._sandbox_params,
                     )
                     logger.debug("Executor: {} annulé ({})", label, order_id)
@@ -569,12 +590,12 @@ class Executor:
         """Mécanisme principal : watchOrders via ccxt Pro."""
         while self._running:
             try:
-                if self._position is None:
+                if not self._positions:
                     await asyncio.sleep(1)
                     continue
 
                 orders = await self._exchange.watch_orders(
-                    self._position.symbol, params=self._sandbox_params,
+                    params=self._sandbox_params,
                 )
                 for order in orders:
                     await self._process_watched_order(order)
@@ -587,47 +608,54 @@ class Executor:
 
     async def _process_watched_order(self, order: dict) -> None:
         """Traite un ordre détecté par watchOrders."""
-        if self._position is None:
-            return
-
         order_id = order.get("id", "")
         status = order.get("status", "")
 
         if status not in ("closed", "filled"):
             return
 
-        # Déterminer si c'est le SL ou le TP
-        exit_reason = ""
-        if order_id == self._position.sl_order_id:
-            exit_reason = "sl"
-        elif order_id == self._position.tp_order_id:
-            exit_reason = "tp"
-        else:
+        # Scanner toutes les positions pour matcher l'order_id
+        for symbol, pos in list(self._positions.items()):
+            exit_reason = ""
+            if order_id == pos.sl_order_id:
+                exit_reason = "sl"
+            elif order_id == pos.tp_order_id:
+                exit_reason = "tp"
+            else:
+                continue
+
+            exit_price = float(order.get("average") or order.get("price") or 0)
+            await self._handle_exchange_close(symbol, exit_price, exit_reason)
             return
 
-        exit_price = float(order.get("average") or order.get("price") or 0)
-        await self._handle_exchange_close(exit_price, exit_reason)
+        # Ordre non matché — log debug (ordres d'autres systèmes sur le sous-compte)
+        logger.debug(
+            "Executor: ordre non matché ignoré: id={}, symbol={}, status={}",
+            order_id, order.get("symbol", "?"), status,
+        )
 
     async def _poll_positions_loop(self) -> None:
-        """Fallback : vérifie périodiquement l'état de la position."""
+        """Fallback : vérifie périodiquement l'état des positions."""
         while self._running:
             try:
                 await asyncio.sleep(_POLL_INTERVAL)
-                if not self._running or self._position is None:
+                if not self._running or not self._positions:
                     continue
 
-                await self._check_position_still_open()
+                for symbol in list(self._positions.keys()):
+                    await self._check_position_still_open(symbol)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning("Executor: erreur polling: {}", e)
 
-    async def _check_position_still_open(self) -> None:
-        """Vérifie si la position est toujours ouverte sur l'exchange."""
-        if self._position is None:
+    async def _check_position_still_open(self, symbol: str) -> None:
+        """Vérifie si une position est toujours ouverte sur l'exchange."""
+        pos = self._positions.get(symbol)
+        if pos is None:
             return
 
-        positions = await self._fetch_positions_safe(self._position.symbol)
+        positions = await self._fetch_positions_safe(symbol)
         has_open = any(
             float(p.get("contracts", 0)) > 0 for p in positions
         )
@@ -636,34 +664,31 @@ class Executor:
             # Position fermée côté exchange (TP/SL exécuté)
             logger.info(
                 "Executor: position {} fermée côté exchange (détectée par polling)",
-                self._position.symbol,
+                symbol,
             )
             # Tenter de récupérer le prix de sortie réel
-            exit_price = await self._fetch_exit_price()
-            exit_reason = await self._determine_exit_reason()
-            await self._handle_exchange_close(exit_price, exit_reason)
+            exit_price = await self._fetch_exit_price(symbol)
+            exit_reason = await self._determine_exit_reason(symbol)
+            await self._handle_exchange_close(symbol, exit_price, exit_reason)
 
     async def _handle_exchange_close(
-        self, exit_price: float, exit_reason: str,
+        self, symbol: str, exit_price: float, exit_reason: str,
     ) -> None:
         """Traite la fermeture d'une position par l'exchange (TP/SL hit)."""
-        if self._position is None:
+        pos = self._positions.get(symbol)
+        if pos is None:
             return
 
         # Annuler l'autre ordre (si SL hit, annuler TP et vice-versa)
-        await self._cancel_pending_orders()
+        await self._cancel_pending_orders(symbol)
 
         net_pnl = self._calculate_pnl(
-            self._position.direction,
-            self._position.entry_price,
-            exit_price,
-            self._position.quantity,
+            pos.direction, pos.entry_price, exit_price, pos.quantity,
         )
 
         logger.info(
             "Executor: EXCHANGE CLOSE {} {} @ {:.2f} net={:+.2f} ({})",
-            self._position.direction, self._position.symbol,
-            exit_price, net_pnl, exit_reason,
+            pos.direction, symbol, exit_price, net_pnl, exit_reason,
         )
 
         from backend.execution.risk_manager import LiveTradeResult
@@ -671,39 +696,50 @@ class Executor:
         self._risk_manager.record_trade_result(LiveTradeResult(
             net_pnl=net_pnl,
             timestamp=datetime.now(tz=timezone.utc),
-            symbol=self._position.symbol,
-            direction=self._position.direction,
+            symbol=symbol,
+            direction=pos.direction,
             exit_reason=exit_reason,
         ))
-        self._risk_manager.unregister_position(self._position.symbol)
+        self._risk_manager.unregister_position(symbol)
 
         await self._notifier.notify_live_order_closed(
-            self._position.symbol, self._position.direction,
-            self._position.entry_price, exit_price,
+            symbol, pos.direction,
+            pos.entry_price, exit_price,
             net_pnl, exit_reason,
-            self._position.strategy_name,
+            pos.strategy_name,
         )
 
-        self._position = None
+        del self._positions[symbol]
 
     # ─── Réconciliation au boot ────────────────────────────────────────
 
     async def _reconcile_on_boot(self) -> None:
         """Synchronise l'état local avec les positions Bitget réelles."""
-        futures_sym = to_futures_symbol("BTC/USDT")
+        configured_symbols = [to_futures_symbol(a.symbol) for a in self._config.assets]
+
+        for futures_sym in configured_symbols:
+            await self._reconcile_symbol(futures_sym)
+
+        # Nettoyage ordres trigger orphelins (TP/SL restés après fermeture)
+        await self._cancel_orphan_orders()
+
+    async def _reconcile_symbol(self, futures_sym: str) -> None:
+        """Réconcilie une paire spécifique."""
         positions = await self._fetch_positions_safe(futures_sym)
 
         exchange_has_position = any(
             float(p.get("contracts", 0)) > 0 for p in positions
         )
-        local_has_position = self._position is not None
+        local_has_position = futures_sym in self._positions
 
         # Cas 1 : les deux côtés ont une position → reprendre le suivi
         if exchange_has_position and local_has_position:
             await self._notifier.notify_reconciliation(
                 f"Position {futures_sym} trouvée sur exchange et en local — reprise."
             )
-            logger.info("Executor: réconciliation OK — position reprise")
+            logger.info(
+                "Executor: réconciliation {} OK — position reprise", futures_sym,
+            )
 
         # Cas 2 : exchange a une position, pas le local → orpheline
         elif exchange_has_position and not local_has_position:
@@ -715,17 +751,16 @@ class Executor:
                 f"(contracts={pos_data.get('contracts')}). Non touchée."
             )
             logger.warning(
-                "Executor: position orpheline sur exchange — non touchée"
+                "Executor: position orpheline sur exchange {} — non touchée",
+                futures_sym,
             )
 
         # Cas 3 : local a une position, pas l'exchange → fermée pendant downtime
         elif not exchange_has_position and local_has_position:
-            exit_price = await self._fetch_exit_price()
+            pos = self._positions[futures_sym]
+            exit_price = await self._fetch_exit_price(futures_sym)
             net_pnl = self._calculate_pnl(
-                self._position.direction,
-                self._position.entry_price,
-                exit_price,
-                self._position.quantity,
+                pos.direction, pos.entry_price, exit_price, pos.quantity,
             )
 
             from backend.execution.risk_manager import LiveTradeResult
@@ -733,27 +768,25 @@ class Executor:
             self._risk_manager.record_trade_result(LiveTradeResult(
                 net_pnl=net_pnl,
                 timestamp=datetime.now(tz=timezone.utc),
-                symbol=self._position.symbol,
-                direction=self._position.direction,
+                symbol=pos.symbol,
+                direction=pos.direction,
                 exit_reason="closed_during_downtime",
             ))
-            self._risk_manager.unregister_position(self._position.symbol)
+            self._risk_manager.unregister_position(pos.symbol)
 
             await self._notifier.notify_reconciliation(
                 f"Position {futures_sym} fermée pendant downtime. "
                 f"P&L estimé: {net_pnl:+.2f}$"
             )
             logger.info(
-                "Executor: position fermée pendant downtime, P&L={:+.2f}", net_pnl,
+                "Executor: position {} fermée pendant downtime, P&L={:+.2f}",
+                futures_sym, net_pnl,
             )
-            self._position = None
+            del self._positions[futures_sym]
 
         # Cas 4 : aucune position → clean
         else:
-            logger.info("Executor: réconciliation OK — aucune position")
-
-        # Nettoyage ordres trigger orphelins (TP/SL restés après fermeture)
-        await self._cancel_orphan_orders()
+            logger.debug("Executor: réconciliation {} — aucune position", futures_sym)
 
     async def _cancel_orphan_orders(self) -> None:
         """Annule les ordres trigger orphelins qui n'ont plus de position associée.
@@ -774,15 +807,15 @@ class Executor:
         if not open_orders:
             return
 
-        # IDs des ordres trackés localement (position courante)
+        # IDs des ordres trackés localement (TOUTES les positions)
         tracked_ids: set[str] = set()
-        if self._position is not None:
-            if self._position.sl_order_id:
-                tracked_ids.add(self._position.sl_order_id)
-            if self._position.tp_order_id:
-                tracked_ids.add(self._position.tp_order_id)
-            if self._position.entry_order_id:
-                tracked_ids.add(self._position.entry_order_id)
+        for pos in self._positions.values():
+            if pos.sl_order_id:
+                tracked_ids.add(pos.sl_order_id)
+            if pos.tp_order_id:
+                tracked_ids.add(pos.tp_order_id)
+            if pos.entry_order_id:
+                tracked_ids.add(pos.entry_order_id)
 
         # Filtrer les ordres orphelins (trigger orders non trackés)
         orphans = [
@@ -814,14 +847,11 @@ class Executor:
                 + ", ".join(cancelled)
             )
 
-    async def _fetch_exit_price(self) -> float:
+    async def _fetch_exit_price(self, symbol: str) -> float:
         """Récupère le prix de sortie réel depuis l'historique Bitget."""
-        if self._position is None:
-            return 0.0
-
         try:
             trades = await self._exchange.fetch_my_trades(
-                self._position.symbol, limit=5,
+                symbol, limit=5,
                 params=self._sandbox_params,
             )
             if trades:
@@ -832,19 +862,20 @@ class Executor:
 
         return 0.0
 
-    async def _determine_exit_reason(self) -> str:
+    async def _determine_exit_reason(self, symbol: str) -> str:
         """Détermine la raison de fermeture (SL ou TP) depuis les ordres."""
-        if self._position is None:
+        pos = self._positions.get(symbol)
+        if pos is None:
             return "unknown"
 
         for order_id, reason in [
-            (self._position.sl_order_id, "sl"),
-            (self._position.tp_order_id, "tp"),
+            (pos.sl_order_id, "sl"),
+            (pos.tp_order_id, "tp"),
         ]:
             if order_id:
                 try:
                     order = await self._exchange.fetch_order(
-                        order_id, self._position.symbol,
+                        order_id, symbol,
                         params=self._sandbox_params,
                     )
                     if order.get("status") in ("closed", "filled"):
@@ -922,55 +953,97 @@ class Executor:
 
     def get_status(self) -> dict[str, Any]:
         """Retourne le statut de l'executor pour /health et le dashboard."""
+        # Backward compat: "position" (première) + "positions" (liste complète)
         pos_info = None
-        if self._position:
-            pos_info = {
-                "symbol": self._position.symbol,
-                "direction": self._position.direction,
-                "entry_price": self._position.entry_price,
-                "quantity": self._position.quantity,
-                "sl_price": self._position.sl_price,
-                "tp_price": self._position.tp_price,
-            }
+        positions_list: list[dict[str, Any]] = []
 
-        return {
+        for pos in self._positions.values():
+            info = {
+                "symbol": pos.symbol,
+                "direction": pos.direction,
+                "entry_price": pos.entry_price,
+                "quantity": pos.quantity,
+                "sl_price": pos.sl_price,
+                "tp_price": pos.tp_price,
+                "strategy_name": pos.strategy_name,
+            }
+            positions_list.append(info)
+            if pos_info is None:
+                pos_info = info
+
+        result: dict[str, Any] = {
             "enabled": self.is_enabled,
             "connected": self.is_connected,
             "sandbox": self._config.secrets.bitget_sandbox,
             "position": pos_info,
+            "positions": positions_list,
             "risk_manager": self._risk_manager.get_status(),
         }
 
+        if self._selector:
+            result["selector"] = self._selector.get_status()
+
+        return result
+
     def get_state_for_persistence(self) -> dict[str, Any]:
         """Retourne l'état à persister par le StateManager."""
-        pos_data = None
-        if self._position:
-            pos_data = {
-                "symbol": self._position.symbol,
-                "direction": self._position.direction,
-                "entry_price": self._position.entry_price,
-                "quantity": self._position.quantity,
-                "entry_order_id": self._position.entry_order_id,
-                "sl_order_id": self._position.sl_order_id,
-                "tp_order_id": self._position.tp_order_id,
-                "entry_time": self._position.entry_time.isoformat(),
-                "strategy_name": self._position.strategy_name,
-                "sl_price": self._position.sl_price,
-                "tp_price": self._position.tp_price,
+        positions_data: dict[str, dict[str, Any]] = {}
+        for symbol, pos in self._positions.items():
+            positions_data[symbol] = {
+                "symbol": pos.symbol,
+                "direction": pos.direction,
+                "entry_price": pos.entry_price,
+                "quantity": pos.quantity,
+                "entry_order_id": pos.entry_order_id,
+                "sl_order_id": pos.sl_order_id,
+                "tp_order_id": pos.tp_order_id,
+                "entry_time": pos.entry_time.isoformat(),
+                "strategy_name": pos.strategy_name,
+                "sl_price": pos.sl_price,
+                "tp_price": pos.tp_price,
             }
 
         return {
-            "position": pos_data,
+            "positions": positions_data,
             "risk_manager": self._risk_manager.get_state(),
         }
 
-    def restore_position(self, state: dict[str, Any]) -> None:
-        """Restaure la position depuis l'état sauvegardé."""
-        pos_data = state.get("position")
-        if pos_data is None:
+    def restore_positions(self, state: dict[str, Any]) -> None:
+        """Restaure les positions depuis l'état sauvegardé.
+
+        Backward compat : accepte l'ancien format {"position": {...}}
+        et le nouveau format {"positions": {"BTC/USDT:USDT": {...}, ...}}.
+        """
+        # Nouveau format : {"positions": {"BTC/USDT:USDT": {...}, ...}}
+        positions_data = state.get("positions")
+
+        if positions_data and isinstance(positions_data, dict):
+            for symbol, pos_data in positions_data.items():
+                self._positions[symbol] = self._restore_single_position(pos_data)
+                logger.info(
+                    "Executor: position restaurée — {} {} @ {:.2f}",
+                    self._positions[symbol].direction,
+                    symbol,
+                    self._positions[symbol].entry_price,
+                )
             return
 
-        self._position = LivePosition(
+        # Ancien format : {"position": {...}} (single position)
+        pos_data = state.get("position")
+        if pos_data is not None:
+            symbol = pos_data["symbol"]
+            self._positions[symbol] = self._restore_single_position(pos_data)
+            logger.info(
+                "Executor: position restaurée (ancien format) — {} {} @ {:.2f}",
+                self._positions[symbol].direction,
+                symbol,
+                self._positions[symbol].entry_price,
+            )
+
+    @staticmethod
+    def _restore_single_position(pos_data: dict[str, Any]) -> LivePosition:
+        """Crée une LivePosition depuis un dict sérialisé."""
+        return LivePosition(
             symbol=pos_data["symbol"],
             direction=pos_data["direction"],
             entry_price=pos_data["entry_price"],
@@ -982,9 +1055,4 @@ class Executor:
             strategy_name=pos_data.get("strategy_name", ""),
             sl_price=pos_data.get("sl_price", 0),
             tp_price=pos_data.get("tp_price", 0),
-        )
-        logger.info(
-            "Executor: position restaurée — {} {} @ {:.2f}",
-            self._position.direction, self._position.symbol,
-            self._position.entry_price,
         )

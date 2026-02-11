@@ -1,11 +1,14 @@
 /**
- * ExecutorPanel — Panneau de statut de l'executor.
+ * ExecutorPanel — Panneau de statut de l'executor (multi-positions).
  * Props : wsData
  * Affiche le statut executor depuis wsData.executor.
  * Badge "SIMULATION ONLY" si pas d'executor actif.
  *
  * Format backend (executor.get_status()):
- *   { enabled, connected, sandbox, position, risk_manager: { session_pnl, kill_switch, initial_capital, total_orders, open_positions_count } }
+ *   { enabled, connected, sandbox,
+ *     position (compat), positions: [{symbol, direction, entry_price, quantity, sl_price, tp_price, strategy_name}],
+ *     risk_manager: { session_pnl, kill_switch, initial_capital, total_orders, open_positions_count },
+ *     selector: { allowed_strategies, active_symbols, min_trades, min_profit_factor, eval_interval_seconds } }
  */
 export default function ExecutorPanel({ wsData }) {
   const executor = wsData?.executor
@@ -27,10 +30,11 @@ export default function ExecutorPanel({ wsData }) {
     )
   }
 
-  const { enabled, connected, sandbox, position, risk_manager: rm } = executor
+  const { enabled, connected, sandbox, risk_manager: rm, selector } = executor
+  // Multi-positions (nouveau) avec fallback sur position (ancien)
+  const positions = executor.positions || (executor.position ? [executor.position] : [])
 
   const isLive = enabled && !sandbox
-  const hasPosition = position != null
   const sessionPnl = rm?.session_pnl ?? 0
   const balance = rm?.initial_capital
 
@@ -44,7 +48,7 @@ export default function ExecutorPanel({ wsData }) {
       </div>
 
       {/* Status global */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: hasPosition ? 12 : 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: positions.length > 0 || selector ? 12 : 0 }}>
         <StatusRow
           label="Connexion"
           value={connected ? 'connecté' : 'déconnecté'}
@@ -68,36 +72,74 @@ export default function ExecutorPanel({ wsData }) {
         )}
       </div>
 
-      {/* Position ouverte */}
-      {hasPosition && (
-        <div className="executor-position">
-          <div className="flex-between" style={{ marginBottom: 6 }}>
-            <span style={{ fontWeight: 600, fontSize: 12 }}>{position.symbol}</span>
-            <span className={`badge ${position.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>
-              {position.direction}
-            </span>
+      {/* Selector — stratégies autorisées en live */}
+      {selector && (
+        <div style={{ marginBottom: positions.length > 0 ? 12 : 0 }}>
+          <div className="text-xs muted" style={{ marginBottom: 4 }}>Stratégies live autorisées</div>
+          {selector.allowed_strategies && selector.allowed_strategies.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {selector.allowed_strategies.map((s) => (
+                <span key={s} className="badge badge-active" style={{ fontSize: 10, padding: '2px 8px' }}>
+                  {s}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="text-xs muted">aucune (en évaluation)</span>
+          )}
+        </div>
+      )}
+
+      {/* Positions ouvertes */}
+      {positions.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="text-xs muted">
+            {positions.length} position{positions.length > 1 ? 's' : ''} ouverte{positions.length > 1 ? 's' : ''}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <PositionRow label="Entrée" value={Number(position.entry_price).toFixed(2)} />
-            {position.sl_price != null && (
-              <PositionRow label="Stop Loss" value={Number(position.sl_price).toFixed(2)} color="var(--red)" />
-            )}
-            {position.tp_price != null && (
-              <PositionRow label="Take Profit" value={Number(position.tp_price).toFixed(2)} color="var(--accent)" />
-            )}
-            {position.quantity != null && (
-              <PositionRow label="Quantité" value={position.quantity} />
-            )}
-          </div>
+          {positions.map((pos, idx) => (
+            <PositionCard key={pos.symbol || idx} position={pos} />
+          ))}
         </div>
       )}
 
       {/* Pas de position */}
-      {!hasPosition && (
+      {positions.length === 0 && (
         <div className="text-xs muted text-center" style={{ paddingTop: 4 }}>
           Aucune position ouverte
         </div>
       )}
+    </div>
+  )
+}
+
+function PositionCard({ position }) {
+  return (
+    <div className="executor-position">
+      <div className="flex-between" style={{ marginBottom: 6 }}>
+        <span style={{ fontWeight: 600, fontSize: 12 }}>{position.symbol}</span>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          {position.strategy_name && (
+            <span className="badge" style={{ fontSize: 9, padding: '1px 6px', opacity: 0.7 }}>
+              {position.strategy_name}
+            </span>
+          )}
+          <span className={`badge ${position.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>
+            {position.direction}
+          </span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <PosRow label="Entrée" value={Number(position.entry_price).toFixed(2)} />
+        {position.sl_price != null && (
+          <PosRow label="Stop Loss" value={Number(position.sl_price).toFixed(2)} color="var(--red)" />
+        )}
+        {position.tp_price != null && (
+          <PosRow label="Take Profit" value={Number(position.tp_price).toFixed(2)} color="var(--accent)" />
+        )}
+        {position.quantity != null && (
+          <PosRow label="Quantité" value={position.quantity} />
+        )}
+      </div>
     </div>
   )
 }
@@ -113,7 +155,7 @@ function StatusRow({ label, value, color }) {
   )
 }
 
-function PositionRow({ label, value, color }) {
+function PosRow({ label, value, color }) {
   return (
     <div className="flex-between" style={{ fontSize: 11 }}>
       <span className="muted">{label}</span>

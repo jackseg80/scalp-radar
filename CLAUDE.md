@@ -109,8 +109,9 @@ scalp-radar/
 │   │   ├── simulator.py          # LiveStrategyRunner + Simulator (paper trading live)
 │   │   └── arena.py              # StrategyArena (classement parallèle)
 │   ├── execution/
-│   │   ├── executor.py          # Executor live Bitget (market orders, SL/TP, watchOrders, réconciliation)
-│   │   └── risk_manager.py      # LiveRiskManager (pre-trade checks, kill switch live, state)
+│   │   ├── executor.py          # Executor multi-position (3 paires × 4 stratégies, SL/TP, watchOrders)
+│   │   ├── risk_manager.py      # LiveRiskManager (pre-trade checks, kill switch, corrélation groups)
+│   │   └── adaptive_selector.py # Gate stratégies live (évalue Arena + live_eligible config)
 │   │
 │   ├── api/
 │   │   ├── server.py             # FastAPI + lifespan (DataEngine, Simulator, Executor, Arena, StateManager, Watchdog, Heartbeat)
@@ -149,7 +150,7 @@ scalp-radar/
 │           ├── Spark.jsx         # Sparkline SVG minimaliste
 │           ├── Heatmap.jsx       # Matrice assets × stratégies (conditions colorées)
 │           ├── RiskCalc.jsx      # Calculatrice de risque client-side
-│           ├── ExecutorPanel.jsx # Statut executor + position ouverte
+│           ├── ExecutorPanel.jsx # Statut executor + multi-positions + selector
 │           ├── SessionStats.jsx  # Sidebar P&L, trades, win rate (via WS)
 │           ├── EquityCurve.jsx   # Courbe d'equity SVG (poll 30s)
 │           ├── AlertFeed.jsx     # Timeline signaux chronologique
@@ -176,8 +177,9 @@ scalp-radar/
 │   ├── test_telegram.py         # 7 tests : send_message, trade alert, kill switch, notifier
 │   ├── test_heartbeat.py        # 3 tests : format message, no trades, stop
 │   ├── test_watchdog.py         # 8 tests : all ok, WS down, data stale, cooldown, lifecycle
-│   ├── test_executor.py         # 32 tests : symbol mapping, orders, SL rollback, reconciliation
-│   └── test_risk_manager.py     # 16 tests : pre-trade checks, kill switch live, state
+│   ├── test_executor.py         # 53 tests : multi-position, selector, persistence, reconciliation
+│   ├── test_risk_manager.py     # 19 tests : pre-trade checks, kill switch, corrélation groups
+│   └── test_adaptive_selector.py # 12 tests : critères perf, live_eligible, symboles actifs
 │
 ├── scripts/
 │   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto)
@@ -192,7 +194,9 @@ scalp-radar/
     │   ├── sprint-2-backtesting.md
     │   ├── sprint-3-simulator-arena.md
     │   ├── sprint-4-production.md  # Plan détaillé Sprint 4 (crash recovery, Telegram, Docker)
-│   └── sprint-5a-executor.md   # Plan détaillé Sprint 5a (executor live, risk manager)
+│   ├── sprint-5a-executor.md   # Plan détaillé Sprint 5a (executor live, risk manager)
+    │   ├── sprint-5b-scaling.md    # Plan détaillé Sprint 5b (multi-position, selector)
+    │   └── sprint-6-dashboard-v2.md # Plan détaillé Sprint 6 (dashboard V2)
     └── prototypes/
         └── Scalp radar v2.jsx    # Prototype React (référence design Sprint 3)
 ```
@@ -477,14 +481,60 @@ Shutdown : notify_shutdown → heartbeat → watchdog → **executor state save 
 
 - 248 tests passants (200 existants + 48 nouveaux)
 
-### Sprint 5b — Scaling
+### Sprint 5b — Scaling (3 paires × 4 stratégies) ✅
 
-Après validation Sprint 5a :
+Complet. Multi-position, multi-stratégie, sélection adaptative.
+Plan détaillé : `docs/plans/sprint-5b-scaling.md`
 
-- Adaptive strategy selector (allocation capital basée sur performance)
-- 3 paires (BTC, ETH, SOL)
-- 4 stratégies en parallèle
-- Rollout progressif du capital
+**AdaptiveSelector (`execution/adaptive_selector.py`) :**
+
+- Gate quelles stratégies peuvent trader en live (OPEN seulement, CLOSE passe toujours)
+- Évalue périodiquement (5 min) depuis Arena.get_ranking()
+- Critères : `live_eligible` config, `is_active`, `min_trades >= 3`, `net_return_pct > 0`, `profit_factor >= 1.0`
+- `set_active_symbols()` appelé par Executor après leverage setup (try/except par symbole)
+- `_STRATEGY_CONFIG_ATTR` mapping pour accès live_eligible depuis config stratégies
+
+**Executor multi-position (`execution/executor.py`) :**
+
+- `self._positions: dict[str, LivePosition]` (était `_position: LivePosition | None`)
+- Properties `position` (backward compat) et `positions` (liste)
+- `selector: AdaptiveSelector | None` remplace `_ALLOWED_STRATEGIES` / `_ALLOWED_SYMBOLS` hardcodés
+- `start()` : leverage setup try/except par symbole (si SOL échoue, BTC+ETH continuent)
+- `_reconcile_on_boot()` : itère tous les symboles configurés via `_reconcile_symbol()`
+- `_watch_orders_loop()` : watch ALL ordres (sans filtre symbole)
+- `_process_watched_order()` : scan toutes les positions + log debug ordres non matchés
+- `_cancel_orphan_orders()` : tracked_ids depuis TOUTES les positions
+- `restore_positions()` : backward compat ancien format `"position"` → nouveau `"positions"`
+
+**RiskManager — corrélation groups :**
+
+- `pre_trade_check()` : limite direction dans groupe de corrélation (`max_concurrent_same_direction: 2`)
+- Helpers : `_get_correlation_group(symbol)` (strip `:USDT`), `_get_max_same_direction(group)`
+
+**Config :**
+
+- `live_eligible: bool` par stratégie (True pour vwap_rsi/momentum, False pour funding/liquidation)
+- `AdaptiveSelectorConfig` dans risk.yaml (min_trades, min_profit_factor, eval_interval_seconds)
+- 4 stratégies enabled (momentum, funding, liquidation activées en simulation)
+
+**Frontend (ExecutorPanel.jsx) :**
+
+- Multi-positions via `.map()` avec PositionCard (symbole + stratégie + direction)
+- Affichage statut AdaptiveSelector (stratégies live autorisées)
+- Backward compat : fallback `executor.position` si `positions` absent
+
+**API routes (`executor_routes.py`) :**
+
+- `POST /api/executor/test-trade?symbol=BTC/USDT` — query param symbole (défaut BTC)
+- `POST /api/executor/test-close?symbol=BTC/USDT` — idem
+- Quantités minimales par asset
+
+**Lifespan mis à jour :**
+
+Startup : ... → Simulator → Arena → **AdaptiveSelector** → **Executor(selector=selector)** → selector.start() → Watchdog
+Shutdown : selector.stop() → executor state save + stop → ...
+
+- 284 tests passants (252 existants + 32 nouveaux)
 
 ### Sprint 6 Phase 1 — Dashboard V2 ✅
 
