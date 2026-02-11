@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
 
         await executor.start()
         simulator.set_trade_event_callback(executor.handle_event)
-        logger.info("Executor live démarré (sandbox={})", config.exchange.sandbox)
+        logger.info("Executor live démarré (sandbox={})", config.secrets.bitget_sandbox)
     elif config.secrets.live_trading:
         logger.warning("LIVE_TRADING=true mais DataEngine/Simulator absents — executor non créé")
 

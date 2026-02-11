@@ -378,13 +378,21 @@ class DataEngine:
                 logger.warning("DataEngine: erreur polling OI: {}", e)
             await asyncio.sleep(60)  # 60s
 
+    @staticmethod
+    def _to_swap_symbol(spot_symbol: str) -> str:
+        """Convertit un symbole spot en futures swap pour les appels funding/OI."""
+        if ":USDT" not in spot_symbol:
+            return f"{spot_symbol}:USDT"
+        return spot_symbol
+
     async def _fetch_funding_rates(self) -> None:
         """Récupère les funding rates via ccxt."""
         if not self._exchange:
             return
         for asset in self.config.assets:
             try:
-                result = await self._exchange.fetch_funding_rate(asset.symbol)
+                swap_sym = self._to_swap_symbol(asset.symbol)
+                result = await self._exchange.fetch_funding_rate(swap_sym)
                 if result and "fundingRate" in result:
                     rate = result["fundingRate"]
                     if rate is not None:
@@ -399,7 +407,8 @@ class DataEngine:
         now = datetime.now(tz=timezone.utc)
         for asset in self.config.assets:
             try:
-                result = await self._exchange.fetch_open_interest(asset.symbol)
+                swap_sym = self._to_swap_symbol(asset.symbol)
+                result = await self._exchange.fetch_open_interest(swap_sym)
                 if result and "openInterestAmount" in result:
                     oi_value = float(result["openInterestAmount"])
                     snapshots = self._open_interest.setdefault(asset.symbol, [])
