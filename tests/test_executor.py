@@ -69,6 +69,13 @@ def _make_mock_exchange() -> AsyncMock:
     ])
     exchange.watch_orders = AsyncMock(return_value=[])
     exchange.close = AsyncMock()
+    # Méthodes de precision ccxt (simule DECIMAL_PLACES mode)
+    exchange.amount_to_precision = MagicMock(
+        side_effect=lambda sym, qty: f"{int(qty * 1000) / 1000:.3f}",
+    )
+    exchange.price_to_precision = MagicMock(
+        side_effect=lambda sym, price: f"{int(price * 10) / 10:.1f}",
+    )
     return exchange
 
 
@@ -251,6 +258,30 @@ class TestOpenPosition:
         assert tp_call[1]["params"]["triggerPrice"] == 100_800.0
 
     @pytest.mark.asyncio
+    async def test_open_rounds_sl_tp_to_market_precision(self):
+        """SL/TP avec trop de décimales → arrondis à precision.price."""
+        executor = _make_executor()
+        executor._exchange.create_order = AsyncMock(side_effect=[
+            {"id": "entry_1", "status": "closed", "filled": 0.001, "average": 67977.58},
+            {"id": "sl_1", "status": "open"},
+            {"id": "tp_1", "status": "open"},
+        ])
+        # Prix avec 2 décimales (Bitget BTC veut 1 décimale max)
+        event = _make_open_event(
+            entry_price=67977.58, sl_price=67773.65, tp_price=68521.42,
+        )
+        await executor._open_position(event)
+
+        sl_call = executor._exchange.create_order.call_args_list[1]
+        tp_call = executor._exchange.create_order.call_args_list[2]
+        # precision.price = 1 → arrondi à 1 décimale (truncation)
+        assert sl_call[1]["params"]["triggerPrice"] == 67773.6
+        assert tp_call[1]["params"]["triggerPrice"] == 68521.4
+        # LivePosition stocke les prix arrondis
+        assert executor._position.sl_price == 67773.6
+        assert executor._position.tp_price == 68521.4
+
+    @pytest.mark.asyncio
     async def test_open_registers_live_position(self):
         executor = _make_executor()
         event = _make_open_event()
@@ -424,9 +455,32 @@ class TestQuantityRounding:
 
     def test_fallback_to_config(self):
         executor = _make_executor()
-        executor._markets = {}  # Pas de données markets
+        # Si amount_to_precision lève une exception, fallback config
+        executor._exchange.amount_to_precision = MagicMock(
+            side_effect=Exception("no market"),
+        )
         result = executor._round_quantity(0.0015, "BTC/USDT:USDT")
         assert result >= 0.001
+
+
+class TestRoundPrice:
+    def test_rounds_to_market_precision(self):
+        executor = _make_executor()
+        # precision.price = 1 → 1 décimale
+        assert executor._round_price(67773.65, "BTC/USDT:USDT") == 67773.6
+        assert executor._round_price(100_123.99, "BTC/USDT:USDT") == 100_123.9
+
+    def test_already_rounded(self):
+        executor = _make_executor()
+        assert executor._round_price(67773.0, "BTC/USDT:USDT") == 67773.0
+
+    def test_fallback_no_exchange(self):
+        executor = _make_executor()
+        # Si price_to_precision lève une exception, retourne le prix tel quel
+        executor._exchange.price_to_precision = MagicMock(
+            side_effect=Exception("no market"),
+        )
+        assert executor._round_price(67773.65, "BTC/USDT:USDT") == 67773.65
 
 
 # ─── Reconciliation ───────────────────────────────────────────────────────

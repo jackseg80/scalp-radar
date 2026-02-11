@@ -346,8 +346,8 @@ class Executor:
             return
 
         entry_order_id = entry_order.get("id", "")
-        filled_qty = float(entry_order.get("filled", quantity))
-        avg_price = float(entry_order.get("average", event.entry_price))
+        filled_qty = float(entry_order.get("filled") or quantity)
+        avg_price = float(entry_order.get("average") or event.entry_price)
 
         if filled_qty <= 0:
             logger.error("Executor: ordre d'entrée non rempli")
@@ -362,8 +362,11 @@ class Executor:
 
         # 2. Placer SL (market trigger) — CRITIQUE, retry si échec
         close_side = "sell" if event.direction == "LONG" else "buy"
+        sl_price = self._round_price(event.sl_price, futures_sym)
+        tp_price = self._round_price(event.tp_price, futures_sym)
+
         sl_order_id = await self._place_sl_with_retry(
-            futures_sym, close_side, filled_qty, event.sl_price,
+            futures_sym, close_side, filled_qty, sl_price,
             event.strategy_name,
         )
 
@@ -390,7 +393,7 @@ class Executor:
 
         # 3. Placer TP (limit trigger) — moins critique
         tp_order_id = await self._place_tp(
-            futures_sym, close_side, filled_qty, event.tp_price,
+            futures_sym, close_side, filled_qty, tp_price,
         )
 
         # 4. Enregistrer la position
@@ -403,8 +406,8 @@ class Executor:
             sl_order_id=sl_order_id,
             tp_order_id=tp_order_id,
             strategy_name=event.strategy_name,
-            sl_price=event.sl_price,
-            tp_price=event.tp_price,
+            sl_price=sl_price,
+            tp_price=tp_price,
         )
 
         self._risk_manager.register_position({
@@ -416,7 +419,7 @@ class Executor:
 
         await self._notifier.notify_live_order_opened(
             futures_sym, event.direction, filled_qty, avg_price,
-            event.sl_price, event.tp_price,
+            sl_price, tp_price,
             event.strategy_name, entry_order_id,
         )
 
@@ -500,7 +503,7 @@ class Executor:
                 futures_sym, "market", close_side, self._position.quantity,
                 params={"reduceOnly": True, **self._sandbox_params},
             )
-            exit_price = float(close_order.get("average", event.exit_price or 0))
+            exit_price = float(close_order.get("average") or event.exit_price or 0)
         except Exception as e:
             logger.error("Executor: échec close market: {}", e)
             return
@@ -602,7 +605,7 @@ class Executor:
         else:
             return
 
-        exit_price = float(order.get("average", order.get("price", 0)))
+        exit_price = float(order.get("average") or order.get("price") or 0)
         await self._handle_exchange_close(exit_price, exit_reason)
 
     async def _poll_positions_loop(self) -> None:
@@ -803,9 +806,12 @@ class Executor:
         return await self._exchange.fetch_positions()
 
     def _round_quantity(self, quantity: float, futures_symbol: str) -> float:
-        """Arrondit la quantité au min_order_size de load_markets()."""
-        market = self._markets.get(futures_symbol)
-        if market is None:
+        """Arrondit la quantité via ccxt (gère tick_size et decimal_places)."""
+        try:
+            rounded = float(
+                self._exchange.amount_to_precision(futures_symbol, quantity),
+            )
+        except Exception:
             # Fallback sur config
             for asset in self._config.assets:
                 if to_futures_symbol(asset.symbol) == futures_symbol:
@@ -813,19 +819,23 @@ class Executor:
                     return max(step, round(quantity / step) * step)
             return quantity
 
-        # Utiliser les limites ccxt
-        limits = market.get("limits", {}).get("amount", {})
-        min_amount = limits.get("min", 0)
-        precision = market.get("precision", {}).get("amount")
+        # Respecter le min_amount
+        market = self._markets.get(futures_symbol)
+        if market:
+            min_amount = (
+                market.get("limits", {}).get("amount", {}).get("min") or 0
+            )
+            return max(min_amount, rounded)
+        return rounded
 
-        if precision is not None:
-            # ccxt retourne la précision en nombre de décimales
-            factor = 10 ** precision
-            rounded = int(quantity * factor) / factor
-        else:
-            rounded = quantity
-
-        return max(min_amount or 0, rounded)
+    def _round_price(self, price: float, futures_symbol: str) -> float:
+        """Arrondit un prix via ccxt (gère tick_size et decimal_places)."""
+        try:
+            return float(
+                self._exchange.price_to_precision(futures_symbol, price),
+            )
+        except Exception:
+            return price
 
     def _calculate_pnl(
         self,

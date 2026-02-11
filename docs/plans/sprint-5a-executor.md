@@ -49,7 +49,8 @@ Classe `Executor` — orchestrateur principal :
   2. Position exchange, PAS d'état local → position orpheline, alerter, ne pas toucher
   3. PAS de position exchange, état local présent → fermée pendant downtime (TP/SL hit ou liquidée). **Fetch P&L réel** via `fetchClosedOrders()` / `fetchMyTrades()`, mettre à jour risk_manager, notifier
   4. Aucune position des deux côtés → clean, rien à faire
-- **`_round_quantity(qty, symbol)`** — arrondi à `min_order_size` de `load_markets()` (valeurs réelles Bitget, pas config)
+- **`_round_quantity(qty, symbol)`** — via `exchange.amount_to_precision()` (gère TICK_SIZE mode de Bitget)
+- **`_round_price(price, symbol)`** — via `exchange.price_to_precision()` (arrondi trigger SL/TP à la précision marché)
 - **`get_status() → dict`** — pour /health et dashboard
 
 Instance ccxt **Pro** séparée de celle du DataEngine (authentifiée, pour ordres + watchOrders).
@@ -66,22 +67,32 @@ Classe `LiveRiskManager` — gardien pré/post-trade :
 
 Double kill switch : le Simulator a le sien (virtuel), le RiskManager a le sien (argent réel).
 
-### 3. `tests/test_executor.py` (32 tests)
+### 3. `backend/api/executor_routes.py`
+
+Endpoints de test pour le pipeline executor :
+
+- **`GET /api/executor/status`** — statut détaillé (position, risk_manager, kill switch)
+- **`POST /api/executor/test-trade`** — injecte un TradeEvent OPEN (LONG BTC 0.001, SL 0.3%, TP 0.8%)
+- **`POST /api/executor/test-close`** — ferme la position ouverte par market close
+
+### 4. `tests/test_executor.py` (36 tests)
 
 - Symbol mapping (spot → futures, symbole inconnu → ValueError)
 - Event filtering (seul vwap_rsi + BTC accepté, autres ignorés)
 - Ouverture position (create_order market, SL/TP trigger orders placés)
+- **Prix SL/TP arrondis** à la précision marché avant envoi à l'exchange
 - **Rollback SL échoué** : si SL échoue après retries → close market immédiat
 - TP échoué : log warning, position gardée (SL protège)
 - Échec entry order : pas de SL/TP placés
-- Quantité arrondie via données load_markets()
+- Quantité arrondie via `amount_to_precision`
+- Prix arrondi via `price_to_precision` (3 tests)
 - Fermeture position (cancel SL/TP + market close)
 - Réconciliation au boot (4 scénarios dont P&L fetch)
 - Leverage : pas de set_leverage si position ouverte
 - Lifecycle (start/stop)
 - Mock ccxt via AsyncMock
 
-### 4. `tests/test_risk_manager.py` (16 tests)
+### 5. `tests/test_risk_manager.py` (16 tests)
 
 - Pre-trade check OK / rejeté (kill switch, position dupliquée, max positions, marge)
 - Kill switch : déclenché à >= 5%, accumulation pertes
@@ -188,23 +199,47 @@ Section `executor` dans la réponse `/health` (status, positions, kill switch li
 10. **Leverage : vérifier avant de changer** — ne set le leverage que s'il n'y a PAS de position ouverte (changer le leverage avec une position ouverte peut déclencher une liquidation)
 11. **Rate limiting entre ordres** — `await asyncio.sleep(0.1)` entre entry, SL et TP pour éviter de taper les rate limits Bitget
 12. **Réconciliation 4 cas** — dont fetch P&L réel via `fetchClosedOrders()` quand une position a été fermée pendant le downtime
-13. **Testnet Bitget obligatoire** — valider le pipeline complet sur le demo trading avant mainnet
+13. **Arrondi via ccxt** — `price_to_precision()` et `amount_to_precision()` au lieu de calculs manuels, car Bitget utilise le mode TICK_SIZE (ex: precision.price = 0.1, pas 1)
+14. **Position mode one-way** — `set_position_mode(False)` + `options["hedged"] = False` pour éviter l'envoi de `tradeSide` dans les ordres (erreur 40774)
+15. **Réponses Bitget : `None` ≠ absent** — `order.get("filled")` retourne `None` (pas la valeur par défaut). Pattern `or` requis : `order.get("filled") or quantity`
 
 ---
 
 ## Résultats
 
-- **248 tests passent** (200 existants + 32 executor + 16 risk_manager)
+- **252 tests passent** (200 existants + 36 executor + 16 risk_manager)
 - Aucune régression sur les tests existants
 - `LIVE_TRADING=false` (défaut) → aucun changement de comportement
 - `LIVE_TRADING=true` sans DataEngine → warning loggé, executor non créé
+
+### Test mainnet validé (2026-02-11)
+
+Pipeline complet testé sur Bitget mainnet avec 10 USDT de capital :
+
+| Étape | Résultat |
+|-------|----------|
+| Entry market order | LONG 0.001 BTC @ 67952.36 |
+| SL trigger (mark_price) | Placé @ 67748.5 (1re tentative) |
+| TP trigger (limit) | Placé @ 68496.0 |
+| Position trackée | symbol, direction, SL/TP, order IDs |
+| Market close (test-close) | Exécuté, P&L = -$0.08 (fees) |
+| Réconciliation au boot | Position orpheline détectée après crash |
+| Nettoyage post-close | position: null, risk_manager MAJ |
+
+**Bugs corrigés pendant les tests** :
+
+- Erreur 40774 (tradeSide) → `options["hedged"] = False` + `set_position_mode(False)`
+- Erreur 40808 (trigger price precision) → `price_to_precision()` au lieu de calcul manuel
+- TypeError `float(None)` → pattern `order.get("filled") or quantity`
+- Sandbox Bitget cassé (ccxt issue #25523) → tests sur mainnet directement
+
+**Note** : le sandbox Bitget n'est pas utilisable pour les ordres (API key n'a pas les permissions demo trading, et ccxt sandbox mode est buggé). Les tests ont été validés directement sur mainnet avec un capital minimal.
 
 ---
 
 ## Prochaines étapes (Sprint 5b)
 
-1. Validation sur testnet Bitget (`sandbox: true` dans exchanges.yaml)
-2. Adaptive strategy selector (allocation capital basée sur performance)
-3. Extension à 3 paires (BTC, ETH, SOL)
-4. Extension à 4 stratégies en parallèle
-5. Rollout progressif du capital
+1. Adaptive strategy selector (allocation capital basée sur performance)
+2. Extension à 3 paires (BTC, ETH, SOL)
+3. Extension à 4 stratégies en parallèle
+4. Rollout progressif du capital
