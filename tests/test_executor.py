@@ -50,8 +50,8 @@ def _make_mock_exchange() -> AsyncMock:
         },
     })
     exchange.fetch_balance = AsyncMock(return_value={
-        "free": {"USDT": 5_000.0},
-        "total": {"USDT": 10_000.0},
+        "free": {"USDT": 5_000.0, "SUSDT": 5_000.0},
+        "total": {"USDT": 10_000.0, "SUSDT": 10_000.0},
     })
     exchange.fetch_positions = AsyncMock(return_value=[])
     exchange.set_leverage = AsyncMock()

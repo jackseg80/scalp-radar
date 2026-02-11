@@ -155,6 +155,11 @@ class Executor:
             return {"productType": "SUSDT-FUTURES"}
         return {}
 
+    @property
+    def _margin_coin(self) -> str:
+        """Devise de marge : SUSDT en sandbox, USDT en mainnet."""
+        return "SUSDT" if self._config.secrets.bitget_sandbox else "USDT"
+
     # ─── Lifecycle ─────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -180,8 +185,9 @@ class Executor:
             balance = await self._exchange.fetch_balance({
                 "type": "swap", **self._sandbox_params,
             })
-            free = float(balance.get("free", {}).get("USDT", 0))
-            total = float(balance.get("total", {}).get("USDT", 0))
+            coin = self._margin_coin
+            free = float(balance.get("free", {}).get(coin, 0))
+            total = float(balance.get("total", {}).get(coin, 0))
             self._risk_manager.set_initial_capital(total)
             logger.info(
                 "Executor: balance USDT — libre={:.2f}, total={:.2f}", free, total,
@@ -299,8 +305,9 @@ class Executor:
         balance = await self._exchange.fetch_balance({
             "type": "swap", **self._sandbox_params,
         })
-        free = float(balance.get("free", {}).get("USDT", 0))
-        total = float(balance.get("total", {}).get("USDT", 0))
+        coin = self._margin_coin
+        free = float(balance.get("free", {}).get(coin, 0))
+        total = float(balance.get("total", {}).get(coin, 0))
 
         quantity = self._round_quantity(event.quantity, futures_sym)
         if quantity <= 0:
