@@ -3,6 +3,9 @@
  * Props : wsData
  * Affiche le statut executor depuis wsData.executor.
  * Badge "SIMULATION ONLY" si pas d'executor actif.
+ *
+ * Format backend (executor.get_status()):
+ *   { enabled, connected, sandbox, position, risk_manager: { session_pnl, kill_switch, initial_capital, total_orders, open_positions_count } }
  */
 export default function ExecutorPanel({ wsData }) {
   const executor = wsData?.executor
@@ -24,32 +27,44 @@ export default function ExecutorPanel({ wsData }) {
     )
   }
 
-  const { status, position, mode, daily_pnl, daily_trades } = executor
+  const { enabled, connected, sandbox, position, risk_manager: rm } = executor
 
-  const isLive = mode === 'live'
+  const isLive = enabled && !sandbox
   const hasPosition = position != null
+  const sessionPnl = rm?.session_pnl ?? 0
+  const balance = rm?.initial_capital
 
   return (
     <div className="card">
       <div className="flex-between" style={{ marginBottom: 10 }}>
         <h2 style={{ marginBottom: 0 }}>Executor</h2>
-        <span className={`badge ${isLive ? 'badge-active' : 'badge-simulation'}`}>
-          {isLive ? 'LIVE' : 'PAPER'}
+        <span className={`badge ${isLive ? 'badge-active' : sandbox ? 'badge-simulation' : 'badge-stopped'}`}>
+          {isLive ? 'LIVE' : sandbox ? 'SANDBOX' : 'OFF'}
         </span>
       </div>
 
       {/* Status global */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: hasPosition ? 12 : 0 }}>
-        <StatusRow label="Status" value={status || 'idle'} />
-        {daily_pnl != null && (
-          <StatusRow
-            label="P&L Jour"
-            value={`${daily_pnl >= 0 ? '+' : ''}${Number(daily_pnl).toFixed(2)}$`}
-            color={daily_pnl >= 0 ? 'var(--accent)' : 'var(--red)'}
-          />
+        <StatusRow
+          label="Connexion"
+          value={connected ? 'connecté' : 'déconnecté'}
+          color={connected ? 'var(--accent)' : 'var(--red)'}
+        />
+        {balance != null && (
+          <StatusRow label="Solde Bitget" value={`${Number(balance).toFixed(2)} USDT`} />
         )}
-        {daily_trades != null && (
-          <StatusRow label="Trades Jour" value={daily_trades} />
+        <StatusRow
+          label="P&L Session"
+          value={`${sessionPnl >= 0 ? '+' : ''}${Number(sessionPnl).toFixed(2)}$`}
+          color={sessionPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
+        />
+        {rm?.total_orders != null && rm.total_orders > 0 && (
+          <StatusRow label="Ordres passés" value={rm.total_orders} />
+        )}
+        {rm?.kill_switch && (
+          <div className="badge badge-stopped" style={{ textAlign: 'center', marginTop: 4, padding: '6px 8px' }}>
+            KILL SWITCH LIVE ACTIF
+          </div>
         )}
       </div>
 
@@ -64,31 +79,21 @@ export default function ExecutorPanel({ wsData }) {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <PositionRow label="Entrée" value={Number(position.entry_price).toFixed(2)} />
-            {position.current_price != null && (
-              <PositionRow label="Actuel" value={Number(position.current_price).toFixed(2)} />
+            {position.sl_price != null && (
+              <PositionRow label="Stop Loss" value={Number(position.sl_price).toFixed(2)} color="var(--red)" />
             )}
-            {position.unrealized_pnl != null && (
-              <PositionRow
-                label="P&L non réalisé"
-                value={`${position.unrealized_pnl >= 0 ? '+' : ''}${Number(position.unrealized_pnl).toFixed(2)}$`}
-                color={position.unrealized_pnl >= 0 ? 'var(--accent)' : 'var(--red)'}
-              />
+            {position.tp_price != null && (
+              <PositionRow label="Take Profit" value={Number(position.tp_price).toFixed(2)} color="var(--accent)" />
             )}
-            {position.stop_loss != null && (
-              <PositionRow label="Stop Loss" value={Number(position.stop_loss).toFixed(2)} color="var(--red)" />
-            )}
-            {position.take_profit != null && (
-              <PositionRow label="Take Profit" value={Number(position.take_profit).toFixed(2)} color="var(--accent)" />
-            )}
-            {position.leverage != null && (
-              <PositionRow label="Levier" value={`x${position.leverage}`} />
+            {position.quantity != null && (
+              <PositionRow label="Quantité" value={position.quantity} />
             )}
           </div>
         </div>
       )}
 
       {/* Pas de position */}
-      {!hasPosition && executor.status !== 'idle' && (
+      {!hasPosition && (
         <div className="text-xs muted text-center" style={{ paddingTop: 4 }}>
           Aucune position ouverte
         </div>
