@@ -7,7 +7,8 @@ Réutilise PositionManager (fees, slippage, TP/SL) et IncrementalIndicatorEngine
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -76,6 +77,9 @@ class LiveStrategyRunner:
             capital=self._capital,
             initial_capital=self._initial_capital,
         )
+
+        # Sprint 5a : queue d'événements pour l'Executor (drainée par le Simulator)
+        self._pending_events: list[Any] = []
 
     @property
     def name(self) -> str:
@@ -153,7 +157,7 @@ class LiveStrategyRunner:
                         self._position, candle.close, candle.timestamp,
                         "regime_change", self._current_regime
                     )
-                    self._record_trade(trade)
+                    self._record_trade(trade, symbol)
                     self._position = None
                     return
 
@@ -162,7 +166,7 @@ class LiveStrategyRunner:
                 candle, self._position, self._strategy, ctx, self._current_regime
             )
             if exit_result is not None:
-                self._record_trade(exit_result)
+                self._record_trade(exit_result, symbol)
                 self._position = None
                 return
 
@@ -183,8 +187,10 @@ class LiveStrategyRunner:
                         signal.entry_price,
                         signal.score,
                     )
+                    # Sprint 5a : notifier l'Executor
+                    self._emit_open_event(symbol, signal)
 
-    def _record_trade(self, trade: TradeResult) -> None:
+    def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
         """Enregistre un trade et vérifie le kill switch."""
         self._capital += trade.net_pnl
         self._trades.append(trade)
@@ -208,6 +214,10 @@ class LiveStrategyRunner:
             trade.exit_reason,
         )
 
+        # Sprint 5a : notifier l'Executor
+        if symbol:
+            self._emit_close_event(symbol, trade)
+
         # Kill switch
         session_loss_pct = abs(min(0, self._stats.net_pnl)) / self._initial_capital * 100
         max_session = self._config.risk.kill_switch.max_session_loss_percent
@@ -220,6 +230,46 @@ class LiveStrategyRunner:
                 "[{}] KILL SWITCH : perte session {:.1f}% >= {:.1f}%",
                 self.name, session_loss_pct, max_session,
             )
+
+    # ─── Sprint 5a : émission d'événements pour l'Executor ───────────
+
+    def _emit_open_event(self, symbol: str, signal: Any) -> None:
+        """Crée un TradeEvent OPEN et l'ajoute à la queue."""
+        from backend.execution.executor import TradeEvent, TradeEventType
+
+        self._pending_events.append(TradeEvent(
+            event_type=TradeEventType.OPEN,
+            strategy_name=self.name,
+            symbol=symbol,
+            direction=signal.direction.value,
+            entry_price=signal.entry_price,
+            quantity=self._position.quantity if self._position else 0,
+            tp_price=signal.tp_price,
+            sl_price=signal.sl_price,
+            score=signal.score,
+            timestamp=self._position.entry_time if self._position else datetime.now(tz=timezone.utc),
+            market_regime=self._current_regime.value,
+        ))
+
+    def _emit_close_event(self, symbol: str, trade: TradeResult) -> None:
+        """Crée un TradeEvent CLOSE et l'ajoute à la queue."""
+        from backend.execution.executor import TradeEvent, TradeEventType
+
+        self._pending_events.append(TradeEvent(
+            event_type=TradeEventType.CLOSE,
+            strategy_name=self.name,
+            symbol=symbol,
+            direction=trade.direction.value,
+            entry_price=trade.entry_price,
+            quantity=trade.quantity,
+            tp_price=0,
+            sl_price=0,
+            score=0,
+            timestamp=trade.exit_time,
+            market_regime=trade.market_regime.value,
+            exit_reason=trade.exit_reason,
+            exit_price=trade.exit_price,
+        ))
 
     def restore_state(self, state: dict) -> None:
         """Restaure l'état du runner depuis un snapshot sauvegardé."""
@@ -294,6 +344,11 @@ class Simulator:
         self._runners: list[LiveStrategyRunner] = []
         self._indicator_engine: IncrementalIndicatorEngine | None = None
         self._running = False
+        self._trade_event_callback: Callable | None = None
+
+    def set_trade_event_callback(self, callback: Callable) -> None:
+        """Enregistre le callback de l'Executor pour recevoir les TradeEvent."""
+        self._trade_event_callback = callback
 
     async def start(self, saved_state: dict | None = None) -> None:
         """Démarre le simulateur : crée les runners et s'enregistre sur le DataEngine.
@@ -368,6 +423,17 @@ class Simulator:
                     "Simulator: erreur runner '{}': {}",
                     runner.name, e,
                 )
+
+            # Sprint 5a : drain pending_events vers l'Executor (swap atomique)
+            if self._trade_event_callback and runner._pending_events:
+                events, runner._pending_events = runner._pending_events, []
+                for event in events:
+                    try:
+                        await self._trade_event_callback(event)
+                    except Exception as e:
+                        logger.error(
+                            "Simulator: erreur callback trade event: {}", e,
+                        )
 
     async def stop(self) -> None:
         """Arrête le simulateur."""

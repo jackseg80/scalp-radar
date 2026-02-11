@@ -108,11 +108,13 @@ scalp-radar/
 │   │   ├── metrics.py            # BacktestMetrics + format table console
 │   │   ├── simulator.py          # LiveStrategyRunner + Simulator (paper trading live)
 │   │   └── arena.py              # StrategyArena (classement parallèle)
-│   ├── execution/                # (Sprint 5)
+│   ├── execution/
+│   │   ├── executor.py          # Executor live Bitget (market orders, SL/TP, watchOrders, réconciliation)
+│   │   └── risk_manager.py      # LiveRiskManager (pre-trade checks, kill switch live, state)
 │   │
 │   ├── api/
-│   │   ├── server.py             # FastAPI + lifespan (DataEngine, Simulator, Arena, StateManager, Watchdog, Heartbeat)
-│   │   ├── health.py             # GET /health → status, data_engine, database, uptime, watchdog
+│   │   ├── server.py             # FastAPI + lifespan (DataEngine, Simulator, Executor, Arena, StateManager, Watchdog, Heartbeat)
+│   │   ├── health.py             # GET /health → status, data_engine, database, uptime, watchdog, executor
 │   │   ├── simulator_routes.py   # GET /api/simulator/* (status, positions, trades, performance)
 │   │   ├── arena_routes.py       # GET /api/arena/* (ranking, strategy detail)
 │   │   ├── signals_routes.py     # GET /api/signals/recent
@@ -162,7 +164,9 @@ scalp-radar/
 │   ├── test_state_manager.py    # 16 tests : save, load, restore, round-trip, periodic save
 │   ├── test_telegram.py         # 7 tests : send_message, trade alert, kill switch, notifier
 │   ├── test_heartbeat.py        # 3 tests : format message, no trades, stop
-│   └── test_watchdog.py         # 8 tests : all ok, WS down, data stale, cooldown, lifecycle
+│   ├── test_watchdog.py         # 8 tests : all ok, WS down, data stale, cooldown, lifecycle
+│   ├── test_executor.py         # 32 tests : symbol mapping, orders, SL rollback, reconciliation
+│   └── test_risk_manager.py     # 16 tests : pre-trade checks, kill switch live, state
 │
 ├── scripts/
 │   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto)
@@ -176,7 +180,8 @@ scalp-radar/
     │   ├── sprint-1-foundations.md
     │   ├── sprint-2-backtesting.md
     │   ├── sprint-3-simulator-arena.md
-    │   └── sprint-4-production.md  # Plan détaillé Sprint 4 (crash recovery, Telegram, Docker)
+    │   ├── sprint-4-production.md  # Plan détaillé Sprint 4 (crash recovery, Telegram, Docker)
+│   └── sprint-5a-executor.md   # Plan détaillé Sprint 5a (executor live, risk manager)
     └── prototypes/
         └── Scalp radar v2.jsx    # Prototype React (référence design Sprint 3)
 ```
@@ -419,20 +424,47 @@ Shutdown : notify_shutdown → heartbeat → watchdog → state save → simulat
 
 - 200 tests passants (166 existants + 34 nouveaux)
 
-### Sprint 5a — Executor Minimal + Safety (next)
+### Sprint 5a — Executor Minimal + Safety ✅
 
-Objectif : valider le pipeline simulation → ordre réel → confirmation → suivi → clôture.
-Scope volontairement réduit : 1 stratégie (VWAP+RSI), 1 paire (BTC/USDT:USDT), capital minimal.
+Complet. Executor live trading minimal : 1 stratégie (VWAP+RSI), 1 paire (BTC/USDT:USDT).
+Plan détaillé : `docs/plans/sprint-5a-executor.md`
 
-- `execution/executor.py` — exécution ordres réels Bitget via ccxt (limit/market)
-- `execution/risk_manager.py` — position sizing live, kill switch persisté, vérification marge
-- Paires futures : passer de `BTC/USDT` (spot) à `BTC/USDT:USDT` (futures swap)
-- Check positions au boot : réconcilier état local avec positions réelles Bitget
-- Mode `LIVE_TRADING=true` dans .env (défaut false = simulation only)
-- Alertes Telegram sur chaque ordre réel passé
+**Executor (`execution/executor.py`) :**
 
-**Raisonnement** : un bug dans l'executor = perte d'argent réel. On battle-teste le pipeline
-avant d'ajouter de la complexité. Sprint 5a doit tourner quelques jours sans incident.
+- Pattern observer : Simulator émet TradeEvent → Executor réplique en ordres réels Bitget
+- Market order d'entrée (taker 0.06%, cohérent avec backtester/simulator)
+- SL = market trigger (garanti), TP = limit trigger (maker fee)
+- **Règle #1 : JAMAIS de position sans SL** — retry 2x, sinon close market immédiat + alerte Telegram
+- `watchOrders()` via ccxt Pro (détection fills quasi temps réel) + polling 5s en fallback
+- Réconciliation 4 cas au boot (position exchange ↔ état local, dont fetch P&L downtime)
+- Mapping symboles `BTC/USDT` → `BTC/USDT:USDT` dans executor uniquement (assets.yaml inchangé)
+- `load_markets()` au start pour min_order_size/tick_size réels Bitget
+- Rate limiting : `asyncio.sleep(0.1)` entre chaque ordre séquentiel
+- Leverage vérifié avant changement (pas de set si position ouverte)
+- Instance ccxt Pro authentifiée séparée du DataEngine
+
+**LiveRiskManager (`execution/risk_manager.py`) :**
+
+- Pre-trade checks : kill switch, position dupliquée, max concurrent, marge suffisante
+- Double kill switch : Simulator (virtuel) + RiskManager (argent réel, >= 5% perte)
+- State persistence : get_state/restore_state pour crash recovery
+
+**Intégration :**
+
+- `simulator.py` : `_pending_events` queue + swap atomique pour callback Executor
+- `server.py` : section 4b lifespan (après Simulator, avant Watchdog)
+- `state_manager.py` : save/load executor state (écriture atomique)
+- `health.py` : section executor dans /health
+- `watchdog.py` : checks executor déconnecté + kill switch live
+- `notifier.py` + `telegram.py` : alertes ordres live (ouverture, fermeture, SL échoué)
+- `config.py` : `LIVE_TRADING=false` (défaut, simulation only)
+
+**Lifespan mis à jour :**
+
+Startup : DB → Telegram/Notifier → DataEngine → StateManager → Simulator → **Executor** → Arena → Watchdog → Heartbeat
+Shutdown : notify_shutdown → heartbeat → watchdog → **executor state save + stop** → state save → simulator → engine → db
+
+- 248 tests passants (200 existants + 48 nouveaux)
 
 ### Sprint 5b — Scaling
 

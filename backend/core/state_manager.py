@@ -33,9 +33,11 @@ class StateManager:
         self,
         db: Database,
         state_file: str = "data/simulator_state.json",
+        executor_state_file: str = "data/executor_state.json",
     ) -> None:
         self._db = db
         self._state_file = state_file
+        self._executor_state_file = executor_state_file
         self._task: asyncio.Task[None] | None = None
         self._running = False
 
@@ -165,6 +167,57 @@ class StateManager:
                 break
             except Exception as e:
                 logger.error("StateManager: erreur sauvegarde périodique: {}", e)
+
+    # ─── Sprint 5a : état Executor ────────────────────────────────────
+
+    async def save_executor_state(self, executor: Any, risk_manager: Any) -> None:
+        """Sauvegarde l'état de l'Executor et du RiskManager."""
+        state: dict[str, Any] = {
+            "saved_at": datetime.now(tz=timezone.utc).isoformat(),
+            "executor": executor.get_state_for_persistence(),
+        }
+
+        Path(self._executor_state_file).parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = self._executor_state_file + ".tmp"
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_file, self._executor_state_file)
+            logger.debug("StateManager: état executor sauvegardé")
+        except OSError as e:
+            logger.error("StateManager: erreur sauvegarde executor: {}", e)
+            try:
+                os.unlink(tmp_file)
+            except OSError:
+                pass
+
+    async def load_executor_state(self) -> dict[str, Any] | None:
+        """Charge l'état de l'Executor sauvegardé."""
+        if not Path(self._executor_state_file).exists():
+            logger.info("StateManager: pas de fichier état executor, démarrage fresh")
+            return None
+
+        try:
+            with open(self._executor_state_file, encoding="utf-8") as f:
+                data = json.load(f)
+
+            if not isinstance(data, dict) or "executor" not in data:
+                logger.warning(
+                    "StateManager: fichier état executor invalide, démarrage fresh"
+                )
+                return None
+
+            saved_at = data.get("saved_at", "inconnu")
+            logger.info(
+                "StateManager: état executor chargé (sauvegardé à {})", saved_at,
+            )
+            return data.get("executor")
+
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(
+                "StateManager: erreur lecture état executor ({}), démarrage fresh", e,
+            )
+            return None
 
     async def stop(self) -> None:
         """Arrête la boucle de sauvegarde."""

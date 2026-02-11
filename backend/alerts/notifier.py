@@ -22,6 +22,9 @@ class AnomalyType(str, Enum):
     DATA_STALE = "data_stale"
     ALL_STRATEGIES_STOPPED = "all_strategies_stopped"
     KILL_SWITCH_GLOBAL = "kill_switch_global"
+    EXECUTOR_DISCONNECTED = "executor_disconnected"
+    KILL_SWITCH_LIVE = "kill_switch_live"
+    SL_PLACEMENT_FAILED = "sl_placement_failed"
 
 
 # Messages formatés par type d'anomalie
@@ -30,6 +33,9 @@ _ANOMALY_MESSAGES = {
     AnomalyType.DATA_STALE: "Données obsolètes (>5 min)",
     AnomalyType.ALL_STRATEGIES_STOPPED: "Toutes les stratégies arrêtées",
     AnomalyType.KILL_SWITCH_GLOBAL: "Kill switch global déclenché",
+    AnomalyType.EXECUTOR_DISCONNECTED: "Executor live déconnecté",
+    AnomalyType.KILL_SWITCH_LIVE: "Kill switch LIVE déclenché",
+    AnomalyType.SL_PLACEMENT_FAILED: "Placement SL échoué — close market déclenché",
 }
 
 
@@ -83,3 +89,65 @@ class Notifier:
         logger.info("Notifier: shutdown")
         if self._telegram:
             await self._telegram.send_shutdown_message()
+
+    # ─── Sprint 5a : alertes ordres live ───────────────────────────────
+
+    async def notify_live_order_opened(
+        self,
+        symbol: str,
+        direction: str,
+        quantity: float,
+        entry_price: float,
+        sl_price: float,
+        tp_price: float,
+        strategy: str,
+        order_id: str,
+    ) -> None:
+        """Notifie un ordre live ouvert."""
+        logger.info(
+            "Notifier: LIVE ORDER {} {} {} @ {:.2f} (SL={:.2f}, TP={:.2f})",
+            direction, quantity, symbol, entry_price, sl_price, tp_price,
+        )
+        if self._telegram:
+            await self._telegram.send_live_order_opened(
+                symbol, direction, quantity, entry_price,
+                sl_price, tp_price, strategy, order_id,
+            )
+
+    async def notify_live_order_closed(
+        self,
+        symbol: str,
+        direction: str,
+        entry_price: float,
+        exit_price: float,
+        net_pnl: float,
+        exit_reason: str,
+        strategy: str,
+    ) -> None:
+        """Notifie un ordre live fermé."""
+        logger.info(
+            "Notifier: LIVE CLOSE {} {} {:.2f} → {:.2f} net={:+.2f} ({})",
+            direction, symbol, entry_price, exit_price, net_pnl, exit_reason,
+        )
+        if self._telegram:
+            await self._telegram.send_live_order_closed(
+                symbol, direction, entry_price, exit_price,
+                net_pnl, exit_reason, strategy,
+            )
+
+    async def notify_live_sl_failed(self, symbol: str, strategy: str) -> None:
+        """Notifie un échec critique de placement SL."""
+        logger.critical(
+            "Notifier: SL ÉCHOUÉ {} ({}) — close market déclenché",
+            symbol, strategy,
+        )
+        if self._telegram:
+            await self._telegram.send_live_sl_failed(symbol, strategy)
+
+    async def notify_reconciliation(self, result: str) -> None:
+        """Notifie le résultat de la réconciliation au boot."""
+        logger.info("Notifier: réconciliation: {}", result)
+        if self._telegram:
+            await self._telegram.send_message(
+                f"<b>Réconciliation</b>\n{result}"
+            )

@@ -51,10 +51,15 @@ async def health_check(request: Request) -> dict:
     watchdog = getattr(request.app.state, "watchdog", None)
     watchdog_status = watchdog.get_status() if watchdog else None
 
+    # Statut Executor (Sprint 5a)
+    executor = getattr(request.app.state, "executor", None)
+    executor_status = executor.get_status() if executor else None
+
     return {
         "status": status,
         "data_engine": engine_status,
         "database": {"connected": db_connected},
         "watchdog": watchdog_status,
+        "executor": executor_status,
         "uptime_seconds": int(uptime),
     }

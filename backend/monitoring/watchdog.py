@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from backend.alerts.notifier import Notifier
     from backend.backtesting.simulator import Simulator
     from backend.core.data_engine import DataEngine
+    from backend.execution.executor import Executor
 
 # Cooldown anti-spam en secondes par type d'anomalie
 _ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
@@ -35,11 +36,13 @@ class Watchdog:
         simulator: Simulator,
         notifier: Notifier,
         check_interval: int = 30,
+        executor: Executor | None = None,
     ) -> None:
         self._data_engine = data_engine
         self._simulator = simulator
         self._notifier = notifier
         self._check_interval = check_interval
+        self._executor = executor
 
         self._task: asyncio.Task[None] | None = None
         self._running = False
@@ -105,6 +108,16 @@ class Watchdog:
             if AnomalyType.KILL_SWITCH_GLOBAL not in self._last_alert_time:
                 self._current_issues.append("Kill switch global")
                 await self._alert(AnomalyType.KILL_SWITCH_GLOBAL)
+
+        # 5. Executor live (Sprint 5a)
+        if self._executor is not None:
+            if self._executor.is_enabled and not self._executor.is_connected:
+                self._current_issues.append("Executor live déconnecté")
+                await self._alert(AnomalyType.EXECUTOR_DISCONNECTED)
+
+            if self._executor.is_enabled and self._executor._risk_manager.is_kill_switch_triggered:
+                self._current_issues.append("Kill switch live déclenché")
+                await self._alert(AnomalyType.KILL_SWITCH_LIVE)
 
     async def _alert(self, anomaly_type: AnomalyType, details: str = "") -> None:
         """Envoie une alerte avec cooldown anti-spam."""

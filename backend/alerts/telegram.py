@@ -88,3 +88,64 @@ class TelegramClient:
     async def send_shutdown_message(self) -> bool:
         """Envoie un message à l'arrêt."""
         return await self.send_message("<b>Scalp Radar arrêté</b>")
+
+    # ─── Sprint 5a : alertes ordres live ───────────────────────────────
+
+    async def send_live_order_opened(
+        self,
+        symbol: str,
+        direction: str,
+        quantity: float,
+        entry_price: float,
+        sl_price: float,
+        tp_price: float,
+        strategy: str,
+        order_id: str,
+    ) -> bool:
+        """Alerte ouverture position LIVE."""
+        text = (
+            f"<b>LIVE ORDER</b>\n"
+            f"{direction} {symbol}\n"
+            f"Stratégie: {strategy}\n"
+            f"Entry: {entry_price:.2f}\n"
+            f"Quantité: {quantity}\n"
+            f"SL: {sl_price:.2f} | TP: {tp_price:.2f}\n"
+            f"Order ID: <code>{order_id}</code>"
+        )
+        return await self.send_message(text)
+
+    async def send_live_order_closed(
+        self,
+        symbol: str,
+        direction: str,
+        entry_price: float,
+        exit_price: float,
+        net_pnl: float,
+        exit_reason: str,
+        strategy: str,
+    ) -> bool:
+        """Alerte fermeture position LIVE."""
+        pnl_sign = "+" if net_pnl >= 0 else ""
+        text = (
+            f"<b>LIVE CLOSE</b>\n"
+            f"{direction} {symbol}\n"
+            f"{entry_price:.2f} → {exit_price:.2f}\n"
+            f"Net: <b>{pnl_sign}{net_pnl:.2f}$</b>\n"
+            f"Raison: {exit_reason}\n"
+            f"Stratégie: {strategy}"
+        )
+        return await self.send_message(text)
+
+    async def send_live_sl_failed(
+        self,
+        symbol: str,
+        strategy: str,
+    ) -> bool:
+        """Alerte urgente : SL échoué, close market déclenché."""
+        text = (
+            f"<b>ALERTE URGENTE — SL ÉCHOUÉ</b>\n"
+            f"{symbol} ({strategy})\n"
+            f"Le placement du SL a échoué après retries.\n"
+            f"Position fermée en market immédiatement."
+        )
+        return await self.send_message(text)

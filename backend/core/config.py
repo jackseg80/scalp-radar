@@ -243,6 +243,7 @@ class SecretsConfig(BaseSettings):
     log_level: str = "DEBUG"
     enable_websocket: bool = True
     heartbeat_interval: int = 3600  # secondes (1h par défaut, overridable via .env)
+    live_trading: bool = False  # LIVE_TRADING env var, défaut false = simulation only
 
 
 # ─── APP CONFIG (agrégation) ────────────────────────────────────────────────
