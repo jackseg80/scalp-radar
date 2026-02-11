@@ -552,16 +552,17 @@ Refonte complète du frontend. Plan détaillé : `docs/plans/sprint-6-dashboard-
 **Frontend (12 créés, 5 modifiés, 2 supprimés) :**
 
 - Layout 2 colonnes : zone principale (tabs Scanner/Heatmap/Risque) + sidebar
-- Scanner : table assets avec prix, régime, RSI, VWAP dist, SignalDots + détail extensible (ScoreRing, SignalBreakdown, indicateurs)
-- Heatmap : matrice assets × stratégies, cellules colorées par ratio conditions met/total
+- Scanner : table assets avec prix, var%, direction, sparkline, score, SignalDots + détail extensible (ScoreRing, SignalBreakdown, indicateurs)
+- Heatmap : matrice assets × stratégies, cellules à gradient d'intensité proportionnel + colonne score Σ
 - RiskCalc : calculateur interactif (capital, levier slider, SL%, résultats: taille position, perte max, distance liquidation)
 - ExecutorPanel : badge PAPER/LIVE, position ouverte, P&L non réalisé
 - EquityCurve : courbe SVG avec aire sous la courbe, baseline capital initial
 - AlertFeed : timeline signaux chronologique inverse
 - ArenaRankingMini : classement compact sidebar (remplace ArenaRanking)
 - ScoreRing : anneau SVG score global (couleur par ratio)
-- Spark : sparkline SVG minimaliste
-- SignalDots/SignalBreakdown : visualisations conditions par stratégie
+- Spark : sparkline SVG avec gradient fill, aire sous la courbe, dot animé (alimentée par 60 derniers close)
+- SignalDots : pastilles 22px avec initiales stratégie (V/M/F/L), bordure et fond colorés par ratio
+- SignalBreakdown : barres de progression par stratégie
 - SessionStats : réécrit pour utiliser wsData (pas de polling)
 - TradeHistory : collapsible (5 visible, expandable)
 - styles.css : refonte complète (471 lignes, CSS variables, dark theme)
@@ -576,6 +577,24 @@ Refonte complète du frontend. Plan détaillé : `docs/plans/sprint-6-dashboard-
 - CSS classes (pas d'inline styles), CSS variables dark theme existantes
 
 - 252 tests passants (0 régression)
+
+### Sprint 6 Phase 2 — Dashboard Polish ✅
+
+Alignement visuel du dashboard sur le prototype (`docs/prototypes/Scalp radar v2.jsx`).
+
+**Backend :**
+
+- `simulator.py` : `get_conditions()` renvoie `sparkline` (60 derniers close prices depuis le buffer 1m)
+
+**Frontend (5 fichiers modifiés) :**
+
+- `Spark.jsx` : gradient fill sous la courbe + dot animé (pulsation) sur le dernier point
+- `Scanner.jsx` : colonnes Var. (%), Dir. (LONG/SHORT basé sur RSI/VWAP), Score (meilleure stratégie), tri par score décroissant
+- `Heatmap.jsx` : gradient d'intensité proportionnel au ratio (pas statique), colonne Σ score par asset
+- `SignalDots.jsx` : pastilles 22×22px avec initiales stratégie (V/M/F/L), bordure colorée
+- `styles.css` : `.signal-dot` 22px avec bordure, `.score-number`, `.asset-dot`
+
+- 284 tests passants (0 régression)
 
 ## Dev Workflow
 
