@@ -23,7 +23,7 @@ export default function SessionStats({ wsData }) {
   if (!wsData) {
     return (
       <div className="card">
-        <h2>Session</h2>
+        <h2>Simulator <span className="dim text-xs" style={{ textTransform: 'none', letterSpacing: 0 }}>(Paper)</span></h2>
         <div className="empty-state">En attente de données...</div>
       </div>
     )
@@ -31,14 +31,14 @@ export default function SessionStats({ wsData }) {
 
   return (
     <div className="card">
-      <h2>Session</h2>
+      <h2>Simulator <span className="dim text-xs" style={{ textTransform: 'none', letterSpacing: 0 }}>(Paper)</span></h2>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <StatRow
           label="P&L Net"
           value={`${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}$`}
           color={totalPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
         />
-        <StatRow label="Capital" value={`${totalCapital.toFixed(0)}$`} />
+        <StatRow label="Capital (virtuel)" value={`${totalCapital.toFixed(0)}$`} />
         <StatRow label="Trades" value={totalTrades} />
         <StatRow
           label="Win Rate"
