@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DEPLOY_DIR="${DEPLOY_DIR:-/opt/scalp-radar}"
+DEPLOY_DIR="${DEPLOY_DIR:-$HOME/scalp-radar}"
 cd "$DEPLOY_DIR"
 
 echo "========================================"
