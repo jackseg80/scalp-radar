@@ -27,7 +27,7 @@ def _make_config() -> MagicMock:
     config.secrets.bitget_api_key = "test_key"
     config.secrets.bitget_secret = "test_secret"
     config.secrets.bitget_passphrase = "test_pass"
-    config.exchange.sandbox = True
+    config.secrets.bitget_sandbox = True
     config.risk.position.max_concurrent_positions = 3
     config.risk.position.default_leverage = 15
     config.risk.margin.min_free_margin_percent = 20
@@ -448,7 +448,8 @@ class TestReconciliation:
         notifier = _make_notifier()
         executor = _make_executor(notifier=notifier)
         executor._exchange.fetch_positions = AsyncMock(return_value=[
-            {"contracts": 0.001, "side": "long", "entryPrice": 100_000.0},
+            {"contracts": 0.001, "side": "long", "entryPrice": 100_000.0,
+             "symbol": "BTC/USDT:USDT"},
         ])
         await executor._reconcile_on_boot()
         notifier.notify_reconciliation.assert_called_once()
@@ -491,13 +492,15 @@ class TestLeverageSetup:
         executor = _make_executor()
         executor._exchange.fetch_positions = AsyncMock(return_value=[])
         await executor._setup_leverage_and_margin("BTC/USDT:USDT")
-        executor._exchange.set_leverage.assert_called_once_with(15, "BTC/USDT:USDT")
+        executor._exchange.set_leverage.assert_called_once_with(
+            15, "BTC/USDT:USDT", params={"productType": "SUSDT-FUTURES"},
+        )
 
     @pytest.mark.asyncio
     async def test_skips_leverage_when_position_open(self):
         executor = _make_executor()
         executor._exchange.fetch_positions = AsyncMock(return_value=[
-            {"contracts": 0.001},
+            {"contracts": 0.001, "symbol": "BTC/USDT:USDT"},
         ])
         await executor._setup_leverage_and_margin("BTC/USDT:USDT")
         executor._exchange.set_leverage.assert_not_called()

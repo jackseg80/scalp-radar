@@ -148,13 +148,20 @@ class Executor:
     def position(self) -> LivePosition | None:
         return self._position
 
+    @property
+    def _sandbox_params(self) -> dict[str, str]:
+        """Params productType pour le demo trading Bitget."""
+        if self._config.secrets.bitget_sandbox:
+            return {"productType": "SUSDT-FUTURES"}
+        return {}
+
     # ─── Lifecycle ─────────────────────────────────────────────────────
 
     async def start(self) -> None:
         """Initialise l'exchange ccxt Pro, réconcilie, lance la surveillance."""
         import ccxt.pro as ccxtpro
 
-        sandbox = self._config.exchange.sandbox
+        sandbox = self._config.secrets.bitget_sandbox
         self._exchange = ccxtpro.bitget({
             "apiKey": self._config.secrets.bitget_api_key,
             "secret": self._config.secrets.bitget_secret,
@@ -170,7 +177,9 @@ class Executor:
             logger.info("Executor: {} marchés chargés", len(self._markets))
 
             # 2. Fetch balance pour le capital initial
-            balance = await self._exchange.fetch_balance({"type": "swap"})
+            balance = await self._exchange.fetch_balance({
+                "type": "swap", **self._sandbox_params,
+            })
             free = float(balance.get("free", {}).get("USDT", 0))
             total = float(balance.get("total", {}).get("USDT", 0))
             self._risk_manager.set_initial_capital(total)
@@ -224,7 +233,7 @@ class Executor:
 
     async def _setup_leverage_and_margin(self, futures_symbol: str) -> None:
         """Set leverage et margin mode, seulement s'il n'y a pas de position ouverte."""
-        positions = await self._exchange.fetch_positions([futures_symbol])
+        positions = await self._fetch_positions_safe(futures_symbol)
         has_open = any(
             float(p.get("contracts", 0)) > 0 for p in positions
         )
@@ -239,13 +248,17 @@ class Executor:
             return
 
         try:
-            await self._exchange.set_leverage(leverage, futures_symbol)
+            await self._exchange.set_leverage(
+                leverage, futures_symbol, params=self._sandbox_params,
+            )
             logger.info("Executor: leverage set à {}x pour {}", leverage, futures_symbol)
         except Exception as e:
             logger.warning("Executor: impossible de set leverage: {}", e)
 
         try:
-            await self._exchange.set_margin_mode(margin_mode, futures_symbol)
+            await self._exchange.set_margin_mode(
+                margin_mode, futures_symbol, params=self._sandbox_params,
+            )
             logger.info("Executor: margin mode set à '{}' pour {}", margin_mode, futures_symbol)
         except Exception as e:
             # Bitget renvoie une erreur si le mode est déjà celui demandé
@@ -283,7 +296,9 @@ class Executor:
             return
 
         # Pre-trade check
-        balance = await self._exchange.fetch_balance({"type": "swap"})
+        balance = await self._exchange.fetch_balance({
+            "type": "swap", **self._sandbox_params,
+        })
         free = float(balance.get("free", {}).get("USDT", 0))
         total = float(balance.get("total", {}).get("USDT", 0))
 
@@ -305,6 +320,7 @@ class Executor:
         try:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
+                params=self._sandbox_params,
             )
         except Exception as e:
             logger.error("Executor: échec ordre d'entrée: {}", e)
@@ -341,7 +357,7 @@ class Executor:
             try:
                 await self._exchange.create_order(
                     futures_sym, "market", close_side, filled_qty,
-                    params={"reduceOnly": True},
+                    params={"reduceOnly": True, **self._sandbox_params},
                 )
             except Exception as e:
                 logger.critical("Executor: ÉCHEC close market urgence: {}", e)
@@ -402,6 +418,7 @@ class Executor:
                         "triggerPrice": sl_price,
                         "triggerType": "mark_price",
                         "reduceOnly": True,
+                        **self._sandbox_params,
                     },
                 )
                 sl_id = sl_order.get("id", "")
@@ -435,6 +452,7 @@ class Executor:
                     "triggerPrice": tp_price,
                     "triggerType": "mark_price",
                     "reduceOnly": True,
+                    **self._sandbox_params,
                 },
             )
             tp_id = tp_order.get("id", "")
@@ -461,7 +479,7 @@ class Executor:
         try:
             close_order = await self._exchange.create_order(
                 futures_sym, "market", close_side, self._position.quantity,
-                params={"reduceOnly": True},
+                params={"reduceOnly": True, **self._sandbox_params},
             )
             exit_price = float(close_order.get("average", event.exit_price or 0))
         except Exception as e:
@@ -516,6 +534,7 @@ class Executor:
                 try:
                     await self._exchange.cancel_order(
                         order_id, self._position.symbol,
+                        params=self._sandbox_params,
                     )
                     logger.debug("Executor: {} annulé ({})", label, order_id)
                 except Exception as e:
@@ -532,7 +551,9 @@ class Executor:
                     await asyncio.sleep(1)
                     continue
 
-                orders = await self._exchange.watch_orders(self._position.symbol)
+                orders = await self._exchange.watch_orders(
+                    self._position.symbol, params=self._sandbox_params,
+                )
                 for order in orders:
                     await self._process_watched_order(order)
 
@@ -584,7 +605,7 @@ class Executor:
         if self._position is None:
             return
 
-        positions = await self._exchange.fetch_positions([self._position.symbol])
+        positions = await self._fetch_positions_safe(self._position.symbol)
         has_open = any(
             float(p.get("contracts", 0)) > 0 for p in positions
         )
@@ -648,7 +669,7 @@ class Executor:
     async def _reconcile_on_boot(self) -> None:
         """Synchronise l'état local avec les positions Bitget réelles."""
         futures_sym = to_futures_symbol("BTC/USDT")
-        positions = await self._exchange.fetch_positions([futures_sym])
+        positions = await self._fetch_positions_safe(futures_sym)
 
         exchange_has_position = any(
             float(p.get("contracts", 0)) > 0 for p in positions
@@ -717,6 +738,7 @@ class Executor:
         try:
             trades = await self._exchange.fetch_my_trades(
                 self._position.symbol, limit=5,
+                params=self._sandbox_params,
             )
             if trades:
                 # Dernier trade = le plus récent
@@ -739,6 +761,7 @@ class Executor:
                 try:
                     order = await self._exchange.fetch_order(
                         order_id, self._position.symbol,
+                        params=self._sandbox_params,
                     )
                     if order.get("status") in ("closed", "filled"):
                         return reason
@@ -748,6 +771,17 @@ class Executor:
         return "unknown"
 
     # ─── Helpers ───────────────────────────────────────────────────────
+
+    async def _fetch_positions_safe(self, symbol: str | None = None) -> list[dict]:
+        """Fetch positions, gère le sandbox (pas de symbole pour éviter erreur marginCoin)."""
+        if self._config.secrets.bitget_sandbox:
+            positions = await self._exchange.fetch_positions(params=self._sandbox_params)
+            if symbol:
+                positions = [p for p in positions if p.get("symbol") == symbol]
+            return positions
+        if symbol:
+            return await self._exchange.fetch_positions([symbol])
+        return await self._exchange.fetch_positions()
 
     def _round_quantity(self, quantity: float, futures_symbol: str) -> float:
         """Arrondit la quantité au min_order_size de load_markets()."""
@@ -811,7 +845,7 @@ class Executor:
         return {
             "enabled": self.is_enabled,
             "connected": self.is_connected,
-            "sandbox": self._config.exchange.sandbox,
+            "sandbox": self._config.secrets.bitget_sandbox,
             "position": pos_info,
             "risk_manager": self._risk_manager.get_status(),
         }
