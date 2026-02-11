@@ -62,7 +62,7 @@ uv run python -m scripts.fetch_history --symbol BTC/USDT --timeframe 5m --days 7
 uv run pytest tests/ -v
 ```
 
-200 tests couvrant : modèles, config, database, indicateurs, 4 stratégies, backtesting, simulator, arena, API, state manager, telegram, watchdog.
+252 tests couvrant : modèles, config, database, indicateurs, 4 stratégies, backtesting, simulator, arena, API, state manager, telegram, watchdog, executor, risk manager.
 
 ## Endpoints
 
@@ -76,6 +76,9 @@ uv run pytest tests/ -v
 | `GET /api/arena/ranking` | Classement des stratégies par return % |
 | `GET /api/arena/strategy/{name}` | Détail d'une stratégie (status + trades + perf) |
 | `GET /api/signals/recent` | Derniers signaux (paginé, ?limit=20) |
+| `GET /api/executor/status` | Statut executor (position, SL/TP, kill switch) |
+| `POST /api/executor/test-trade` | Ouvre un trade test LONG BTC (capital minimal) |
+| `POST /api/executor/test-close` | Ferme la position ouverte par market close |
 | `WS /ws/live` | WebSocket push temps réel (status, ranking) |
 
 ## Stack technique
@@ -98,12 +101,13 @@ config/              # Paramètres YAML (assets, strategies, risk, exchanges)
 backend/core/        # Modèles, config, database, data engine, indicateurs, position manager
 backend/strategies/  # 4 stratégies (vwap_rsi, momentum, funding, liquidation) + factory
 backend/backtesting/ # Engine, metrics, simulator (paper trading), arena (classement)
-backend/api/         # FastAPI + endpoints simulator/arena/signals + WebSocket
+backend/execution/   # Executor live trading (Bitget), risk manager
+backend/api/         # FastAPI + endpoints simulator/arena/signals/executor + WebSocket
 backend/alerts/      # Telegram client, Notifier, Heartbeat
 backend/monitoring/  # Watchdog (data freshness, WS, stratégies)
 scripts/             # fetch_history, run_backtest
 frontend/src/        # React dashboard (5 composants, hooks polling + WS)
-tests/               # pytest (200 tests)
+tests/               # pytest (252 tests)
 ```
 
 ## Déploiement production
@@ -117,7 +121,14 @@ bash deploy.sh
 ```
 
 Le bot tourne H24 en Docker Compose : backend (port 8000) + frontend nginx (port 80).
-Alertes Telegram : startup/shutdown, heartbeat horaire, anomalies watchdog.
+Alertes Telegram : startup/shutdown, heartbeat horaire, trades live, anomalies watchdog.
+
+### Variables d'environnement (production)
+
+```bash
+LIVE_TRADING=true       # Active l'executor (défaut: false = simulation only)
+BITGET_SANDBOX=false    # Mainnet (true = demo trading, non fonctionnel actuellement)
+```
 
 ## Avancement
 
@@ -125,5 +136,5 @@ Alertes Telegram : startup/shutdown, heartbeat horaire, anomalies watchdog.
 - [x] Sprint 2 — Backtesting & stratégie VWAP+RSI
 - [x] Sprint 3 — Simulator, 4 stratégies, Arena, API, frontend MVP
 - [x] Sprint 4 — Production (Docker, crash recovery, monitoring, Telegram)
-- [ ] Sprint 5a — Trading live (executor minimal, 1 stratégie, 1 paire)
+- [x] Sprint 5a — Trading live (executor, risk manager, pipeline validé mainnet)
 - [ ] Sprint 5b — Scaling (adaptive selector, 3 paires, 4 stratégies)
