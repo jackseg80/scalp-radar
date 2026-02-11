@@ -271,20 +271,57 @@ tr:last-child td { border-bottom: none; }
 /* ─── SIGNAL DOTS ──────────────────────────────────────────────────────── */
 .signal-dots {
   display: flex;
-  gap: 3px;
+  gap: 4px;
   align-items: center;
 }
 .signal-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  font-size: 0;
-  transition: background 0.2s;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  cursor: default;
 }
-.signal-dot--high { background: var(--accent); }
-.signal-dot--medium { background: var(--yellow); }
-.signal-dot--low { background: var(--orange); }
-.signal-dot--none { background: var(--border); }
+.signal-dot--high {
+  background: rgba(0, 230, 138, 0.12);
+  border: 1px solid rgba(0, 230, 138, 0.3);
+  color: var(--accent);
+}
+.signal-dot--medium {
+  background: rgba(255, 197, 61, 0.12);
+  border: 1px solid rgba(255, 197, 61, 0.3);
+  color: var(--yellow);
+}
+.signal-dot--low {
+  background: rgba(255, 140, 66, 0.10);
+  border: 1px solid rgba(255, 140, 66, 0.25);
+  color: var(--orange);
+}
+.signal-dot--none {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+}
+
+/* ─── SCORE NUMBER (inline dans le scanner) ───────────────────────────── */
+.score-number {
+  font-size: 16px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+
+/* ─── ASSET DOT ───────────────────────────────────────────────────────── */
+.asset-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
 
 /* ─── SIGNAL BREAKDOWN ─────────────────────────────────────────────────── */
 .breakdown-bar {

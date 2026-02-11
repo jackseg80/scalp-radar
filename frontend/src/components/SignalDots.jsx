@@ -1,8 +1,16 @@
 /**
- * SignalDots — Grille de mini points colorés par stratégie.
- * Props : strategies (objet { stratName: { conditions_met, conditions_total } })
- * Couleur par ratio : high >= 0.75, medium >= 0.5, low >= 0.25, none < 0.25
+ * SignalDots — Pastilles colorées par stratégie avec initiales.
+ * Props : strategies (objet { stratName: { conditions } })
+ * Taille 22x22, initiale visible, couleur par ratio conditions met/total.
  */
+
+const STRATEGY_ICONS = {
+  vwap_rsi: 'V',
+  momentum: 'M',
+  funding: 'F',
+  liquidation: 'L',
+}
+
 export default function SignalDots({ strategies = {} }) {
   const entries = Object.entries(strategies)
 
@@ -26,12 +34,16 @@ export default function SignalDots({ strategies = {} }) {
               ? 'low'
               : 'none'
 
+        const icon = STRATEGY_ICONS[name] || name.charAt(0).toUpperCase()
+
         return (
           <span
             key={name}
             className={`signal-dot signal-dot--${level}`}
             title={`${name}: ${met}/${total}`}
-          />
+          >
+            {icon}
+          </span>
         )
       })}
     </div>

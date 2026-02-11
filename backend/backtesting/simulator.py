@@ -551,6 +551,7 @@ class Simulator:
                 "indicators": {},
                 "strategies": {},
                 "position": None,
+                "sparkline": [],
             }
 
             # Prix courant depuis le buffer 1m du DataEngine
@@ -558,6 +559,10 @@ class Simulator:
             if data.candles.get("1m"):
                 last_candle = data.candles["1m"][-1]
                 asset_data["price"] = last_candle.close
+                # Sparkline : 60 derniers close prices
+                asset_data["sparkline"] = [
+                    c.close for c in data.candles["1m"][-60:]
+                ]
                 if len(data.candles["1m"]) >= 2:
                     prev_close = data.candles["1m"][-2].close
                     if prev_close > 0:

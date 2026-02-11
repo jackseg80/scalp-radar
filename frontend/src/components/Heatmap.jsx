@@ -1,18 +1,15 @@
 /**
- * Heatmap — Matrice assets x stratégies.
+ * Heatmap — Matrice assets x stratégies avec cellules à gradient d'intensité.
  * Utilise useApi('/api/simulator/conditions', 10000).
- * Grille CSS avec cellules colorées selon le ratio conditions_met / conditions_total.
  */
 import { useApi } from '../hooks/useApi'
 
 export default function Heatmap() {
   const { data, loading } = useApi('/api/simulator/conditions', 10000)
 
-  // Backend renvoie assets comme dict {symbol: data}, convertir en tableau
   const assetsObj = data?.assets || {}
   const assets = Object.entries(assetsObj).map(([symbol, a]) => ({ symbol, ...a }))
 
-  // Extraire la liste de toutes les stratégies uniques
   const strategyNames = []
   assets.forEach(a => {
     Object.keys(a.strategies || {}).forEach(name => {
@@ -42,19 +39,19 @@ export default function Heatmap() {
     )
   }
 
-  const columns = strategyNames.length + 1
-  const gridTemplate = `100px repeat(${strategyNames.length}, 1fr)`
+  const gridTemplate = `100px repeat(${strategyNames.length}, 1fr) 50px`
 
   return (
     <div className="card">
       <h2>Heatmap — Conditions</h2>
 
       <div className="heatmap-grid" style={{ gridTemplateColumns: gridTemplate }}>
-        {/* En-tête : cellule vide + noms des stratégies */}
+        {/* En-tête : cellule vide + noms des stratégies + score total */}
         <div className="heatmap-header" />
         {strategyNames.map(name => (
           <div key={name} className="heatmap-header">{name}</div>
         ))}
+        <div className="heatmap-header" style={{ textAlign: 'center', fontWeight: 700 }}>&#931;</div>
 
         {/* Lignes : un asset par ligne */}
         {assets.map(asset => (
@@ -71,6 +68,17 @@ export default function Heatmap() {
 }
 
 function AssetRow({ symbol, strategies, strategyNames }) {
+  let totalMet = 0, totalConditions = 0
+  strategyNames.forEach(name => {
+    const s = strategies[name]
+    if (s) {
+      const conditions = s.conditions || []
+      totalMet += conditions.filter(c => c.met).length
+      totalConditions += conditions.length
+    }
+  })
+  const globalRatio = totalConditions > 0 ? totalMet / totalConditions : 0
+
   return (
     <>
       <div className="heatmap-cell" style={{ fontWeight: 600, textAlign: 'left', fontSize: 12 }}>
@@ -83,7 +91,7 @@ function AssetRow({ symbol, strategies, strategyNames }) {
             <div
               key={name}
               className="heatmap-cell"
-              style={{ background: 'transparent', color: 'var(--text-dim)' }}
+              style={{ background: 'rgba(255,255,255,0.015)', color: 'var(--text-dim)' }}
             >
               --
             </div>
@@ -101,21 +109,46 @@ function AssetRow({ symbol, strategies, strategyNames }) {
           <div
             key={name}
             className="heatmap-cell"
-            style={{ background: bg, color: fg }}
+            style={{ background: bg, color: fg, fontWeight: 700 }}
             title={`${symbol} / ${name}: ${met}/${total}`}
           >
             {met}/{total}
           </div>
         )
       })}
+      <div
+        className="heatmap-cell"
+        style={{
+          textAlign: 'center',
+          fontWeight: 800,
+          fontSize: 12,
+          color: getScoreColor(globalRatio),
+          background: getScoreBg(globalRatio),
+        }}
+      >
+        {Math.round(globalRatio * 100)}
+      </div>
     </>
   )
 }
 
 function getCellColor(ratio) {
-  if (ratio >= 0.75) return { bg: 'var(--accent-dim)', fg: 'var(--accent)' }
-  if (ratio >= 0.55) return { bg: 'var(--yellow-dim)', fg: 'var(--yellow)' }
-  if (ratio >= 0.35) return { bg: 'var(--orange-dim)', fg: 'var(--orange)' }
-  if (ratio > 0)     return { bg: 'var(--red-dim)', fg: 'var(--red)' }
-  return { bg: 'transparent', fg: 'var(--text-dim)' }
+  // Intensité proportionnelle au ratio pour un vrai gradient
+  if (ratio >= 0.75) return { bg: `rgba(0, 230, 138, ${0.08 + ratio * 0.22})`, fg: '#00e68a' }
+  if (ratio >= 0.55) return { bg: `rgba(255, 197, 61, ${0.06 + ratio * 0.18})`, fg: '#ffc53d' }
+  if (ratio >= 0.35) return { bg: `rgba(255, 140, 66, ${0.04 + ratio * 0.14})`, fg: '#ff8c42' }
+  if (ratio > 0)     return { bg: `rgba(255, 68, 102, ${0.03 + ratio * 0.10})`, fg: '#ff4466' }
+  return { bg: 'rgba(255, 255, 255, 0.015)', fg: 'var(--text-dim)' }
+}
+
+function getScoreColor(score) {
+  if (score >= 0.75) return '#00e68a'
+  if (score >= 0.55) return '#ffc53d'
+  if (score >= 0.35) return '#ff8c42'
+  return '#ff4466'
+}
+
+function getScoreBg(score) {
+  const color = getScoreColor(score)
+  return `${color}18`
 }
