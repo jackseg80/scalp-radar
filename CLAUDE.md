@@ -10,7 +10,7 @@ and presents results via a real-time dashboard.
 
 - GitHub: https://github.com/jackseg80/scalp-radar.git
 - Local dev: D:\Python\scalp-radar (Windows + VSCode)
-- Production: Linux server at 192.168.1.200, deployed via Docker Compose
+- Production: Linux server at 192.168.1.200 (~/scalp-radar), deployed via Docker Compose
 
 ## Developer Profile
 
