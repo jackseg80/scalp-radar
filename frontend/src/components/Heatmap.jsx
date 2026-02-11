@@ -3,6 +3,14 @@
  * Utilise useApi('/api/simulator/conditions', 10000).
  */
 import { useApi } from '../hooks/useApi'
+import Tooltip from './Tooltip'
+
+const STRATEGY_DESCRIPTIONS = {
+  vwap_rsi: 'Mean reversion : achat/vente quand le prix touche le VWAP avec RSI extrême',
+  momentum: 'Breakout : trade avec la tendance sur cassure de range + volume',
+  funding: 'Arbitrage funding rate : long si taux très négatif, short si très positif',
+  liquidation: 'Chasse aux liquidations : trade la cascade quand le prix approche les zones de liquidation',
+}
 
 export default function Heatmap() {
   const { data, loading } = useApi('/api/simulator/conditions', 10000)
@@ -49,9 +57,17 @@ export default function Heatmap() {
         {/* En-tête : cellule vide + noms des stratégies + score total */}
         <div className="heatmap-header" />
         {strategyNames.map(name => (
-          <div key={name} className="heatmap-header">{name}</div>
+          <div key={name} className="heatmap-header">
+            <Tooltip content={STRATEGY_DESCRIPTIONS[name] || name} position="bottom">
+              <span>{name}</span>
+            </Tooltip>
+          </div>
         ))}
-        <div className="heatmap-header" style={{ textAlign: 'center', fontWeight: 700 }}>&#931;</div>
+        <div className="heatmap-header" style={{ textAlign: 'center', fontWeight: 700 }}>
+          <Tooltip content="Score agrégé : conditions remplies / total, toutes stratégies" position="bottom">
+            <span>&#931;</span>
+          </Tooltip>
+        </div>
 
         {/* Lignes : un asset par ligne */}
         {assets.map(asset => (
@@ -105,15 +121,26 @@ function AssetRow({ symbol, strategies, strategyNames }) {
 
         const { bg, fg } = getCellColor(ratio)
 
-        return (
-          <div
-            key={name}
-            className="heatmap-cell"
-            style={{ background: bg, color: fg, fontWeight: 700 }}
-            title={`${symbol} / ${name}: ${met}/${total}`}
-          >
-            {met}/{total}
+        const cellTooltip = (
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 3 }}>{symbol} — {name}</div>
+            {conditions.map((c, i) => (
+              <div key={i} style={{ fontSize: 10, opacity: 0.85 }}>
+                {c.met ? '\u2713' : '\u2717'} {c.name}
+              </div>
+            ))}
           </div>
+        )
+
+        return (
+          <Tooltip key={name} content={cellTooltip}>
+            <div
+              className="heatmap-cell"
+              style={{ background: bg, color: fg, fontWeight: 700 }}
+            >
+              {met}/{total}
+            </div>
+          </Tooltip>
         )
       })}
       <div

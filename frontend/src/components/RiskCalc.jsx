@@ -4,6 +4,7 @@
  * Outputs : taille de position, perte max, distance de liquidation.
  */
 import { useState } from 'react'
+import Tooltip from './Tooltip'
 
 export default function RiskCalc() {
   const [capital, setCapital] = useState(10000)
@@ -23,9 +24,11 @@ export default function RiskCalc() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* Capital */}
         <div>
-          <label className="text-xs muted" style={{ display: 'block', marginBottom: 4 }}>
-            Capital (USDT)
-          </label>
+          <Tooltip content="Capital initial en USDT, base pour le calcul de la taille de position" inline={false}>
+            <label className="text-xs muted" style={{ display: 'block', marginBottom: 4 }}>
+              Capital (USDT)
+            </label>
+          </Tooltip>
           <input
             type="number"
             className="risk-input"
@@ -39,7 +42,9 @@ export default function RiskCalc() {
         {/* Levier */}
         <div>
           <div className="flex-between" style={{ marginBottom: 4 }}>
-            <label className="text-xs muted">Levier</label>
+            <Tooltip content="Multiplicateur de marge (x1 = spot, x50 max). Plus le levier est haut, plus la liquidation est proche">
+              <label className="text-xs muted">Levier</label>
+            </Tooltip>
             <span className="mono text-xs" style={{ color: 'var(--accent)' }}>x{leverage}</span>
           </div>
           <input
@@ -59,7 +64,9 @@ export default function RiskCalc() {
         {/* Stop Loss */}
         <div>
           <div className="flex-between" style={{ marginBottom: 4 }}>
-            <label className="text-xs muted">Stop Loss (%)</label>
+            <Tooltip content="Distance du stop loss en % depuis l'entrée. Détermine la perte max par trade">
+              <label className="text-xs muted">Stop Loss (%)</label>
+            </Tooltip>
             <span className="mono text-xs">{stopLoss}%</span>
           </div>
           <input
@@ -83,21 +90,25 @@ export default function RiskCalc() {
             <ResultRow
               label="Taille position"
               value={`${positionSize.toLocaleString('fr-FR')} USDT`}
+              tooltip="= Capital × Levier"
             />
             <ResultRow
               label="Perte max (SL)"
               value={`${maxLoss.toFixed(2)} USDT`}
               color="var(--red)"
+              tooltip="= Capital × (Stop Loss % / 100)"
             />
             <ResultRow
               label="Distance liquidation"
               value={`${liqDistance.toFixed(2)}%`}
               color={liqDistance < 2 ? 'var(--red)' : liqDistance < 5 ? 'var(--orange)' : 'var(--accent)'}
+              tooltip="= 100 / Levier. À x20 = 5%. Minimum recommandé : 2-3%"
             />
             <ResultRow
               label="Ratio SL / Liq"
               value={`${riskReward}x`}
               color="var(--text-secondary)"
+              tooltip="Marge de sécurité entre le SL et la liquidation. Plus élevé = plus sûr"
             />
           </div>
 
@@ -121,8 +132,8 @@ export default function RiskCalc() {
   )
 }
 
-function ResultRow({ label, value, color }) {
-  return (
+function ResultRow({ label, value, color, tooltip }) {
+  const row = (
     <div className="flex-between" style={{ fontSize: 12 }}>
       <span className="muted">{label}</span>
       <span className="mono" style={{ fontWeight: 600, color: color || 'var(--text-primary)' }}>
@@ -130,4 +141,6 @@ function ResultRow({ label, value, color }) {
       </span>
     </div>
   )
+  if (!tooltip) return row
+  return <Tooltip content={tooltip} inline={false}>{row}</Tooltip>
 }

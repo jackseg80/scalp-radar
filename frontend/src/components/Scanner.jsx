@@ -9,6 +9,7 @@ import { useApi } from '../hooks/useApi'
 import SignalDots from './SignalDots'
 import SignalDetail from './SignalDetail'
 import Spark from './Spark'
+import Tooltip from './Tooltip'
 
 function getAssetScore(asset) {
   const strats = asset.strategies || {}
@@ -93,11 +94,11 @@ export default function Scanner({ wsData }) {
               <tr>
                 <th>Actif</th>
                 <th>Prix</th>
-                <th>Var.</th>
-                <th>Dir.</th>
-                <th>Trend</th>
-                <th>Score</th>
-                <th>Signaux</th>
+                <th><Tooltip content="Variation de prix entre les 2 dernières bougies 1 min">Var.</Tooltip></th>
+                <th><Tooltip content="Direction suggérée par les indicateurs (RSI < 30 → LONG, RSI > 70 → SHORT)">Dir.</Tooltip></th>
+                <th><Tooltip content="Sparkline des 60 derniers prix de clôture (1 min)">Trend</Tooltip></th>
+                <th><Tooltip content="Score = ratio de conditions remplies de la meilleure stratégie (100 = toutes remplies)">Score</Tooltip></th>
+                <th><Tooltip content="Pastilles par stratégie : V=VWAP+RSI, M=Momentum, F=Funding, L=Liquidation">Signaux</Tooltip></th>
               </tr>
             </thead>
             <tbody>

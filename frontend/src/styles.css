@@ -498,6 +498,67 @@ tr:last-child td { border-bottom: none; }
 }
 .pulse { animation: pulse 2s infinite; }
 
+/* ─── TOOLTIP ──────────────────────────────────────────────────────────── */
+.tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.tooltip-wrap--block {
+  display: flex;
+  width: 100%;
+}
+.tooltip-box {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+  max-width: 280px;
+  min-width: 120px;
+  width: max-content;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  transition-delay: 0s;
+  text-align: left;
+}
+.tooltip-wrap:hover .tooltip-box {
+  opacity: 1;
+  transition-delay: 300ms;
+}
+.tooltip-box--top {
+  bottom: calc(100% + 8px);
+}
+.tooltip-box--bottom {
+  top: calc(100% + 8px);
+}
+/* Flèche */
+.tooltip-box::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+}
+.tooltip-box--top::after {
+  top: 100%;
+  border-top-color: var(--border);
+}
+.tooltip-box--bottom::after {
+  bottom: 100%;
+  border-bottom-color: var(--border);
+}
+
 /* ─── EMPTY STATE ──────────────────────────────────────────────────────── */
 .empty-state {
   color: var(--text-muted);

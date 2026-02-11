@@ -4,6 +4,8 @@
  * Affiche le ranking depuis wsData.ranking.
  * 4 lignes max avec nom de stratégie + PnL + badge status.
  */
+import Tooltip from './Tooltip'
+
 export default function ArenaRankingMini({ wsData }) {
   const ranking = wsData?.ranking || []
 
@@ -44,12 +46,16 @@ export default function ArenaRankingMini({ wsData }) {
 
                 {/* PnL + Badge */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                  <span className={`mono text-xs ${isProfit ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
-                    {isProfit ? '+' : ''}{pnl.toFixed(2)}$
-                  </span>
-                  <span className={`badge ${isActive ? 'badge-active' : 'badge-stopped'}`}>
-                    {isActive ? 'ACTIF' : 'STOP'}
-                  </span>
+                  <Tooltip content={`P&L net de ${s.name} en simulation`}>
+                    <span className={`mono text-xs ${isProfit ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
+                      {isProfit ? '+' : ''}{pnl.toFixed(2)}$
+                    </span>
+                  </Tooltip>
+                  <Tooltip content={isActive ? 'Stratégie en simulation active' : 'Stratégie arrêtée (kill switch ou performance insuffisante)'}>
+                    <span className={`badge ${isActive ? 'badge-active' : 'badge-stopped'}`}>
+                      {isActive ? 'ACTIF' : 'STOP'}
+                    </span>
+                  </Tooltip>
                 </div>
               </div>
             )

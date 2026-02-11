@@ -1,4 +1,5 @@
 import { useApi } from '../hooks/useApi'
+import Tooltip from './Tooltip'
 
 export default function Header({ wsConnected, tabs, activeTab, onTabChange }) {
   const { data } = useApi('/health', 10000)
@@ -27,26 +28,30 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange }) {
       </div>
 
       <div className="header-right">
-        <StatusDot label="Engine" ok={engineOk} />
-        <StatusDot label="DB" ok={dbOk} />
-        <StatusDot label="WS" ok={wsConnected} />
-        <span className={`status-badge ${status === 'ok' ? 'status-badge--ok' : 'status-badge--error'}`}>
-          {status.toUpperCase()}
-        </span>
+        <StatusDot label="Engine" ok={engineOk} tooltip="DataEngine : connexion WebSocket Bitget" />
+        <StatusDot label="DB" ok={dbOk} tooltip="Base de données SQLite" />
+        <StatusDot label="WS" ok={wsConnected} tooltip="WebSocket frontend ↔ backend (/ws/live)" />
+        <Tooltip content="État de santé global du système">
+          <span className={`status-badge ${status === 'ok' ? 'status-badge--ok' : 'status-badge--error'}`}>
+            {status.toUpperCase()}
+          </span>
+        </Tooltip>
       </div>
     </header>
   )
 }
 
-function StatusDot({ label, ok }) {
+function StatusDot({ label, ok, tooltip }) {
   const cls = ok ? 'status-dot__indicator--ok'
     : ok === false ? 'status-dot__indicator--error'
     : 'status-dot__indicator--loading'
 
-  return (
+  const dot = (
     <span className="status-dot">
       <span className={`status-dot__indicator ${cls}`} />
       {label}
     </span>
   )
+  if (!tooltip) return dot
+  return <Tooltip content={tooltip}>{dot}</Tooltip>
 }

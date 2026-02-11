@@ -5,6 +5,7 @@
  * Etat vide : ligne plate.
  */
 import { useApi } from '../hooks/useApi'
+import Tooltip from './Tooltip'
 
 const SVG_W = 400
 const SVG_H = 120
@@ -18,7 +19,7 @@ export default function EquityCurve() {
 
   return (
     <div className="card">
-      <h2>Equity Curve</h2>
+      <h2><Tooltip content="Courbe d'equity cumulée de toutes les stratégies en simulation" position="bottom">Equity Curve</Tooltip></h2>
 
       {loading && points.length === 0 && (
         <div className="empty-state">

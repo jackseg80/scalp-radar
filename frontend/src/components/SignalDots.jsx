@@ -1,14 +1,41 @@
 /**
- * SignalDots — Pastilles colorées par stratégie avec initiales.
+ * SignalDots — Pastilles colorées par stratégie avec initiales et tooltips détaillés.
  * Props : strategies (objet { stratName: { conditions } })
  * Taille 22x22, initiale visible, couleur par ratio conditions met/total.
  */
+import Tooltip from './Tooltip'
 
 const STRATEGY_ICONS = {
   vwap_rsi: 'V',
   momentum: 'M',
   funding: 'F',
   liquidation: 'L',
+}
+
+const STRATEGY_NAMES = {
+  vwap_rsi: 'VWAP+RSI',
+  momentum: 'Momentum',
+  funding: 'Funding',
+  liquidation: 'Liquidation',
+}
+
+function buildTooltip(name, conditions) {
+  const label = STRATEGY_NAMES[name] || name
+  const met = conditions.filter(c => c.met).length
+  const total = conditions.length
+  const lines = conditions.map(c => {
+    const check = c.met ? '\u2713' : '\u2717'
+    const val = c.value != null ? ` (${typeof c.value === 'number' ? c.value.toFixed(2) : c.value})` : ''
+    return `${check} ${c.name}${val}`
+  })
+  return (
+    <div>
+      <div style={{ fontWeight: 600, marginBottom: 3 }}>{label} : {met}/{total}</div>
+      {lines.map((line, i) => (
+        <div key={i} style={{ fontSize: 10, opacity: 0.85 }}>{line}</div>
+      ))}
+    </div>
+  )
 }
 
 export default function SignalDots({ strategies = {} }) {
@@ -37,13 +64,11 @@ export default function SignalDots({ strategies = {} }) {
         const icon = STRATEGY_ICONS[name] || name.charAt(0).toUpperCase()
 
         return (
-          <span
-            key={name}
-            className={`signal-dot signal-dot--${level}`}
-            title={`${name}: ${met}/${total}`}
-          >
-            {icon}
-          </span>
+          <Tooltip key={name} content={buildTooltip(name, conditions)}>
+            <span className={`signal-dot signal-dot--${level}`}>
+              {icon}
+            </span>
+          </Tooltip>
         )
       })}
     </div>

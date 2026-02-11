@@ -10,6 +10,8 @@
  *     risk_manager: { session_pnl, kill_switch, initial_capital, total_orders, open_positions_count },
  *     selector: { allowed_strategies, active_symbols, min_trades, min_profit_factor, eval_interval_seconds } }
  */
+import Tooltip from './Tooltip'
+
 export default function ExecutorPanel({ wsData }) {
   const executor = wsData?.executor
 
@@ -42,9 +44,11 @@ export default function ExecutorPanel({ wsData }) {
     <div className="card">
       <div className="flex-between" style={{ marginBottom: 10 }}>
         <h2 style={{ marginBottom: 0 }}>Executor</h2>
-        <span className={`badge ${isLive ? 'badge-active' : sandbox ? 'badge-simulation' : 'badge-stopped'}`}>
-          {isLive ? 'LIVE' : sandbox ? 'SANDBOX' : 'OFF'}
-        </span>
+        <Tooltip content={isLive ? 'LIVE = ordres réels Bitget' : sandbox ? 'SANDBOX = simulation avec solde réel' : 'OFF = executor désactivé'}>
+          <span className={`badge ${isLive ? 'badge-active' : sandbox ? 'badge-simulation' : 'badge-stopped'}`}>
+            {isLive ? 'LIVE' : sandbox ? 'SANDBOX' : 'OFF'}
+          </span>
+        </Tooltip>
       </div>
 
       {/* Status global */}
@@ -53,22 +57,30 @@ export default function ExecutorPanel({ wsData }) {
           label="Connexion"
           value={connected ? 'connecté' : 'déconnecté'}
           color={connected ? 'var(--accent)' : 'var(--red)'}
+          tooltip="Connexion à l'API Bitget via ccxt Pro"
         />
         {balance != null && (
-          <StatusRow label="Solde Bitget" value={`${Number(balance).toFixed(2)} USDT`} />
+          <StatusRow
+            label="Solde Bitget"
+            value={`${Number(balance).toFixed(2)} USDT`}
+            tooltip="Capital réel disponible sur Bitget pour les ordres live"
+          />
         )}
         <StatusRow
           label="P&L Session"
           value={`${sessionPnl >= 0 ? '+' : ''}${Number(sessionPnl).toFixed(2)}$`}
           color={sessionPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
+          tooltip="Profit/perte des ordres réels depuis le dernier démarrage (net de frais)"
         />
         {rm?.total_orders != null && rm.total_orders > 0 && (
           <StatusRow label="Ordres passés" value={rm.total_orders} />
         )}
         {rm?.kill_switch && (
-          <div className="badge badge-stopped" style={{ textAlign: 'center', marginTop: 4, padding: '6px 8px' }}>
-            KILL SWITCH LIVE ACTIF
-          </div>
+          <Tooltip content="Trading stoppé : perte session ≥ 5% du capital" inline={false}>
+            <div className="badge badge-stopped" style={{ textAlign: 'center', marginTop: 4, padding: '6px 8px' }}>
+              KILL SWITCH LIVE ACTIF
+            </div>
+          </Tooltip>
         )}
       </div>
 
@@ -85,7 +97,9 @@ export default function ExecutorPanel({ wsData }) {
               ))}
             </div>
           ) : (
-            <span className="text-xs muted">aucune (en évaluation)</span>
+            <Tooltip content="L'adaptive selector attend 3+ trades simulés profitables avant d'autoriser une stratégie en live">
+              <span className="text-xs muted">aucune (en évaluation)</span>
+            </Tooltip>
           )}
         </div>
       )}
@@ -144,8 +158,8 @@ function PositionCard({ position }) {
   )
 }
 
-function StatusRow({ label, value, color }) {
-  return (
+function StatusRow({ label, value, color, tooltip }) {
+  const row = (
     <div className="flex-between" style={{ fontSize: 12 }}>
       <span className="muted">{label}</span>
       <span className="mono" style={{ fontWeight: 500, color: color || 'var(--text-primary)' }}>
@@ -153,6 +167,8 @@ function StatusRow({ label, value, color }) {
       </span>
     </div>
   )
+  if (!tooltip) return row
+  return <Tooltip content={tooltip} inline={false}>{row}</Tooltip>
 }
 
 function PosRow({ label, value, color }) {
