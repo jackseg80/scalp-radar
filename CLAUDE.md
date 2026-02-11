@@ -419,12 +419,29 @@ Shutdown : notify_shutdown → heartbeat → watchdog → state save → simulat
 
 - 200 tests passants (166 existants + 34 nouveaux)
 
-### Sprint 5 — Live Trading
+### Sprint 5a — Executor Minimal + Safety (next)
 
-- execution/executor.py — real order execution
-- execution/risk_manager.py — kill switch, position sizing
-- Adaptive strategy selector
-- Progressive rollout: small capital first, monitor closely
+Objectif : valider le pipeline simulation → ordre réel → confirmation → suivi → clôture.
+Scope volontairement réduit : 1 stratégie (VWAP+RSI), 1 paire (BTC/USDT:USDT), capital minimal.
+
+- `execution/executor.py` — exécution ordres réels Bitget via ccxt (limit/market)
+- `execution/risk_manager.py` — position sizing live, kill switch persisté, vérification marge
+- Paires futures : passer de `BTC/USDT` (spot) à `BTC/USDT:USDT` (futures swap)
+- Check positions au boot : réconcilier état local avec positions réelles Bitget
+- Mode `LIVE_TRADING=true` dans .env (défaut false = simulation only)
+- Alertes Telegram sur chaque ordre réel passé
+
+**Raisonnement** : un bug dans l'executor = perte d'argent réel. On battle-teste le pipeline
+avant d'ajouter de la complexité. Sprint 5a doit tourner quelques jours sans incident.
+
+### Sprint 5b — Scaling
+
+Après validation Sprint 5a :
+
+- Adaptive strategy selector (allocation capital basée sur performance)
+- 3 paires (BTC, ETH, SOL)
+- 4 stratégies en parallèle
+- Rollout progressif du capital
 
 ## Dev Workflow
 

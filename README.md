@@ -106,10 +106,24 @@ frontend/src/        # React dashboard (5 composants, hooks polling + WS)
 tests/               # pytest (200 tests)
 ```
 
+## Déploiement production
+
+```bash
+# Sur le serveur Linux (192.168.1.200)
+ssh jack@192.168.1.200
+cd ~/scalp-radar
+bash deploy.sh
+# → graceful shutdown, git pull, docker build, health check, rollback si erreur
+```
+
+Le bot tourne H24 en Docker Compose : backend (port 8000) + frontend nginx (port 80).
+Alertes Telegram : startup/shutdown, heartbeat horaire, anomalies watchdog.
+
 ## Avancement
 
 - [x] Sprint 1 — Fondations (config, modèles, database, data engine, API, tests)
 - [x] Sprint 2 — Backtesting & stratégie VWAP+RSI
 - [x] Sprint 3 — Simulator, 4 stratégies, Arena, API, frontend MVP
 - [x] Sprint 4 — Production (Docker, crash recovery, monitoring, Telegram)
-- [ ] Sprint 5 — Trading live
+- [ ] Sprint 5a — Trading live (executor minimal, 1 stratégie, 1 paire)
+- [ ] Sprint 5b — Scaling (adaptive selector, 3 paires, 4 stratégies)
