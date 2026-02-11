@@ -14,7 +14,15 @@ import numpy as np
 from loguru import logger
 
 from backend.core.models import Candle, Direction, MarketRegime
+from backend.core.position_manager import (
+    PositionManager,
+    PositionManagerConfig,
+    TradeResult,
+)
 from backend.strategies.base import BaseStrategy, OpenPosition, StrategyContext
+
+# Re-export pour compatibilité (tests et scripts importent TradeResult depuis engine)
+__all__ = ["BacktestConfig", "BacktestEngine", "BacktestResult", "TradeResult"]
 
 
 @dataclass
@@ -31,24 +39,6 @@ class BacktestConfig:
     slippage_pct: float = 0.0005  # 0.05%
     high_vol_slippage_mult: float = 2.0
     max_risk_per_trade: float = 0.02  # 2%
-
-
-@dataclass
-class TradeResult:
-    """Résultat d'un trade clôturé."""
-
-    direction: Direction
-    entry_price: float
-    exit_price: float
-    quantity: float
-    entry_time: datetime
-    exit_time: datetime
-    gross_pnl: float
-    fee_cost: float
-    slippage_cost: float
-    net_pnl: float
-    exit_reason: str  # "tp", "sl", "signal_exit", "end_of_data"
-    market_regime: MarketRegime
 
 
 @dataclass
@@ -81,6 +71,14 @@ class BacktestEngine:
     def __init__(self, config: BacktestConfig, strategy: BaseStrategy) -> None:
         self._config = config
         self._strategy = strategy
+        self._pm = PositionManager(PositionManagerConfig(
+            leverage=config.leverage,
+            maker_fee=config.maker_fee,
+            taker_fee=config.taker_fee,
+            slippage_pct=config.slippage_pct,
+            high_vol_slippage_mult=config.high_vol_slippage_mult,
+            max_risk_per_trade=config.max_risk_per_trade,
+        ))
 
     def run(
         self,
@@ -173,8 +171,8 @@ class BacktestEngine:
 
             # 2. Si position ouverte : vérifier TP/SL puis check_exit
             if position is not None:
-                exit_result = self._check_position_exit(
-                    candle, position, ctx, current_regime
+                exit_result = self._pm.check_position_exit(
+                    candle, position, self._strategy, ctx, current_regime
                 )
                 if exit_result is not None:
                     capital += exit_result.net_pnl
@@ -185,21 +183,21 @@ class BacktestEngine:
             if position is None and main_ind:
                 signal = self._strategy.evaluate(ctx)
                 if signal is not None:
-                    position = self._open_position(signal, candle.timestamp, capital)
+                    position = self._pm.open_position(signal, candle.timestamp, capital)
                     if position is not None:
                         capital -= position.entry_fee
 
             # 4. Equity curve (point par bougie)
             current_equity = capital
             if position is not None:
-                current_equity += self._unrealized_pnl(position, candle.close)
+                current_equity += self._pm.unrealized_pnl(position, candle.close)
             equity_curve.append(current_equity)
             equity_timestamps.append(candle.timestamp)
 
         # 5. Clôture forcée des positions ouvertes
         if position is not None and main_candles:
             last_candle = main_candles[-1]
-            trade = self._force_close(position, last_candle, current_regime)
+            trade = self._pm.force_close(position, last_candle, current_regime)
             capital += trade.net_pnl
             trades.append(trade)
             position = None
@@ -237,185 +235,3 @@ class BacktestEngine:
             else:
                 break
         return result
-
-    def _check_position_exit(
-        self,
-        candle: Candle,
-        position: OpenPosition,
-        ctx: StrategyContext,
-        regime: MarketRegime,
-    ) -> TradeResult | None:
-        """Vérifie TP/SL (heuristique OHLC) puis check_exit."""
-        tp_hit = False
-        sl_hit = False
-
-        if position.direction == Direction.LONG:
-            tp_hit = candle.high >= position.tp_price
-            sl_hit = candle.low <= position.sl_price
-        else:
-            tp_hit = candle.low <= position.tp_price
-            sl_hit = candle.high >= position.sl_price
-
-        if tp_hit and sl_hit:
-            # Heuristique OHLC : déterminer lequel est touché en premier
-            exit_reason = self._ohlc_heuristic(candle, position)
-        elif tp_hit:
-            exit_reason = "tp"
-        elif sl_hit:
-            exit_reason = "sl"
-        else:
-            # Ni TP ni SL → check_exit
-            exit_signal = self._strategy.check_exit(ctx, position)
-            if exit_signal:
-                return self._close_position(
-                    position, candle.close, candle.timestamp, "signal_exit", regime
-                )
-            return None
-
-        if exit_reason == "tp":
-            exit_price = position.tp_price
-        else:
-            exit_price = position.sl_price
-
-        return self._close_position(
-            position, exit_price, candle.timestamp, exit_reason, regime
-        )
-
-    def _ohlc_heuristic(self, candle: Candle, position: OpenPosition) -> str:
-        """Heuristique OHLC pour déterminer TP ou SL quand les deux sont touchés.
-
-        Bougie verte (close > open) → mouvement inféré : open → high → low → close
-        Bougie rouge (close < open) → mouvement inféré : open → low → high → close
-        Doji (close == open) → SL priorisé (conservateur)
-        """
-        if candle.close > candle.open:
-            # Bougie verte : high d'abord
-            if position.direction == Direction.LONG:
-                return "tp"  # TP en haut touché d'abord
-            return "sl"  # SHORT : SL en haut touché d'abord
-        elif candle.close < candle.open:
-            # Bougie rouge : low d'abord
-            if position.direction == Direction.LONG:
-                return "sl"  # SL en bas touché d'abord
-            return "tp"  # SHORT : TP en bas touché d'abord
-        else:
-            return "sl"  # Conservateur
-
-    def _open_position(
-        self,
-        signal: Any,
-        timestamp: datetime,
-        capital: float,
-    ) -> OpenPosition | None:
-        """Ouvre une position avec position sizing basé sur le coût SL réel."""
-        entry_price = signal.entry_price
-        sl_price = signal.sl_price
-
-        if entry_price <= 0 or sl_price <= 0:
-            return None
-
-        # Distance SL en %
-        sl_distance_pct = abs(entry_price - sl_price) / entry_price
-
-        # Coût SL réel = distance + taker_fee + slippage
-        sl_real_cost = sl_distance_pct + self._config.taker_fee + self._config.slippage_pct
-
-        if sl_real_cost <= 0:
-            return None
-
-        # Position sizing
-        risk_amount = capital * self._config.max_risk_per_trade
-        notional = risk_amount / sl_real_cost
-        quantity = notional / entry_price
-
-        if quantity <= 0:
-            return None
-
-        # Fee d'entrée (taker = market order)
-        entry_fee = quantity * entry_price * self._config.taker_fee
-
-        if entry_fee >= capital:
-            return None
-
-        return OpenPosition(
-            direction=signal.direction,
-            entry_price=entry_price,
-            quantity=quantity,
-            entry_time=timestamp,
-            tp_price=signal.tp_price,
-            sl_price=sl_price,
-            entry_fee=entry_fee,
-        )
-
-    def _close_position(
-        self,
-        position: OpenPosition,
-        exit_price: float,
-        exit_time: datetime,
-        exit_reason: str,
-        regime: MarketRegime,
-    ) -> TradeResult:
-        """Clôture une position et calcule le P&L."""
-        # Slippage sur les market orders (SL et signal_exit)
-        slippage_cost = 0.0
-        actual_exit_price = exit_price
-
-        if exit_reason in ("sl", "signal_exit"):
-            slippage_rate = self._config.slippage_pct
-            # Haute volatilité → slippage doublé
-            if regime == MarketRegime.HIGH_VOLATILITY:
-                slippage_rate *= self._config.high_vol_slippage_mult
-
-            slippage_cost = position.quantity * exit_price * slippage_rate
-
-            if position.direction == Direction.LONG:
-                actual_exit_price = exit_price * (1 - slippage_rate)
-            else:
-                actual_exit_price = exit_price * (1 + slippage_rate)
-
-        # Gross P&L
-        if position.direction == Direction.LONG:
-            gross_pnl = (actual_exit_price - position.entry_price) * position.quantity
-        else:
-            gross_pnl = (position.entry_price - actual_exit_price) * position.quantity
-
-        # Fee de sortie
-        if exit_reason == "tp":
-            exit_fee = position.quantity * exit_price * self._config.maker_fee
-        else:
-            exit_fee = position.quantity * exit_price * self._config.taker_fee
-
-        fee_cost = position.entry_fee + exit_fee
-        net_pnl = gross_pnl - fee_cost - slippage_cost
-
-        return TradeResult(
-            direction=position.direction,
-            entry_price=position.entry_price,
-            exit_price=actual_exit_price,
-            quantity=position.quantity,
-            entry_time=position.entry_time,
-            exit_time=exit_time,
-            gross_pnl=gross_pnl,
-            fee_cost=fee_cost,
-            slippage_cost=slippage_cost,
-            net_pnl=net_pnl,
-            exit_reason=exit_reason,
-            market_regime=regime,
-        )
-
-    def _force_close(
-        self,
-        position: OpenPosition,
-        candle: Candle,
-        regime: MarketRegime,
-    ) -> TradeResult:
-        """Clôture forcée en fin de données (market order au close)."""
-        return self._close_position(
-            position, candle.close, candle.timestamp, "end_of_data", regime
-        )
-
-    def _unrealized_pnl(self, position: OpenPosition, current_price: float) -> float:
-        """P&L non réalisé (pour l'equity curve)."""
-        if position.direction == Direction.LONG:
-            return (current_price - position.entry_price) * position.quantity
-        return (position.entry_price - current_price) * position.quantity

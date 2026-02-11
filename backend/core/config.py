@@ -57,7 +57,7 @@ class LiquidationConfig(BaseModel):
     timeframe: str = "5m"
     oi_change_threshold: float = Field(default=5.0, gt=0)
     leverage_estimate: int = Field(default=15, ge=1)
-    zone_buffer_percent: float = Field(default=0.5, gt=0)
+    zone_buffer_percent: float = Field(default=1.5, gt=0)
     tp_percent: float = Field(default=0.8, gt=0)
     sl_percent: float = Field(default=0.4, gt=0)
     weight: float = Field(default=0.20, ge=0, le=1)

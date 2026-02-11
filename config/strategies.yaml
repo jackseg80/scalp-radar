@@ -18,7 +18,7 @@ liquidation:
   timeframe: "5m"
   oi_change_threshold: 5.0
   leverage_estimate: 15
-  zone_buffer_percent: 0.5
+  zone_buffer_percent: 1.5
   tp_percent: 0.8
   sl_percent: 0.4
   weight: 0.20

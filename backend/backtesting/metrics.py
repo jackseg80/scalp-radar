@@ -11,7 +11,8 @@ from datetime import timedelta
 
 import numpy as np
 
-from backend.backtesting.engine import BacktestResult, TradeResult
+from backend.backtesting.engine import BacktestResult
+from backend.core.position_manager import TradeResult
 
 
 @dataclass

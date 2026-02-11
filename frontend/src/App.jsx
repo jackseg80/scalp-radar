@@ -1,22 +1,28 @@
+import Header from './components/Header'
+import ArenaRanking from './components/ArenaRanking'
+import SignalFeed from './components/SignalFeed'
+import SessionStats from './components/SessionStats'
+import TradeHistory from './components/TradeHistory'
+import { useWebSocket } from './hooks/useWebSocket'
+
+const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/live`
+
 export default function App() {
+  const { lastMessage, connected } = useWebSocket(wsUrl)
+
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontFamily: "'DM Sans', sans-serif",
-    }}>
-      <h1 style={{ fontSize: 28, fontWeight: 800, color: '#00e68a', letterSpacing: -0.5 }}>
-        SCALP RADAR
-      </h1>
-      <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 14, marginTop: 8 }}>
-        Dashboard en construction — Sprint 3
-      </p>
-      <p style={{ color: 'rgba(255,255,255,0.18)', fontSize: 11, marginTop: 24, fontFamily: 'monospace' }}>
-        v0.1.0 · Phase 1/5
-      </p>
+    <div className="app">
+      <Header wsConnected={connected} />
+      <div className="main-grid">
+        <div className="content">
+          <ArenaRanking />
+          <SignalFeed wsData={lastMessage} />
+          <TradeHistory />
+        </div>
+        <aside>
+          <SessionStats />
+        </aside>
+      </div>
     </div>
   )
 }

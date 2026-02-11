@@ -16,7 +16,7 @@ from loguru import logger
 
 from backend.core.config import AppConfig
 from backend.core.database import Database
-from backend.core.models import Candle, MultiTimeframeData, TimeFrame
+from backend.core.models import Candle, MultiTimeframeData, OISnapshot, TimeFrame
 
 # Taille max du buffer rolling par (symbol, timeframe)
 MAX_BUFFER_SIZE = 500
@@ -114,8 +114,13 @@ class DataEngine:
         self._last_update: Optional[datetime] = None
         self._connected = False
 
-        # Callbacks pour les consommateurs (stratégies en Sprint 2)
+        # Callbacks pour les consommateurs
         self._callbacks: list[Callable] = []
+
+        # Données additionnelles (funding, OI)
+        self._funding_rates: dict[str, float] = {}
+        self._open_interest: dict[str, list[OISnapshot]] = {}
+        self._oi_max_snapshots = 60  # 60 snapshots × 60s = 1h d'historique
 
     @property
     def is_connected(self) -> bool:
@@ -145,6 +150,14 @@ class DataEngine:
         """Enregistre un callback appelé à chaque nouvelle candle validée."""
         self._callbacks.append(callback)
 
+    def get_funding_rate(self, symbol: str) -> float | None:
+        """Retourne le dernier funding rate connu pour un symbol."""
+        return self._funding_rates.get(symbol)
+
+    def get_open_interest(self, symbol: str) -> list[OISnapshot]:
+        """Retourne les snapshots d'OI pour un symbol."""
+        return list(self._open_interest.get(symbol, []))
+
     # ─── LIFECYCLE ──────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -165,6 +178,14 @@ class DataEngine:
                 name=f"watch_{asset.symbol}",
             )
             self._tasks.append(task)
+
+        # Tâches de polling pour funding rate et OI
+        self._tasks.append(
+            asyncio.create_task(self._poll_funding_rates(), name="poll_funding")
+        )
+        self._tasks.append(
+            asyncio.create_task(self._poll_open_interest(), name="poll_oi")
+        )
 
         self._connected = True
         logger.info(
@@ -332,3 +353,73 @@ class DataEngine:
                     await result
             except Exception as e:
                 logger.error("DataEngine: erreur callback: {}", e)
+
+    # ─── POLLING FUNDING & OI ──────────────────────────────────────────────
+
+    async def _poll_funding_rates(self) -> None:
+        """Polling des funding rates toutes les 5 minutes."""
+        while self._running:
+            try:
+                await self._fetch_funding_rates()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("DataEngine: erreur polling funding: {}", e)
+            await asyncio.sleep(300)  # 5 min
+
+    async def _poll_open_interest(self) -> None:
+        """Polling de l'open interest toutes les 60 secondes."""
+        while self._running:
+            try:
+                await self._fetch_open_interest()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("DataEngine: erreur polling OI: {}", e)
+            await asyncio.sleep(60)  # 60s
+
+    async def _fetch_funding_rates(self) -> None:
+        """Récupère les funding rates via ccxt."""
+        if not self._exchange:
+            return
+        for asset in self.config.assets:
+            try:
+                result = await self._exchange.fetch_funding_rate(asset.symbol)
+                if result and "fundingRate" in result:
+                    rate = result["fundingRate"]
+                    if rate is not None:
+                        self._funding_rates[asset.symbol] = float(rate) * 100  # en %
+            except Exception as e:
+                logger.debug("DataEngine: funding rate non dispo pour {}: {}", asset.symbol, e)
+
+    async def _fetch_open_interest(self) -> None:
+        """Récupère l'open interest via ccxt."""
+        if not self._exchange:
+            return
+        now = datetime.now(tz=timezone.utc)
+        for asset in self.config.assets:
+            try:
+                result = await self._exchange.fetch_open_interest(asset.symbol)
+                if result and "openInterestAmount" in result:
+                    oi_value = float(result["openInterestAmount"])
+                    snapshots = self._open_interest.setdefault(asset.symbol, [])
+
+                    # Calculer le changement vs snapshot précédent
+                    change_pct = 0.0
+                    if snapshots:
+                        prev = snapshots[-1].value
+                        if prev > 0:
+                            change_pct = (oi_value - prev) / prev * 100
+
+                    snapshots.append(OISnapshot(
+                        timestamp=now,
+                        symbol=asset.symbol,
+                        value=oi_value,
+                        change_pct=change_pct,
+                    ))
+
+                    # Borner l'historique
+                    if len(snapshots) > self._oi_max_snapshots:
+                        self._open_interest[asset.symbol] = snapshots[-self._oi_max_snapshots:]
+            except Exception as e:
+                logger.debug("DataEngine: OI non dispo pour {}: {}", asset.symbol, e)

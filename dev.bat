@@ -26,7 +26,7 @@ start "SCALP-BACKEND" cmd /k "cd /d %~dp0 && uv run uvicorn backend.api.server:a
 
 :: Frontend (Vite)
 echo [*] Lancement du frontend (port 5173)...
-start "SCALP-FRONTEND" cmd /k "cd /d %~dp0frontend && npx vite"
+start "SCALP-FRONTEND" cmd /k "cd /d %~dp0frontend && npx vite --host"
 
 echo.
 echo [OK] Backend : http://localhost:8000

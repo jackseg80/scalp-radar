@@ -1,0 +1,426 @@
+"""Tests pour backend/backtesting/simulator.py."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, AsyncMock
+
+import pytest
+
+from backend.core.models import Candle, Direction, MarketRegime, TimeFrame
+from backend.core.position_manager import PositionManager, PositionManagerConfig, TradeResult
+from backend.core.incremental_indicators import IncrementalIndicatorEngine
+from backend.strategies.base import OpenPosition, StrategyContext, StrategySignal
+from backend.backtesting.simulator import LiveStrategyRunner, RunnerStats, Simulator
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _make_candle(
+    close: float = 100_000.0,
+    high: float | None = None,
+    low: float | None = None,
+    open_: float | None = None,
+    volume: float = 100.0,
+    ts: datetime | None = None,
+) -> Candle:
+    o = open_ or close
+    h = high or max(close, o) * 1.001
+    lo = low or min(close, o) * 0.999
+    return Candle(
+        timestamp=ts or datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+        open=o,
+        high=h,
+        low=lo,
+        close=close,
+        volume=volume,
+        symbol="BTC/USDT",
+        timeframe=TimeFrame.M5,
+    )
+
+
+def _make_pm_config() -> PositionManagerConfig:
+    return PositionManagerConfig(
+        leverage=15,
+        maker_fee=0.0002,
+        taker_fee=0.0006,
+        slippage_pct=0.0005,
+        high_vol_slippage_mult=2.0,
+        max_risk_per_trade=0.02,
+    )
+
+
+def _make_runner(
+    strategy=None,
+    config=None,
+    indicator_engine=None,
+    position_manager=None,
+    data_engine=None,
+) -> LiveStrategyRunner:
+    """Crée un runner avec des mocks par défaut."""
+    if strategy is None:
+        strategy = MagicMock()
+        strategy.name = "test_strat"
+        strategy.min_candles = {"5m": 50}
+        strategy.evaluate.return_value = None
+        strategy.check_exit.return_value = None
+
+    if config is None:
+        config = MagicMock()
+        config.risk.kill_switch.max_session_loss_percent = 5.0
+        config.risk.kill_switch.max_daily_loss_percent = 10.0
+        config.risk.position.max_risk_per_trade_percent = 2.0
+
+    if indicator_engine is None:
+        indicator_engine = MagicMock(spec=IncrementalIndicatorEngine)
+        indicator_engine.get_indicators.return_value = {
+            "5m": {
+                "rsi": 30.0,
+                "vwap": 99_500.0,
+                "adx": 15.0,
+                "di_plus": 10.0,
+                "di_minus": 12.0,
+                "atr": 500.0,
+                "atr_sma": 450.0,
+                "close": 100_000.0,
+            }
+        }
+
+    if position_manager is None:
+        position_manager = PositionManager(_make_pm_config())
+
+    if data_engine is None:
+        data_engine = MagicMock()
+        data_engine.get_funding_rate.return_value = None
+        data_engine.get_open_interest.return_value = []
+
+    return LiveStrategyRunner(
+        strategy=strategy,
+        config=config,
+        indicator_engine=indicator_engine,
+        position_manager=position_manager,
+        data_engine=data_engine,
+    )
+
+
+# ─── Tests LiveStrategyRunner ────────────────────────────────────────────────
+
+
+class TestRunnerBasics:
+    def test_initial_state(self):
+        """Le runner démarre avec capital=10k, pas de position, pas de trades."""
+        runner = _make_runner()
+        status = runner.get_status()
+        assert status["capital"] == 10_000.0
+        assert status["net_pnl"] == 0.0
+        assert status["total_trades"] == 0
+        assert status["has_position"] is False
+        assert status["kill_switch"] is False
+        assert status["is_active"] is True
+
+    def test_name_from_strategy(self):
+        runner = _make_runner()
+        assert runner.name == "test_strat"
+
+
+class TestRunnerOnCandle:
+    @pytest.mark.asyncio
+    async def test_no_indicators_returns_early(self):
+        """Si pas d'indicateurs, on n'évalue pas."""
+        ie = MagicMock(spec=IncrementalIndicatorEngine)
+        ie.get_indicators.return_value = {}
+
+        strategy = MagicMock()
+        strategy.name = "test"
+        strategy.min_candles = {"5m": 50}
+
+        runner = _make_runner(strategy=strategy, indicator_engine=ie)
+        candle = _make_candle()
+
+        await runner.on_candle("BTC/USDT", "5m", candle)
+        strategy.evaluate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_evaluate_called_no_signal(self):
+        """Si evaluate retourne None, pas de position ouverte."""
+        strategy = MagicMock()
+        strategy.name = "test"
+        strategy.min_candles = {"5m": 50}
+        strategy.evaluate.return_value = None
+
+        runner = _make_runner(strategy=strategy)
+        candle = _make_candle()
+
+        await runner.on_candle("BTC/USDT", "5m", candle)
+        strategy.evaluate.assert_called_once()
+        assert runner.get_status()["has_position"] is False
+
+    @pytest.mark.asyncio
+    async def test_evaluate_signal_opens_position(self):
+        """Si evaluate retourne un signal, une position est ouverte."""
+        signal = StrategySignal(
+            direction=Direction.LONG,
+            entry_price=100_000.0,
+            tp_price=100_800.0,
+            sl_price=99_700.0,
+            score=0.75,
+            strength="MODERATE",
+            market_regime=MarketRegime.RANGING,
+        )
+
+        strategy = MagicMock()
+        strategy.name = "test"
+        strategy.min_candles = {"5m": 50}
+        strategy.evaluate.return_value = signal
+
+        runner = _make_runner(strategy=strategy)
+        candle = _make_candle()
+
+        await runner.on_candle("BTC/USDT", "5m", candle)
+        assert runner.get_status()["has_position"] is True
+        assert runner.get_status()["capital"] < 10_000.0  # Fee déduite
+
+    @pytest.mark.asyncio
+    async def test_tp_hit_closes_position(self):
+        """Si TP touché, la position est fermée avec gain."""
+        signal = StrategySignal(
+            direction=Direction.LONG,
+            entry_price=100_000.0,
+            tp_price=100_800.0,
+            sl_price=99_700.0,
+            score=0.75,
+            strength="MODERATE",
+            market_regime=MarketRegime.RANGING,
+        )
+
+        strategy = MagicMock()
+        strategy.name = "test"
+        strategy.min_candles = {"5m": 50}
+        strategy.evaluate.return_value = signal
+        strategy.check_exit.return_value = None
+
+        runner = _make_runner(strategy=strategy)
+
+        # Ouvrir
+        candle1 = _make_candle(close=100_000.0, ts=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc))
+        await runner.on_candle("BTC/USDT", "5m", candle1)
+        assert runner.get_status()["has_position"] is True
+
+        # Ne plus ouvrir de nouvelles positions
+        strategy.evaluate.return_value = None
+
+        # TP touché
+        candle2 = _make_candle(
+            close=100_900.0,
+            high=101_000.0,
+            low=100_500.0,
+            open_=100_500.0,
+            ts=datetime(2024, 1, 15, 12, 5, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "5m", candle2)
+        assert runner.get_status()["has_position"] is False
+        assert runner.get_status()["total_trades"] == 1
+        assert runner.get_status()["wins"] == 1
+
+    @pytest.mark.asyncio
+    async def test_sl_hit_closes_position(self):
+        """Si SL touché, la position est fermée avec perte."""
+        signal = StrategySignal(
+            direction=Direction.LONG,
+            entry_price=100_000.0,
+            tp_price=100_800.0,
+            sl_price=99_700.0,
+            score=0.75,
+            strength="MODERATE",
+            market_regime=MarketRegime.RANGING,
+        )
+
+        strategy = MagicMock()
+        strategy.name = "test"
+        strategy.min_candles = {"5m": 50}
+        strategy.evaluate.return_value = signal
+        strategy.check_exit.return_value = None
+
+        runner = _make_runner(strategy=strategy)
+
+        # Ouvrir
+        candle1 = _make_candle(close=100_000.0, ts=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc))
+        await runner.on_candle("BTC/USDT", "5m", candle1)
+        assert runner.get_status()["has_position"] is True
+
+        strategy.evaluate.return_value = None
+
+        # SL touché
+        candle2 = _make_candle(
+            close=99_600.0,
+            high=100_100.0,
+            low=99_500.0,
+            open_=100_000.0,
+            ts=datetime(2024, 1, 15, 12, 5, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "5m", candle2)
+        assert runner.get_status()["has_position"] is False
+        assert runner.get_status()["total_trades"] == 1
+        assert runner.get_status()["losses"] == 1
+
+
+class TestKillSwitch:
+    @pytest.mark.asyncio
+    async def test_kill_switch_triggers_on_session_loss(self):
+        """Kill switch si perte session >= max_session_loss_percent."""
+        config = MagicMock()
+        config.risk.kill_switch.max_session_loss_percent = 5.0
+        config.risk.kill_switch.max_daily_loss_percent = 10.0
+        config.risk.position.max_risk_per_trade_percent = 2.0
+
+        runner = _make_runner(config=config)
+
+        # Simuler un gros trade perdant (> 5% du capital initial)
+        trade = TradeResult(
+            direction=Direction.LONG,
+            entry_price=100_000.0,
+            exit_price=95_000.0,
+            quantity=0.01,
+            entry_time=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+            exit_time=datetime(2024, 1, 15, 12, 5, tzinfo=timezone.utc),
+            gross_pnl=-500.0,
+            fee_cost=5.0,
+            slippage_cost=2.0,
+            net_pnl=-507.0,  # 5.07% de 10k
+            exit_reason="sl",
+            market_regime=MarketRegime.RANGING,
+        )
+        runner._record_trade(trade)
+
+        assert runner.is_kill_switch_triggered is True
+        assert runner.get_status()["is_active"] is False
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_prevents_new_positions(self):
+        """Après kill switch, on_candle ne fait rien."""
+        runner = _make_runner()
+        runner._kill_switch_triggered = True
+
+        strategy = runner._strategy
+        candle = _make_candle()
+        await runner.on_candle("BTC/USDT", "5m", candle)
+        strategy.evaluate.assert_not_called()
+
+
+class TestRegimeChangeExit:
+    @pytest.mark.asyncio
+    async def test_regime_change_closes_position(self):
+        """Position coupée quand le régime passe RANGING → TRENDING."""
+        signal = StrategySignal(
+            direction=Direction.LONG,
+            entry_price=100_000.0,
+            tp_price=100_800.0,
+            sl_price=99_700.0,
+            score=0.75,
+            strength="MODERATE",
+            market_regime=MarketRegime.RANGING,
+        )
+
+        strategy = MagicMock()
+        strategy.name = "test"
+        strategy.min_candles = {"5m": 50}
+        strategy.evaluate.return_value = signal
+        strategy.check_exit.return_value = None
+
+        ie = MagicMock(spec=IncrementalIndicatorEngine)
+        # Première candle : régime RANGING (adx=15)
+        ie.get_indicators.return_value = {
+            "5m": {
+                "rsi": 30.0, "vwap": 99_500.0,
+                "adx": 15.0, "di_plus": 10.0, "di_minus": 12.0,
+                "atr": 500.0, "atr_sma": 450.0, "close": 100_000.0,
+            }
+        }
+
+        runner = _make_runner(strategy=strategy, indicator_engine=ie)
+
+        # Ouvrir position
+        candle1 = _make_candle(close=100_000.0, ts=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc))
+        await runner.on_candle("BTC/USDT", "5m", candle1)
+        assert runner.get_status()["has_position"] is True
+
+        strategy.evaluate.return_value = None
+
+        # Deuxième candle : régime change vers TRENDING_UP (adx=35, di_plus>di_minus)
+        ie.get_indicators.return_value = {
+            "5m": {
+                "rsi": 55.0, "vwap": 100_000.0,
+                "adx": 35.0, "di_plus": 30.0, "di_minus": 10.0,
+                "atr": 600.0, "atr_sma": 450.0, "close": 100_200.0,
+            }
+        }
+
+        candle2 = _make_candle(
+            close=100_200.0,
+            ts=datetime(2024, 1, 15, 12, 5, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "5m", candle2)
+        assert runner.get_status()["has_position"] is False
+        assert runner.get_status()["total_trades"] == 1
+
+
+# ─── Tests Simulator ─────────────────────────────────────────────────────────
+
+
+class TestSimulator:
+    @pytest.mark.asyncio
+    async def test_dispatch_candle_updates_indicators(self):
+        """_dispatch_candle met à jour les indicateurs puis dispatch aux runners."""
+        de = MagicMock()
+        de.on_candle = MagicMock()
+        de.get_funding_rate.return_value = None
+        de.get_open_interest.return_value = []
+
+        config = MagicMock()
+        sim = Simulator(data_engine=de, config=config)
+
+        ie = MagicMock(spec=IncrementalIndicatorEngine)
+        ie.get_indicators.return_value = {}
+        sim._indicator_engine = ie
+        sim._running = True
+
+        runner = MagicMock()
+        runner.name = "mock"
+        runner.on_candle = AsyncMock()
+        sim._runners = [runner]
+
+        candle = _make_candle()
+        await sim._dispatch_candle("BTC/USDT", "5m", candle)
+
+        ie.update.assert_called_once_with("BTC/USDT", "5m", candle)
+        runner.on_candle.assert_called_once_with("BTC/USDT", "5m", candle)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_not_running(self):
+        """Si pas running, _dispatch_candle ne fait rien."""
+        de = MagicMock()
+        config = MagicMock()
+        sim = Simulator(data_engine=de, config=config)
+        sim._running = False
+
+        ie = MagicMock(spec=IncrementalIndicatorEngine)
+        sim._indicator_engine = ie
+
+        candle = _make_candle()
+        await sim._dispatch_candle("BTC/USDT", "5m", candle)
+        ie.update.assert_not_called()
+
+    def test_get_all_status_empty(self):
+        """Status vide si pas de runners."""
+        de = MagicMock()
+        config = MagicMock()
+        sim = Simulator(data_engine=de, config=config)
+        assert sim.get_all_status() == {}
+
+    def test_is_kill_switch_triggered_false(self):
+        """Pas de kill switch par défaut."""
+        de = MagicMock()
+        config = MagicMock()
+        sim = Simulator(data_engine=de, config=config)
+        assert sim.is_kill_switch_triggered() is False

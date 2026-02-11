@@ -263,6 +263,15 @@ class SessionState(BaseModel):
         return self.wins / self.total_trades
 
 
+class OISnapshot(BaseModel):
+    """Snapshot d'open interest pour un symbol."""
+
+    timestamp: datetime
+    symbol: str
+    value: float  # Open interest en USDT
+    change_pct: float = 0.0  # Variation vs snapshot précédent
+
+
 class MultiTimeframeData(BaseModel):
     """Données agrégées multi-timeframe pour un symbol."""
 

@@ -13,6 +13,12 @@ from typing import Any
 from backend.core.config import AppConfig
 from backend.core.models import Candle, Direction, MarketRegime, SignalStrength
 
+# Constantes pour les clés extra_data (pas de magic strings)
+EXTRA_FUNDING_RATE = "funding_rate"
+EXTRA_OPEN_INTEREST = "open_interest"
+EXTRA_OI_CHANGE_PCT = "oi_change_pct"
+EXTRA_ORDERBOOK = "orderbook"
+
 
 @dataclass
 class OpenPosition:
@@ -43,6 +49,7 @@ class StrategyContext:
     current_position: OpenPosition | None
     capital: float
     config: AppConfig
+    extra_data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

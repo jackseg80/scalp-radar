@@ -83,32 +83,54 @@ scalp-radar/
 │   │   ├── config.py             # YAML loader + validation croisée (Pydantic)
 │   │   ├── database.py           # SQLite async (aiosqlite, WAL mode)
 │   │   ├── indicators.py          # RSI, VWAP, ADX+DI, ATR, SMA, EMA, régime (pur numpy)
-│   │   ├── data_engine.py        # ccxt Pro WebSocket + DataValidator + buffer rolling
+│   │   ├── incremental_indicators.py # Buffers rolling pour indicateurs live (Simulator)
+│   │   ├── position_manager.py   # Sizing, fees, slippage, TP/SL (réutilisé par engine + simulator)
+│   │   ├── data_engine.py        # ccxt Pro WebSocket + polling OI/funding + buffer rolling
 │   │   ├── rate_limiter.py       # Token bucket par catégorie d'endpoint
 │   │   └── logging_setup.py      # loguru: console + fichier JSON + fichier erreurs
 │   │
 │   ├── strategies/
-│   │   ├── base.py               # BaseStrategy ABC, StrategyContext, StrategySignal
-│   │   └── vwap_rsi.py           # VWAP+RSI mean reversion strategy
+│   │   ├── base.py               # BaseStrategy ABC, StrategyContext, StrategySignal, EXTRA_* constants
+│   │   ├── factory.py            # create_strategy() + get_enabled_strategies()
+│   │   ├── vwap_rsi.py           # VWAP+RSI mean reversion (RANGING)
+│   │   ├── momentum.py           # Momentum Breakout (TRENDING)
+│   │   ├── funding.py            # Funding Rate Arbitrage (paper trading only)
+│   │   └── liquidation.py        # Liquidation Zone Hunting (paper trading only)
 │   ├── backtesting/
-│   │   ├── engine.py             # Moteur event-driven (OHLC heuristique, sizing SL réel)
-│   │   └── metrics.py            # BacktestMetrics + format table console
+│   │   ├── engine.py             # Moteur event-driven (délègue au PositionManager)
+│   │   ├── metrics.py            # BacktestMetrics + format table console
+│   │   ├── simulator.py          # LiveStrategyRunner + Simulator (paper trading live)
+│   │   └── arena.py              # StrategyArena (classement parallèle)
 │   ├── execution/                # (Sprint 5)
 │   │
 │   ├── api/
-│   │   ├── server.py             # FastAPI + lifespan (DataEngine intégré)
-│   │   └── health.py             # GET /health → status, data_engine, database, uptime
+│   │   ├── server.py             # FastAPI + lifespan (DataEngine + Simulator + Arena)
+│   │   ├── health.py             # GET /health → status, data_engine, database, uptime
+│   │   ├── simulator_routes.py   # GET /api/simulator/* (status, positions, trades, performance)
+│   │   ├── arena_routes.py       # GET /api/arena/* (ranking, strategy detail)
+│   │   ├── signals_routes.py     # GET /api/signals/recent
+│   │   └── websocket_routes.py   # WS /ws/live (push temps réel)
 │   │
 │   ├── alerts/                   # (Sprint 4)
 │   └── monitoring/               # (Sprint 4)
 │
-├── frontend/                     # React + Vite (scaffold Sprint 1, implémentation Sprint 3)
+├── frontend/                     # React + Vite (dashboard dark theme)
 │   ├── package.json
-│   ├── vite.config.js            # Proxy /api et /health → backend:8000
+│   ├── vite.config.js            # Proxy /api, /health, /ws → backend:8000
 │   ├── index.html
 │   └── src/
 │       ├── main.jsx
-│       └── App.jsx               # Placeholder
+│       ├── App.jsx               # Layout grid + WebSocket
+│       ├── styles.css            # Dark theme (variables CSS)
+│       ├── hooks/
+│       │   ├── useApi.js         # Polling hook (configurable interval)
+│       │   └── useWebSocket.js   # WS avec reconnexion auto (backoff exponentiel)
+│       └── components/
+│           ├── Header.jsx        # Logo, status indicators (Engine/DB/WS)
+│           ├── ArenaRanking.jsx  # Table classement stratégies (poll 30s)
+│           ├── SignalFeed.jsx    # Stratégies live via WebSocket
+│           ├── SessionStats.jsx  # Sidebar PnL, trades, win rate (poll 3s)
+│           └── TradeHistory.jsx  # Trades récents (poll 10s)
 │
 ├── tests/
 │   ├── conftest.py               # Fixtures partagées (config_dir temporaire)
@@ -117,7 +139,15 @@ scalp-radar/
 │   ├── test_database.py          # 12 tests : CRUD candles, session state, signals, trades (async)
 │   ├── test_indicators.py        # 22 tests : RSI, VWAP, ADX, ATR, SMA, EMA, régime
 │   ├── test_strategy_vwap_rsi.py # 11 tests : signaux, filtres, check_exit, compute_indicators
-│   └── test_backtesting.py       # 17 tests : engine, métriques, OHLC, sizing, Sortino
+│   ├── test_backtesting.py       # 17 tests : engine, métriques, OHLC, sizing, Sortino
+│   ├── test_position_manager.py  # 10 tests : sizing, fees, slippage, TP/SL, heuristique
+│   ├── test_incremental_indicators.py # 5 tests : buffer rolling, trim, indicateurs
+│   ├── test_strategy_momentum.py # 10 tests : breakout, volume, trend filter, ADX exit
+│   ├── test_strategy_funding.py  # 7 tests : extreme rates, delay, neutral exit
+│   ├── test_strategy_liquidation.py # 7 tests : zones, OI threshold, proximity score
+│   ├── test_simulator.py         # 14 tests : runner, on_candle, kill switch, regime change
+│   ├── test_arena.py             # 9 tests : ranking, profit factor, drawdown, detail
+│   └── test_api_simulator.py     # 7 tests : endpoints status, trades, ranking, signals
 │
 ├── scripts/
 │   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto)
@@ -280,13 +310,54 @@ Plan détaillé : `docs/plans/sprint-2-backtesting.md`
 - Ajouterait une sortie anticipée sur changement de régime pendant le trade
 - Aurait éliminé une bonne partie des 28 trades trending perdants
 
-### Sprint 3 — API & Frontend
+### Sprint 3 — Simulator, Stratégies & Frontend ✅
 
-- API endpoints REST + WebSocket vers frontend
-- Frontend React connecté au backend réel (basé sur prototype JSX)
-- Stratégies 2-5 implementation
-- backtesting/simulator.py — live paper trading
-- StrategyArena — parallel simulation comparison
+Complet. Paper trading live, 4 stratégies, Arena, API REST+WS, frontend dashboard.
+
+**Infrastructure extraite :**
+
+- `PositionManager` — sizing, fees, slippage, TP/SL réutilisé par BacktestEngine ET Simulator
+- `IncrementalIndicatorEngine` — buffers numpy rolling (500 candles), recalcul < 1ms par update
+- `StrategyFactory` — create_strategy() et get_enabled_strategies() depuis la config YAML
+
+**4 stratégies implémentées :**
+
+- **VWAP+RSI** (Sprint 2) — mean reversion en RANGING, filtre 15m anti-trend
+- **Momentum Breakout** — trade AVEC la tendance, complémentaire à VWAP+RSI
+- **Funding Rate Arbitrage** — scalp lent sur taux extrêmes (paper trading only)
+- **Liquidation Zone Hunting** — cascade OI + zones de liquidation estimées (paper trading only)
+
+**Simulator (paper trading live) :**
+
+- `LiveStrategyRunner` — un runner par stratégie, capital virtuel isolé (10k$)
+- `Simulator` — orchestrateur, câblé sur DataEngine via on_candle callback
+- Kill switch : coupe si perte session >= 5% (configurable dans risk.yaml)
+- Quick fix régime : coupe la position quand RANGING → TRENDING
+
+**Arena :**
+
+- Classement parallèle par net_return_pct, profit factor, max drawdown
+- Isolation totale : chaque stratégie = capital séparé
+
+**API (8 endpoints + WebSocket) :**
+
+- `/api/simulator/*` — status, positions, trades, performance
+- `/api/arena/*` — ranking, strategy detail
+- `/api/signals/recent` — derniers signaux
+- `/ws/live` — push temps réel (3s interval)
+
+**Frontend MVP (dark theme) :**
+
+- 5 composants : Header, ArenaRanking, SignalFeed, SessionStats, TradeHistory
+- Hooks : useApi (polling configurable), useWebSocket (reconnexion backoff exponentiel)
+- 166 tests passants (69 nouveaux + 97 existants)
+
+**Décisions clés Sprint 3 :**
+
+- Constantes `EXTRA_*` dans base.py (pas de magic strings pour extra_data)
+- Champ `source` en DB (backtest/simulation/live) pour filtrer les trades
+- Funding et Liquidation non backtestables (pas de données historiques OI/funding)
+- `zone_buffer_percent` élargi de 0.5% à 1.5% (estimation levier trop grossière)
 
 ### Sprint 4 — Production
 

@@ -74,7 +74,8 @@ class Database:
                 tp_price REAL,
                 sl_price REAL,
                 regime TEXT,
-                metadata_json TEXT
+                metadata_json TEXT,
+                source TEXT DEFAULT 'backtest'
             );
 
             CREATE TABLE IF NOT EXISTS trades (
@@ -92,7 +93,8 @@ class Database:
                 entry_time TEXT NOT NULL,
                 exit_time TEXT NOT NULL,
                 strategy TEXT NOT NULL,
-                regime TEXT
+                regime TEXT,
+                source TEXT DEFAULT 'backtest'
             );
 
             CREATE TABLE IF NOT EXISTS session_state (
@@ -208,14 +210,14 @@ class Database:
 
     # ─── SIGNALS ────────────────────────────────────────────────────────────
 
-    async def insert_signal(self, signal: Signal) -> None:
+    async def insert_signal(self, signal: Signal, source: str = "backtest") -> None:
         assert self._conn is not None
         import json
         await self._conn.execute(
             """INSERT INTO signals
                (timestamp, strategy, symbol, direction, strength, score,
-                entry_price, tp_price, sl_price, regime, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                entry_price, tp_price, sl_price, regime, metadata_json, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 signal.timestamp.isoformat(),
                 signal.strategy_name,
@@ -228,20 +230,21 @@ class Database:
                 signal.sl_price,
                 signal.market_regime.value if signal.market_regime else None,
                 json.dumps(signal.metadata),
+                source,
             ),
         )
         await self._conn.commit()
 
     # ─── TRADES ─────────────────────────────────────────────────────────────
 
-    async def insert_trade(self, trade: Trade) -> None:
+    async def insert_trade(self, trade: Trade, source: str = "backtest") -> None:
         assert self._conn is not None
         await self._conn.execute(
             """INSERT INTO trades
                (id, symbol, direction, entry_price, exit_price, quantity, leverage,
                 gross_pnl, fee_cost, slippage_cost, net_pnl,
-                entry_time, exit_time, strategy, regime)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                entry_time, exit_time, strategy, regime, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 trade.id,
                 trade.symbol,
@@ -258,6 +261,7 @@ class Database:
                 trade.exit_time.isoformat(),
                 trade.strategy_name,
                 trade.market_regime.value if trade.market_regime else None,
+                source,
             ),
         )
         await self._conn.commit()
