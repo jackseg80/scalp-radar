@@ -690,11 +690,6 @@ class Executor:
 
     async def _reconcile_on_boot(self) -> None:
         """Synchronise l'état local avec les positions Bitget réelles."""
-        # TODO(fix): Ajouter fetch_open_orders() pour détecter les ordres trigger
-        # orphelins (TP/SL) qui ne sont pas trackés localement. Actuellement on ne
-        # vérifie que les positions via fetch_positions(), mais des trigger orders
-        # peuvent rester pendants après un crash ou un arrêt non propre.
-        # → Annuler les ordres orphelins non trackés + alerter via Telegram.
         futures_sym = to_futures_symbol("BTC/USDT")
         positions = await self._fetch_positions_safe(futures_sym)
 
@@ -756,6 +751,68 @@ class Executor:
         # Cas 4 : aucune position → clean
         else:
             logger.info("Executor: réconciliation OK — aucune position")
+
+        # Nettoyage ordres trigger orphelins (TP/SL restés après fermeture)
+        await self._cancel_orphan_orders()
+
+    async def _cancel_orphan_orders(self) -> None:
+        """Annule les ordres trigger orphelins qui n'ont plus de position associée.
+
+        Après un crash ou un arrêt, un SL/TP trigger order peut rester pendant
+        sur l'exchange alors que la position a été fermée (par l'autre trigger).
+        Ces ordres orphelins sont dangereux : ils pourraient ouvrir une nouvelle
+        position involontaire si le prix revient sur le niveau.
+        """
+        try:
+            open_orders = await self._exchange.fetch_open_orders(
+                params={"type": "swap", **self._sandbox_params},
+            )
+        except Exception as e:
+            logger.warning("Executor: impossible de fetch open orders: {}", e)
+            return
+
+        if not open_orders:
+            return
+
+        # IDs des ordres trackés localement (position courante)
+        tracked_ids: set[str] = set()
+        if self._position is not None:
+            if self._position.sl_order_id:
+                tracked_ids.add(self._position.sl_order_id)
+            if self._position.tp_order_id:
+                tracked_ids.add(self._position.tp_order_id)
+            if self._position.entry_order_id:
+                tracked_ids.add(self._position.entry_order_id)
+
+        # Filtrer les ordres orphelins (trigger orders non trackés)
+        orphans = [
+            o for o in open_orders
+            if o.get("id") and o["id"] not in tracked_ids
+        ]
+
+        if not orphans:
+            return
+
+        cancelled: list[str] = []
+        for order in orphans:
+            order_id = order["id"]
+            symbol = order.get("symbol", "unknown")
+            try:
+                await self._exchange.cancel_order(
+                    order_id, symbol, params=self._sandbox_params,
+                )
+                cancelled.append(f"{order_id} ({symbol})")
+                logger.info("Executor: ordre orphelin annulé: {} ({})", order_id, symbol)
+            except Exception as e:
+                logger.warning(
+                    "Executor: échec annulation ordre orphelin {}: {}", order_id, e,
+                )
+
+        if cancelled:
+            await self._notifier.notify_reconciliation(
+                f"Ordres trigger orphelins annulés ({len(cancelled)}): "
+                + ", ".join(cancelled)
+            )
 
     async def _fetch_exit_price(self) -> float:
         """Récupère le prix de sortie réel depuis l'historique Bitget."""

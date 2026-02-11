@@ -537,6 +537,114 @@ class TestReconciliation:
         assert "downtime" in call_arg
 
 
+# ─── Orphan trigger orders ────────────────────────────────────────────────
+
+
+class TestOrphanOrders:
+    @pytest.mark.asyncio
+    async def test_cancels_orphan_trigger_orders(self):
+        """Ordres trigger sans position associée → annulés."""
+        notifier = _make_notifier()
+        executor = _make_executor(notifier=notifier)
+        # Pas de position locale ni exchange
+        executor._position = None
+        executor._exchange.fetch_positions = AsyncMock(return_value=[])
+        # Deux ordres orphelins sur l'exchange
+        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
+            {"id": "orphan_sl_1", "symbol": "BTC/USDT:USDT", "type": "limit"},
+            {"id": "orphan_tp_2", "symbol": "BTC/USDT:USDT", "type": "limit"},
+        ])
+
+        await executor._reconcile_on_boot()
+
+        assert executor._exchange.cancel_order.call_count == 2
+        notifier.notify_reconciliation.assert_called()
+        # Le dernier appel concerne les orphelins
+        last_call = notifier.notify_reconciliation.call_args_list[-1][0][0]
+        assert "orphelin" in last_call.lower()
+        assert "2" in last_call
+
+    @pytest.mark.asyncio
+    async def test_keeps_tracked_orders(self):
+        """Ordres trackés par la position locale → pas annulés."""
+        notifier = _make_notifier()
+        executor = _make_executor(notifier=notifier)
+        # Position locale avec SL/TP connus
+        executor._position = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="entry_1",
+            sl_order_id="sl_tracked", tp_order_id="tp_tracked",
+            strategy_name="vwap_rsi",
+        )
+        executor._risk_manager.register_position({
+            "symbol": "BTC/USDT:USDT", "direction": "LONG",
+        })
+        # Position confirmée sur exchange
+        executor._exchange.fetch_positions = AsyncMock(return_value=[
+            {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
+        ])
+        # Les 2 ordres ouverts SONT trackés localement
+        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
+            {"id": "sl_tracked", "symbol": "BTC/USDT:USDT"},
+            {"id": "tp_tracked", "symbol": "BTC/USDT:USDT"},
+        ])
+
+        await executor._reconcile_on_boot()
+
+        # Aucun ordre annulé (tous trackés)
+        executor._exchange.cancel_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mixed_tracked_and_orphan_orders(self):
+        """Mix d'ordres trackés et orphelins → seuls les orphelins annulés."""
+        notifier = _make_notifier()
+        executor = _make_executor(notifier=notifier)
+        executor._position = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="entry_1",
+            sl_order_id="sl_tracked", tp_order_id="tp_tracked",
+            strategy_name="vwap_rsi",
+        )
+        executor._risk_manager.register_position({
+            "symbol": "BTC/USDT:USDT", "direction": "LONG",
+        })
+        executor._exchange.fetch_positions = AsyncMock(return_value=[
+            {"contracts": 0.001, "side": "long", "symbol": "BTC/USDT:USDT"},
+        ])
+        # 2 trackés + 1 orphelin
+        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
+            {"id": "sl_tracked", "symbol": "BTC/USDT:USDT"},
+            {"id": "tp_tracked", "symbol": "BTC/USDT:USDT"},
+            {"id": "old_tp_from_crash", "symbol": "BTC/USDT:USDT"},
+        ])
+
+        await executor._reconcile_on_boot()
+
+        # Seul l'orphelin annulé
+        executor._exchange.cancel_order.assert_called_once_with(
+            "old_tp_from_crash", "BTC/USDT:USDT",
+            params=executor._sandbox_params,
+        )
+        last_call = notifier.notify_reconciliation.call_args_list[-1][0][0]
+        assert "orphelin" in last_call.lower()
+
+    @pytest.mark.asyncio
+    async def test_fetch_open_orders_failure_non_blocking(self):
+        """Échec fetch_open_orders → log warning, pas de crash."""
+        executor = _make_executor()
+        executor._position = None
+        executor._exchange.fetch_positions = AsyncMock(return_value=[])
+        executor._exchange.fetch_open_orders = AsyncMock(
+            side_effect=Exception("API down"),
+        )
+
+        # Ne doit pas crasher
+        await executor._reconcile_on_boot()
+        assert executor._position is None
+
+
 # ─── Leverage setup ────────────────────────────────────────────────────────
 
 
