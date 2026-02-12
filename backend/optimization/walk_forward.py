@@ -10,6 +10,7 @@ from __future__ import annotations
 import gc
 import itertools
 import os
+import time
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -372,7 +373,8 @@ class WalkForwardOptimizer:
         else:
             coarse_grid = full_grid
 
-        # ProcessPool instable sur Windows → limité à 4 workers avec fallback séquentiel
+        # 4 workers = bon compromis performance/thermique sur laptop
+        # (8 workers = seulement ~1.5x plus rapide mais double la charge thermique)
         n_workers = max_workers or min(os.cpu_count() or 4, 4)
         n_distinct_combos = len(coarse_grid)
 
@@ -592,19 +594,42 @@ class WalkForwardOptimizer:
         main_tf: str,
         n_workers: int,
     ) -> list[_ISResult]:
-        """Exécution parallèle via ProcessPoolExecutor."""
-        chunksize = max(1, len(grid) // (n_workers * 4))
+        """Exécution parallèle par lots avec cooldown pour éviter la surchauffe CPU.
+
+        Envoie les backtests par lots de (n_workers * 5) puis pause 2s
+        entre chaque lot pour laisser le CPU refroidir.
+        """
+        batch_size = n_workers * 5  # ~20 tasks par lot avec 4 workers
+        cooldown_s = 2.0  # pause entre les lots
+
         results: list[_ISResult] = []
+        n_batches = (len(grid) + batch_size - 1) // batch_size
+
         with ProcessPoolExecutor(
             max_workers=n_workers,
             initializer=_init_worker,
             initargs=(candles_serialized, strategy_name, symbol, bt_config_dict, main_tf),
             max_tasks_per_child=50,
         ) as executor:
-            for result in executor.map(
-                _run_single_backtest_worker, grid, chunksize=chunksize,
-            ):
-                results.append(result)
+            for batch_idx in range(n_batches):
+                batch_start = batch_idx * batch_size
+                batch = grid[batch_start : batch_start + batch_size]
+                chunksize = max(1, len(batch) // (n_workers * 2))
+
+                logger.info(
+                    "    Lot {}/{} ({} backtests)...",
+                    batch_idx + 1, n_batches, len(batch),
+                )
+
+                for result in executor.map(
+                    _run_single_backtest_worker, batch, chunksize=chunksize,
+                ):
+                    results.append(result)
+
+                # Pause entre les lots pour éviter la surchauffe
+                if batch_idx < n_batches - 1:
+                    time.sleep(cooldown_s)
+
         return results
 
     @staticmethod

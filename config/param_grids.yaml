@@ -2,7 +2,7 @@
 optimization:
   is_window_days: 120     # In-sample : 4 mois
   oos_window_days: 30     # Out-of-sample : 1 mois
-  step_days: 30           # Avancement entre fenêtres
+  step_days: 30           # Pas glissant entre fenêtres
   metric: "sharpe_ratio"  # Métrique d'optimisation (sharpe_ratio | net_return_pct | profit_factor)
   max_workers: null        # null = os.cpu_count()
   main_exchange: "binance" # Exchange source pour le WFO
