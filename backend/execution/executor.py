@@ -75,6 +75,8 @@ SYMBOL_SPOT_TO_FUTURES: dict[str, str] = {
     "BTC/USDT": "BTC/USDT:USDT",
     "ETH/USDT": "ETH/USDT:USDT",
     "SOL/USDT": "SOL/USDT:USDT",
+    "DOGE/USDT": "DOGE/USDT:USDT",
+    "LINK/USDT": "LINK/USDT:USDT",
 }
 
 
@@ -203,14 +205,14 @@ class Executor:
             # 3. Setup leverage pour tous les symboles configurés
             active_symbols: set[str] = set()
             for asset in self._config.assets:
-                futures_sym = to_futures_symbol(asset.symbol)
                 try:
+                    futures_sym = to_futures_symbol(asset.symbol)
                     await self._setup_leverage_and_margin(futures_sym)
                     active_symbols.add(asset.symbol)
                 except Exception as e:
                     logger.warning(
                         "Executor: setup échoué pour {} — désactivé: {}",
-                        futures_sym, e,
+                        asset.symbol, e,
                     )
 
             if self._selector:
@@ -715,7 +717,12 @@ class Executor:
 
     async def _reconcile_on_boot(self) -> None:
         """Synchronise l'état local avec les positions Bitget réelles."""
-        configured_symbols = [to_futures_symbol(a.symbol) for a in self._config.assets]
+        configured_symbols = []
+        for a in self._config.assets:
+            try:
+                configured_symbols.append(to_futures_symbol(a.symbol))
+            except ValueError:
+                pass  # symbole non supporté en futures, ignoré
 
         for futures_sym in configured_symbols:
             await self._reconcile_symbol(futures_sym)

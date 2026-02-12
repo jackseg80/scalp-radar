@@ -197,7 +197,7 @@ class TestSymbolMapping:
 
     def test_unknown_symbol_raises(self):
         with pytest.raises(ValueError, match="non supporté"):
-            to_futures_symbol("DOGE/USDT")
+            to_futures_symbol("SHIB/USDT")
 
 
 # ─── Event filtering (via selector) ──────────────────────────────────────
