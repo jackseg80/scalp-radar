@@ -9,18 +9,28 @@ from __future__ import annotations
 from typing import Any
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.funding import FundingStrategy
+from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
 from backend.strategies.vwap_rsi import VwapRsiStrategy
 
-# Lazy imports des configs pour éviter les dépendances circulaires
-from backend.core.config import MomentumConfig, VwapRsiConfig
+from backend.core.config import (
+    FundingConfig,
+    LiquidationConfig,
+    MomentumConfig,
+    VwapRsiConfig,
+)
 
 # Registre central — pas de switch/case, extensible par ajout de ligne
-# Funding et Liquidation exclus : pas de données historiques OI/funding
 STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
     "vwap_rsi": (VwapRsiConfig, VwapRsiStrategy),
     "momentum": (MomentumConfig, MomentumStrategy),
+    "funding": (FundingConfig, FundingStrategy),
+    "liquidation": (LiquidationConfig, LiquidationStrategy),
 }
+
+# Stratégies qui nécessitent extra_data (funding rates, OI) pour le backtest
+STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation"}
 
 
 def create_strategy_with_params(
@@ -37,6 +47,14 @@ def create_strategy_with_params(
             f"Disponibles : {list(STRATEGY_REGISTRY.keys())}"
         )
     config_cls, strategy_cls = STRATEGY_REGISTRY[strategy_name]
+
+    # Mirroring : extreme_negative_threshold = -extreme_positive_threshold
+    if strategy_name == "funding" and "extreme_positive_threshold" in params:
+        params.setdefault(
+            "extreme_negative_threshold",
+            -abs(params["extreme_positive_threshold"]),
+        )
+
     # Merge defaults + custom params
     defaults = config_cls().model_dump()
     merged = {**defaults, **params}

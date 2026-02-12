@@ -18,6 +18,7 @@ import yaml
 from loguru import logger
 
 from backend.backtesting.engine import BacktestConfig, run_backtest_single
+from backend.backtesting.extra_data_builder import build_extra_data_map
 from backend.backtesting.metrics import calculate_metrics
 from backend.core.database import Database
 from backend.core.models import Candle
@@ -199,9 +200,21 @@ async def validate_on_bitget(
             end_date=main_candles[-1].timestamp,
         )
 
+        # Charger extra_data si nécessaire (funding/OI Binance comme proxy)
+        from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
+        extra_data_map: dict[str, dict[str, Any]] | None = None
+        if strategy_name in STRATEGIES_NEED_EXTRA_DATA:
+            funding_rates = await db.get_funding_rates(symbol, exchange="binance")
+            oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange="binance")
+            if funding_rates or oi_records:
+                extra_data_map = build_extra_data_map(
+                    main_candles, funding_rates, oi_records,
+                )
+
         # Backtest
         result = run_backtest_single(
-            strategy_name, recommended_params, candles_by_tf, bt_config, main_tf
+            strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,
+            extra_data_by_timestamp=extra_data_map,
         )
         metrics = calculate_metrics(result)
 

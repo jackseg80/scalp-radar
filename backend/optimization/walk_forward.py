@@ -25,6 +25,7 @@ import yaml
 from loguru import logger
 
 from backend.backtesting.engine import BacktestConfig, BacktestResult, run_backtest_single
+from backend.backtesting.extra_data_builder import build_extra_data_map
 from backend.backtesting.metrics import calculate_metrics
 from backend.core.database import Database
 from backend.core.models import Candle, TimeFrame
@@ -205,6 +206,7 @@ _worker_strategy: str = ""
 _worker_symbol: str = ""
 _worker_bt_config: BacktestConfig | None = None
 _worker_main_tf: str = ""
+_worker_extra_data: dict[str, dict[str, Any]] | None = None
 
 
 def _init_worker(
@@ -213,9 +215,10 @@ def _init_worker(
     symbol: str,
     bt_config_dict: dict,
     main_tf: str,
+    extra_data_map: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Initialise les données partagées dans chaque worker (appelé 1x par process)."""
-    global _worker_candles, _worker_strategy, _worker_symbol, _worker_bt_config, _worker_main_tf
+    global _worker_candles, _worker_strategy, _worker_symbol, _worker_bt_config, _worker_main_tf, _worker_extra_data
 
     # Couper les logs dans les workers (seul le process principal affiche la progression)
     import logging
@@ -229,6 +232,7 @@ def _init_worker(
     _worker_symbol = symbol
     _worker_bt_config = BacktestConfig(**bt_config_dict)
     _worker_main_tf = main_tf
+    _worker_extra_data = extra_data_map
 
 
 def _run_single_backtest_worker(params: dict[str, Any]) -> _ISResult:
@@ -238,6 +242,7 @@ def _run_single_backtest_worker(params: dict[str, Any]) -> _ISResult:
     """
     result = run_backtest_single(
         _worker_strategy, params, _worker_candles, _worker_bt_config, _worker_main_tf,
+        extra_data_by_timestamp=_worker_extra_data,
     )
     metrics = calculate_metrics(result)
 
@@ -257,11 +262,13 @@ def _run_single_backtest_sequential(
     bt_config: BacktestConfig,
     main_tf: str,
     precomputed_indicators: dict | None = None,
+    extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
 ) -> _ISResult:
     """Version séquentielle (fallback si ProcessPoolExecutor crashe)."""
     result = run_backtest_single(
         strategy_name, params, candles_by_tf, bt_config, main_tf,
         precomputed_indicators=precomputed_indicators,
+        extra_data_by_timestamp=extra_data_by_timestamp,
     )
     metrics = calculate_metrics(result)
     return (
@@ -274,9 +281,12 @@ def _run_single_backtest_sequential(
 
 
 # Paramètres qui affectent compute_indicators() (tout le reste = seuils evaluate())
+# Funding/liquidation : aucun paramètre n'affecte les indicateurs (pas de compute_indicators)
 _INDICATOR_PARAMS: dict[str, list[str]] = {
     "vwap_rsi": ["rsi_period"],
     "momentum": ["breakout_lookback"],
+    "funding": [],
+    "liquidation": [],
 }
 
 
@@ -346,6 +356,33 @@ class WalkForwardOptimizer:
             )
             all_candles_by_tf[tf] = candles
             logger.info("  {} : {} candles", tf, len(candles))
+
+        # Charger funding/OI si la stratégie en a besoin
+        from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
+        all_funding_rates: list[dict] = []
+        all_oi_records: list[dict] = []
+        needs_extra = strategy_name in STRATEGIES_NEED_EXTRA_DATA
+
+        if needs_extra:
+            logger.info("Chargement données extra (funding/OI) depuis {} ...", exchange)
+            all_funding_rates = await db.get_funding_rates(symbol, exchange=exchange)
+            all_oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange=exchange)
+            logger.info(
+                "  funding: {} rates, OI: {} records",
+                len(all_funding_rates), len(all_oi_records),
+            )
+            if not all_funding_rates and strategy_name == "funding":
+                logger.warning(
+                    "Aucun funding rate en DB pour {} — "
+                    "lancez: uv run python -m scripts.fetch_funding --symbol {}",
+                    symbol, symbol,
+                )
+            if not all_oi_records and strategy_name == "liquidation":
+                logger.warning(
+                    "Aucun record OI en DB pour {} — "
+                    "lancez: uv run python -m scripts.fetch_oi --symbol {}",
+                    symbol, symbol,
+                )
 
         await db.close()
 
@@ -428,10 +465,19 @@ class WalkForwardOptimizer:
                     logger.warning("Fenêtre {} : pas de candles IS, skip", w_idx)
                     continue
 
+                # Build extra_data_map pour IS window (funding/OI)
+                is_extra_data_map: dict[str, dict[str, Any]] | None = None
+                if needs_extra:
+                    is_extra_data_map = build_extra_data_map(
+                        is_candles_by_tf[main_tf],
+                        all_funding_rates, all_oi_records,
+                    )
+
                 # --- Coarse pass ---
                 coarse_results = self._parallel_backtest(
                     coarse_grid, is_candles_by_tf, strategy_name, symbol,
                     bt_config_dict, main_tf, n_workers, metric,
+                    extra_data_map=is_extra_data_map,
                 )
 
                 # Top 20
@@ -447,6 +493,7 @@ class WalkForwardOptimizer:
                     fine_results = self._parallel_backtest(
                         fine_grid, is_candles_by_tf, strategy_name, symbol,
                         bt_config_dict, main_tf, n_workers, metric,
+                        extra_data_map=is_extra_data_map,
                     )
                     all_is_results = coarse_results + fine_results
                 else:
@@ -473,8 +520,17 @@ class WalkForwardOptimizer:
                     logger.warning("Fenêtre {} : pas de candles OOS, skip", w_idx)
                     continue
 
+                # Build extra_data_map pour OOS window
+                oos_extra_data_map: dict[str, dict[str, Any]] | None = None
+                if needs_extra:
+                    oos_extra_data_map = build_extra_data_map(
+                        oos_candles_by_tf[main_tf],
+                        all_funding_rates, all_oi_records,
+                    )
+
                 oos_result = run_backtest_single(
-                    strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf
+                    strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf,
+                    extra_data_by_timestamp=oos_extra_data_map,
                 )
                 oos_metrics = calculate_metrics(oos_result)
 
@@ -584,6 +640,7 @@ class WalkForwardOptimizer:
         main_tf: str,
         n_workers: int,
         metric: str,
+        extra_data_map: dict[str, dict[str, Any]] | None = None,
     ) -> list[_ISResult]:
         """Lance les backtests avec chaîne de fallback :
 
@@ -618,6 +675,7 @@ class WalkForwardOptimizer:
             results, remaining_grid = self._run_pool(
                 grid, candles_serialized, strategy_name, symbol,
                 bt_config_dict, main_tf, n_workers,
+                extra_data_map=extra_data_map,
             )
             # Libérer les candles sérialisées dès que le pool est fini
             del candles_serialized
@@ -631,6 +689,7 @@ class WalkForwardOptimizer:
         if remaining_grid:
             seq_results = self._run_sequential(
                 remaining_grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
+                extra_data_map=extra_data_map,
             )
             results.extend(seq_results)
 
@@ -708,6 +767,7 @@ class WalkForwardOptimizer:
         bt_config_dict: dict,
         main_tf: str,
         n_workers: int,
+        extra_data_map: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[list[_ISResult], list[dict[str, Any]]]:
         """Exécution parallèle par lots avec cooldown.
 
@@ -726,7 +786,7 @@ class WalkForwardOptimizer:
             with ProcessPoolExecutor(
                 max_workers=n_workers,
                 initializer=_init_worker,
-                initargs=(candles_serialized, strategy_name, symbol, bt_config_dict, main_tf),
+                initargs=(candles_serialized, strategy_name, symbol, bt_config_dict, main_tf, extra_data_map),
                 max_tasks_per_child=50,
             ) as executor:
                 for batch_idx in range(n_batches):
@@ -773,6 +833,7 @@ class WalkForwardOptimizer:
         strategy_name: str,
         bt_config_dict: dict,
         main_tf: str,
+        extra_data_map: dict[str, dict[str, Any]] | None = None,
     ) -> list[_ISResult]:
         """Exécution séquentielle avec pré-calcul des indicateurs par groupe.
 
@@ -828,6 +889,7 @@ class WalkForwardOptimizer:
                     _run_single_backtest_sequential(
                         params, candles_by_tf, strategy_name, bt_config, main_tf,
                         precomputed_indicators=precomputed,
+                        extra_data_by_timestamp=extra_data_map,
                     )
                 )
                 done += 1

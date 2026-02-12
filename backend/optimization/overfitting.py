@@ -82,6 +82,7 @@ class OverfitDetector:
         bt_config: BacktestConfig,
         all_symbols_results: dict[str, dict[str, Any]] | None = None,
         seed: int | None = 42,
+        extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
     ) -> OverfitReport:
         """Analyse complète : Monte Carlo + DSR + stabilité + convergence."""
         mc = self.monte_carlo_block_bootstrap(trades, seed=seed)
@@ -92,6 +93,7 @@ class OverfitDetector:
         stability = self.parameter_stability(
             strategy_name, symbol, optimal_params,
             candles_by_tf, bt_config,
+            extra_data_by_timestamp=extra_data_by_timestamp,
         )
         convergence = None
         if all_symbols_results and len(all_symbols_results) >= 2:
@@ -212,6 +214,7 @@ class OverfitDetector:
         candles_by_tf: dict[str, list[Candle]],
         bt_config: BacktestConfig,
         perturbation_pcts: list[float] | None = None,
+        extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
     ) -> StabilityResult:
         """Perturbe chaque paramètre de ±pct et mesure l'impact sur le Sharpe.
 
@@ -225,6 +228,7 @@ class OverfitDetector:
         try:
             ref_result = run_backtest_single(
                 strategy_name, optimal_params, candles_by_tf, bt_config,
+                extra_data_by_timestamp=extra_data_by_timestamp,
             )
             ref_sharpe = calculate_metrics(ref_result).sharpe_ratio
         except Exception:
@@ -260,6 +264,7 @@ class OverfitDetector:
                         p_result = run_backtest_single(
                             strategy_name, perturbed_params,
                             candles_by_tf, bt_config,
+                            extra_data_by_timestamp=extra_data_by_timestamp,
                         )
                         p_sharpe = calculate_metrics(p_result).sharpe_ratio
                         del p_result

@@ -100,9 +100,12 @@ class TestStrategyRegistry:
         assert "momentum" in STRATEGY_REGISTRY
 
     def test_registry_excludes_non_optimizable(self):
-        assert "funding" not in STRATEGY_REGISTRY
-        assert "liquidation" not in STRATEGY_REGISTRY
         assert "orderflow" not in STRATEGY_REGISTRY
+
+    def test_registry_contains_funding_liquidation(self):
+        """Sprint 7b : funding et liquidation sont maintenant optimisables."""
+        assert "funding" in STRATEGY_REGISTRY
+        assert "liquidation" in STRATEGY_REGISTRY
 
     def test_create_strategy_with_params(self):
         strategy = create_strategy_with_params("vwap_rsi", {"rsi_period": 20})

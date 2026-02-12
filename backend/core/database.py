@@ -167,7 +167,37 @@ class Database:
                 last_update TEXT NOT NULL
             );
         """)
+        await self._create_sprint7b_tables()
         await self._conn.commit()
+
+    async def _create_sprint7b_tables(self) -> None:
+        """Tables Sprint 7b : funding rates et open interest historiques."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS funding_rates (
+                symbol TEXT NOT NULL,
+                exchange TEXT NOT NULL DEFAULT 'binance',
+                timestamp INTEGER NOT NULL,
+                funding_rate REAL NOT NULL,
+                PRIMARY KEY (symbol, exchange, timestamp)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_funding_rates_lookup
+                ON funding_rates (symbol, exchange, timestamp);
+
+            CREATE TABLE IF NOT EXISTS open_interest (
+                symbol TEXT NOT NULL,
+                exchange TEXT NOT NULL DEFAULT 'binance',
+                timeframe TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                oi REAL NOT NULL,
+                oi_value REAL NOT NULL,
+                PRIMARY KEY (symbol, exchange, timeframe, timestamp)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_oi_lookup
+                ON open_interest (symbol, exchange, timeframe, timestamp);
+        """)
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
 
@@ -327,6 +357,141 @@ class Database:
             ),
         )
         await self._conn.commit()
+
+    # ─── FUNDING RATES ─────────────────────────────────────────────────────
+
+    async def insert_funding_rates_batch(self, rates: list[dict]) -> int:
+        """Insère un batch de funding rates. Ignore les doublons. Retourne le nombre inséré."""
+        if not rates:
+            return 0
+        assert self._conn is not None
+        data = [
+            (r["symbol"], r["exchange"], r["timestamp"], r["funding_rate"])
+            for r in rates
+        ]
+        cursor = await self._conn.executemany(
+            """INSERT OR IGNORE INTO funding_rates
+               (symbol, exchange, timestamp, funding_rate)
+               VALUES (?, ?, ?, ?)""",
+            data,
+        )
+        await self._conn.commit()
+        return cursor.rowcount
+
+    async def get_funding_rates(
+        self,
+        symbol: str,
+        exchange: str = "binance",
+        start_ts: int | None = None,
+        end_ts: int | None = None,
+    ) -> list[dict]:
+        """Retourne les funding rates triés par timestamp ASC."""
+        assert self._conn is not None
+        query = "SELECT * FROM funding_rates WHERE symbol = ? AND exchange = ?"
+        params: list[object] = [symbol, exchange]
+
+        if start_ts is not None:
+            query += " AND timestamp >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            query += " AND timestamp <= ?"
+            params.append(end_ts)
+
+        query += " ORDER BY timestamp ASC"
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "symbol": row["symbol"],
+                "exchange": row["exchange"],
+                "timestamp": row["timestamp"],
+                "funding_rate": row["funding_rate"],
+            }
+            for row in rows
+        ]
+
+    async def get_latest_funding_timestamp(
+        self, symbol: str, exchange: str = "binance",
+    ) -> int | None:
+        """Retourne le timestamp du dernier funding rate (pour reprise incrémentale)."""
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT MAX(timestamp) as ts FROM funding_rates WHERE symbol = ? AND exchange = ?",
+            [symbol, exchange],
+        )
+        row = await cursor.fetchone()
+        if row and row["ts"]:
+            return row["ts"]
+        return None
+
+    # ─── OPEN INTEREST ───────────────────────────────────────────────────
+
+    async def insert_oi_batch(self, records: list[dict]) -> int:
+        """Insère un batch d'OI records. Ignore les doublons. Retourne le nombre inséré."""
+        if not records:
+            return 0
+        assert self._conn is not None
+        data = [
+            (r["symbol"], r["exchange"], r["timeframe"], r["timestamp"], r["oi"], r["oi_value"])
+            for r in records
+        ]
+        cursor = await self._conn.executemany(
+            """INSERT OR IGNORE INTO open_interest
+               (symbol, exchange, timeframe, timestamp, oi, oi_value)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            data,
+        )
+        await self._conn.commit()
+        return cursor.rowcount
+
+    async def get_open_interest(
+        self,
+        symbol: str,
+        timeframe: str = "5m",
+        exchange: str = "binance",
+        start_ts: int | None = None,
+        end_ts: int | None = None,
+    ) -> list[dict]:
+        """Retourne les records OI triés par timestamp ASC."""
+        assert self._conn is not None
+        query = "SELECT * FROM open_interest WHERE symbol = ? AND exchange = ? AND timeframe = ?"
+        params: list[object] = [symbol, exchange, timeframe]
+
+        if start_ts is not None:
+            query += " AND timestamp >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            query += " AND timestamp <= ?"
+            params.append(end_ts)
+
+        query += " ORDER BY timestamp ASC"
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "symbol": row["symbol"],
+                "exchange": row["exchange"],
+                "timeframe": row["timeframe"],
+                "timestamp": row["timestamp"],
+                "oi": row["oi"],
+                "oi_value": row["oi_value"],
+            }
+            for row in rows
+        ]
+
+    async def get_latest_oi_timestamp(
+        self, symbol: str, timeframe: str = "5m", exchange: str = "binance",
+    ) -> int | None:
+        """Retourne le timestamp du dernier record OI (pour reprise incrémentale)."""
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT MAX(timestamp) as ts FROM open_interest WHERE symbol = ? AND exchange = ? AND timeframe = ?",
+            [symbol, exchange, timeframe],
+        )
+        row = await cursor.fetchone()
+        if row and row["ts"]:
+            return row["ts"]
+        return None
 
     # ─── SESSION STATE ──────────────────────────────────────────────────────
 

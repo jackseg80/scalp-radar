@@ -72,9 +72,9 @@ async def check_data(config_dir: str = "config") -> None:
                 days = 0
                 mark = "✗"
 
-            status = f"{symbol:<12s} {exchange:<8s}: {days:>4d} jours"
+            status = f"{symbol:<12s} {exchange:<8s} candles : {days:>4d} jours"
             if n_candles > 0:
-                status += f" (5m: {n_candles // 1000}k candles)"
+                status += f" (5m: {n_candles // 1000}k)"
             status += f"  {mark}"
 
             if n_candles == 0:
@@ -86,6 +86,32 @@ async def check_data(config_dir: str = "config") -> None:
                 status += f"  → {cmd}"
 
             print(f"  {status}")
+
+    # Données funding/OI (Binance seulement)
+    print(f"\n  Funding Rates & Open Interest ({main_exchange})")
+    print("  " + "─" * 48)
+    for symbol in symbols:
+        # Funding rates
+        funding = await db.get_funding_rates(symbol, exchange=main_exchange)
+        n_funding = len(funding)
+        if n_funding > 0:
+            f_days = (funding[-1]["timestamp"] - funding[0]["timestamp"]) / 1000 / 86400
+            f_mark = "✓" if f_days >= 360 else "⚠"
+            f_status = f"{symbol:<12s} funding  : {f_days:>4.0f} jours ({n_funding} rates) {f_mark}"
+        else:
+            f_status = f"{symbol:<12s} funding  :    0 jours  ✗  → uv run python -m scripts.fetch_funding --symbol {symbol}"
+        print(f"  {f_status}")
+
+        # Open Interest
+        oi = await db.get_open_interest(symbol, timeframe="5m", exchange=main_exchange)
+        n_oi = len(oi)
+        if n_oi > 0:
+            o_days = (oi[-1]["timestamp"] - oi[0]["timestamp"]) / 1000 / 86400
+            o_mark = "✓" if o_days >= 360 else "⚠"
+            o_status = f"{symbol:<12s} OI 5m    : {o_days:>4.0f} jours ({n_oi // 1000}k records) {o_mark}"
+        else:
+            o_status = f"{symbol:<12s} OI 5m    :    0 jours  ✗  → uv run python -m scripts.fetch_oi --symbol {symbol}"
+        print(f"  {o_status}")
 
     await db.close()
     print()
@@ -237,6 +263,18 @@ async def run_optimization(
             end_date=datetime.now(),
         )
 
+    # Charger extra_data (funding/OI) si nécessaire pour la stabilité
+    from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
+    stability_extra_data = None
+    if strategy_name in STRATEGIES_NEED_EXTRA_DATA and stab_candles:
+        from backend.backtesting.extra_data_builder import build_extra_data_map
+        funding_rates = await db.get_funding_rates(symbol, exchange=main_exchange)
+        oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange=main_exchange)
+        if funding_rates or oi_records:
+            stability_extra_data = build_extra_data_map(
+                stab_candles, funding_rates, oi_records,
+            )
+
     overfit = detector.full_analysis(
         trades=wfo.all_oos_trades,
         observed_sharpe=wfo.avg_oos_sharpe,
@@ -247,6 +285,7 @@ async def run_optimization(
         candles_by_tf=stability_candles_by_tf,
         bt_config=bt_config,
         all_symbols_results=all_symbols_results,
+        extra_data_by_timestamp=stability_extra_data,
     )
 
     logger.info(
@@ -359,7 +398,7 @@ async def main() -> None:
     symbols = [a.symbol for a in config.assets]
     available_strategies = list(STRATEGY_REGISTRY.keys())
     excluded = [
-        name for name in ["funding", "liquidation", "orderflow"]
+        name for name in ["orderflow"]
         if name not in STRATEGY_REGISTRY
     ]
 

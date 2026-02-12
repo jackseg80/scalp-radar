@@ -70,6 +70,13 @@ class LiquidationConfig(BaseModel):
     tp_percent: float = Field(default=0.8, gt=0)
     sl_percent: float = Field(default=0.4, gt=0)
     weight: float = Field(default=0.20, ge=0, le=1)
+    per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:
+        """Retourne les paramètres avec overrides per_asset appliqués."""
+        base = self.model_dump(exclude={"per_asset", "enabled", "live_eligible", "weight"})
+        overrides = self.per_asset.get(symbol, {})
+        return {**base, **overrides}
 
 
 class OrderflowConfig(BaseModel):
@@ -113,6 +120,13 @@ class FundingConfig(BaseModel):
     tp_percent: float = Field(default=0.4, gt=0)
     sl_percent: float = Field(default=0.2, gt=0)
     weight: float = Field(default=0.15, ge=0, le=1)
+    per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:
+        """Retourne les paramètres avec overrides per_asset appliqués."""
+        base = self.model_dump(exclude={"per_asset", "enabled", "live_eligible", "weight"})
+        overrides = self.per_asset.get(symbol, {})
+        return {**base, **overrides}
 
 
 class CustomStrategyConfig(BaseModel):

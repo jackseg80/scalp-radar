@@ -88,6 +88,7 @@ class BacktestEngine:
         candles_by_tf: dict[str, list[Candle]],
         main_tf: str = "5m",
         precomputed_indicators: dict[str, dict[str, dict[str, Any]]] | None = None,
+        extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
     ) -> BacktestResult:
         """Lance le backtest. candles_by_tf = {"5m": [...], "15m": [...]}."""
         # Vérifier les données
@@ -153,6 +154,11 @@ class BacktestEngine:
                 if last_ts and last_ts in indicators_by_tf[tf]:
                     ctx_indicators[tf] = indicators_by_tf[tf][last_ts]
 
+            # Extra data pour cette bougie (funding rate, OI, etc.)
+            extra = {}
+            if extra_data_by_timestamp:
+                extra = extra_data_by_timestamp.get(ts_iso, {})
+
             # Construire le context
             ctx = StrategyContext(
                 symbol=self._config.symbol,
@@ -162,6 +168,7 @@ class BacktestEngine:
                 current_position=position,
                 capital=capital,
                 config=None,  # type: ignore[arg-type] — pas besoin en backtest
+                extra_data=extra,
             )
 
             # Détecter le régime si les indicateurs sont dispo
@@ -251,6 +258,7 @@ def run_backtest_single(
     bt_config: BacktestConfig,
     main_tf: str = "5m",
     precomputed_indicators: dict[str, dict[str, dict[str, Any]]] | None = None,
+    extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
 ) -> BacktestResult:
     """Lance un backtest unique avec paramètres custom.
 
@@ -259,9 +267,14 @@ def run_backtest_single(
 
     Args:
         precomputed_indicators: Si fourni, skip compute_indicators() (speedup WFO).
+        extra_data_by_timestamp: Si fourni, injecte les extra_data (funding, OI) par bougie.
     """
     from backend.optimization import create_strategy_with_params
 
     strategy = create_strategy_with_params(strategy_name, params)
     engine = BacktestEngine(bt_config, strategy)
-    return engine.run(candles_by_tf, main_tf=main_tf, precomputed_indicators=precomputed_indicators)
+    return engine.run(
+        candles_by_tf, main_tf=main_tf,
+        precomputed_indicators=precomputed_indicators,
+        extra_data_by_timestamp=extra_data_by_timestamp,
+    )

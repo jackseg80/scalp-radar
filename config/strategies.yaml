@@ -25,6 +25,7 @@ liquidation:
   tp_percent: 0.8
   sl_percent: 0.4
   weight: 0.20
+  per_asset: {}  # Overrides par asset (ex: BTC/USDT: {oi_change_threshold: 3.0})
 
 orderflow:
   enabled: false
@@ -60,6 +61,7 @@ funding:
   tp_percent: 0.4
   sl_percent: 0.2
   weight: 0.15
+  per_asset: {}  # Overrides par asset (ex: BTC/USDT: {extreme_positive_threshold: 0.05})
 
 # Stratégies custom (swing existantes, baseline pour l'Arena)
 custom_strategies:
