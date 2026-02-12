@@ -418,96 +418,118 @@ class WalkForwardOptimizer:
                 oos_start.strftime("%Y-%m-%d"), oos_end.strftime("%Y-%m-%d"),
             )
 
-            # Découper les candles IS
-            is_candles_by_tf: dict[str, list[Candle]] = {}
-            for tf, candles in all_candles_by_tf.items():
-                is_candles_by_tf[tf] = _slice_candles(candles, is_start, is_end)
+            try:
+                # Découper les candles IS
+                is_candles_by_tf: dict[str, list[Candle]] = {}
+                for tf, candles in all_candles_by_tf.items():
+                    is_candles_by_tf[tf] = _slice_candles(candles, is_start, is_end)
 
-            if not is_candles_by_tf.get(main_tf):
-                logger.warning("Fenêtre {} : pas de candles IS, skip", w_idx)
-                continue
+                if not is_candles_by_tf.get(main_tf):
+                    logger.warning("Fenêtre {} : pas de candles IS, skip", w_idx)
+                    continue
 
-            # Sérialiser les candles IS pour les workers (uniquement si parallèle)
-            is_serialized = _serialize_candles_by_tf(is_candles_by_tf) if n_workers > 1 else {}
-
-            # --- Coarse pass ---
-            coarse_results = self._parallel_backtest(
-                coarse_grid, is_candles_by_tf, is_serialized, strategy_name, symbol,
-                bt_config_dict, main_tf, n_workers, metric,
-            )
-
-            # Top 20
-            coarse_results.sort(key=lambda r: r[1], reverse=True)
-            top_20 = coarse_results[:20]
-
-            # --- Fine pass ---
-            top_20_params = [r[0] for r in top_20]
-            fine_grid = _fine_grid_around_top(top_20_params, grid_values)
-            n_distinct_combos = max(n_distinct_combos, len(coarse_grid) + len(fine_grid))
-
-            if fine_grid:
-                fine_results = self._parallel_backtest(
-                    fine_grid, is_candles_by_tf, is_serialized, strategy_name, symbol,
+                # --- Coarse pass ---
+                coarse_results = self._parallel_backtest(
+                    coarse_grid, is_candles_by_tf, strategy_name, symbol,
                     bt_config_dict, main_tf, n_workers, metric,
                 )
-                all_is_results = coarse_results + fine_results
-            else:
-                all_is_results = coarse_results
 
-            # Meilleur IS
-            all_is_results.sort(key=lambda r: r[1], reverse=True)
-            best_is = all_is_results[0]
-            best_params = best_is[0]
-            is_sharpe = best_is[1]
-            is_net_return = best_is[2]
-            is_pf = best_is[3]
-            is_n_trades = best_is[4]
+                # Top 20
+                coarse_results.sort(key=lambda r: r[1], reverse=True)
+                top_20 = coarse_results[:20]
 
-            # Top 5 pour stabilité
-            top_5 = [{"params": r[0], "sharpe": r[1]} for r in all_is_results[:5]]
+                # --- Fine pass ---
+                top_20_params = [r[0] for r in top_20]
+                fine_grid = _fine_grid_around_top(top_20_params, grid_values)
+                n_distinct_combos = max(n_distinct_combos, len(coarse_grid) + len(fine_grid))
 
-            # --- OOS evaluation ---
-            oos_candles_by_tf: dict[str, list[Candle]] = {}
-            for tf, candles in all_candles_by_tf.items():
-                oos_candles_by_tf[tf] = _slice_candles(candles, oos_start, oos_end)
+                if fine_grid:
+                    fine_results = self._parallel_backtest(
+                        fine_grid, is_candles_by_tf, strategy_name, symbol,
+                        bt_config_dict, main_tf, n_workers, metric,
+                    )
+                    all_is_results = coarse_results + fine_results
+                else:
+                    all_is_results = coarse_results
 
-            if not oos_candles_by_tf.get(main_tf):
-                logger.warning("Fenêtre {} : pas de candles OOS, skip", w_idx)
+                # Meilleur IS
+                all_is_results.sort(key=lambda r: r[1], reverse=True)
+                best_is = all_is_results[0]
+                best_params = best_is[0]
+                is_sharpe = best_is[1]
+                is_net_return = best_is[2]
+                is_pf = best_is[3]
+                is_n_trades = best_is[4]
+
+                # Top 5 pour stabilité
+                top_5 = [{"params": r[0], "sharpe": r[1]} for r in all_is_results[:5]]
+
+                # --- OOS evaluation ---
+                oos_candles_by_tf: dict[str, list[Candle]] = {}
+                for tf, candles in all_candles_by_tf.items():
+                    oos_candles_by_tf[tf] = _slice_candles(candles, oos_start, oos_end)
+
+                if not oos_candles_by_tf.get(main_tf):
+                    logger.warning("Fenêtre {} : pas de candles OOS, skip", w_idx)
+                    continue
+
+                oos_result = run_backtest_single(
+                    strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf
+                )
+                oos_metrics = calculate_metrics(oos_result)
+
+                all_oos_trades.extend(oos_result.trades)
+
+                # OOS Sharpe = NaN si < 3 trades (non significatif)
+                oos_sharpe = (
+                    oos_metrics.sharpe_ratio
+                    if oos_metrics.total_trades >= 3
+                    else float("nan")
+                )
+
+                window_results.append(WindowResult(
+                    window_index=w_idx,
+                    is_start=is_start,
+                    is_end=is_end,
+                    oos_start=oos_start,
+                    oos_end=oos_end,
+                    best_params=best_params,
+                    is_sharpe=is_sharpe,
+                    is_net_return_pct=is_net_return,
+                    is_profit_factor=is_pf,
+                    is_trades=is_n_trades,
+                    oos_sharpe=oos_sharpe,
+                    oos_net_return_pct=oos_metrics.net_return_pct,
+                    oos_profit_factor=oos_metrics.profit_factor,
+                    oos_trades=oos_metrics.total_trades,
+                    top_n_params=top_5,
+                ))
+
+            except Exception as exc:
+                logger.error(
+                    "Fenêtre {}/{} ERREUR: {} — skip",
+                    w_idx + 1, len(windows), exc,
+                )
                 continue
-
-            oos_result = run_backtest_single(
-                strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf
-            )
-            oos_metrics = calculate_metrics(oos_result)
-
-            all_oos_trades.extend(oos_result.trades)
-
-            window_results.append(WindowResult(
-                window_index=w_idx,
-                is_start=is_start,
-                is_end=is_end,
-                oos_start=oos_start,
-                oos_end=oos_end,
-                best_params=best_params,
-                is_sharpe=is_sharpe,
-                is_net_return_pct=is_net_return,
-                is_profit_factor=is_pf,
-                is_trades=is_n_trades,
-                oos_sharpe=oos_metrics.sharpe_ratio,
-                oos_net_return_pct=oos_metrics.net_return_pct,
-                oos_profit_factor=oos_metrics.profit_factor,
-                oos_trades=oos_metrics.total_trades,
-                top_n_params=top_5,
-            ))
+            finally:
+                # Libérer mémoire entre fenêtres
+                gc.collect()
 
         # Agréger les résultats
         if not window_results:
             raise ValueError("Aucune fenêtre WFO valide")
 
-        avg_is = float(np.mean([w.is_sharpe for w in window_results]))
-        avg_oos = float(np.mean([w.oos_sharpe for w in window_results]))
+        avg_is = float(np.nanmedian([w.is_sharpe for w in window_results]))
+        oos_sharpes = np.array([w.oos_sharpe for w in window_results])
+        n_valid_oos = int(np.sum(~np.isnan(oos_sharpes)))
+        avg_oos = float(np.nanmedian(oos_sharpes)) if n_valid_oos > 0 else 0.0
         oos_is_ratio = avg_oos / avg_is if avg_is > 0 else 0.0
-        consistency = sum(1 for w in window_results if w.oos_sharpe > 0) / len(window_results)
+        # Consistance = % des fenêtres OOS valides (≥3 trades) qui sont positives
+        consistency = (
+            sum(1 for s in oos_sharpes if not np.isnan(s) and s > 0) / n_valid_oos
+            if n_valid_oos > 0
+            else 0.0
+        )
 
         # Paramètres recommandés = médiane des best_params
         all_best_params = [w.best_params for w in window_results]
@@ -556,7 +578,6 @@ class WalkForwardOptimizer:
         self,
         grid: list[dict[str, Any]],
         candles_by_tf: dict[str, list[Candle]],
-        candles_serialized: dict[str, list[dict]],
         strategy_name: str,
         symbol: str,
         bt_config_dict: dict,
@@ -564,27 +585,49 @@ class WalkForwardOptimizer:
         n_workers: int,
         metric: str,
     ) -> list[_ISResult]:
-        """Lance les backtests par lots parallèles, fallback séquentiel si crash.
+        """Lance les backtests avec chaîne de fallback :
 
-        Si le pool crash en cours de route, les résultats déjà calculés sont
-        conservés et le reste est terminé en séquentiel (rien n'est perdu).
+        1. Fast engine (pré-calcul indicateurs + boucle minimale)
+        2. ProcessPool (parallèle, si fast échoue)
+        3. Séquentiel (si pool crashe)
         """
+        # 1. Tenter le fast engine (stratégies supportées uniquement)
+        if strategy_name in ("vwap_rsi", "momentum"):
+            try:
+                results = self._run_fast(
+                    grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
+                )
+                # Trier par métrique
+                metric_idx = {"sharpe_ratio": 1, "net_return_pct": 2, "profit_factor": 3}
+                sort_idx = metric_idx.get(metric, 1)
+                results.sort(key=lambda r: r[sort_idx], reverse=True)
+                return results
+            except Exception as exc:
+                logger.warning(
+                    "Fast engine échoué ({}), fallback pool/séquentiel...",
+                    exc,
+                )
+
+        # 2. Fallback : pool + séquentiel (code existant)
+        # Sérialiser les candles ici seulement (pas avant, pour économiser la mémoire)
+        candles_serialized = _serialize_candles_by_tf(candles_by_tf) if n_workers > 1 else {}
         results: list[_ISResult] = []
         remaining_grid = list(grid)
 
-        # Tenter le mode parallèle par lots
         if n_workers > 1:
             results, remaining_grid = self._run_pool(
                 grid, candles_serialized, strategy_name, symbol,
                 bt_config_dict, main_tf, n_workers,
             )
+            # Libérer les candles sérialisées dès que le pool est fini
+            del candles_serialized
+            gc.collect()
             if remaining_grid:
                 logger.info(
                     "  Continuation séquentielle : {} combos restantes...",
                     len(remaining_grid),
                 )
 
-        # Fallback séquentiel pour le reste (ou tout si n_workers=1)
         if remaining_grid:
             seq_results = self._run_sequential(
                 remaining_grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
@@ -595,6 +638,64 @@ class WalkForwardOptimizer:
         metric_idx = {"sharpe_ratio": 1, "net_return_pct": 2, "profit_factor": 3}
         sort_idx = metric_idx.get(metric, 1)
         results.sort(key=lambda r: r[sort_idx], reverse=True)
+
+        return results
+
+    @staticmethod
+    def _run_fast(
+        grid: list[dict[str, Any]],
+        candles_by_tf: dict[str, list[Candle]],
+        strategy_name: str,
+        bt_config_dict: dict,
+        main_tf: str,
+    ) -> list[_ISResult]:
+        """Fast engine : pré-calcul indicateurs + boucle de trades minimale.
+
+        ~200x plus rapide que le moteur normal pour le grid search IS.
+        Cache construit une seule fois, puis chaque combo = seuils numpy + boucle légère.
+        """
+        from backend.optimization.fast_backtest import run_backtest_from_cache
+        from backend.optimization.indicator_cache import build_cache
+
+        bt_config = BacktestConfig(**bt_config_dict)
+
+        # Extraire les valeurs du grid pour le cache (toutes les variantes)
+        param_grid_values: dict[str, list] = {}
+        for params in grid:
+            for k, v in params.items():
+                if k not in param_grid_values:
+                    param_grid_values[k] = []
+                if v not in param_grid_values[k]:
+                    param_grid_values[k].append(v)
+
+        # Construire le cache (une seule fois)
+        t0 = time.monotonic()
+        cache = build_cache(candles_by_tf, param_grid_values, strategy_name, main_tf)
+        cache_time = time.monotonic() - t0
+        logger.info(
+            "  Fast cache: {} bougies, {:.1f}ms",
+            cache.n_candles, cache_time * 1000,
+        )
+
+        # Exécuter tous les combos
+        results: list[_ISResult] = []
+        total = len(grid)
+        t_start = time.monotonic()
+
+        for i, params in enumerate(grid):
+            results.append(run_backtest_from_cache(strategy_name, params, cache, bt_config))
+            if (i + 1) % 50 == 0 or i == total - 1:
+                elapsed = time.monotonic() - t_start
+                avg_ms = elapsed / (i + 1) * 1000
+                remaining = (total - i - 1) * elapsed / (i + 1)
+                logger.info(
+                    "  Fast {}/{} — {:.1f}ms/bt — {:.1f}s restant",
+                    i + 1, total, avg_ms, remaining,
+                )
+
+        # Libérer le cache numpy explicitement (évite accumulation mémoire sur 20 fenêtres)
+        del cache
+        gc.collect()
 
         return results
 

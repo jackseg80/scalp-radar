@@ -152,9 +152,11 @@ def _calculate_trade_returns(trades: list[TradeResult], initial_capital: float) 
 def _sharpe(returns: list[float], periods_per_year: float) -> float:
     """Sharpe ratio annualisé, risk-free rate = 0."""
     arr = np.array(returns)
-    if np.std(arr) == 0:
+    std = float(np.std(arr))
+    if std < 1e-10:
         return 0.0
-    return float(np.mean(arr) / np.std(arr) * np.sqrt(periods_per_year))
+    result = float(np.mean(arr) / std * np.sqrt(periods_per_year))
+    return min(100.0, result)
 
 
 def _sortino(returns: list[float], periods_per_year: float) -> float:
@@ -164,10 +166,11 @@ def _sortino(returns: list[float], periods_per_year: float) -> float:
     """
     arr = np.array(returns)
     downside = np.minimum(arr, 0.0)
-    downside_std = np.sqrt(np.mean(downside ** 2))
-    if downside_std == 0:
+    downside_std = float(np.sqrt(np.mean(downside ** 2)))
+    if downside_std < 1e-10:
         return 0.0
-    return float(np.mean(arr) / downside_std * np.sqrt(periods_per_year))
+    result = float(np.mean(arr) / downside_std * np.sqrt(periods_per_year))
+    return min(100.0, result)
 
 
 def _calculate_max_dd_duration(

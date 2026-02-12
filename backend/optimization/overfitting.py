@@ -353,10 +353,11 @@ class OverfitDetector:
         if len(returns) < 2:
             return 0.0
         arr = np.array(returns)
-        std = np.std(arr)
-        if std == 0:
+        std = float(np.std(arr))
+        if std < 1e-10:
             return 0.0
-        return float(np.mean(arr) / std)
+        result = float(np.mean(arr) / std)
+        return min(100.0, result)
 
     @staticmethod
     def _skewness(arr: np.ndarray) -> float:

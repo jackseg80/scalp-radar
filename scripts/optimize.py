@@ -21,6 +21,7 @@ os.environ.setdefault("PYTHON_JIT", "0")
 import argparse
 import asyncio
 import itertools
+import math as _math
 from datetime import datetime
 from pathlib import Path
 
@@ -120,7 +121,7 @@ def _save_wfo_intermediate(wfo: "WFOResult", output_dir: str = "data/optimizatio
                 "is_net_return_pct": w.is_net_return_pct,
                 "is_profit_factor": w.is_profit_factor,
                 "is_trades": w.is_trades,
-                "oos_sharpe": w.oos_sharpe,
+                "oos_sharpe": w.oos_sharpe if not _math.isnan(w.oos_sharpe) else None,
                 "oos_net_return_pct": w.oos_net_return_pct,
                 "oos_profit_factor": w.oos_profit_factor,
                 "oos_trades": w.oos_trades,
@@ -418,12 +419,20 @@ async def main() -> None:
 
         for sym in target_symbols:
             logger.info("Optimisation {} × {} ...", strat, sym)
-            report = await run_optimization(
-                strat, sym, args.config_dir, args.verbose,
-                all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
-            )
-            all_reports.append(report)
-            symbol_results[sym] = report.recommended_params
+            try:
+                report = await run_optimization(
+                    strat, sym, args.config_dir, args.verbose,
+                    all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
+                )
+                all_reports.append(report)
+                symbol_results[sym] = report.recommended_params
+            except Exception as exc:
+                logger.error(
+                    "ERREUR {} × {} : {} — on continue avec les suivants",
+                    strat, sym, exc,
+                )
+                import traceback
+                traceback.print_exc()
 
     # Récapitulatif
     print(f"\n{'═' * 55}")
@@ -444,4 +453,22 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    import traceback
+
+    def _unhandled_exception(exc_type, exc_value, exc_tb):
+        """Attrape les exceptions non gérées pour éviter les crashs silencieux."""
+        logger.error("Exception non gérée: {}", exc_value)
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+        sys.exit(1)
+
+    sys.excepthook = _unhandled_exception
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Optimisation interrompue par l'utilisateur")
+    except Exception as exc:
+        logger.error("Erreur fatale: {}", exc)
+        traceback.print_exc()
+        sys.exit(1)
