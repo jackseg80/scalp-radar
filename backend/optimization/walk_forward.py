@@ -11,6 +11,9 @@ import gc
 import itertools
 import os
 import time
+
+# Désactiver le JIT Python 3.13 (segfaults sur calculs longs)
+os.environ.setdefault("PYTHON_JIT", "0")
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -213,6 +216,12 @@ def _init_worker(
 ) -> None:
     """Initialise les données partagées dans chaque worker (appelé 1x par process)."""
     global _worker_candles, _worker_strategy, _worker_symbol, _worker_bt_config, _worker_main_tf
+
+    # Couper les logs dans les workers (seul le process principal affiche la progression)
+    import logging
+    logging.disable(logging.INFO)
+    logger.disable("backend")
+
     _worker_candles = {}
     for tf_str, candle_dicts in candles_serialized.items():
         _worker_candles[tf_str] = [Candle(**cd) for cd in candle_dicts]
@@ -555,27 +564,32 @@ class WalkForwardOptimizer:
         n_workers: int,
         metric: str,
     ) -> list[_ISResult]:
-        """Lance les backtests en parallèle, fallback séquentiel si le pool crashe."""
+        """Lance les backtests par lots parallèles, fallback séquentiel si crash.
+
+        Si le pool crash en cours de route, les résultats déjà calculés sont
+        conservés et le reste est terminé en séquentiel (rien n'est perdu).
+        """
         results: list[_ISResult] = []
+        remaining_grid = list(grid)
 
-        # Tenter le mode parallèle
+        # Tenter le mode parallèle par lots
         if n_workers > 1:
-            try:
-                results = self._run_pool(
-                    grid, candles_serialized, strategy_name, symbol,
-                    bt_config_dict, main_tf, n_workers,
-                )
-            except (BrokenExecutor, OSError) as exc:
-                logger.warning(
-                    "ProcessPool crashé ({}), fallback séquentiel...", type(exc).__name__,
-                )
-                results = []
-
-        # Fallback séquentiel (ou mode n_workers=1)
-        if not results:
-            results = self._run_sequential(
-                grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
+            results, remaining_grid = self._run_pool(
+                grid, candles_serialized, strategy_name, symbol,
+                bt_config_dict, main_tf, n_workers,
             )
+            if remaining_grid:
+                logger.info(
+                    "  Continuation séquentielle : {} combos restantes...",
+                    len(remaining_grid),
+                )
+
+        # Fallback séquentiel pour le reste (ou tout si n_workers=1)
+        if remaining_grid:
+            seq_results = self._run_sequential(
+                remaining_grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
+            )
+            results.extend(seq_results)
 
         # Trier par métrique
         metric_idx = {"sharpe_ratio": 1, "net_return_pct": 2, "profit_factor": 3}
@@ -593,44 +607,63 @@ class WalkForwardOptimizer:
         bt_config_dict: dict,
         main_tf: str,
         n_workers: int,
-    ) -> list[_ISResult]:
-        """Exécution parallèle par lots avec cooldown pour éviter la surchauffe CPU.
+    ) -> tuple[list[_ISResult], list[dict[str, Any]]]:
+        """Exécution parallèle par lots avec cooldown.
 
-        Envoie les backtests par lots de (n_workers * 5) puis pause 2s
-        entre chaque lot pour laisser le CPU refroidir.
+        Retourne (résultats obtenus, combos restantes non traitées).
+        Si le pool crash, les résultats des lots terminés sont conservés.
         """
-        batch_size = n_workers * 5  # ~20 tasks par lot avec 4 workers
-        cooldown_s = 2.0  # pause entre les lots
+        batch_size = 20  # 20 tasks par lot
+        total = len(grid)
 
         results: list[_ISResult] = []
-        n_batches = (len(grid) + batch_size - 1) // batch_size
+        n_batches = (total + batch_size - 1) // batch_size
+        done_count = 0
+        t_start = time.monotonic()
 
-        with ProcessPoolExecutor(
-            max_workers=n_workers,
-            initializer=_init_worker,
-            initargs=(candles_serialized, strategy_name, symbol, bt_config_dict, main_tf),
-            max_tasks_per_child=50,
-        ) as executor:
-            for batch_idx in range(n_batches):
-                batch_start = batch_idx * batch_size
-                batch = grid[batch_start : batch_start + batch_size]
-                chunksize = max(1, len(batch) // (n_workers * 2))
+        try:
+            with ProcessPoolExecutor(
+                max_workers=n_workers,
+                initializer=_init_worker,
+                initargs=(candles_serialized, strategy_name, symbol, bt_config_dict, main_tf),
+                max_tasks_per_child=50,
+            ) as executor:
+                for batch_idx in range(n_batches):
+                    batch_start = batch_idx * batch_size
+                    batch = grid[batch_start : batch_start + batch_size]
+                    chunksize = max(1, len(batch) // (n_workers * 2))
 
-                logger.info(
-                    "    Lot {}/{} ({} backtests)...",
-                    batch_idx + 1, n_batches, len(batch),
-                )
+                    logger.info(
+                        "    Lot {}/{} ({} backtests)...",
+                        batch_idx + 1, n_batches, len(batch),
+                    )
 
-                for result in executor.map(
-                    _run_single_backtest_worker, batch, chunksize=chunksize,
-                ):
-                    results.append(result)
+                    for result in executor.map(
+                        _run_single_backtest_worker, batch, chunksize=chunksize,
+                    ):
+                        results.append(result)
+                        done_count += 1
 
-                # Pause entre les lots pour éviter la surchauffe
-                if batch_idx < n_batches - 1:
-                    time.sleep(cooldown_s)
+                        # Log progression toutes les 10 complétions ou fin de lot
+                        if done_count % 10 == 0 or done_count == total:
+                            elapsed = time.monotonic() - t_start
+                            avg_s = elapsed / done_count
+                            remaining = (total - done_count) * avg_s
+                            eta_min, eta_sec = divmod(int(remaining), 60)
+                            logger.info(
+                                "    Pool {}/{} — {:.1f}s/bt — ETA: {}m{:02d}s",
+                                done_count, total, avg_s, eta_min, eta_sec,
+                            )
 
-        return results
+        except (BrokenExecutor, OSError) as exc:
+            logger.warning(
+                "ProcessPool crashé ({}) après {} backtests, "
+                "continuation séquentielle pour les {} restants...",
+                type(exc).__name__, done_count, len(grid) - done_count,
+            )
+
+        remaining = grid[done_count:]
+        return results, remaining
 
     @staticmethod
     def _run_sequential(
@@ -658,13 +691,15 @@ class WalkForwardOptimizer:
             groups.setdefault(key, []).append(params)
 
         n_groups = len(groups)
+        total = len(grid)
         logger.info(
             "  {} groupes d'indicateurs ({} combos total)",
-            n_groups, len(grid),
+            n_groups, total,
         )
 
         results: list[_ISResult] = []
         done = 0
+        t_start = time.monotonic()
 
         for group_idx, (ind_key, combos) in enumerate(groups.items()):
             # Pré-calculer les indicateurs pour ce groupe
@@ -685,8 +720,15 @@ class WalkForwardOptimizer:
                     )
                 )
                 done += 1
-                if done % 100 == 0:
-                    logger.info("  Backtest {}/{} ...", done, len(grid))
+                if done % 10 == 0 or done == total:
+                    elapsed = time.monotonic() - t_start
+                    avg_s = elapsed / done
+                    remaining = (total - done) * avg_s
+                    eta_min, eta_sec = divmod(int(remaining), 60)
+                    logger.info(
+                        "  Backtest {}/{} — {:.1f}s/bt — ETA: {}m{:02d}s",
+                        done, total, avg_s, eta_min, eta_sec,
+                    )
 
             # Libérer mémoire entre groupes
             del precomputed

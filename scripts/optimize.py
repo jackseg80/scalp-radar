@@ -12,10 +12,17 @@ Lancement :
 
 from __future__ import annotations
 
+# Désactiver le JIT expérimental de Python 3.13 — cause des segfaults
+# et des BrokenProcessPool sur calculs longs (bug connu du specializer).
+# Doit être fait AVANT tout import lourd.
+import os
+os.environ.setdefault("PYTHON_JIT", "0")
+
 import argparse
 import asyncio
 import itertools
 from datetime import datetime
+from pathlib import Path
 
 from loguru import logger
 
@@ -83,6 +90,50 @@ async def check_data(config_dir: str = "config") -> None:
     print()
 
 
+def _save_wfo_intermediate(wfo: "WFOResult", output_dir: str = "data/optimization") -> Path:
+    """Sauvegarde intermédiaire du WFO (avant overfitting) pour ne pas perdre le travail."""
+    import json as _json
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    filename = f"wfo_{wfo.strategy_name}_{wfo.symbol.replace('/', '_')}_intermediate.json"
+    filepath = out / filename
+
+    data = {
+        "strategy_name": wfo.strategy_name,
+        "symbol": wfo.symbol,
+        "avg_is_sharpe": wfo.avg_is_sharpe,
+        "avg_oos_sharpe": wfo.avg_oos_sharpe,
+        "oos_is_ratio": wfo.oos_is_ratio,
+        "consistency_rate": wfo.consistency_rate,
+        "recommended_params": wfo.recommended_params,
+        "n_distinct_combos": wfo.n_distinct_combos,
+        "windows": [
+            {
+                "window_index": w.window_index,
+                "is_start": w.is_start.isoformat(),
+                "is_end": w.is_end.isoformat(),
+                "oos_start": w.oos_start.isoformat(),
+                "oos_end": w.oos_end.isoformat(),
+                "best_params": w.best_params,
+                "is_sharpe": w.is_sharpe,
+                "is_net_return_pct": w.is_net_return_pct,
+                "is_profit_factor": w.is_profit_factor,
+                "is_trades": w.is_trades,
+                "oos_sharpe": w.oos_sharpe,
+                "oos_net_return_pct": w.oos_net_return_pct,
+                "oos_profit_factor": w.oos_profit_factor,
+                "oos_trades": w.oos_trades,
+            }
+            for w in wfo.windows
+        ],
+    }
+    with open(filepath, "w", encoding="utf-8") as f:
+        _json.dump(data, f, indent=2, default=str, ensure_ascii=False)
+    logger.info("WFO intermédiaire sauvé : {}", filepath)
+    return filepath
+
+
 async def run_optimization(
     strategy_name: str,
     symbol: str,
@@ -97,10 +148,18 @@ async def run_optimization(
     logger.info("═" * 55)
 
     # Phase 1 : WFO
+    logger.info("")
+    logger.info(">>> PHASE 1/3 : WALK-FORWARD OPTIMIZATION <<<")
+    logger.info("")
     optimizer = WalkForwardOptimizer(config_dir)
     wfo = await optimizer.optimize(strategy_name, symbol)
 
-    logger.info("WFO terminé : {} fenêtres, OOS/IS ratio = {:.2f}", len(wfo.windows), wfo.oos_is_ratio)
+    logger.info("")
+    logger.info(">>> PHASE 1/3 TERMINEE — WFO : {} fenêtres, OOS/IS ratio = {:.2f} <<<", len(wfo.windows), wfo.oos_is_ratio)
+    logger.info("")
+
+    # Sauvegarde intermédiaire (ne plus jamais perdre 55 min de WFO)
+    _save_wfo_intermediate(wfo)
 
     if verbose:
         for w in wfo.windows:
@@ -110,12 +169,16 @@ async def run_optimization(
             )
 
     # Phase 2 : Overfitting
+    logger.info("")
+    logger.info(">>> PHASE 2/3 : DETECTION OVERFITTING <<<")
+    logger.info("")
     detector = OverfitDetector()
 
-    # Pour la stabilité, charger les candles Binance OOS (toute la période)
+    # Pour la stabilité, utiliser la dernière fenêtre IS (pas tout le dataset)
     grids = _load_param_grids(f"{config_dir}/param_grids.yaml")
     opt_config = grids.get("optimization", {})
     main_exchange = opt_config.get("main_exchange", "binance")
+    is_window_days = opt_config.get("is_window_days", 120)
 
     close_db = False
     if db is None:
@@ -131,19 +194,40 @@ async def run_optimization(
     if hasattr(default_cfg, "trend_filter_timeframe"):
         tfs.append(default_cfg.trend_filter_timeframe)
 
-    candles_by_tf: dict = {}
+    # Charger seulement les IS_WINDOW_DAYS derniers jours pour la stabilité
+    # (34k bougies au lieu de 207k → ~6x plus rapide)
+    from datetime import timedelta
+
+    all_candles_by_tf: dict = {}
     for tf in tfs:
-        candles_by_tf[tf] = await db.get_candles(
+        all_candles_by_tf[tf] = await db.get_candles(
             symbol, tf, exchange=main_exchange, limit=1_000_000,
         )
 
+    # Découper aux derniers is_window_days pour la stabilité
+    stability_candles_by_tf: dict = {}
+    from backend.optimization.walk_forward import _slice_candles
+    if all_candles_by_tf.get(main_tf):
+        last_candle = all_candles_by_tf[main_tf][-1]
+        stability_start = last_candle.timestamp - timedelta(days=is_window_days)
+        for tf in tfs:
+            stability_candles_by_tf[tf] = _slice_candles(
+                all_candles_by_tf[tf], stability_start, last_candle.timestamp,
+            )
+        logger.info(
+            "Stabilité : {} bougies {} (derniers {} jours)",
+            len(stability_candles_by_tf.get(main_tf, [])), main_tf, is_window_days,
+        )
+    else:
+        stability_candles_by_tf = all_candles_by_tf
+
     from backend.backtesting.engine import BacktestConfig
-    main_candles = candles_by_tf.get(main_tf, [])
-    if main_candles:
+    stab_candles = stability_candles_by_tf.get(main_tf, [])
+    if stab_candles:
         bt_config = BacktestConfig(
             symbol=symbol,
-            start_date=main_candles[0].timestamp,
-            end_date=main_candles[-1].timestamp,
+            start_date=stab_candles[0].timestamp,
+            end_date=stab_candles[-1].timestamp,
         )
     else:
         bt_config = BacktestConfig(
@@ -159,7 +243,7 @@ async def run_optimization(
         strategy_name=strategy_name,
         symbol=symbol,
         optimal_params=wfo.recommended_params,
-        candles_by_tf=candles_by_tf,
+        candles_by_tf=stability_candles_by_tf,
         bt_config=bt_config,
         all_symbols_results=all_symbols_results,
     )
@@ -171,6 +255,9 @@ async def run_optimization(
     )
 
     # Phase 3 : Validation Bitget
+    logger.info("")
+    logger.info(">>> PHASE 3/3 : VALIDATION BITGET <<<")
+    logger.info("")
     validation = await validate_on_bitget(
         strategy_name, symbol, wfo.recommended_params,
         wfo.avg_oos_sharpe, db=db,

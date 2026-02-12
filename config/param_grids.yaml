@@ -4,7 +4,7 @@ optimization:
   oos_window_days: 30     # Out-of-sample : 1 mois
   step_days: 30           # Pas glissant entre fenêtres
   metric: "sharpe_ratio"  # Métrique d'optimisation (sharpe_ratio | net_return_pct | profit_factor)
-  max_workers: null        # null = os.cpu_count()
+  max_workers: 4           # Séquentiel uniquement (pool instable sur laptop i9-14900HX)
   main_exchange: "binance" # Exchange source pour le WFO
   validation_exchange: "bitget"  # Exchange pour la validation finale
 
