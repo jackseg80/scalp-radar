@@ -697,6 +697,16 @@ class WalkForwardOptimizer:
             n_groups, total,
         )
 
+        # Couper les logs répétitifs en mode séquentiel (engine + stratégies)
+        import logging as _logging
+        _quiet_loggers = [
+            _logging.getLogger("backend.backtesting.engine"),
+            _logging.getLogger("backend.strategies"),
+        ]
+        _prev_levels = [lg.level for lg in _quiet_loggers]
+        for lg in _quiet_loggers:
+            lg.setLevel(_logging.WARNING)
+
         results: list[_ISResult] = []
         done = 0
         t_start = time.monotonic()
@@ -734,4 +744,6 @@ class WalkForwardOptimizer:
             del precomputed
             gc.collect()
 
+        for lg, lvl in zip(_quiet_loggers, _prev_levels):
+            lg.setLevel(lvl)
         return results
