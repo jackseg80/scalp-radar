@@ -7,6 +7,7 @@ Parallélisé via ProcessPoolExecutor.
 
 from __future__ import annotations
 
+import gc
 import itertools
 import os
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
@@ -245,9 +246,13 @@ def _run_single_backtest_sequential(
     strategy_name: str,
     bt_config: BacktestConfig,
     main_tf: str,
+    precomputed_indicators: dict | None = None,
 ) -> _ISResult:
     """Version séquentielle (fallback si ProcessPoolExecutor crashe)."""
-    result = run_backtest_single(strategy_name, params, candles_by_tf, bt_config, main_tf)
+    result = run_backtest_single(
+        strategy_name, params, candles_by_tf, bt_config, main_tf,
+        precomputed_indicators=precomputed_indicators,
+    )
     metrics = calculate_metrics(result)
     return (
         params,
@@ -256,6 +261,13 @@ def _run_single_backtest_sequential(
         metrics.profit_factor,
         metrics.total_trades,
     )
+
+
+# Paramètres qui affectent compute_indicators() (tout le reste = seuils evaluate())
+_INDICATOR_PARAMS: dict[str, list[str]] = {
+    "vwap_rsi": ["rsi_period"],
+    "momentum": ["breakout_lookback"],
+}
 
 
 def _serialize_candles_by_tf(candles_by_tf: dict[str, list[Candle]]) -> dict[str, list[dict]]:
@@ -353,13 +365,14 @@ class WalkForwardOptimizer:
         logger.info("Grid complet : {} combinaisons", len(full_grid))
 
         # Grid search en 2 passes
-        coarse_max = 500
+        coarse_max = 200
         if len(full_grid) > coarse_max:
             coarse_grid = _latin_hypercube_sample(full_grid, coarse_max)
             logger.info("Coarse pass : {} combinaisons (LHS)", len(coarse_grid))
         else:
             coarse_grid = full_grid
 
+        # ProcessPool instable sur Windows → limité à 4 workers avec fallback séquentiel
         n_workers = max_workers or min(os.cpu_count() or 4, 4)
         n_distinct_combos = len(coarse_grid)
 
@@ -403,12 +416,12 @@ class WalkForwardOptimizer:
                 logger.warning("Fenêtre {} : pas de candles IS, skip", w_idx)
                 continue
 
-            # Sérialiser les candles IS pour les workers
-            is_serialized = _serialize_candles_by_tf(is_candles_by_tf)
+            # Sérialiser les candles IS pour les workers (uniquement si parallèle)
+            is_serialized = _serialize_candles_by_tf(is_candles_by_tf) if n_workers > 1 else {}
 
             # --- Coarse pass ---
             coarse_results = self._parallel_backtest(
-                coarse_grid, is_serialized, strategy_name, symbol,
+                coarse_grid, is_candles_by_tf, is_serialized, strategy_name, symbol,
                 bt_config_dict, main_tf, n_workers, metric,
             )
 
@@ -423,7 +436,7 @@ class WalkForwardOptimizer:
 
             if fine_grid:
                 fine_results = self._parallel_backtest(
-                    fine_grid, is_serialized, strategy_name, symbol,
+                    fine_grid, is_candles_by_tf, is_serialized, strategy_name, symbol,
                     bt_config_dict, main_tf, n_workers, metric,
                 )
                 all_is_results = coarse_results + fine_results
@@ -531,6 +544,7 @@ class WalkForwardOptimizer:
     def _parallel_backtest(
         self,
         grid: list[dict[str, Any]],
+        candles_by_tf: dict[str, list[Candle]],
         candles_serialized: dict[str, list[dict]],
         strategy_name: str,
         symbol: str,
@@ -558,7 +572,7 @@ class WalkForwardOptimizer:
         # Fallback séquentiel (ou mode n_workers=1)
         if not results:
             results = self._run_sequential(
-                grid, candles_serialized, strategy_name, bt_config_dict, main_tf,
+                grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
             )
 
         # Trier par métrique
@@ -596,25 +610,61 @@ class WalkForwardOptimizer:
     @staticmethod
     def _run_sequential(
         grid: list[dict[str, Any]],
-        candles_serialized: dict[str, list[dict]],
+        candles_by_tf: dict[str, list[Candle]],
         strategy_name: str,
         bt_config_dict: dict,
         main_tf: str,
     ) -> list[_ISResult]:
-        """Exécution séquentielle (fiable, sans multiprocessing)."""
-        # Reconstruire les candles une seule fois
-        candles_by_tf: dict[str, list[Candle]] = {}
-        for tf_str, candle_dicts in candles_serialized.items():
-            candles_by_tf[tf_str] = [Candle(**cd) for cd in candle_dicts]
+        """Exécution séquentielle avec pré-calcul des indicateurs par groupe.
+
+        Groupe les combinaisons par paramètres qui affectent compute_indicators()
+        (ex: rsi_period pour vwap_rsi). Les indicateurs sont calculés une seule fois
+        par groupe, puis réutilisés pour toutes les combinaisons de seuils.
+        """
+        from backend.optimization import create_strategy_with_params
+
         bt_config = BacktestConfig(**bt_config_dict)
+        indicator_keys = _INDICATOR_PARAMS.get(strategy_name, [])
+
+        # Grouper les combos par paramètres indicateurs
+        groups: dict[tuple, list[dict[str, Any]]] = {}
+        for params in grid:
+            key = tuple(params.get(k) for k in indicator_keys) if indicator_keys else ()
+            groups.setdefault(key, []).append(params)
+
+        n_groups = len(groups)
+        logger.info(
+            "  {} groupes d'indicateurs ({} combos total)",
+            n_groups, len(grid),
+        )
 
         results: list[_ISResult] = []
-        for i, params in enumerate(grid):
-            if i > 0 and i % 100 == 0:
-                logger.info("  Backtest {}/{} ...", i, len(grid))
-            results.append(
-                _run_single_backtest_sequential(
-                    params, candles_by_tf, strategy_name, bt_config, main_tf,
-                )
+        done = 0
+
+        for group_idx, (ind_key, combos) in enumerate(groups.items()):
+            # Pré-calculer les indicateurs pour ce groupe
+            representative = combos[0]
+            strategy = create_strategy_with_params(strategy_name, representative)
+            logger.info(
+                "  Groupe {}/{} ({} combos) — indicateurs: {}",
+                group_idx + 1, n_groups, len(combos),
+                dict(zip(indicator_keys, ind_key)) if indicator_keys else "aucun",
             )
+            precomputed = strategy.compute_indicators(candles_by_tf)
+
+            for params in combos:
+                results.append(
+                    _run_single_backtest_sequential(
+                        params, candles_by_tf, strategy_name, bt_config, main_tf,
+                        precomputed_indicators=precomputed,
+                    )
+                )
+                done += 1
+                if done % 100 == 0:
+                    logger.info("  Backtest {}/{} ...", done, len(grid))
+
+            # Libérer mémoire entre groupes
+            del precomputed
+            gc.collect()
+
         return results

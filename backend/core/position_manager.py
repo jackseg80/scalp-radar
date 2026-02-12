@@ -209,6 +209,8 @@ class PositionManager:
 
     def unrealized_pnl(self, position: OpenPosition, current_price: float) -> float:
         """P&L non réalisé (pour l'equity curve)."""
+        if position is None:
+            return 0.0
         if position.direction == Direction.LONG:
             return (current_price - position.entry_price) * position.quantity
         return (position.entry_price - current_price) * position.quantity

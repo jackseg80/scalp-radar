@@ -87,6 +87,7 @@ class BacktestEngine:
         self,
         candles_by_tf: dict[str, list[Candle]],
         main_tf: str = "5m",
+        precomputed_indicators: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> BacktestResult:
         """Lance le backtest. candles_by_tf = {"5m": [...], "15m": [...]}."""
         # Vérifier les données
@@ -102,9 +103,12 @@ class BacktestEngine:
                     tf, available, needed,
                 )
 
-        # 0. Pré-calcul des indicateurs
-        logger.info("Pré-calcul des indicateurs...")
-        indicators_by_tf = self._strategy.compute_indicators(candles_by_tf)
+        # 0. Pré-calcul des indicateurs (ou réutilisation)
+        if precomputed_indicators is not None:
+            indicators_by_tf = precomputed_indicators
+        else:
+            logger.info("Pré-calcul des indicateurs...")
+            indicators_by_tf = self._strategy.compute_indicators(candles_by_tf)
 
         # Construire l'index des timestamps 15m pour lookup rapide
         higher_tf_timestamps: dict[str, list[str]] = {}
@@ -246,14 +250,18 @@ def run_backtest_single(
     candles_by_tf: dict[str, list[Candle]],
     bt_config: BacktestConfig,
     main_tf: str = "5m",
+    precomputed_indicators: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> BacktestResult:
     """Lance un backtest unique avec paramètres custom.
 
     Fonction module-level (pas méthode) pour compatibilité ProcessPoolExecutor.
     Utilisé par le walk-forward optimizer.
+
+    Args:
+        precomputed_indicators: Si fourni, skip compute_indicators() (speedup WFO).
     """
     from backend.optimization import create_strategy_with_params
 
     strategy = create_strategy_with_params(strategy_name, params)
     engine = BacktestEngine(bt_config, strategy)
-    return engine.run(candles_by_tf, main_tf=main_tf)
+    return engine.run(candles_by_tf, main_tf=main_tf, precomputed_indicators=precomputed_indicators)

@@ -9,6 +9,7 @@ Méthodes :
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -221,10 +222,17 @@ class OverfitDetector:
             perturbation_pcts = [0.10, 0.20]
 
         # Sharpe de référence
-        ref_result = run_backtest_single(
-            strategy_name, optimal_params, candles_by_tf, bt_config,
-        )
-        ref_sharpe = calculate_metrics(ref_result).sharpe_ratio
+        try:
+            ref_result = run_backtest_single(
+                strategy_name, optimal_params, candles_by_tf, bt_config,
+            )
+            ref_sharpe = calculate_metrics(ref_result).sharpe_ratio
+        except Exception:
+            return StabilityResult(
+                stability_map={p: 0.5 for p in optimal_params},
+                overall_stability=0.5,
+                cliff_params=[],
+            )
 
         stability_map: dict[str, float] = {}
 
@@ -254,12 +262,14 @@ class OverfitDetector:
                             candles_by_tf, bt_config,
                         )
                         p_sharpe = calculate_metrics(p_result).sharpe_ratio
+                        del p_result
                         if ref_sharpe > 0:
                             drop = max(0, (ref_sharpe - p_sharpe) / ref_sharpe)
                             max_drop = max(max_drop, drop)
                     except Exception:
                         max_drop = max(max_drop, 0.5)
 
+            gc.collect()
             # Score = 1 - max_drop (borné 0-1)
             stability_map[param_name] = max(0.0, min(1.0, 1.0 - max_drop))
 
