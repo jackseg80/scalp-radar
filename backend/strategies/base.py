@@ -74,9 +74,32 @@ class BaseStrategy(ABC):
     - check_exit() : sortie anticipée (appelée seulement si ni TP ni SL touchés)
     - compute_indicators() : pré-calcul des indicateurs sur tout le dataset
     - min_candles : nombre minimum de bougies requises par timeframe
+
+    Deux chemins de résolution des paramètres :
+    - **Optimisation** : params injectés explicitement via create_strategy_with_params() → _config
+      contient déjà les valeurs optimisées pour cet asset, _resolve_param() n'est pas appelé.
+    - **Production** (Simulator/Executor) : _config contient les defaults YAML, _resolve_param()
+      résout les overrides per_asset au runtime via le symbole du contexte.
     """
 
     name: str = "base"
+
+    def _resolve_param(self, param_name: str, symbol: str) -> Any:
+        """Résout un paramètre avec override per_asset (chemin production).
+
+        Cherche dans _config.per_asset[symbol][param_name], sinon retourne
+        la valeur par défaut de _config.<param_name>.
+        En optimisation, _config n'a pas de per_asset (ou il est vide),
+        donc cette méthode retourne simplement la valeur injectée.
+        """
+        config = getattr(self, "_config", None)
+        if config is None:
+            raise AttributeError(f"{self.__class__.__name__} n'a pas de _config")
+        per_asset = getattr(config, "per_asset", {})
+        overrides = per_asset.get(symbol, {})
+        if param_name in overrides:
+            return overrides[param_name]
+        return getattr(config, param_name)
 
     @abstractmethod
     def evaluate(self, ctx: StrategyContext) -> StrategySignal | None:

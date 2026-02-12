@@ -74,10 +74,11 @@ scalp-radar/
 ├── deploy.sh                     # Déploiement : graceful shutdown + rollback
 │
 ├── config/                       # ALL tunable parameters — no hardcoding in code
-│   ├── assets.yaml               # Traded pairs + correlation groups
-│   ├── strategies.yaml           # Strategy parameters (5 stratégies + custom)
+│   ├── assets.yaml               # Traded pairs + correlation groups (5 assets, 2 groupes)
+│   ├── strategies.yaml           # Strategy parameters (5 stratégies + custom + per_asset)
 │   ├── risk.yaml                 # Kill switch, position sizing, fees, slippage, margin, SL/TP
-│   └── exchanges.yaml            # Bitget: WebSocket, rate limits par catégorie, API config
+│   ├── exchanges.yaml            # Bitget: WebSocket, rate limits par catégorie, API config
+│   └── param_grids.yaml          # Espaces de recherche pour l'optimisation WFO
 │
 ├── backend/
 │   ├── __init__.py
@@ -103,6 +104,11 @@ scalp-radar/
 │   │   ├── momentum.py           # Momentum Breakout (TRENDING)
 │   │   ├── funding.py            # Funding Rate Arbitrage (paper trading only)
 │   │   └── liquidation.py        # Liquidation Zone Hunting (paper trading only)
+│   ├── optimization/
+│   │   ├── __init__.py           # STRATEGY_REGISTRY + create_strategy_with_params()
+│   │   ├── walk_forward.py       # WFO grid search 2 passes + ProcessPool/fallback séquentiel
+│   │   ├── overfitting.py        # Monte Carlo, DSR, stabilité, convergence cross-asset
+│   │   └── report.py             # Grading A-F, validation Bitget, apply_to_yaml
 │   ├── backtesting/
 │   │   ├── engine.py             # Moteur event-driven (délègue au PositionManager)
 │   │   ├── metrics.py            # BacktestMetrics + format table console
@@ -179,11 +185,13 @@ scalp-radar/
 │   ├── test_watchdog.py         # 8 tests : all ok, WS down, data stale, cooldown, lifecycle
 │   ├── test_executor.py         # 53 tests : multi-position, selector, persistence, reconciliation
 │   ├── test_risk_manager.py     # 19 tests : pre-trade checks, kill switch, corrélation groups
-│   └── test_adaptive_selector.py # 12 tests : critères perf, live_eligible, symboles actifs
+│   ├── test_adaptive_selector.py # 12 tests : critères perf, live_eligible, symboles actifs
+│   └── test_optimization.py      # 46 tests : WFO, Monte Carlo, DSR, stabilité, convergence, grading
 │
 ├── scripts/
-│   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto)
+│   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto, --exchange)
 │   ├── run_backtest.py           # CLI backtest runner (--symbol, --days, --json)
+│   ├── optimize.py               # CLI optimisation WFO (--all, --apply, --check-data, --dry-run)
 │   └── __main__.py               # python -m scripts support
 │
 ├── data/                         # SQLite DB + données (gitignored)
@@ -300,7 +308,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 Les 4 fichiers YAML dans `config/` sont la source de vérité pour tous les paramètres.
 Voir les fichiers directement — ils sont exhaustifs et commentés.
 
-- `assets.yaml` — 3 assets (BTC, ETH, SOL), timeframes [1m, 5m, 15m, 1h], groupes de corrélation
+- `assets.yaml` — 5 assets (BTC, ETH, SOL, DOGE, LINK), timeframes [1m, 5m, 15m, 1h], groupes de corrélation
 - `strategies.yaml` — 5 stratégies scalping + section custom_strategies (swing baseline)
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, SL/TP server-side
 - `exchanges.yaml` — Bitget: WebSocket, rate limits par catégorie, API config (USDT-M, mark_price)
@@ -595,6 +603,70 @@ Alignement visuel du dashboard sur le prototype (`docs/prototypes/Scalp radar v2
 - `styles.css` : `.signal-dot` 22px avec bordure, `.score-number`, `.asset-dot`
 
 - 284 tests passants (0 régression)
+
+### Sprint 7 — Parameter Optimization & Overfitting Detection ✅
+
+Complet. Optimisation automatique des paramètres par stratégie × asset avec détection d'overfitting.
+Plan détaillé : `docs/plans/sprint-7-optimization.md`
+
+**Phase 0 — Données & config :**
+
+- `config/assets.yaml` : +DOGE/USDT, +LINK/USDT, +groupe corrélation altcoins
+- `config/strategies.yaml` : +section `per_asset: {}` sur vwap_rsi et momentum
+- `backend/core/models.py` : +champ `exchange: str = "bitget"` sur Candle
+- `backend/core/config.py` : +`per_asset` + `get_params_for_symbol()` sur VwapRsiConfig/MomentumConfig
+- `backend/core/database.py` : migration idempotente (backup auto, PK 4 colonnes avec exchange, index)
+- `backend/strategies/base.py` : +`_resolve_param()` (overrides per_asset au runtime)
+- `backend/strategies/vwap_rsi.py` / `momentum.py` : TP/SL via `_resolve_param()`
+- `scripts/fetch_history.py` : +`--exchange binance|bitget`, factory exchange
+
+**Phase 1 — Walk-Forward Optimizer :**
+
+- `backend/optimization/__init__.py` : STRATEGY_REGISTRY + `create_strategy_with_params()`
+- `config/param_grids.yaml` : espaces de recherche par stratégie (default + per-asset overrides)
+- `backend/optimization/walk_forward.py` : WFO complet (~600 lignes)
+  - Grid search 2 passes (coarse LHS 500 → fine ±1 step autour du top 20)
+  - ProcessPoolExecutor avec initializer (candles chargées 1× par worker)
+  - Fallback séquentiel automatique si pool crashe (BrokenExecutor)
+  - `max_tasks_per_child=50` pour recycler la mémoire workers
+  - Workers limités à 4 (`min(cpu_count, 4)`)
+- `backend/backtesting/engine.py` : +`run_backtest_single()` (module-level pour les workers)
+
+**Phase 2 — Détection d'overfitting :**
+
+- `backend/optimization/overfitting.py` : `OverfitDetector` (~390 lignes)
+  - Monte Carlo block bootstrap (blocs de 7 trades, 1000 sims, seed configurable)
+  - Deflated Sharpe Ratio (Bailey & Lopez de Prado 2014, `math.erf` au lieu de scipy)
+  - Parameter stability (perturbation ±10/20%, score plateau vs cliff)
+  - Cross-asset convergence (coefficient de variation)
+
+**Phase 3 — Validation & rapport :**
+
+- `backend/optimization/report.py` : grading A-F, validation Bitget 90j + bootstrap CI
+  - `compute_grade()` : score 0-100 → A/B/C/D/F
+  - `validate_on_bitget()` : backtest params optimaux sur Bitget, bootstrap CI Sharpe
+  - `apply_to_yaml()` : écrit params grade A/B dans strategies.yaml per_asset (backup horodaté)
+  - `save_report()` : JSON dans `data/optimization/`
+
+**Phase 4 — CLI :**
+
+- `scripts/optimize.py` : orchestrateur complet
+  - `--check-data` : vérifie données disponibles par exchange × symbol
+  - `--strategy X --symbol Y` ou `--all` ou `--all-symbols`
+  - `--dry-run` : affiche le grid sans exécuter
+  - `--apply` : applique les params grade A/B dans strategies.yaml
+  - `-v` : résultats détaillés par fenêtre
+
+**Décisions clés Sprint 7 :**
+
+- Deux chemins params : optimisation (params explicites du grid) vs production (`_resolve_param` per_asset)
+- scipy retiré (remplacé par `math.erf` pour la CDF normale) — évite MemoryError avec ProcessPoolExecutor
+- Fallback séquentiel automatique si multiprocessing crashe sur Windows
+- Retour worker léger (pas de trades, juste métriques scalaires) pour minimiser le pickling
+- Funding/Liquidation exclus (pas de données historiques OI/funding sur Binance)
+- Migration DB avec backup auto horodaté avant altération du schéma
+
+- 330 tests passants (46 nouveaux + 284 existants, 0 régression)
 
 ## Dev Workflow
 

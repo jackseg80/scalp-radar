@@ -13,6 +13,7 @@ vwap_rsi:
   tp_percent: 0.8
   sl_percent: 0.3
   weight: 0.25
+  per_asset: {}  # Overrides par asset (ex: SOL/USDT: {sl_percent: 0.5})
 
 liquidation:
   enabled: true
@@ -47,6 +48,7 @@ momentum:
   tp_percent: 0.6
   sl_percent: 0.3
   weight: 0.20
+  per_asset: {}  # Overrides par asset (ex: SOL/USDT: {sl_percent: 0.5})
 
 funding:
   enabled: true

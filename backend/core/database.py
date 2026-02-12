@@ -6,6 +6,7 @@ Gère le stockage des candles, signaux, trades et état de session.
 
 from __future__ import annotations
 
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -39,13 +40,37 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
+        await self._migrate_candles_exchange()
         await self._create_tables()
         logger.info("Database initialisée : {}", self.db_path)
 
-    async def _create_tables(self) -> None:
+    async def _migrate_candles_exchange(self) -> None:
+        """Migration idempotente : ajoute la colonne exchange à candles si absente.
+
+        Recrée la table avec la nouvelle PK (exchange, symbol, timeframe, timestamp).
+        Backup automatique horodaté avant migration.
+        """
         assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(candles)")
+        columns = await cursor.fetchall()
+        if not columns:
+            return  # Table n'existe pas encore, _create_tables la créera
+        col_names = [col["name"] for col in columns]
+        if "exchange" in col_names:
+            return  # Déjà migré
+
+        # Backup automatique horodaté
+        db_file = Path(self.db_path)
+        if db_file.exists():
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = db_file.with_name(f"{db_file.stem}_backup_{ts}{db_file.suffix}")
+            shutil.copy2(str(db_file), str(backup_path))
+            logger.info("Backup DB avant migration : {}", backup_path)
+
+        logger.info("Migration candles : ajout colonne exchange...")
         await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS candles (
+            CREATE TABLE IF NOT EXISTS candles_new (
+                exchange TEXT NOT NULL DEFAULT 'bitget',
                 symbol TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
@@ -56,11 +81,43 @@ class Database:
                 volume REAL NOT NULL,
                 vwap REAL,
                 mark_price REAL,
-                PRIMARY KEY (symbol, timeframe, timestamp)
+                PRIMARY KEY (exchange, symbol, timeframe, timestamp)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_candles_lookup
-                ON candles (symbol, timeframe, timestamp);
+            INSERT OR IGNORE INTO candles_new
+                (exchange, symbol, timeframe, timestamp, open, high, low, close, volume, vwap, mark_price)
+            SELECT 'bitget', symbol, timeframe, timestamp, open, high, low, close, volume, vwap, mark_price
+            FROM candles;
+
+            DROP TABLE candles;
+            ALTER TABLE candles_new RENAME TO candles;
+
+            CREATE INDEX IF NOT EXISTS idx_candles_exchange
+                ON candles (exchange, symbol, timeframe, timestamp);
+        """)
+        await self._conn.commit()
+        logger.info("Migration candles terminée (colonne exchange ajoutée)")
+
+    async def _create_tables(self) -> None:
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS candles (
+                exchange TEXT NOT NULL DEFAULT 'bitget',
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL NOT NULL,
+                vwap REAL,
+                mark_price REAL,
+                PRIMARY KEY (exchange, symbol, timeframe, timestamp)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_candles_exchange
+                ON candles (exchange, symbol, timeframe, timestamp);
 
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +178,7 @@ class Database:
         assert self._conn is not None
         data = [
             (
+                c.exchange,
                 c.symbol,
                 c.timeframe.value,
                 c.timestamp.isoformat(),
@@ -136,8 +194,8 @@ class Database:
         ]
         cursor = await self._conn.executemany(
             """INSERT OR IGNORE INTO candles
-               (symbol, timeframe, timestamp, open, high, low, close, volume, vwap, mark_price)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (exchange, symbol, timeframe, timestamp, open, high, low, close, volume, vwap, mark_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             data,
         )
         await self._conn.commit()
@@ -150,11 +208,12 @@ class Database:
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
         limit: int = 500,
+        exchange: str = "bitget",
     ) -> list[Candle]:
         """Récupère des candles avec filtres optionnels."""
         assert self._conn is not None
-        query = "SELECT * FROM candles WHERE symbol = ? AND timeframe = ?"
-        params: list[object] = [symbol, timeframe]
+        query = "SELECT * FROM candles WHERE exchange = ? AND symbol = ? AND timeframe = ?"
+        params: list[object] = [exchange, symbol, timeframe]
 
         if start:
             query += " AND timestamp >= ?"
@@ -178,6 +237,7 @@ class Database:
                 volume=row["volume"],
                 symbol=row["symbol"],
                 timeframe=TimeFrame.from_string(row["timeframe"]),
+                exchange=row["exchange"],
                 vwap=row["vwap"],
                 mark_price=row["mark_price"],
             )
@@ -185,25 +245,27 @@ class Database:
         ]
 
     async def get_latest_candle_timestamp(
-        self, symbol: str, timeframe: str
+        self, symbol: str, timeframe: str, exchange: str = "bitget",
     ) -> Optional[datetime]:
         """Retourne le timestamp de la dernière candle stockée."""
         assert self._conn is not None
         cursor = await self._conn.execute(
-            "SELECT MAX(timestamp) as ts FROM candles WHERE symbol = ? AND timeframe = ?",
-            [symbol, timeframe],
+            "SELECT MAX(timestamp) as ts FROM candles WHERE exchange = ? AND symbol = ? AND timeframe = ?",
+            [exchange, symbol, timeframe],
         )
         row = await cursor.fetchone()
         if row and row["ts"]:
             return datetime.fromisoformat(row["ts"])
         return None
 
-    async def delete_candles(self, symbol: str, timeframe: str) -> int:
-        """Supprime toutes les candles pour un (symbol, timeframe). Retourne le nombre supprimé."""
+    async def delete_candles(
+        self, symbol: str, timeframe: str, exchange: str = "bitget",
+    ) -> int:
+        """Supprime toutes les candles pour un (exchange, symbol, timeframe). Retourne le nombre supprimé."""
         assert self._conn is not None
         cursor = await self._conn.execute(
-            "DELETE FROM candles WHERE symbol = ? AND timeframe = ?",
-            (symbol, timeframe),
+            "DELETE FROM candles WHERE exchange = ? AND symbol = ? AND timeframe = ?",
+            (exchange, symbol, timeframe),
         )
         await self._conn.commit()
         return cursor.rowcount

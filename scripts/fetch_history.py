@@ -1,4 +1,4 @@
-"""Téléchargement de l'historique des klines depuis Bitget via ccxt REST.
+"""Téléchargement de l'historique des klines depuis Bitget ou Binance via ccxt REST.
 
 Script async avec asyncio.run() comme point d'entrée.
 Gère la reprise (ne télécharge que les données manquantes).
@@ -6,6 +6,7 @@ Gère la reprise (ne télécharge que les données manquantes).
 Lancement :
     uv run python -m scripts.fetch_history
     uv run python -m scripts.fetch_history --symbol BTC/USDT --timeframe 5m --days 7
+    uv run python -m scripts.fetch_history --exchange binance --days 730
 """
 
 from __future__ import annotations
@@ -37,20 +38,37 @@ async def fetch_ohlcv(
     )
 
 
+def create_exchange(exchange_name: str) -> ccxt.Exchange:
+    """Crée une instance ccxt pour l'exchange demandé."""
+    if exchange_name == "bitget":
+        return ccxt.bitget({
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap"},
+        })
+    elif exchange_name == "binance":
+        return ccxt.binance({
+            "enableRateLimit": True,
+            "options": {"defaultType": "future"},
+        })
+    else:
+        raise ValueError(f"Exchange non supporté : {exchange_name}")
+
+
 async def fetch_symbol_timeframe(
-    exchange: ccxt.bitget,
+    exchange: ccxt.Exchange,
     db: Database,
     symbol: str,
     timeframe: str,
     start_date: datetime,
     end_date: datetime,
+    exchange_name: str = "bitget",
 ) -> int:
     """Télécharge les klines pour un (symbol, timeframe) et les persiste."""
     tf = TimeFrame.from_string(timeframe)
     interval_ms = tf.to_milliseconds()
 
     # Vérifier les données existantes pour la reprise
-    latest = await db.get_latest_candle_timestamp(symbol, timeframe)
+    latest = await db.get_latest_candle_timestamp(symbol, timeframe, exchange=exchange_name)
     if latest and latest.timestamp() * 1000 > start_date.timestamp() * 1000:
         actual_start_ms = int(latest.timestamp() * 1000) + interval_ms
         logger.info(
@@ -104,6 +122,7 @@ async def fetch_symbol_timeframe(
                     volume=float(ohlcv[5]) if len(ohlcv) > 5 else 0.0,
                     symbol=symbol,
                     timeframe=tf,
+                    exchange=exchange_name,
                 )
                 candles.append(candle)
             except (ValueError, IndexError) as e:
@@ -130,6 +149,8 @@ async def main() -> None:
     parser.add_argument("--symbol", type=str, help="Symbol spécifique (ex: BTC/USDT)")
     parser.add_argument("--timeframe", type=str, help="Timeframe spécifique (ex: 5m)")
     parser.add_argument("--days", type=int, default=180, help="Nombre de jours (défaut: 180)")
+    parser.add_argument("--exchange", type=str, default="bitget", choices=["bitget", "binance"],
+                        help="Exchange source (défaut: bitget)")
     parser.add_argument("--force", action="store_true", help="Supprimer les données existantes et re-fetcher")
     args = parser.parse_args()
 
@@ -139,10 +160,7 @@ async def main() -> None:
     db = Database()
     await db.init()
 
-    exchange = ccxt.bitget({
-        "enableRateLimit": True,
-        "options": {"defaultType": "swap"},
-    })
+    exchange = create_exchange(args.exchange)
 
     end_date = datetime.now(tz=timezone.utc)
     start_date = end_date - timedelta(days=args.days)
@@ -158,7 +176,8 @@ async def main() -> None:
             pairs.append((asset.symbol, tf))
 
     logger.info(
-        "Téléchargement de {} paire(s) sur {} jours ({} → {})",
+        "Téléchargement {} : {} paire(s) sur {} jours ({} → {})",
+        args.exchange,
         len(pairs),
         args.days,
         start_date.strftime("%Y-%m-%d"),
@@ -168,21 +187,22 @@ async def main() -> None:
     # --force : supprimer les données existantes
     if args.force:
         for symbol, tf in pairs:
-            deleted = await db.delete_candles(symbol, tf)
+            deleted = await db.delete_candles(symbol, tf, exchange=args.exchange)
             if deleted:
-                logger.info("Supprimé {} candles existantes pour {} {}", deleted, symbol, tf)
+                logger.info("Supprimé {} candles existantes pour {} {} ({})", deleted, symbol, tf, args.exchange)
 
     total = 0
     for symbol, tf in pairs:
         count = await fetch_symbol_timeframe(
-            exchange, db, symbol, tf, start_date, end_date
+            exchange, db, symbol, tf, start_date, end_date,
+            exchange_name=args.exchange,
         )
         total += count
-        logger.info("{} {} : {} candles insérées", symbol, tf, count)
+        logger.info("{} {} ({}) : {} candles insérées", symbol, tf, args.exchange, count)
 
     await db.close()
 
-    logger.info("Terminé : {} candles au total", total)
+    logger.info("Terminé : {} candles au total ({})", total, args.exchange)
 
 
 if __name__ == "__main__":

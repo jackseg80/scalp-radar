@@ -178,17 +178,21 @@ class MomentumStrategy(BaseStrategy):
         # Régime de marché
         regime = detect_market_regime(adx_val, di_plus, di_minus, atr_val, atr_sma_val)
 
-        # TP/SL basé sur ATR
+        # TP/SL basé sur ATR (per_asset overrides via _resolve_param en production)
+        tp_pct = self._resolve_param("tp_percent", ctx.symbol)
+        sl_pct = self._resolve_param("sl_percent", ctx.symbol)
+        atr_mult_tp = self._resolve_param("atr_multiplier_tp", ctx.symbol)
+        atr_mult_sl = self._resolve_param("atr_multiplier_sl", ctx.symbol)
         if not np.isnan(atr_val) and atr_val > 0:
-            atr_tp = atr_val * self._config.atr_multiplier_tp
-            atr_sl = atr_val * self._config.atr_multiplier_sl
+            atr_tp = atr_val * atr_mult_tp
+            atr_sl = atr_val * atr_mult_sl
         else:
-            atr_tp = close * self._config.tp_percent / 100
-            atr_sl = close * self._config.sl_percent / 100
+            atr_tp = close * tp_pct / 100
+            atr_sl = close * sl_pct / 100
 
         # Cap par les % config
-        max_tp = close * self._config.tp_percent / 100
-        max_sl = close * self._config.sl_percent / 100
+        max_tp = close * tp_pct / 100
+        max_sl = close * sl_pct / 100
         tp_distance = min(atr_tp, max_tp)
         sl_distance = min(atr_sl, max_sl)
 

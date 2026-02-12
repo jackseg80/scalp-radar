@@ -90,6 +90,7 @@ class Candle(BaseModel):
     volume: float = Field(ge=0)
     symbol: str
     timeframe: TimeFrame
+    exchange: str = "bitget"
     vwap: Optional[float] = None
     mark_price: Optional[float] = None
 

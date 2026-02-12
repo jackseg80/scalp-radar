@@ -26,7 +26,28 @@ assets:
     tick_size: 0.001
     correlation_group: crypto_major
 
+  - symbol: "DOGE/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1m", "5m", "15m", "1h"]
+    max_leverage: 20
+    min_order_size: 10
+    tick_size: 0.00001
+    correlation_group: altcoins
+
+  - symbol: "LINK/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1m", "5m", "15m", "1h"]
+    max_leverage: 20
+    min_order_size: 0.1
+    tick_size: 0.001
+    correlation_group: altcoins
+
 correlation_groups:
   crypto_major:
     max_concurrent_same_direction: 2
     max_exposure_percent: 60
+  altcoins:
+    max_concurrent_same_direction: 2
+    max_exposure_percent: 40

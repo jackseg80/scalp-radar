@@ -236,14 +236,16 @@ class VwapRsiStrategy(BaseStrategy):
         else:
             strength = SignalStrength.WEAK
 
-        # TP / SL
+        # TP / SL (per_asset overrides via _resolve_param en production)
         entry_price = close_val
+        tp_pct = self._resolve_param("tp_percent", ctx.symbol)
+        sl_pct = self._resolve_param("sl_percent", ctx.symbol)
         if direction == Direction.LONG:
-            tp_price = entry_price * (1 + self._config.tp_percent / 100)
-            sl_price = entry_price * (1 - self._config.sl_percent / 100)
+            tp_price = entry_price * (1 + tp_pct / 100)
+            sl_price = entry_price * (1 - sl_pct / 100)
         else:
-            tp_price = entry_price * (1 - self._config.tp_percent / 100)
-            sl_price = entry_price * (1 + self._config.sl_percent / 100)
+            tp_price = entry_price * (1 - tp_pct / 100)
+            sl_price = entry_price * (1 + sl_pct / 100)
 
         return StrategySignal(
             direction=direction,

@@ -1,0 +1,360 @@
+"""CLI d'optimisation des paramètres de stratégies.
+
+Lancement :
+    uv run python -m scripts.optimize --check-data
+    uv run python -m scripts.optimize --strategy vwap_rsi --symbol BTC/USDT
+    uv run python -m scripts.optimize --strategy vwap_rsi --all-symbols
+    uv run python -m scripts.optimize --all
+    uv run python -m scripts.optimize --all --dry-run
+    uv run python -m scripts.optimize --all --apply
+    uv run python -m scripts.optimize --strategy vwap_rsi --symbol BTC/USDT -v
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import itertools
+from datetime import datetime
+
+from loguru import logger
+
+from backend.core.config import get_config
+from backend.core.database import Database
+from backend.core.logging_setup import setup_logging
+from backend.optimization import STRATEGY_REGISTRY
+from backend.optimization.overfitting import OverfitDetector
+from backend.optimization.report import (
+    FinalReport,
+    apply_to_yaml,
+    build_final_report,
+    save_report,
+    validate_on_bitget,
+)
+from backend.optimization.walk_forward import WalkForwardOptimizer, _build_grid, _load_param_grids
+
+
+async def check_data(config_dir: str = "config") -> None:
+    """Vérifie les données disponibles pour l'optimisation."""
+    config = get_config(config_dir)
+    grids = _load_param_grids(f"{config_dir}/param_grids.yaml")
+    opt_config = grids.get("optimization", {})
+    main_exchange = opt_config.get("main_exchange", "binance")
+    val_exchange = opt_config.get("validation_exchange", "bitget")
+
+    db = Database()
+    await db.init()
+
+    symbols = [a.symbol for a in config.assets]
+
+    print("\nVérification des données pour l'optimisation")
+    print("─" * 50)
+
+    for exchange in [main_exchange, val_exchange]:
+        for symbol in symbols:
+            # Compter les candles 5m
+            candles = await db.get_candles(symbol, "5m", exchange=exchange, limit=1_000_000)
+            n_candles = len(candles)
+            if n_candles > 0:
+                first = candles[0].timestamp
+                last = candles[-1].timestamp
+                days = (last - first).days
+                mark = "✓"
+            else:
+                days = 0
+                mark = "✗"
+
+            status = f"{symbol:<12s} {exchange:<8s}: {days:>4d} jours"
+            if n_candles > 0:
+                status += f" (5m: {n_candles // 1000}k candles)"
+            status += f"  {mark}"
+
+            if n_candles == 0:
+                cmd = f"uv run python -m scripts.fetch_history --exchange {exchange} --symbol {symbol}"
+                if exchange == main_exchange:
+                    cmd += " --days 720"
+                else:
+                    cmd += " --days 90"
+                status += f"  → {cmd}"
+
+            print(f"  {status}")
+
+    await db.close()
+    print()
+
+
+async def run_optimization(
+    strategy_name: str,
+    symbol: str,
+    config_dir: str = "config",
+    verbose: bool = False,
+    all_symbols_results: dict[str, dict] | None = None,
+    db: Database | None = None,
+) -> FinalReport:
+    """Optimise une stratégie sur un asset."""
+    logger.info("═" * 55)
+    logger.info("  Optimisation {} × {}", strategy_name.upper(), symbol)
+    logger.info("═" * 55)
+
+    # Phase 1 : WFO
+    optimizer = WalkForwardOptimizer(config_dir)
+    wfo = await optimizer.optimize(strategy_name, symbol)
+
+    logger.info("WFO terminé : {} fenêtres, OOS/IS ratio = {:.2f}", len(wfo.windows), wfo.oos_is_ratio)
+
+    if verbose:
+        for w in wfo.windows:
+            logger.info(
+                "  Window {} : IS Sharpe={:.2f}, OOS Sharpe={:.2f}",
+                w.window_index, w.is_sharpe, w.oos_sharpe,
+            )
+
+    # Phase 2 : Overfitting
+    detector = OverfitDetector()
+
+    # Pour la stabilité, charger les candles Binance OOS (toute la période)
+    grids = _load_param_grids(f"{config_dir}/param_grids.yaml")
+    opt_config = grids.get("optimization", {})
+    main_exchange = opt_config.get("main_exchange", "binance")
+
+    close_db = False
+    if db is None:
+        db = Database()
+        await db.init()
+        close_db = True
+
+    from backend.optimization import STRATEGY_REGISTRY as reg
+    config_cls, _ = reg[strategy_name]
+    default_cfg = config_cls()
+    main_tf = default_cfg.timeframe
+    tfs = [main_tf]
+    if hasattr(default_cfg, "trend_filter_timeframe"):
+        tfs.append(default_cfg.trend_filter_timeframe)
+
+    candles_by_tf: dict = {}
+    for tf in tfs:
+        candles_by_tf[tf] = await db.get_candles(
+            symbol, tf, exchange=main_exchange, limit=1_000_000,
+        )
+
+    from backend.backtesting.engine import BacktestConfig
+    main_candles = candles_by_tf.get(main_tf, [])
+    if main_candles:
+        bt_config = BacktestConfig(
+            symbol=symbol,
+            start_date=main_candles[0].timestamp,
+            end_date=main_candles[-1].timestamp,
+        )
+    else:
+        bt_config = BacktestConfig(
+            symbol=symbol,
+            start_date=datetime.now(),
+            end_date=datetime.now(),
+        )
+
+    overfit = detector.full_analysis(
+        trades=wfo.all_oos_trades,
+        observed_sharpe=wfo.avg_oos_sharpe,
+        n_distinct_combos=wfo.n_distinct_combos,
+        strategy_name=strategy_name,
+        symbol=symbol,
+        optimal_params=wfo.recommended_params,
+        candles_by_tf=candles_by_tf,
+        bt_config=bt_config,
+        all_symbols_results=all_symbols_results,
+    )
+
+    logger.info(
+        "Overfitting : MC p={:.3f}, DSR={:.2f}, Stabilité={:.2f}",
+        overfit.monte_carlo.p_value, overfit.dsr.dsr,
+        overfit.stability.overall_stability,
+    )
+
+    # Phase 3 : Validation Bitget
+    validation = await validate_on_bitget(
+        strategy_name, symbol, wfo.recommended_params,
+        wfo.avg_oos_sharpe, db=db,
+    )
+
+    logger.info(
+        "Bitget : Sharpe={:.2f} [CI: {:.2f} — {:.2f}], transfer={:.2f}",
+        validation.bitget_sharpe,
+        validation.bitget_sharpe_ci_low, validation.bitget_sharpe_ci_high,
+        validation.transfer_ratio,
+    )
+
+    # Build report
+    report = build_final_report(wfo, overfit, validation)
+    save_report(report)
+
+    # Affichage console
+    _print_report(report)
+
+    if close_db:
+        await db.close()
+
+    return report
+
+
+def _print_report(report: FinalReport) -> None:
+    """Affichage console du rapport."""
+    print(f"\n  {'═' * 55}")
+    print(f"  Optimisation {report.strategy_name.upper()} × {report.symbol}")
+    print(f"  {'═' * 55}")
+
+    print(f"\n  Walk-Forward ({report.wfo_n_windows} fenêtres)")
+    print(f"  {'─' * 40}")
+    print(f"  IS Sharpe moyen     : {report.wfo_avg_is_sharpe:.2f}")
+    print(f"  OOS Sharpe moyen    : {report.wfo_avg_oos_sharpe:.2f}")
+    print(f"  OOS/IS ratio        : {report.oos_is_ratio:.2f}")
+    print(f"  Consistance OOS+    : {report.wfo_consistency_rate:.0%}")
+    print(f"  Combinaisons testées: {report.n_distinct_combos}")
+
+    print(f"\n  Paramètres recommandés")
+    print(f"  {'─' * 40}")
+    for k, v in sorted(report.recommended_params.items()):
+        print(f"  {k:<25s}: {v}")
+
+    print(f"\n  Détection d'overfitting")
+    print(f"  {'─' * 40}")
+    mc_mark = "✓" if report.mc_significant else "✗"
+    print(f"  Monte Carlo p-value  : {report.mc_p_value:.3f} {mc_mark}")
+    dsr_mark = "✓" if report.dsr > 0.95 else ("~" if report.dsr > 0.80 else "✗")
+    print(f"  DSR (n={report.n_distinct_combos}){'':>10s}: {report.dsr:.2f} {dsr_mark}")
+    stab_mark = "✓" if report.stability > 0.80 else ("~" if report.stability > 0.60 else "✗")
+    print(f"  Stabilité paramètres : {report.stability:.2f} {stab_mark}")
+    if report.convergence is not None:
+        conv_mark = "✓" if report.convergence > 0.70 else "✗"
+        print(f"  Convergence cross    : {report.convergence:.2f} {conv_mark}")
+
+    print(f"\n  Validation Bitget")
+    print(f"  {'─' * 40}")
+    v = report.validation
+    print(f"  Sharpe Bitget        : {v.bitget_sharpe:.2f} [CI 95%: {v.bitget_sharpe_ci_low:.2f} — {v.bitget_sharpe_ci_high:.2f}]")
+    transfer_mark = "✓" if v.transfer_ratio > 0.50 else "✗"
+    print(f"  Transfer ratio       : {v.transfer_ratio:.2f} {transfer_mark}")
+    vol_str = "Oui" if v.volume_warning else "Non"
+    print(f"  Volume divergence    : {vol_str}")
+
+    print(f"\n  {'═' * 25}")
+    print(f"  GRADE : {report.grade}")
+    print(f"  LIVE ELIGIBLE : {'Oui' if report.live_eligible else 'Non'}")
+    print(f"  {'═' * 25}")
+
+    if report.warnings:
+        print(f"\n  Warnings :")
+        for w in report.warnings:
+            print(f"    ⚠ {w}")
+    print()
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="Optimisation des paramètres de stratégies")
+    parser.add_argument("--strategy", type=str, help="Stratégie à optimiser (ex: vwap_rsi)")
+    parser.add_argument("--symbol", type=str, help="Symbol spécifique (ex: BTC/USDT)")
+    parser.add_argument("--all-symbols", action="store_true", help="Optimiser sur tous les assets")
+    parser.add_argument("--all", action="store_true", help="Optimiser toutes les stratégies optimisables")
+    parser.add_argument("--check-data", action="store_true", help="Vérifier les données disponibles")
+    parser.add_argument("--dry-run", action="store_true", help="Afficher le plan sans exécuter")
+    parser.add_argument("--apply", action="store_true", help="Appliquer les paramètres grade A/B")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Affichage détaillé")
+    parser.add_argument("--config-dir", type=str, default="config", help="Répertoire de config")
+    args = parser.parse_args()
+
+    setup_logging(level="INFO")
+
+    if args.check_data:
+        await check_data(args.config_dir)
+        return
+
+    config = get_config(args.config_dir)
+    symbols = [a.symbol for a in config.assets]
+    available_strategies = list(STRATEGY_REGISTRY.keys())
+    excluded = [
+        name for name in ["funding", "liquidation", "orderflow"]
+        if name not in STRATEGY_REGISTRY
+    ]
+
+    # Déterminer quoi optimiser
+    if args.all:
+        strategies = available_strategies
+        target_symbols = symbols
+        if excluded:
+            logger.info(
+                "Stratégies exclues (pas de données historiques) : {}",
+                ", ".join(excluded),
+            )
+    elif args.strategy:
+        if args.strategy not in STRATEGY_REGISTRY:
+            logger.error(
+                "Stratégie '{}' non optimisable. Disponibles : {}",
+                args.strategy, available_strategies,
+            )
+            return
+        strategies = [args.strategy]
+        if args.all_symbols:
+            target_symbols = symbols
+        elif args.symbol:
+            target_symbols = [args.symbol]
+        else:
+            logger.error("Spécifier --symbol ou --all-symbols")
+            return
+    else:
+        parser.print_help()
+        return
+
+    # Dry run
+    if args.dry_run:
+        grids = _load_param_grids(f"{args.config_dir}/param_grids.yaml")
+        print("\nPlan d'optimisation (dry-run)")
+        print("─" * 50)
+        total_combos = 0
+        for strat in strategies:
+            strat_grids = grids.get(strat, {})
+            for sym in target_symbols:
+                grid = _build_grid(strat_grids, sym)
+                n = len(grid)
+                total_combos += n
+                coarse = min(n, 500)
+                print(f"  {strat} × {sym} : {n} combos (coarse: {coarse})")
+        print(f"\n  Total : {total_combos} combinaisons")
+        print(f"  Workers : {__import__('os').cpu_count()}")
+        print()
+        return
+
+    # Exécution
+    all_reports: list[FinalReport] = []
+
+    for strat in strategies:
+        # Collecter les résultats par symbole pour convergence cross-asset
+        symbol_results: dict[str, dict] = {}
+
+        for sym in target_symbols:
+            logger.info("Optimisation {} × {} ...", strat, sym)
+            report = await run_optimization(
+                strat, sym, args.config_dir, args.verbose,
+                all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
+            )
+            all_reports.append(report)
+            symbol_results[sym] = report.recommended_params
+
+    # Récapitulatif
+    print(f"\n{'═' * 55}")
+    print("  Récapitulatif")
+    print(f"{'═' * 55}")
+    for r in all_reports:
+        elig = "✓ LIVE" if r.live_eligible else "✗"
+        print(f"  {r.strategy_name:<12s} × {r.symbol:<12s} : Grade {r.grade} {elig}")
+    print()
+
+    # Apply
+    if args.apply:
+        applied = apply_to_yaml(all_reports, f"{args.config_dir}/strategies.yaml")
+        if applied:
+            logger.info("Paramètres appliqués dans strategies.yaml")
+        else:
+            logger.warning("Aucun paramètre appliqué (pas de grade A/B)")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

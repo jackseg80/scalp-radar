@@ -1,0 +1,39 @@
+# Paramètres d'optimisation walk-forward
+optimization:
+  is_window_days: 120     # In-sample : 4 mois
+  oos_window_days: 30     # Out-of-sample : 1 mois
+  step_days: 30           # Avancement entre fenêtres
+  metric: "sharpe_ratio"  # Métrique d'optimisation (sharpe_ratio | net_return_pct | profit_factor)
+  max_workers: null        # null = os.cpu_count()
+  main_exchange: "binance" # Exchange source pour le WFO
+  validation_exchange: "bitget"  # Exchange pour la validation finale
+
+vwap_rsi:
+  default:
+    rsi_period: [10, 14, 20]
+    rsi_long_threshold: [25, 30, 35]
+    rsi_short_threshold: [65, 70, 75]
+    volume_spike_multiplier: [1.5, 2.0, 2.5]
+    vwap_deviation_entry: [0.1, 0.2, 0.3, 0.5]
+    trend_adx_threshold: [20, 25, 30]
+    tp_percent: [0.4, 0.6, 0.8, 1.0]
+    sl_percent: [0.2, 0.3, 0.4, 0.5]
+  BTC/USDT:
+    sl_percent: [0.2, 0.3, 0.4]
+    tp_percent: [0.4, 0.6, 0.8]
+  SOL/USDT:
+    sl_percent: [0.4, 0.5, 0.7]
+    tp_percent: [0.6, 0.8, 1.0, 1.2]
+
+momentum:
+  default:
+    breakout_lookback: [15, 20, 30, 40]
+    volume_confirmation_multiplier: [1.5, 2.0, 2.5]
+    atr_multiplier_tp: [1.5, 2.0, 2.5]
+    atr_multiplier_sl: [0.5, 1.0, 1.5]
+    tp_percent: [0.4, 0.6, 0.8, 1.0]
+    sl_percent: [0.2, 0.3, 0.5]
+
+# Funding et liquidation : exclus du Sprint 7.
+# Pas de données historiques OI/funding sur Binance.
+# Paper trading avec paramètres manuels.

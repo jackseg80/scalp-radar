@@ -22,7 +22,10 @@ from backend.core.position_manager import (
 from backend.strategies.base import BaseStrategy, OpenPosition, StrategyContext
 
 # Re-export pour compatibilité (tests et scripts importent TradeResult depuis engine)
-__all__ = ["BacktestConfig", "BacktestEngine", "BacktestResult", "TradeResult"]
+__all__ = [
+    "BacktestConfig", "BacktestEngine", "BacktestResult",
+    "TradeResult", "run_backtest_single",
+]
 
 
 @dataclass
@@ -235,3 +238,22 @@ class BacktestEngine:
             else:
                 break
         return result
+
+
+def run_backtest_single(
+    strategy_name: str,
+    params: dict[str, Any],
+    candles_by_tf: dict[str, list[Candle]],
+    bt_config: BacktestConfig,
+    main_tf: str = "5m",
+) -> BacktestResult:
+    """Lance un backtest unique avec paramètres custom.
+
+    Fonction module-level (pas méthode) pour compatibilité ProcessPoolExecutor.
+    Utilisé par le walk-forward optimizer.
+    """
+    from backend.optimization import create_strategy_with_params
+
+    strategy = create_strategy_with_params(strategy_name, params)
+    engine = BacktestEngine(bt_config, strategy)
+    return engine.run(candles_by_tf, main_tf=main_tf)
