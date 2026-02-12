@@ -1,8 +1,12 @@
+/**
+ * SessionStats — Stats du simulateur.
+ * Props : wsData
+ * Conçu pour être wrappé par CollapsibleCard dans App.jsx.
+ */
 import Tooltip from './Tooltip'
 
 export default function SessionStats({ wsData }) {
   const strategies = wsData?.strategies || {}
-  const killSwitch = wsData?.kill_switch || false
 
   let totalPnl = 0
   let totalTrades = 0
@@ -19,56 +23,54 @@ export default function SessionStats({ wsData }) {
   })
 
   const winRate = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0
-  const longCount = 0 // TODO: compter depuis les trades
-  const shortCount = 0
 
   if (!wsData) {
-    return (
-      <div className="card">
-        <h2>Simulator <span className="dim text-xs" style={{ textTransform: 'none', letterSpacing: 0 }}>(Paper)</span></h2>
-        <div className="empty-state">En attente de données...</div>
-      </div>
-    )
+    return <div className="empty-state">En attente de données...</div>
   }
 
   return (
-    <div className="card">
-      <h2>Simulator <span className="dim text-xs" style={{ textTransform: 'none', letterSpacing: 0 }}>(Paper)</span></h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <StatRow
-          label="P&L Net"
-          value={`${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}$`}
-          color={totalPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
-          tooltip="Profit/perte total de toutes les stratégies en simulation (net de frais)"
-        />
-        <StatRow
-          label="Capital (virtuel)"
-          value={`${totalCapital.toFixed(0)}$`}
-          tooltip="Capital de simulation : 10 000$ par stratégie active"
-        />
-        <StatRow label="Trades" value={totalTrades} />
-        <StatRow
-          label="Win Rate"
-          value={`${winRate.toFixed(1)}%`}
-          color={winRate >= 50 ? 'var(--accent)' : winRate > 0 ? 'var(--red)' : undefined}
-          tooltip="Pourcentage de trades gagnants sur le total"
-        />
-        <StatRow
-          label="W / L"
-          value={`${totalWins} / ${totalLosses}`}
-          tooltip="Nombre de trades gagnants / perdants"
-        />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <StatRow
+        label="P&L Net"
+        value={`${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}$`}
+        color={totalPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
+        tooltip="Profit/perte total de toutes les stratégies en simulation (net de frais)"
+      />
+      <StatRow
+        label="Capital (virtuel)"
+        value={`${totalCapital.toFixed(0)}$`}
+        tooltip="Capital de simulation : 10 000$ par stratégie active"
+      />
+      <StatRow label="Trades" value={totalTrades} />
+      <StatRow
+        label="Win Rate"
+        value={`${winRate.toFixed(1)}%`}
+        color={winRate >= 50 ? 'var(--accent)' : winRate > 0 ? 'var(--red)' : undefined}
+        tooltip="Pourcentage de trades gagnants sur le total"
+      />
+      <StatRow
+        label="W / L"
+        value={`${totalWins} / ${totalLosses}`}
+        tooltip="Nombre de trades gagnants / perdants"
+      />
 
-        {killSwitch && (
-          <Tooltip content="Trading stoppé : perte session ≥ 5% du capital" inline={false}>
-            <div className="badge badge-stopped" style={{ textAlign: 'center', marginTop: 4, padding: '6px 8px' }}>
-              KILL SWITCH ACTIF
-            </div>
-          </Tooltip>
-        )}
-      </div>
+      {wsData?.kill_switch && (
+        <Tooltip content="Trading stoppé : perte session ≥ 5% du capital" inline={false}>
+          <div className="badge badge-stopped" style={{ textAlign: 'center', marginTop: 4, padding: '6px 8px' }}>
+            KILL SWITCH ACTIF
+          </div>
+        </Tooltip>
+      )}
     </div>
   )
+}
+
+// Exposer le summary pour CollapsibleCard
+SessionStats.getSummary = function(wsData) {
+  const strategies = wsData?.strategies || {}
+  let totalPnl = 0
+  Object.values(strategies).forEach(s => { totalPnl += s.net_pnl || 0 })
+  return `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(0)}$`
 }
 
 function StatRow({ label, value, color, tooltip }) {

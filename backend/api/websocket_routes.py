@@ -86,6 +86,7 @@ async def live_feed(websocket: WebSocket) -> None:
             if simulator is not None:
                 data["strategies"] = simulator.get_all_status()
                 data["kill_switch"] = simulator.is_kill_switch_triggered()
+                data["simulator_positions"] = simulator.get_open_positions()
 
             if arena is not None:
                 ranking = arena.get_ranking()

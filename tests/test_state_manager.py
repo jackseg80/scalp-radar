@@ -31,6 +31,7 @@ def _make_runner(
     runner._capital = capital
     runner._kill_switch_triggered = kill_switch
     runner._position = position
+    runner._position_symbol = "BTC/USDT" if position is not None else None
 
     stats = MagicMock()
     stats.capital = capital

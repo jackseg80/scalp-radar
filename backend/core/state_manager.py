@@ -74,6 +74,7 @@ class StateManager:
                 "kill_switch": runner._kill_switch_triggered,
                 "is_active": runner._stats.is_active,
                 "position": position_data,
+                "position_symbol": runner._position_symbol,
             }
 
         # Écriture atomique

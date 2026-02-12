@@ -42,7 +42,8 @@ def _make_mock_runner(
         is_active=is_active,
     )
     runner.get_stats.return_value = stats
-    runner.get_trades.return_value = trades or []
+    # get_trades retourne list[tuple[str, TradeResult]]
+    runner.get_trades.return_value = [("BTC/USDT", t) for t in (trades or [])]
     runner.get_status.return_value = {
         "name": name,
         "capital": capital,

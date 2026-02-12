@@ -54,6 +54,7 @@ class StrategyArena:
                     "status": runner.get_status(),
                     "trades": [
                         {
+                            "symbol": sym,
                             "direction": t.direction.value,
                             "entry_price": t.entry_price,
                             "exit_price": t.exit_price,
@@ -63,7 +64,7 @@ class StrategyArena:
                             "net_pnl": t.net_pnl,
                             "exit_reason": t.exit_reason,
                         }
-                        for t in runner.get_trades()
+                        for sym, t in runner.get_trades()
                     ],
                     "performance": self._perf_to_dict(
                         self._compute_performance(runner)
@@ -74,7 +75,7 @@ class StrategyArena:
     def _compute_performance(self, runner: LiveStrategyRunner) -> StrategyPerformance:
         """Calcule les métriques de performance d'un runner."""
         stats = runner.get_stats()
-        trades = runner.get_trades()
+        trades = [t for _, t in runner.get_trades()]
 
         # Win rate
         win_rate = 0.0

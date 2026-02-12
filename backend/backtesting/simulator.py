@@ -82,7 +82,8 @@ class LiveStrategyRunner:
         self._initial_capital = 10_000.0
         self._capital = self._initial_capital
         self._position: OpenPosition | None = None
-        self._trades: list[TradeResult] = []
+        self._position_symbol: str | None = None
+        self._trades: list[tuple[str, TradeResult]] = []
         self._current_regime = MarketRegime.RANGING
         self._previous_regime = MarketRegime.RANGING
         self._kill_switch_triggered = False
@@ -172,6 +173,7 @@ class LiveStrategyRunner:
                     )
                     self._record_trade(trade, symbol)
                     self._position = None
+                    self._position_symbol = None
                     return
 
             # Check TP/SL/signal_exit
@@ -181,6 +183,7 @@ class LiveStrategyRunner:
             if exit_result is not None:
                 self._record_trade(exit_result, symbol)
                 self._position = None
+                self._position_symbol = None
                 return
 
         # 5. Si pas de position : évaluer l'entrée
@@ -191,6 +194,7 @@ class LiveStrategyRunner:
                     signal, candle.timestamp, self._capital
                 )
                 if self._position is not None:
+                    self._position_symbol = symbol
                     self._capital -= self._position.entry_fee
                     logger.info(
                         "[{}] {} {} @ {:.2f} (score={:.2f})",
@@ -206,7 +210,7 @@ class LiveStrategyRunner:
     def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
         """Enregistre un trade et vérifie le kill switch."""
         self._capital += trade.net_pnl
-        self._trades.append(trade)
+        self._trades.append((symbol, trade))
         self._stats.total_trades += 1
         self._stats.net_pnl = self._capital - self._initial_capital
 
@@ -310,6 +314,8 @@ class LiveStrategyRunner:
                 sl_price=pos_data["sl_price"],
                 entry_fee=pos_data["entry_fee"],
             )
+            # Backward compat : ancien format sans position_symbol
+            self._position_symbol = state.get("position_symbol", "UNKNOWN")
 
         logger.info(
             "[{}] État restauré : capital={:.2f}, trades={}, kill_switch={}",
@@ -371,7 +377,7 @@ class LiveStrategyRunner:
             "has_position": self._position is not None,
         }
 
-    def get_trades(self) -> list[TradeResult]:
+    def get_trades(self) -> list[tuple[str, TradeResult]]:
         return list(self._trades)
 
     def get_stats(self) -> RunnerStats:
@@ -508,9 +514,10 @@ class Simulator:
         """Retourne tous les trades de tous les runners."""
         all_trades = []
         for runner in self._runners:
-            for trade in runner.get_trades():
+            for symbol, trade in runner.get_trades():
                 all_trades.append({
                     "strategy": runner.name,
+                    "symbol": symbol,
                     "direction": trade.direction.value,
                     "entry_price": trade.entry_price,
                     "exit_price": trade.exit_price,
@@ -527,6 +534,24 @@ class Simulator:
         # Trier par exit_time
         all_trades.sort(key=lambda t: t["exit_time"], reverse=True)
         return all_trades
+
+    def get_open_positions(self) -> list[dict]:
+        """Retourne les positions ouvertes de tous les runners."""
+        positions = []
+        for runner in self._runners:
+            if runner._position is not None and runner._position_symbol:
+                pos = runner._position
+                positions.append({
+                    "symbol": runner._position_symbol,
+                    "strategy": runner.name,
+                    "direction": pos.direction.value,
+                    "entry_price": pos.entry_price,
+                    "quantity": pos.quantity,
+                    "tp_price": pos.tp_price,
+                    "sl_price": pos.sl_price,
+                    "entry_time": pos.entry_time.isoformat(),
+                })
+        return positions
 
     def is_kill_switch_triggered(self) -> bool:
         """Vérifie si au moins un runner a déclenché le kill switch."""
@@ -626,12 +651,15 @@ class Simulator:
                     "conditions": conditions,
                 }
 
-                # Position ouverte sur cet asset
-                if runner._position is not None:
+                # Position ouverte sur cet asset (vérifier le symbol)
+                if runner._position is not None and runner._position_symbol == symbol:
                     asset_data["position"] = {
                         "direction": runner._position.direction.value,
                         "entry_price": runner._position.entry_price,
+                        "tp_price": runner._position.tp_price,
+                        "sl_price": runner._position.sl_price,
                         "strategy": runner.name,
+                        "entry_time": runner._position.entry_time.isoformat(),
                     }
 
             assets[symbol] = asset_data
@@ -653,7 +681,7 @@ class Simulator:
             for runner in self._runners:
                 # Chercher le dernier trade de ce runner pour ce symbol
                 last_score = None
-                for trade in runner.get_trades():
+                for _sym, trade in runner.get_trades():
                     if hasattr(trade, "entry_price"):
                         # TradeResult n'a pas de score — on utilise les conditions
                         break
@@ -670,9 +698,9 @@ class Simulator:
             equity = self._equity_cache
         else:
             # Recalculer
-            all_trades = []
+            all_trades: list[TradeResult] = []
             for runner in self._runners:
-                for trade in runner.get_trades():
+                for _sym, trade in runner.get_trades():
                     all_trades.append(trade)
             all_trades.sort(key=lambda t: t.exit_time)
 
