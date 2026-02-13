@@ -70,7 +70,7 @@ scalp-radar/
 ├── frontend/                     # React + Vite (20 components: Scanner, Heatmap, RiskCalc, ExecutorPanel, etc.)
 ├── tests/                        # 513 tests (pytest)
 ├── scripts/                      # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check
-└── docs/plans/                   # Sprint plans 1-12 archivés
+└── docs/plans/                   # Sprint plans 1-13 archivés
 ```
 
 ## Trading Strategies (8 implémentées)
@@ -139,7 +139,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-12) : 513 tests passants**
+**Sprints complétés (1-13) : 533 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -160,11 +160,12 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 7 : WFO grid search (2 passes, ProcessPool), overfitting detection (Monte Carlo, DSR, stabilité), grading A-F (330 tests)
 - Sprint 7b : Funding/OI historiques (fetch scripts, extra_data_builder) (352 tests)
 
-### Sprint 9-12 : Advanced Strategies
+### Sprint 9-13 : Advanced Strategies & Research
 - Sprint 9 : 3 stratégies 1h (Bollinger, Donchian, SuperTrend) + fast engine numpy (419 tests)
 - Sprint 10 : Infrastructure grid/DCA (BaseGridStrategy, GridPositionManager, MultiPositionEngine) (451 tests)
 - Sprint 11 : GridStrategyRunner paper trading (envelope_dca live simulation) (484 tests)
 - Sprint 12 : Executor grid/DCA support (multi-niveaux Bitget, 8 bugs corrigés) (513 tests)
+- Sprint 13 : DB optimization_results + page Recherche (visualisation WFO, migration 49 JSON) (533 tests)
 - Hotfix : Monte Carlo underpowered detection fix (envelope_dca Grade D→B)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
@@ -232,4 +233,4 @@ Windows (VSCode)                    Linux Server (192.168.1.200)
 - Bitget API docs: <https://www.bitget.com/api-doc/>
 - ccxt Bitget: <https://docs.ccxt.com/#/exchanges/bitget>
 - Frontend prototype: `docs/prototypes/Scalp radar v2.jsx` (référence design)
-- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-12 archivés)
+- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-13 archivés)
