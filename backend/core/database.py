@@ -169,6 +169,7 @@ class Database:
         """)
         await self._create_sprint7b_tables()
         await self._create_sprint13_tables()
+        await self._create_sprint14_tables()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -267,6 +268,41 @@ class Database:
         )
         await self._conn.commit()
         logger.info("Migration optimization_results : colonne source ajoutée")
+
+    async def _create_sprint14_tables(self) -> None:
+        """Tables Sprint 14 : jobs d'optimisation WFO."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS optimization_jobs (
+                id TEXT PRIMARY KEY,
+                strategy_name TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+
+                -- Statut
+                status TEXT NOT NULL DEFAULT 'pending',
+                progress_pct REAL DEFAULT 0,
+                current_phase TEXT DEFAULT '',
+
+                -- Paramètres
+                params_override TEXT,
+
+                -- Timing
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                duration_seconds REAL,
+
+                -- Résultat
+                result_id INTEGER,
+                error_message TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_jobs_status
+                ON optimization_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_jobs_created
+                ON optimization_jobs(created_at);
+        """)
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
 

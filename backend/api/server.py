@@ -50,6 +50,16 @@ async def lifespan(app: FastAPI):
     app.state.db = db
     app.state.start_time = datetime.now(tz=timezone.utc)
 
+    # 1b. JobManager (Sprint 14)
+    from backend.optimization.job_manager import JobManager
+    from backend.api.websocket_routes import manager as ws_manager
+
+    db_path_str = str(db.db_path) if db.db_path else "data/scalp_radar.db"
+    job_manager = JobManager(db_path=db_path_str, ws_broadcast=ws_manager.broadcast)
+    await job_manager.start()
+    app.state.job_manager = job_manager
+    logger.info("JobManager démarré (worker loop actif)")
+
     # 2. Telegram + Notifier (si token configuré)
     telegram: TelegramClient | None = None
     if config.secrets.telegram_bot_token:
@@ -171,6 +181,12 @@ async def lifespan(app: FastAPI):
         await simulator.stop()
     if engine:
         await engine.stop()
+
+    # JobManager : arrêter le worker loop
+    if hasattr(app.state, "job_manager") and app.state.job_manager:
+        await app.state.job_manager.stop()
+        logger.info("JobManager arrêté")
+
     await db.close()
     logger.info("Shutdown complet")
 

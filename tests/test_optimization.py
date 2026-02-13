@@ -445,7 +445,7 @@ class TestReport:
             oos_is_ratio=0.50, bitget_transfer=0.80,
             live_eligible=True, warnings=[], n_distinct_combos=700,
         )
-        filepath = save_report(report, str(tmp_path))
+        filepath, result_id = save_report(report, output_dir=str(tmp_path))
         assert filepath.exists()
         assert "vwap_rsi" in filepath.name
 

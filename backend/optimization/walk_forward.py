@@ -7,6 +7,7 @@ Parallélisé via ProcessPoolExecutor.
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import itertools
 import os
@@ -18,7 +19,8 @@ from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+import threading
 
 import numpy as np
 import yaml
@@ -339,8 +341,15 @@ class WalkForwardOptimizer:
         step_days: int = 30,
         max_workers: int | None = None,
         metric: str = "sharpe_ratio",
+        progress_callback: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        params_override: dict | None = None,
     ) -> WFOResult:
-        """Walk-forward optimization complète."""
+        """Walk-forward optimization complète.
+
+        Args:
+            params_override: Sous-grille custom {param_name: [values]} fusionnée dans "default".
+        """
         opt_config = self._grids.get("optimization", {})
         is_window_days = opt_config.get("is_window_days", is_window_days)
         oos_window_days = opt_config.get("oos_window_days", oos_window_days)
@@ -435,6 +444,12 @@ class WalkForwardOptimizer:
 
         # Construire le grid
         strategy_grids = self._grids.get(strategy_name, {})
+
+        # Fusionner params_override dans "default" si fourni
+        if params_override:
+            merged_default = {**strategy_grids.get("default", {}), **params_override}
+            strategy_grids = {**strategy_grids, "default": merged_default}
+
         full_grid = _build_grid(strategy_grids, symbol)
         grid_values = {**strategy_grids.get("default", {}), **strategy_grids.get(symbol, {})}
         logger.info("Grid complet : {} combinaisons", len(full_grid))
@@ -485,6 +500,11 @@ class WalkForwardOptimizer:
                 is_start.strftime("%Y-%m-%d"), is_end.strftime("%Y-%m-%d"),
                 oos_start.strftime("%Y-%m-%d"), oos_end.strftime("%Y-%m-%d"),
             )
+
+            # Check annulation
+            if cancel_event and cancel_event.is_set():
+                logger.warning("Optimisation annulée (cancel_event set)")
+                raise asyncio.CancelledError("Optimisation annulée par l'utilisateur")
 
             try:
                 # Découper les candles IS
@@ -607,6 +627,12 @@ class WalkForwardOptimizer:
             finally:
                 # Libérer mémoire entre fenêtres
                 gc.collect()
+
+                # Progress callback (WFO = 80% du total)
+                if progress_callback:
+                    pct = (w_idx + 1) / len(windows) * 80.0
+                    phase = f"WFO Fenêtre {w_idx + 1}/{len(windows)}"
+                    progress_callback(pct, phase)
 
         # Agréger les résultats
         if not window_results:

@@ -345,7 +345,7 @@ def save_report(
     timeframe: str | None = None,
     output_dir: str = "data/optimization",
     db_path: str | None = None,
-) -> Path:
+) -> tuple[Path, int | None]:
     """Sauvegarde le rapport en JSON et en DB.
 
     Args:
@@ -355,6 +355,9 @@ def save_report(
         timeframe: Timeframe de la stratégie (ex: "5m", "1h")
         output_dir: Répertoire JSON
         db_path: Chemin DB SQLite (None = depuis config)
+
+    Returns:
+        (filepath, result_id) : chemin JSON + ID DB (ou None si pas sauvé en DB)
     """
     # 1. Sauvegarde JSON (existant)
     out = Path(output_dir)
@@ -372,6 +375,7 @@ def save_report(
     logger.info("Rapport JSON sauvé : {}", filepath)
 
     # 2. Sauvegarde DB (nouveau)
+    result_id = None
     if timeframe is not None:
         from backend.core.config import get_config
         from backend.optimization.optimization_db import save_result_sync
@@ -385,14 +389,14 @@ def save_report(
             else:
                 db_path = "data/scalp_radar.db"  # Fallback
 
-        save_result_sync(db_path, report, wfo_windows, duration, timeframe)
+        result_id = save_result_sync(db_path, report, wfo_windows, duration, timeframe)
 
     # 3. Push serveur (best-effort, ne crashe jamais)
     if timeframe is not None:
         from backend.optimization.optimization_db import push_to_server
         push_to_server(report, wfo_windows, duration, timeframe)
 
-    return filepath
+    return filepath, result_id
 
 
 def _report_to_dict(report: FinalReport) -> dict[str, Any]:

@@ -51,7 +51,7 @@ def save_result_sync(
     duration: float | None,
     timeframe: str,
     source: str = "local",
-) -> None:
+) -> int:
     """Sauvegarde un résultat WFO en DB (sync pour optimize.py CLI).
 
     Args:
@@ -61,6 +61,9 @@ def save_result_sync(
         duration: Durée du run en secondes (ou None)
         timeframe: Timeframe de la stratégie (ex: "5m", "1h")
         source: Origine du résultat ("local" ou "server")
+
+    Returns:
+        result_id (int) : ID du résultat inséré
     """
     conn = sqlite3.connect(db_path)
     try:
@@ -104,7 +107,7 @@ def save_result_sync(
         )
 
         # 2. Insérer le nouveau avec is_latest=1
-        conn.execute(
+        cursor = conn.execute(
             """INSERT INTO optimization_results (
                 strategy_name, asset, timeframe, created_at, duration_seconds,
                 grade, total_score, oos_sharpe, consistency, oos_is_ratio, dsr,
@@ -137,12 +140,14 @@ def save_result_sync(
                 source,
             ),
         )
+        result_id = cursor.lastrowid
 
         conn.commit()
         logger.info(
-            "Résultat WFO sauvé en DB : {} × {} (grade {}, score {})",
-            report.strategy_name, report.symbol, report.grade, report.total_score,
+            "Résultat WFO sauvé en DB : {} × {} (grade {}, score {}, id={})",
+            report.strategy_name, report.symbol, report.grade, report.total_score, result_id,
         )
+        return result_id
     finally:
         conn.close()
 

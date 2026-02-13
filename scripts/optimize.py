@@ -22,8 +22,10 @@ import argparse
 import asyncio
 import itertools
 import math as _math
+import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 
@@ -168,8 +170,15 @@ async def run_optimization(
     verbose: bool = False,
     all_symbols_results: dict[str, dict] | None = None,
     db: Database | None = None,
-) -> FinalReport:
-    """Optimise une stratégie sur un asset."""
+    progress_callback: Callable[[float, str], None] | None = None,
+    cancel_event: threading.Event | None = None,
+    params_override: dict | None = None,
+) -> tuple[FinalReport, int | None]:
+    """Optimise une stratégie sur un asset.
+
+    Returns:
+        (report, result_id) : FinalReport + ID DB (ou None si pas sauvé)
+    """
     logger.info("═" * 55)
     logger.info("  Optimisation {} × {}", strategy_name.upper(), symbol)
     logger.info("═" * 55)
@@ -179,7 +188,12 @@ async def run_optimization(
     logger.info(">>> PHASE 1/3 : WALK-FORWARD OPTIMIZATION <<<")
     logger.info("")
     optimizer = WalkForwardOptimizer(config_dir)
-    wfo = await optimizer.optimize(strategy_name, symbol)
+    wfo = await optimizer.optimize(
+        strategy_name, symbol,
+        progress_callback=progress_callback,
+        cancel_event=cancel_event,
+        params_override=params_override,
+    )
 
     logger.info("")
     logger.info(">>> PHASE 1/3 TERMINEE — WFO : {} fenêtres, OOS/IS ratio = {:.2f} <<<", len(wfo.windows), wfo.oos_is_ratio)
@@ -299,6 +313,9 @@ async def run_optimization(
         overfit.stability.overall_stability,
     )
 
+    if progress_callback:
+        progress_callback(90.0, "Overfitting detection terminée")
+
     # Phase 3 : Validation Bitget
     logger.info("")
     logger.info(">>> PHASE 3/3 : VALIDATION BITGET <<<")
@@ -314,6 +331,9 @@ async def run_optimization(
         validation.bitget_sharpe_ci_low, validation.bitget_sharpe_ci_high,
         validation.transfer_ratio,
     )
+
+    if progress_callback:
+        progress_callback(95.0, "Validation Bitget terminée")
 
     # Build report
     report = build_final_report(wfo, overfit, validation)
@@ -340,12 +360,15 @@ async def run_optimization(
     ]
 
     # Sauvegarde JSON + DB
-    save_report(
+    filepath, result_id = save_report(
         report,
         wfo_windows=windows_serialized,
         duration=None,  # TODO: tracker la durée si nécessaire
         timeframe=main_tf,
     )
+
+    if progress_callback:
+        progress_callback(100.0, "Terminé")
 
     # Affichage console
     _print_report(report)
@@ -353,7 +376,7 @@ async def run_optimization(
     if close_db:
         await db.close()
 
-    return report
+    return report, result_id
 
 
 def _print_report(report: FinalReport) -> None:
@@ -500,7 +523,7 @@ async def main() -> None:
         for sym in target_symbols:
             logger.info("Optimisation {} × {} ...", strat, sym)
             try:
-                report = await run_optimization(
+                report, result_id = await run_optimization(
                     strat, sym, args.config_dir, args.verbose,
                     all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
                 )
