@@ -144,6 +144,50 @@ class Notifier:
         if self._telegram:
             await self._telegram.send_live_sl_failed(symbol, strategy)
 
+    async def notify_grid_level_opened(
+        self,
+        symbol: str,
+        direction: str,
+        level_num: int,
+        quantity: float,
+        entry_price: float,
+        avg_price: float,
+        sl_price: float,
+        strategy: str,
+    ) -> None:
+        """Notifie l'ouverture d'un niveau grid."""
+        logger.info(
+            "Notifier: GRID ENTRY #{} {} {} qty={:.6f} @ {:.2f} (avg={:.2f}, SL={:.2f})",
+            level_num, direction, symbol, quantity, entry_price, avg_price, sl_price,
+        )
+        if self._telegram:
+            await self._telegram.send_grid_level_opened(
+                symbol, direction, level_num, quantity, entry_price,
+                avg_price, sl_price, strategy,
+            )
+
+    async def notify_grid_cycle_closed(
+        self,
+        symbol: str,
+        direction: str,
+        num_positions: int,
+        avg_entry: float,
+        exit_price: float,
+        net_pnl: float,
+        exit_reason: str,
+        strategy: str,
+    ) -> None:
+        """Notifie la fermeture d'un cycle grid."""
+        logger.info(
+            "Notifier: GRID CLOSE {} {} — {} niveaux, net={:+.2f} ({})",
+            direction, symbol, num_positions, net_pnl, exit_reason,
+        )
+        if self._telegram:
+            await self._telegram.send_grid_cycle_closed(
+                symbol, direction, num_positions, avg_entry, exit_price,
+                net_pnl, exit_reason, strategy,
+            )
+
     async def notify_reconciliation(self, result: str) -> None:
         """Notifie le résultat de la réconciliation au boot."""
         logger.info("Notifier: réconciliation: {}", result)

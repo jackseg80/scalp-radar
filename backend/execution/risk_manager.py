@@ -59,10 +59,13 @@ class LiveRiskManager:
         entry_price: float,
         free_margin: float,
         total_balance: float,
+        leverage_override: int | None = None,
     ) -> tuple[bool, str]:
         """Vérifie toutes les conditions avant de passer un ordre.
 
         Retourne (ok, reason).
+        leverage_override : si fourni, utilise ce leverage au lieu du défaut
+        (ex: grid DCA leverage=6 vs défaut=15).
         """
         # 1. Kill switch live déclenché ?
         if self._kill_switch_triggered:
@@ -91,7 +94,7 @@ class LiveRiskManager:
                 return False, f"correlation_group_limit ({group})"
 
         # 5. Marge disponible suffisante ?
-        leverage = self._config.risk.position.default_leverage
+        leverage = leverage_override or self._config.risk.position.default_leverage
         required_margin = quantity * entry_price / leverage
         min_free_pct = self._config.risk.margin.min_free_margin_percent / 100
         min_free = total_balance * min_free_pct

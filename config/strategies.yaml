@@ -96,8 +96,8 @@ supertrend:
   per_asset: {}
 
 envelope_dca:
-  enabled: true          # Paper trading Sprint 11
-  live_eligible: false
+  enabled: true          # Paper trading Sprint 11 → live Sprint 12
+  live_eligible: true
   timeframe: "1h"
   ma_period: 7           # Optimisé WFO
   num_levels: 2          # Optimisé WFO

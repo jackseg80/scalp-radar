@@ -22,6 +22,10 @@ _STRATEGY_CONFIG_ATTR = {
     "momentum": "momentum",
     "funding": "funding",
     "liquidation": "liquidation",
+    "envelope_dca": "envelope_dca",
+    "bollinger_mr": "bollinger_mr",
+    "donchian_breakout": "donchian_breakout",
+    "supertrend": "supertrend",
 }
 
 

@@ -136,6 +136,53 @@ class TelegramClient:
         )
         return await self.send_message(text)
 
+    async def send_grid_level_opened(
+        self,
+        symbol: str,
+        direction: str,
+        level_num: int,
+        quantity: float,
+        entry_price: float,
+        avg_price: float,
+        sl_price: float,
+        strategy: str,
+    ) -> bool:
+        """Alerte ouverture d'un niveau grid."""
+        text = (
+            f"<b>GRID ENTRY #{level_num}</b>\n"
+            f"{direction} {symbol}\n"
+            f"Strategie: {strategy}\n"
+            f"Entry: {entry_price:.2f} (qty: {quantity:.6f})\n"
+            f"Prix moyen: {avg_price:.2f}\n"
+            f"SL global: {sl_price:.2f}"
+        )
+        return await self.send_message(text)
+
+    async def send_grid_cycle_closed(
+        self,
+        symbol: str,
+        direction: str,
+        num_positions: int,
+        avg_entry: float,
+        exit_price: float,
+        net_pnl: float,
+        exit_reason: str,
+        strategy: str,
+    ) -> bool:
+        """Alerte fermeture d'un cycle grid."""
+        status = "WIN" if net_pnl >= 0 else "LOSS"
+        pnl_sign = "+" if net_pnl >= 0 else ""
+        text = (
+            f"<b>GRID CLOSE — {status}</b>\n"
+            f"{direction} {symbol}\n"
+            f"Positions: {num_positions}\n"
+            f"{avg_entry:.2f} -> {exit_price:.2f}\n"
+            f"P&L net: <b>{pnl_sign}{net_pnl:.2f}$</b>\n"
+            f"Raison: {exit_reason}\n"
+            f"Strategie: {strategy}"
+        )
+        return await self.send_message(text)
+
     async def send_live_sl_failed(
         self,
         symbol: str,

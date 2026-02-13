@@ -195,18 +195,19 @@ scalp-radar/
 │   ├── test_arena.py             # 9 tests : ranking, profit factor, drawdown, detail
 │   ├── test_api_simulator.py     # 7 tests : endpoints status, trades, ranking, signals
 │   ├── test_state_manager.py    # 16 tests : save, load, restore, round-trip, periodic save
-│   ├── test_telegram.py         # 7 tests : send_message, trade alert, kill switch, notifier
+│   ├── test_telegram.py         # 10 tests : send_message, trade alert, kill switch, notifier, grid messages
 │   ├── test_heartbeat.py        # 3 tests : format message, no trades, stop
 │   ├── test_watchdog.py         # 8 tests : all ok, WS down, data stale, cooldown, lifecycle
 │   ├── test_executor.py         # 53 tests : multi-position, selector, persistence, reconciliation
-│   ├── test_risk_manager.py     # 19 tests : pre-trade checks, kill switch, corrélation groups
+│   ├── test_risk_manager.py     # 22 tests : pre-trade checks, kill switch, corrélation groups, leverage_override
 │   ├── test_adaptive_selector.py # 12 tests : critères perf, live_eligible, symboles actifs
 │   ├── test_optimization.py      # 52 tests : WFO, Monte Carlo, DSR, stabilité, convergence, grading
 │   ├── test_funding_oi_data.py  # 23 tests : fetch funding/OI, extra_data_builder, alignement
 │   ├── test_new_strategies.py   # 48 tests : bollinger_mr, donchian_breakout, supertrend (1h)
 │   ├── test_fast_backtest.py    # 18 tests : fast engine, indicator_cache, parité
 │   ├── test_multi_engine.py     # 32 tests : MultiPositionEngine, grid/DCA backtest
-│   └── test_grid_runner.py      # 28 tests : GridStrategyRunner, paper trading grid/DCA
+│   ├── test_grid_runner.py      # 28 tests : GridStrategyRunner, paper trading grid/DCA
+│   └── test_executor_grid.py   # 25 tests : Executor grid DCA, ouverture/fermeture/surveillance/state
 │
 ├── scripts/
 │   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto, --exchange)
@@ -235,7 +236,8 @@ scalp-radar/
     │   ├── sprint-9-new-1h-strategies.md
     │   ├── sprint-10-multi-position-engine.md
     │   ├── sprint-11-paper-trading-grid.md
-    │   └── hotfix-monte-carlo-underpowered.md
+    │   ├── hotfix-monte-carlo-underpowered.md
+    │   └── sprint-12-executor-grid-dca.md
     └── prototypes/
         └── Scalp radar v2.jsx    # Prototype React (référence design Sprint 3)
 ```
@@ -857,7 +859,7 @@ Plan détaillé : `docs/plans/sprint-10-multi-position-engine.md`
 
 ### Sprint 11 — Paper Trading Grid/DCA (Envelope DCA) ✅
 
-Complet. Envelope DCA en paper trading live (Simulator uniquement, pas Executor).
+Complet. Envelope DCA en paper trading live (Simulator). Executor ajouté en Sprint 12.
 Plan détaillé : `docs/plans/sprint-11-paper-trading-grid.md`
 
 **Fichiers créés :**
@@ -889,6 +891,50 @@ Fix détection underpowered dans Monte Carlo (pénalisait incorrectement les str
 - Seuil underpowered < 30 trades → retourne p_value=0.50 (score neutre 12/25 pts)
 - ASCII fallback pour console Windows (cp1252 compat)
 - Impact : BTC envelope_dca Grade D → B
+
+### Sprint 12 — Executor Grid DCA + Alertes Telegram ✅
+
+Complet. L'Executor (exécution live Bitget) supporte maintenant les cycles grid/DCA multi-niveaux (envelope_dca).
+Plan détaillé : `docs/plans/sprint-12-executor-grid-dca.md`
+
+**Fichiers créés :**
+
+- `tests/test_executor_grid.py` — 25 tests
+
+**Fichiers modifiés :**
+
+- `executor.py` : +2 dataclasses (`GridLivePosition`, `GridLiveState`), ~12 méthodes grid (~350 lignes)
+- `risk_manager.py` : +param `leverage_override` dans `pre_trade_check`
+- `adaptive_selector.py` : +4 mappings stratégies 1h dans `_STRATEGY_CONFIG_ATTR`
+- `notifier.py` : +2 méthodes grid (`notify_grid_level_opened`, `notify_grid_cycle_closed`)
+- `telegram.py` : +2 méthodes format messages grid
+- `strategies.yaml` : `envelope_dca.live_eligible: true`
+- `test_risk_manager.py` : +3 tests `leverage_override`
+- `test_telegram.py` : +3 tests format messages grid
+
+**8 bugs corrigés vs plan original :**
+
+1. AdaptiveSelector bloquait envelope_dca (mapping manquant + `live_eligible: false`)
+2. RiskManager rejetait le 2ème niveau grid (`position_already_open`)
+3. `record_pnl()` n'existait pas (utiliser `record_trade_result(LiveTradeResult(...))`)
+4. `_watch_orders_loop` dormait sans positions mono (condition inclut `_grid_states`)
+5. `_poll_positions_loop` ignorait les grids (itérer aussi `_grid_states`)
+6. `_cancel_orphan_orders` supprimait le SL grid (inclure grid IDs dans `tracked_ids`)
+7. Leverage 15 au lieu de 6 dans le margin check (`leverage_override` param)
+8. Conflit mono/grid sur le même symbol (exclusion mutuelle bidirectionnelle)
+
+**Décisions clés Sprint 12 :**
+
+- Dispatch grid vs mono dans `handle_event()` via `_is_grid_strategy()`
+- Pre-trade check au 1er niveau seulement (un cycle = 1 slot pour max_concurrent)
+- SL global server-side recalculé à chaque niveau (cancel ancien + place nouveau)
+- TP client-side (SMA dynamique, détecté par GridStrategyRunner)
+- Règle #1 : JAMAIS de position sans SL → `_emergency_close_grid()` si SL impossible
+- Exclusion mutuelle mono/grid par symbol (Bitget agrège positions par symbol+direction)
+- State persistence round-trip (`grid_states` dans `get_state_for_persistence/restore_positions`)
+- Réconciliation grid au boot (`_reconcile_grid_symbol`)
+
+- 513 tests passants (29 nouveaux)
 
 ## Dev Workflow
 

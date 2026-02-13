@@ -71,7 +71,7 @@ uv run python -m scripts.fetch_oi
 uv run pytest tests/ -v
 ```
 
-484 tests couvrant : modèles, config, database, indicateurs, 8 stratégies (4 scalp 5m + 3 swing 1h + 1 grid/DCA), backtesting (mono + multi-position), simulator, arena, API, state manager, telegram, watchdog, executor, risk manager, optimisation WFO, fast engines, funding/OI data.
+513 tests couvrant : modèles, config, database, indicateurs, 8 stratégies (4 scalp 5m + 3 swing 1h + 1 grid/DCA), backtesting (mono + multi-position), simulator, arena, API, state manager, telegram, watchdog, executor (mono + grid DCA), risk manager, optimisation WFO, fast engines, funding/OI data.
 
 ## Endpoints
 
@@ -120,7 +120,7 @@ backend/alerts/      # Telegram client, Notifier, Heartbeat
 backend/monitoring/  # Watchdog (data freshness, WS, stratégies)
 scripts/             # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check
 frontend/src/        # React dashboard (19 composants, Scanner/Heatmap/Risque, hooks polling + WS)
-tests/               # pytest (484 tests, 27 fichiers)
+tests/               # pytest (513 tests, 28 fichiers)
 ```
 
 ## Déploiement production
@@ -191,3 +191,4 @@ uv run python -m scripts.optimize --all --apply
 - [x] Sprint 9 — 3 nouvelles stratégies 1h (Bollinger MR, Donchian Breakout, SuperTrend)
 - [x] Sprint 10 — Moteur multi-position modulaire (grid/DCA, EnvelopeDCA)
 - [x] Sprint 11 — Paper trading Grid/DCA (GridStrategyRunner, warm-up, state persistence)
+- [x] Sprint 12 — Executor Grid DCA + Alertes Telegram (8 bugs corrigés, multi-niveaux live)

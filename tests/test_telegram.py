@@ -129,3 +129,88 @@ class TestNotifier:
         assert "Anomalie" in text
         assert "WebSocket déconnecté" in text
         assert "depuis 45s" in text
+
+
+# ─── Sprint 12 : messages grid ──────────────────────────────────────────
+
+
+class TestTelegramGrid:
+    """Tests pour les messages Telegram grid DCA."""
+
+    @pytest.mark.asyncio
+    async def test_send_grid_level_opened_format(self):
+        """Format message ouverture niveau grid."""
+        client = TelegramClient("fake_token", "fake_chat_id")
+        client.send_message = AsyncMock(return_value=True)
+
+        await client.send_grid_level_opened(
+            symbol="BTC/USDT",
+            direction="LONG",
+            level_num=2,
+            quantity=0.001,
+            entry_price=48_000.0,
+            avg_price=49_000.0,
+            sl_price=39_200.0,
+            strategy="envelope_dca",
+        )
+
+        client.send_message.assert_called_once()
+        text = client.send_message.call_args[0][0]
+        assert "GRID ENTRY #2" in text
+        assert "LONG" in text
+        assert "BTC/USDT" in text
+        assert "envelope_dca" in text
+        assert "48000.00" in text
+        assert "49000.00" in text
+        assert "39200.00" in text
+
+    @pytest.mark.asyncio
+    async def test_send_grid_cycle_closed_format(self):
+        """Format message fermeture cycle grid."""
+        client = TelegramClient("fake_token", "fake_chat_id")
+        client.send_message = AsyncMock(return_value=True)
+
+        await client.send_grid_cycle_closed(
+            symbol="BTC/USDT",
+            direction="LONG",
+            num_positions=3,
+            avg_entry=49_000.0,
+            exit_price=51_000.0,
+            net_pnl=12.50,
+            exit_reason="tp_global",
+            strategy="envelope_dca",
+        )
+
+        client.send_message.assert_called_once()
+        text = client.send_message.call_args[0][0]
+        assert "GRID CLOSE" in text
+        assert "WIN" in text
+        assert "LONG" in text
+        assert "3" in text
+        assert "49000.00" in text
+        assert "51000.00" in text
+        assert "+12.50$" in text
+        assert "tp_global" in text
+
+    @pytest.mark.asyncio
+    async def test_send_grid_cycle_closed_loss(self):
+        """Format message fermeture cycle grid en perte."""
+        client = TelegramClient("fake_token", "fake_chat_id")
+        client.send_message = AsyncMock(return_value=True)
+
+        await client.send_grid_cycle_closed(
+            symbol="ETH/USDT",
+            direction="SHORT",
+            num_positions=2,
+            avg_entry=3_000.0,
+            exit_price=3_100.0,
+            net_pnl=-8.50,
+            exit_reason="sl_global",
+            strategy="envelope_dca",
+        )
+
+        text = client.send_message.call_args[0][0]
+        assert "LOSS" in text
+        assert "SHORT" in text
+        assert "-8.50$" in text
+        assert "sl_global" in text

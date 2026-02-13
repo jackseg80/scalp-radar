@@ -1,5 +1,6 @@
 """Executor : exécution d'ordres réels sur Bitget via ccxt Pro.
 
+Sprint 12 : support grid DCA multi-niveaux (envelope_dca).
 Sprint 5b : multi-stratégie, multi-paire, adaptive selector.
 Pattern observer : reçoit les TradeEvent du Simulator via callback,
 réplique en ordres réels sur Bitget.
@@ -68,6 +69,47 @@ class LivePosition:
     tp_price: float = 0.0
 
 
+@dataclass
+class GridLivePosition:
+    """Position individuelle dans un cycle grid live."""
+
+    level: int
+    entry_price: float
+    quantity: float
+    entry_order_id: str
+    entry_time: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+@dataclass
+class GridLiveState:
+    """État complet d'un cycle grid live sur un symbole.
+
+    Un cycle grid = N positions ouvertes séquentiellement sur le même symbol,
+    avec un SL global server-side et un TP client-side (SMA dynamique).
+    Compté comme 1 "position" pour le RiskManager (max_concurrent, corrélation).
+    """
+
+    symbol: str  # format futures "BTC/USDT:USDT"
+    direction: str  # "LONG" | "SHORT"
+    strategy_name: str
+    leverage: int
+    positions: list[GridLivePosition] = field(default_factory=list)
+    sl_order_id: str | None = None
+    sl_price: float = 0.0
+    opened_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    @property
+    def total_quantity(self) -> float:
+        return sum(p.quantity for p in self.positions)
+
+    @property
+    def avg_entry_price(self) -> float:
+        if not self.positions:
+            return 0.0
+        total_notional = sum(p.quantity * p.entry_price for p in self.positions)
+        return total_notional / self.total_quantity
+
+
 # ─── MAPPING SYMBOLES ─────────────────────────────────────────────────────
 
 # Mapping symbole spot → futures swap Bitget
@@ -125,6 +167,7 @@ class Executor:
 
         self._exchange: Any = None  # ccxt.pro.bitget (créé dans start)
         self._positions: dict[str, LivePosition] = {}
+        self._grid_states: dict[str, GridLiveState] = {}  # {futures_sym: state}
         self._running = False
         self._connected = False
         self._watch_task: asyncio.Task[None] | None = None
@@ -313,16 +356,24 @@ class Executor:
         if not self._running or not self._connected:
             return
 
+        is_grid = self._is_grid_strategy(event.strategy_name)
+
         if event.event_type == TradeEventType.OPEN:
             # Gate OPEN via AdaptiveSelector (si configuré)
             if self._selector and not self._selector.is_allowed(
                 event.strategy_name, event.symbol,
             ):
                 return
-            await self._open_position(event)
+            if is_grid:
+                await self._open_grid_position(event)
+            else:
+                await self._open_position(event)
         elif event.event_type == TradeEventType.CLOSE:
             # CLOSE passe toujours (on doit pouvoir fermer)
-            await self._close_position(event)
+            if is_grid:
+                await self._close_grid_cycle(event)
+            else:
+                await self._close_position(event)
 
     # ─── Ouverture de position ─────────────────────────────────────────
 
@@ -334,6 +385,13 @@ class Executor:
         if futures_sym in self._positions:
             logger.warning(
                 "Executor: position déjà ouverte sur {}, ignore OPEN", futures_sym,
+            )
+            return
+
+        # Exclusion mutuelle : pas de mono si grid active sur même symbol
+        if futures_sym in self._grid_states:
+            logger.warning(
+                "Executor: cycle grid actif sur {}, ignore OPEN mono", futures_sym,
             )
             return
 
@@ -508,6 +566,305 @@ class Executor:
             logger.warning("Executor: échec placement TP: {}", e)
             return None
 
+    # ─── Grid DCA : ouverture / fermeture / SL ─────────────────────────
+
+    async def _open_grid_position(self, event: TradeEvent) -> None:
+        """Ouvre un niveau de la grille DCA.
+
+        Différences avec _open_position :
+        - Autorise PLUSIEURS positions sur le même symbol (niveaux DCA)
+        - Pre-trade check uniquement au 1er niveau (un cycle = 1 slot)
+        - Met à jour le SL global après chaque nouvelle entrée
+        - PAS de TP trigger (TP dynamique = SMA, géré par le runner)
+        """
+        futures_sym = to_futures_symbol(event.symbol)
+
+        # Exclusion mutuelle mono/grid
+        if futures_sym in self._positions:
+            logger.warning(
+                "Executor: position mono active sur {}, ignore OPEN grid", futures_sym,
+            )
+            return
+
+        state = self._grid_states.get(futures_sym)
+        is_first_level = state is None
+
+        # Pre-trade check UNIQUEMENT au 1er niveau (Bug 2 fix)
+        if is_first_level:
+            grid_leverage = self._get_grid_leverage(event.strategy_name)
+
+            # Setup leverage au 1er trade grid (pas au start)
+            try:
+                await self._exchange.set_leverage(
+                    grid_leverage, futures_sym, params=self._sandbox_params,
+                )
+                logger.info(
+                    "Executor: leverage grid set a {}x pour {}",
+                    grid_leverage, futures_sym,
+                )
+            except Exception as e:
+                logger.warning("Executor: set leverage grid: {}", e)
+
+            balance = await self._exchange.fetch_balance(
+                {"type": "swap", **self._sandbox_params},
+            )
+            coin = self._margin_coin
+            free = float(balance.get("free", {}).get(coin, 0))
+            total = float(balance.get("total", {}).get(coin, 0))
+
+            quantity = self._round_quantity(event.quantity, futures_sym)
+            if quantity <= 0:
+                logger.warning("Executor: grid quantité arrondie à 0, trade ignoré")
+                return
+
+            ok, reason = self._risk_manager.pre_trade_check(
+                futures_sym, event.direction, quantity,
+                event.entry_price, free, total,
+                leverage_override=grid_leverage,
+            )
+            if not ok:
+                logger.warning("Executor: grid trade rejeté — {}", reason)
+                return
+        else:
+            quantity = self._round_quantity(event.quantity, futures_sym)
+            if quantity <= 0:
+                logger.warning("Executor: grid quantité arrondie à 0, trade ignoré")
+                return
+
+        # Market entry
+        side = "buy" if event.direction == "LONG" else "sell"
+        try:
+            entry_order = await self._exchange.create_order(
+                futures_sym, "market", side, quantity,
+                params=self._sandbox_params,
+            )
+        except Exception as e:
+            logger.error("Executor: échec grid entry: {}", e)
+            return
+
+        filled_qty = float(entry_order.get("filled") or quantity)
+        avg_price = float(entry_order.get("average") or event.entry_price)
+        order_id = entry_order.get("id", "")
+
+        if filled_qty <= 0:
+            logger.error("Executor: grid entry non remplie")
+            return
+
+        # Créer ou mettre à jour GridLiveState
+        if is_first_level:
+            state = GridLiveState(
+                symbol=futures_sym,
+                direction=event.direction,
+                strategy_name=event.strategy_name,
+                leverage=self._get_grid_leverage(event.strategy_name),
+            )
+            self._grid_states[futures_sym] = state
+
+            # Register dans RiskManager (1 cycle = 1 position)
+            # NOTE: la quantité trackée par le RM ne sera pas mise à jour
+            # aux niveaux suivants — dette technique acceptable.
+            self._risk_manager.register_position({
+                "symbol": futures_sym,
+                "direction": event.direction,
+                "entry_price": avg_price,
+                "quantity": filled_qty,
+            })
+
+        level_num = len(state.positions)
+        state.positions.append(GridLivePosition(
+            level=level_num,
+            entry_price=avg_price,
+            quantity=filled_qty,
+            entry_order_id=order_id,
+        ))
+
+        # Rate limiting (comme _open_position)
+        await asyncio.sleep(_ORDER_DELAY)
+
+        # Recalculer et replacer le SL global
+        await self._update_grid_sl(futures_sym, state)
+
+        # Telegram
+        await self._notifier.notify_grid_level_opened(
+            event.symbol, event.direction, level_num,
+            filled_qty, avg_price,
+            state.avg_entry_price, state.sl_price,
+            event.strategy_name,
+        )
+
+        logger.info(
+            "Executor: GRID {} level {} {} {:.6f} @ {:.2f} (avg={:.2f}, SL={:.2f})",
+            event.direction, level_num, futures_sym,
+            filled_qty, avg_price, state.avg_entry_price, state.sl_price,
+        )
+
+    async def _update_grid_sl(
+        self, futures_sym: str, state: GridLiveState,
+    ) -> None:
+        """Annule l'ancien SL et place un nouveau basé sur le prix moyen.
+
+        Appelée à chaque ouverture de niveau (le prix moyen change → le SL change).
+        Quantité du SL = total_quantity (toutes les positions agrégées).
+        """
+        # 1. Annuler l'ancien SL s'il existe
+        if state.sl_order_id:
+            try:
+                await self._exchange.cancel_order(
+                    state.sl_order_id, futures_sym, params=self._sandbox_params,
+                )
+            except Exception as e:
+                logger.warning("Executor: échec cancel ancien SL grid: {}", e)
+
+        # 2. Calculer nouveau SL
+        sl_pct = self._get_grid_sl_percent(state.strategy_name)
+        if state.direction == "LONG":
+            new_sl = state.avg_entry_price * (1 - sl_pct / 100)
+        else:
+            new_sl = state.avg_entry_price * (1 + sl_pct / 100)
+        new_sl = self._round_price(new_sl, futures_sym)
+
+        # 3. Placer SL (retry 3x) — quantité = total agrégé
+        close_side = "sell" if state.direction == "LONG" else "buy"
+        sl_order_id = await self._place_sl_with_retry(
+            futures_sym, close_side, state.total_quantity, new_sl,
+            state.strategy_name,
+        )
+
+        if sl_order_id is None:
+            # Règle #1 : JAMAIS de position sans SL
+            logger.critical(
+                "Executor: SL GRID IMPOSSIBLE — close urgence {}", futures_sym,
+            )
+            await self._emergency_close_grid(futures_sym, state)
+            return
+
+        state.sl_order_id = sl_order_id
+        state.sl_price = new_sl
+
+    async def _emergency_close_grid(
+        self, futures_sym: str, state: GridLiveState,
+    ) -> None:
+        """Fermeture d'urgence si SL impossible. JAMAIS de position sans SL."""
+        close_side = "sell" if state.direction == "LONG" else "buy"
+        try:
+            await self._exchange.create_order(
+                futures_sym, "market", close_side, state.total_quantity,
+                params={"reduceOnly": True, **self._sandbox_params},
+            )
+        except Exception as e:
+            logger.critical("Executor: ÉCHEC close urgence grid: {}", e)
+
+        self._risk_manager.unregister_position(futures_sym)
+        del self._grid_states[futures_sym]
+        await self._notifier.notify_live_sl_failed(futures_sym, state.strategy_name)
+
+    async def _close_grid_cycle(self, event: TradeEvent) -> None:
+        """Ferme toutes les positions d'un cycle DCA.
+
+        Déclenché par :
+        - tp_global (retour à la SMA, détecté par le runner)
+        - sl_global (SL trigger exécuté sur exchange, détecté par watchOrders)
+        - autre (signal_exit, etc.)
+        """
+        futures_sym = to_futures_symbol(event.symbol)
+        state = self._grid_states.get(futures_sym)
+        if state is None:
+            return
+
+        close_side = "sell" if state.direction == "LONG" else "buy"
+
+        # 1. Annuler SL (sauf si c'est le SL qui a déclenché)
+        if event.exit_reason != "sl_global" and state.sl_order_id:
+            try:
+                await self._exchange.cancel_order(
+                    state.sl_order_id, futures_sym, params=self._sandbox_params,
+                )
+            except Exception:
+                pass  # Le SL a peut-être déjà été exécuté
+
+        # 2. Market close (sauf si SL déjà exécuté sur exchange)
+        if event.exit_reason != "sl_global":
+            try:
+                close_order = await self._exchange.create_order(
+                    futures_sym, "market", close_side, state.total_quantity,
+                    params={"reduceOnly": True, **self._sandbox_params},
+                )
+                exit_price = float(
+                    close_order.get("average") or event.exit_price or 0,
+                )
+            except Exception as e:
+                logger.error("Executor: échec close grid: {}", e)
+                return
+        else:
+            exit_price = event.exit_price or state.sl_price
+
+        # 3. P&L net (via méthode existante, inclut fees)
+        net_pnl = self._calculate_pnl(
+            state.direction, state.avg_entry_price, exit_price, state.total_quantity,
+        )
+
+        # 4. RiskManager
+        from backend.execution.risk_manager import LiveTradeResult
+
+        self._risk_manager.record_trade_result(LiveTradeResult(
+            net_pnl=net_pnl,
+            timestamp=datetime.now(tz=timezone.utc),
+            symbol=futures_sym,
+            direction=state.direction,
+            exit_reason=event.exit_reason or "unknown",
+        ))
+        self._risk_manager.unregister_position(futures_sym)
+
+        # 5. Telegram
+        await self._notifier.notify_grid_cycle_closed(
+            event.symbol, state.direction,
+            len(state.positions), state.avg_entry_price, exit_price,
+            net_pnl, event.exit_reason or "unknown",
+            state.strategy_name,
+        )
+
+        logger.info(
+            "Executor: GRID CLOSE {} {} — {} niveaux, avg={:.2f} -> {:.2f}, "
+            "net={:+.2f} ({})",
+            state.direction, futures_sym, len(state.positions),
+            state.avg_entry_price, exit_price, net_pnl, event.exit_reason,
+        )
+
+        # 6. Cleanup
+        del self._grid_states[futures_sym]
+
+    async def _handle_grid_sl_executed(
+        self, futures_sym: str, state: GridLiveState, exit_price: float,
+    ) -> None:
+        """Traite l'exécution du SL grid par Bitget (watchOrders ou polling)."""
+        net_pnl = self._calculate_pnl(
+            state.direction, state.avg_entry_price, exit_price, state.total_quantity,
+        )
+
+        from backend.execution.risk_manager import LiveTradeResult
+
+        self._risk_manager.record_trade_result(LiveTradeResult(
+            net_pnl=net_pnl,
+            timestamp=datetime.now(tz=timezone.utc),
+            symbol=futures_sym,
+            direction=state.direction,
+            exit_reason="sl_global",
+        ))
+        self._risk_manager.unregister_position(futures_sym)
+
+        # Convertir futures → spot pour le notifier
+        spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+        await self._notifier.notify_grid_cycle_closed(
+            spot_sym, state.direction,
+            len(state.positions), state.avg_entry_price, exit_price,
+            net_pnl, "sl_global", state.strategy_name,
+        )
+
+        logger.info(
+            "Executor: SL grid exécuté {} — net={:+.2f}", futures_sym, net_pnl,
+        )
+        del self._grid_states[futures_sym]
+
     # ─── Fermeture de position ─────────────────────────────────────────
 
     async def _close_position(self, event: TradeEvent) -> None:
@@ -592,7 +949,7 @@ class Executor:
         """Mécanisme principal : watchOrders via ccxt Pro."""
         while self._running:
             try:
-                if not self._positions:
+                if not self._positions and not self._grid_states:
                     await asyncio.sleep(1)
                     continue
 
@@ -630,6 +987,15 @@ class Executor:
             await self._handle_exchange_close(symbol, exit_price, exit_reason)
             return
 
+        # Scanner les grid states pour SL match
+        for futures_sym, grid_state in list(self._grid_states.items()):
+            if order_id == grid_state.sl_order_id:
+                exit_price = float(
+                    order.get("average") or order.get("price") or grid_state.sl_price,
+                )
+                await self._handle_grid_sl_executed(futures_sym, grid_state, exit_price)
+                return
+
         # Ordre non matché — log debug (ordres d'autres systèmes sur le sous-compte)
         logger.debug(
             "Executor: ordre non matché ignoré: id={}, symbol={}, status={}",
@@ -641,11 +1007,13 @@ class Executor:
         while self._running:
             try:
                 await asyncio.sleep(_POLL_INTERVAL)
-                if not self._running or not self._positions:
+                if not self._running:
                     continue
 
                 for symbol in list(self._positions.keys()):
                     await self._check_position_still_open(symbol)
+                for symbol in list(self._grid_states.keys()):
+                    await self._check_grid_still_open(symbol)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -672,6 +1040,22 @@ class Executor:
             exit_price = await self._fetch_exit_price(symbol)
             exit_reason = await self._determine_exit_reason(symbol)
             await self._handle_exchange_close(symbol, exit_price, exit_reason)
+
+    async def _check_grid_still_open(self, symbol: str) -> None:
+        """Vérifie si la position grid est toujours ouverte sur l'exchange."""
+        state = self._grid_states.get(symbol)
+        if state is None:
+            return
+
+        positions = await self._fetch_positions_safe(symbol)
+        has_open = any(float(p.get("contracts", 0)) > 0 for p in positions)
+
+        if not has_open:
+            logger.info(
+                "Executor: grid {} fermée côté exchange (détectée par polling)", symbol,
+            )
+            exit_price = await self._fetch_exit_price(symbol)
+            await self._handle_grid_sl_executed(symbol, state, exit_price)
 
     async def _handle_exchange_close(
         self, symbol: str, exit_price: float, exit_reason: str,
@@ -726,6 +1110,10 @@ class Executor:
 
         for futures_sym in configured_symbols:
             await self._reconcile_symbol(futures_sym)
+
+        # Réconcilier les cycles grid restaurés
+        for futures_sym in list(self._grid_states.keys()):
+            await self._reconcile_grid_symbol(futures_sym)
 
         # Nettoyage ordres trigger orphelins (TP/SL restés après fermeture)
         await self._cancel_orphan_orders()
@@ -795,6 +1183,78 @@ class Executor:
         else:
             logger.debug("Executor: réconciliation {} — aucune position", futures_sym)
 
+    async def _reconcile_grid_symbol(self, futures_sym: str) -> None:
+        """Réconcilie un cycle grid restauré avec l'exchange."""
+        state = self._grid_states.get(futures_sym)
+        if state is None:
+            return
+
+        positions = await self._fetch_positions_safe(futures_sym)
+        has_position = any(
+            float(p.get("contracts", 0)) > 0 for p in positions
+        )
+
+        if has_position:
+            # Vérifier si le SL est toujours actif
+            if state.sl_order_id:
+                try:
+                    sl_order = await self._exchange.fetch_order(
+                        state.sl_order_id, futures_sym,
+                        params=self._sandbox_params,
+                    )
+                    if sl_order.get("status") in ("closed", "filled"):
+                        exit_price = float(
+                            sl_order.get("average") or state.sl_price,
+                        )
+                        logger.info(
+                            "Executor: SL grid exécuté pendant downtime {}",
+                            futures_sym,
+                        )
+                        await self._handle_grid_sl_executed(
+                            futures_sym, state, exit_price,
+                        )
+                        return
+                except Exception:
+                    pass
+
+            # Rétablir le leverage
+            try:
+                await self._exchange.set_leverage(
+                    state.leverage, futures_sym, params=self._sandbox_params,
+                )
+            except Exception:
+                pass
+
+            logger.info(
+                "Executor: cycle grid restauré {} ({} niveaux, SL={})",
+                futures_sym, len(state.positions), state.sl_order_id,
+            )
+        else:
+            # Position fermée pendant downtime (SL exécuté ou liquidation)
+            exit_price = await self._fetch_exit_price(futures_sym)
+            net_pnl = self._calculate_pnl(
+                state.direction, state.avg_entry_price,
+                exit_price, state.total_quantity,
+            )
+            from backend.execution.risk_manager import LiveTradeResult
+
+            self._risk_manager.record_trade_result(LiveTradeResult(
+                net_pnl=net_pnl,
+                timestamp=datetime.now(tz=timezone.utc),
+                symbol=futures_sym,
+                direction=state.direction,
+                exit_reason="closed_during_downtime",
+            ))
+            await self._notifier.notify_reconciliation(
+                f"Cycle grid {futures_sym} fermé pendant downtime. "
+                f"P&L estimé: {net_pnl:+.2f}$"
+            )
+            logger.info(
+                "Executor: grid {} fermée pendant downtime, net={:+.2f}",
+                futures_sym, net_pnl,
+            )
+            del self._grid_states[futures_sym]
+
     async def _cancel_orphan_orders(self) -> None:
         """Annule les ordres trigger orphelins qui n'ont plus de position associée.
 
@@ -814,7 +1274,7 @@ class Executor:
         if not open_orders:
             return
 
-        # IDs des ordres trackés localement (TOUTES les positions)
+        # IDs des ordres trackés localement (positions mono + grid)
         tracked_ids: set[str] = set()
         for pos in self._positions.values():
             if pos.sl_order_id:
@@ -823,6 +1283,12 @@ class Executor:
                 tracked_ids.add(pos.tp_order_id)
             if pos.entry_order_id:
                 tracked_ids.add(pos.entry_order_id)
+        for grid_state in self._grid_states.values():
+            if grid_state.sl_order_id:
+                tracked_ids.add(grid_state.sl_order_id)
+            for gp in grid_state.positions:
+                if gp.entry_order_id:
+                    tracked_ids.add(gp.entry_order_id)
 
         # Filtrer les ordres orphelins (trigger orders non trackés)
         orphans = [
@@ -978,6 +1444,22 @@ class Executor:
             if pos_info is None:
                 pos_info = info
 
+        for gs in self._grid_states.values():
+            info = {
+                "symbol": gs.symbol,
+                "direction": gs.direction,
+                "entry_price": gs.avg_entry_price,
+                "quantity": gs.total_quantity,
+                "sl_price": gs.sl_price,
+                "tp_price": 0.0,
+                "strategy_name": gs.strategy_name,
+                "type": "grid",
+                "levels": len(gs.positions),
+            }
+            positions_list.append(info)
+            if pos_info is None:
+                pos_info = info
+
         result: dict[str, Any] = {
             "enabled": self.is_enabled,
             "connected": self.is_connected,
@@ -1010,8 +1492,31 @@ class Executor:
                 "tp_price": pos.tp_price,
             }
 
+        grid_states_data: dict[str, dict[str, Any]] = {}
+        for sym, gs in self._grid_states.items():
+            grid_states_data[sym] = {
+                "symbol": gs.symbol,
+                "direction": gs.direction,
+                "strategy_name": gs.strategy_name,
+                "leverage": gs.leverage,
+                "sl_order_id": gs.sl_order_id,
+                "sl_price": gs.sl_price,
+                "opened_at": gs.opened_at.isoformat(),
+                "positions": [
+                    {
+                        "level": p.level,
+                        "entry_price": p.entry_price,
+                        "quantity": p.quantity,
+                        "entry_order_id": p.entry_order_id,
+                        "entry_time": p.entry_time.isoformat(),
+                    }
+                    for p in gs.positions
+                ],
+            }
+
         return {
             "positions": positions_data,
+            "grid_states": grid_states_data,
             "risk_manager": self._risk_manager.get_state(),
         }
 
@@ -1046,6 +1551,55 @@ class Executor:
                 symbol,
                 self._positions[symbol].entry_price,
             )
+
+        # Grid states (Sprint 12)
+        for sym, gs_data in state.get("grid_states", {}).items():
+            self._grid_states[sym] = GridLiveState(
+                symbol=gs_data["symbol"],
+                direction=gs_data["direction"],
+                strategy_name=gs_data["strategy_name"],
+                leverage=gs_data.get("leverage", 6),
+                sl_order_id=gs_data.get("sl_order_id"),
+                sl_price=gs_data.get("sl_price", 0.0),
+                opened_at=datetime.fromisoformat(gs_data["opened_at"]),
+                positions=[
+                    GridLivePosition(
+                        level=p["level"],
+                        entry_price=p["entry_price"],
+                        quantity=p["quantity"],
+                        entry_order_id=p["entry_order_id"],
+                        entry_time=datetime.fromisoformat(p["entry_time"]),
+                    )
+                    for p in gs_data.get("positions", [])
+                ],
+            )
+            logger.info(
+                "Executor: grid restaurée — {} {} niveaux",
+                sym, len(self._grid_states[sym].positions),
+            )
+
+    # ─── Grid helpers ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_grid_strategy(strategy_name: str) -> bool:
+        """Vérifie si la stratégie est de type grid/DCA."""
+        from backend.optimization import is_grid_strategy
+
+        return is_grid_strategy(strategy_name)
+
+    def _get_grid_sl_percent(self, strategy_name: str) -> float:
+        """Récupère le sl_percent depuis la config stratégie."""
+        strat_config = getattr(self._config.strategies, strategy_name, None)
+        if strat_config and hasattr(strat_config, "sl_percent"):
+            return strat_config.sl_percent
+        return 20.0
+
+    def _get_grid_leverage(self, strategy_name: str) -> int:
+        """Récupère le leverage depuis la config stratégie."""
+        strat_config = getattr(self._config.strategies, strategy_name, None)
+        if strat_config and hasattr(strat_config, "leverage"):
+            return strat_config.leverage
+        return 6
 
     @staticmethod
     def _restore_single_position(pos_data: dict[str, Any]) -> LivePosition:

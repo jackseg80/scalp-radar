@@ -308,3 +308,73 @@ class TestCorrelationGroups:
         )
         assert ok is True
         assert reason == "ok"
+
+
+# ─── Sprint 12 : leverage_override ──────────────────────────────────────
+
+
+class TestLeverageOverride:
+    """Tests pour le paramètre leverage_override (grid DCA)."""
+
+    def test_leverage_override_uses_custom_leverage(self):
+        """Avec leverage_override=6, la marge requise est calculée à levier 6."""
+        rm = _make_rm()
+        # quantity=0.01, entry=100000 → notional=1000
+        # leverage=6 → required_margin = 1000/6 = 166.67
+        # free=5000, min_free=20%*10000=2000 → résidu=4833 > 2000 → OK
+        ok, reason = rm.pre_trade_check(
+            "BTC/USDT:USDT", "LONG",
+            quantity=0.01, entry_price=100_000.0,
+            free_margin=5_000.0, total_balance=10_000.0,
+            leverage_override=6,
+        )
+        assert ok is True
+        assert reason == "ok"
+
+    def test_leverage_override_higher_margin_requirement(self):
+        """Avec leverage=6 (vs default 15), la marge requise est plus haute."""
+        rm = _make_rm()
+        # quantity=0.1, entry=100000 → notional=10000
+        # leverage=6 → required_margin = 10000/6 = 1666.67
+        # free=3500, min_free=20%*10000=2000 → résidu=1833.33 < 2000 → REJETÉ
+        ok_low_lev, reason_low = rm.pre_trade_check(
+            "BTC/USDT:USDT", "LONG",
+            quantity=0.1, entry_price=100_000.0,
+            free_margin=3_500.0, total_balance=10_000.0,
+            leverage_override=6,
+        )
+        assert ok_low_lev is False
+        assert reason_low == "insufficient_margin"
+
+        # Même trade SANS override → leverage=15 → required=10000/15=666.67
+        # résidu=3500-666.67=2833.33 > 2000 → OK
+        ok_default, reason_default = rm.pre_trade_check(
+            "BTC/USDT:USDT", "LONG",
+            quantity=0.1, entry_price=100_000.0,
+            free_margin=3_500.0, total_balance=10_000.0,
+        )
+        assert ok_default is True
+        assert reason_default == "ok"
+
+    def test_grid_cycle_counts_as_one_position(self):
+        """Un cycle grid = 1 position pour max_concurrent_positions."""
+        rm = _make_rm()
+        # Enregistrer 1 cycle grid (1 appel register_position)
+        rm.register_position({
+            "symbol": "BTC/USDT:USDT", "direction": "LONG",
+            "entry_price": 50_000.0, "quantity": 0.002,
+        })
+        # 2ème position mono
+        rm.register_position({
+            "symbol": "ETH/USDT:USDT", "direction": "LONG",
+            "entry_price": 3_000.0, "quantity": 0.1,
+        })
+        assert rm.open_positions_count == 2  # grid=1 + mono=1
+
+        # 3ème position OK (max=3)
+        ok, reason = rm.pre_trade_check(
+            "SOL/USDT:USDT", "LONG",
+            quantity=1.0, entry_price=150.0,
+            free_margin=5_000.0, total_balance=10_000.0,
+        )
+        assert ok is True
