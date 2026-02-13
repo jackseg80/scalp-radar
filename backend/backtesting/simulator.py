@@ -2,18 +2,23 @@
 
 Exécute les stratégies sur données live en capital virtuel isolé.
 Réutilise PositionManager (fees, slippage, TP/SL) et IncrementalIndicatorEngine.
+
+Sprint 11 : GridStrategyRunner pour les stratégies grid/DCA (envelope_dca).
 """
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
+import numpy as np
 from loguru import logger
 
 from backend.core.config import AppConfig
 from backend.core.data_engine import DataEngine
+from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.core.indicators import detect_market_regime
 from backend.core.models import Candle, Direction, MarketRegime
@@ -22,6 +27,7 @@ from backend.core.position_manager import (
     PositionManagerConfig,
     TradeResult,
 )
+from backend.optimization import is_grid_strategy
 from backend.strategies.base import (
     EXTRA_FUNDING_RATE,
     EXTRA_OI_CHANGE_PCT,
@@ -30,7 +36,11 @@ from backend.strategies.base import (
     OpenPosition,
     StrategyContext,
 )
+from backend.strategies.base_grid import BaseGridStrategy, GridLevel, GridPosition
 from backend.strategies.factory import get_enabled_strategies
+
+if TYPE_CHECKING:
+    from backend.core.database import Database
 
 
 def _safe_round(val: Any, decimals: int = 1) -> float | None:
@@ -384,10 +394,412 @@ class LiveStrategyRunner:
         return self._stats
 
 
+class GridStrategyRunner:
+    """Exécute une stratégie grid/DCA sur données live (paper trading).
+
+    Différences avec LiveStrategyRunner :
+    - Gère N positions simultanées via GridPositionManager
+    - Utilise compute_grid() au lieu de evaluate()
+    - TP/SL global (pas par position)
+    - Un "trade" = cycle complet (toutes positions ouvertes → toutes fermées)
+    """
+
+    def __init__(
+        self,
+        strategy: BaseGridStrategy,
+        config: AppConfig,
+        indicator_engine: IncrementalIndicatorEngine,
+        grid_position_manager: GridPositionManager,
+        data_engine: DataEngine,
+    ) -> None:
+        self._strategy = strategy
+        self._config = config
+        self._indicator_engine = indicator_engine
+        self._gpm = grid_position_manager
+        self._data_engine = data_engine
+
+        self._initial_capital = 10_000.0
+        self._capital = self._initial_capital
+        self._positions: list[GridPosition] = []
+        self._grid_symbol: str | None = None  # Symbole actif de la grille
+        self._trades: list[tuple[str, TradeResult]] = []
+        self._current_regime = MarketRegime.RANGING
+        self._kill_switch_triggered = False
+        self._stats = RunnerStats(
+            capital=self._capital,
+            initial_capital=self._initial_capital,
+        )
+
+        # Sprint 5a : queue d'événements pour l'Executor (drainée par le Simulator)
+        self._pending_events: list[Any] = []
+
+        # COMPAT: duck typing pour Simulator/StateManager qui accèdent à ces attributs.
+        # Voir self._positions pour le vrai état grid.
+        self._position = None
+        self._position_symbol = None
+
+        # Buffer de closes pour calcul SMA interne
+        self._strategy_tf = getattr(strategy._config, "timeframe", "1h")
+        self._ma_period = getattr(strategy._config, "ma_period", 7)
+        self._close_buffer: dict[str, deque] = {}
+
+    @property
+    def name(self) -> str:
+        return self._strategy.name
+
+    @property
+    def is_kill_switch_triggered(self) -> bool:
+        return self._kill_switch_triggered
+
+    @property
+    def strategy(self) -> BaseStrategy:
+        return self._strategy
+
+    @property
+    def current_regime(self) -> MarketRegime:
+        return self._current_regime
+
+    async def _warmup_from_db(self, db: Database, symbol: str) -> None:
+        """Pré-charge les bougies historiques depuis la DB pour le warm-up SMA."""
+        needed = max(self._ma_period + 20, 50)
+        candles = await db.get_recent_candles(symbol, self._strategy_tf, needed)
+        if not candles:
+            logger.info(
+                "[{}] Warm-up: 0 bougies {} en DB pour {}",
+                self.name, self._strategy_tf, symbol,
+            )
+            return
+
+        if symbol not in self._close_buffer:
+            self._close_buffer[symbol] = deque(
+                maxlen=max(self._ma_period + 20, 50)
+            )
+
+        for candle in candles:
+            self._close_buffer[symbol].append(candle.close)
+            self._indicator_engine.update(symbol, self._strategy_tf, candle)
+
+        logger.info(
+            "[{}] Warm-up: {} bougies {} chargées pour {}",
+            self.name, len(candles), self._strategy_tf, symbol,
+        )
+
+    async def on_candle(
+        self, symbol: str, timeframe: str, candle: Candle
+    ) -> None:
+        """Traitement d'une nouvelle candle — logique grid."""
+        if self._kill_switch_triggered:
+            return
+
+        # Filtre strict : seul le timeframe de la stratégie est traité
+        if timeframe != self._strategy_tf:
+            return
+
+        # Maintenir le buffer de closes
+        if symbol not in self._close_buffer:
+            self._close_buffer[symbol] = deque(
+                maxlen=max(self._ma_period + 20, 50)
+            )
+        self._close_buffer[symbol].append(candle.close)
+
+        # Calculer SMA
+        closes = list(self._close_buffer[symbol])
+        if len(closes) < self._ma_period:
+            return
+
+        sma_val = float(np.mean(closes[-self._ma_period:]))
+
+        # Récupérer les indicateurs de l'engine et merger SMA
+        indicators = self._indicator_engine.get_indicators(symbol)
+        if not indicators:
+            indicators = {}
+        indicators.setdefault(self._strategy_tf, {}).update({
+            "sma": sma_val,
+            "close": candle.close,
+        })
+
+        # Détecter le régime (si ADX/ATR disponibles)
+        main_ind = indicators.get(self._strategy_tf, {})
+        self._current_regime = detect_market_regime(
+            main_ind.get("adx", float("nan")),
+            main_ind.get("di_plus", float("nan")),
+            main_ind.get("di_minus", float("nan")),
+            main_ind.get("atr", float("nan")),
+            main_ind.get("atr_sma", float("nan")),
+        )
+
+        # Construire le contexte
+        ctx = StrategyContext(
+            symbol=symbol,
+            timestamp=candle.timestamp,
+            candles={},
+            indicators=indicators,
+            current_position=None,
+            capital=self._capital,
+            config=self._config,
+        )
+
+        # Construire le GridState
+        grid_state = self._gpm.compute_grid_state(
+            self._positions, candle.close
+        )
+
+        # 1. Si positions ouvertes → check TP/SL global
+        if self._positions:
+            tp_price = self._strategy.get_tp_price(grid_state, main_ind)
+            sl_price = self._strategy.get_sl_price(grid_state, main_ind)
+
+            # Check via OHLC heuristic
+            exit_reason, exit_price = self._gpm.check_global_tp_sl(
+                self._positions, candle, tp_price, sl_price
+            )
+
+            # Si pas de TP/SL OHLC, check should_close_all (signal)
+            if exit_reason is None:
+                close_reason = self._strategy.should_close_all(ctx, grid_state)
+                if close_reason:
+                    exit_reason = close_reason
+                    exit_price = candle.close
+
+            if exit_reason:
+                trade = self._gpm.close_all_positions(
+                    self._positions, exit_price,
+                    candle.timestamp, exit_reason,
+                    self._current_regime,
+                )
+                self._record_trade(trade, symbol)
+                self._positions = []
+                self._grid_symbol = None
+                self._emit_close_event(symbol, trade)
+                return
+
+        # 2. Ouvrir de nouveaux niveaux si grille pas pleine
+        if len(self._positions) < self._strategy.max_positions:
+            levels = self._strategy.compute_grid(ctx, grid_state)
+
+            for level in levels:
+                if level.index in {p.level for p in self._positions}:
+                    continue
+
+                touched = False
+                if level.direction == Direction.LONG:
+                    touched = candle.low <= level.entry_price
+                else:
+                    touched = candle.high >= level.entry_price
+
+                if touched:
+                    position = self._gpm.open_grid_position(
+                        level, candle.timestamp,
+                        self._capital,
+                        self._strategy.max_positions,
+                    )
+                    if position:
+                        self._positions.append(position)
+                        self._grid_symbol = symbol
+                        logger.info(
+                            "[{}] GRID {} level {} @ {:.2f} ({}) — {}/{} positions",
+                            self.name,
+                            level.direction.value,
+                            level.index,
+                            level.entry_price,
+                            symbol,
+                            len(self._positions),
+                            self._strategy.max_positions,
+                        )
+                        self._emit_open_event(symbol, level, position)
+
+    def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
+        """Enregistre un trade grid (fermeture de toutes les positions)."""
+        self._capital += trade.net_pnl
+        self._trades.append((symbol, trade))
+        self._stats.total_trades += 1
+        self._stats.net_pnl = self._capital - self._initial_capital
+        self._stats.capital = self._capital
+
+        if trade.net_pnl > 0:
+            self._stats.wins += 1
+        else:
+            self._stats.losses += 1
+
+        logger.info(
+            "[{}] Grid trade clos : {} avg={:.2f} → {:.2f}, net={:+.2f} ({})",
+            self.name,
+            trade.direction.value,
+            trade.entry_price,
+            trade.exit_price,
+            trade.net_pnl,
+            trade.exit_reason,
+        )
+
+        # Kill switch
+        session_loss_pct = (
+            abs(min(0, self._stats.net_pnl)) / self._initial_capital * 100
+        )
+        max_session = self._config.risk.kill_switch.max_session_loss_percent
+        if session_loss_pct >= max_session:
+            self._kill_switch_triggered = True
+            self._stats.is_active = False
+            logger.warning(
+                "[{}] KILL SWITCH : perte session {:.1f}% >= {:.1f}%",
+                self.name, session_loss_pct, max_session,
+            )
+
+    def _emit_open_event(
+        self, symbol: str, level: GridLevel, position: GridPosition
+    ) -> None:
+        """Crée un TradeEvent OPEN pour un niveau de grille."""
+        from backend.execution.executor import TradeEvent, TradeEventType
+
+        self._pending_events.append(TradeEvent(
+            event_type=TradeEventType.OPEN,
+            strategy_name=self.name,
+            symbol=symbol,
+            direction=position.direction.value,
+            entry_price=position.entry_price,
+            quantity=position.quantity,
+            tp_price=0.0,
+            sl_price=0.0,
+            score=0.0,
+            timestamp=position.entry_time,
+            market_regime=self._current_regime.value,
+        ))
+
+    def _emit_close_event(self, symbol: str, trade: TradeResult) -> None:
+        """Crée un TradeEvent CLOSE pour la fermeture grid globale."""
+        from backend.execution.executor import TradeEvent, TradeEventType
+
+        self._pending_events.append(TradeEvent(
+            event_type=TradeEventType.CLOSE,
+            strategy_name=self.name,
+            symbol=symbol,
+            direction=trade.direction.value,
+            entry_price=trade.entry_price,
+            quantity=trade.quantity,
+            tp_price=0.0,
+            sl_price=0.0,
+            score=0.0,
+            timestamp=trade.exit_time,
+            market_regime=self._current_regime.value,
+            exit_reason=trade.exit_reason,
+            exit_price=trade.exit_price,
+        ))
+
+    def restore_state(self, state: dict) -> None:
+        """Restaure l'état du runner depuis un snapshot sauvegardé."""
+        self._capital = state.get("capital", self._initial_capital)
+        self._kill_switch_triggered = state.get("kill_switch", False)
+
+        self._stats.capital = self._capital
+        self._stats.net_pnl = state.get("net_pnl", 0.0)
+        self._stats.total_trades = state.get("total_trades", 0)
+        self._stats.wins = state.get("wins", 0)
+        self._stats.losses = state.get("losses", 0)
+        self._stats.is_active = state.get("is_active", True)
+
+        # Restaurer les positions grid ouvertes
+        grid_positions = state.get("grid_positions", [])
+        self._positions = []
+        for gp in grid_positions:
+            self._positions.append(GridPosition(
+                level=gp["level"],
+                direction=Direction(gp["direction"]),
+                entry_price=gp["entry_price"],
+                quantity=gp["quantity"],
+                entry_time=datetime.fromisoformat(gp["entry_time"]),
+                entry_fee=gp["entry_fee"],
+            ))
+        if self._positions:
+            self._grid_symbol = state.get("grid_symbol", "UNKNOWN")
+
+        logger.info(
+            "[{}] État restauré : capital={:.2f}, trades={}, positions_grid={}, kill_switch={}",
+            self.name,
+            self._capital,
+            self._stats.total_trades,
+            len(self._positions),
+            self._kill_switch_triggered,
+        )
+
+    def build_context(self, symbol: str) -> StrategyContext | None:
+        """Construit un StrategyContext pour le dashboard (get_conditions)."""
+        if not self._indicator_engine:
+            return None
+
+        indicators = self._indicator_engine.get_indicators(symbol)
+        if not indicators:
+            indicators = {}
+
+        # Merger SMA depuis le buffer interne
+        closes = list(self._close_buffer.get(symbol, []))
+        if len(closes) >= self._ma_period:
+            sma_val = float(np.mean(closes[-self._ma_period:]))
+            indicators.setdefault(self._strategy_tf, {}).update({
+                "sma": sma_val,
+                "close": closes[-1] if closes else 0.0,
+            })
+
+        return StrategyContext(
+            symbol=symbol,
+            timestamp=datetime.now(tz=timezone.utc),
+            candles={},
+            indicators=indicators,
+            current_position=None,
+            capital=self._capital,
+            config=self._config,
+        )
+
+    def get_grid_positions(self) -> list[dict]:
+        """Retourne les positions grid ouvertes pour le dashboard."""
+        result = []
+        for p in self._positions:
+            result.append({
+                "symbol": self._grid_symbol or "UNKNOWN",
+                "strategy": self.name,
+                "direction": p.direction.value,
+                "entry_price": p.entry_price,
+                "quantity": p.quantity,
+                "entry_time": p.entry_time.isoformat(),
+                "level": p.level,
+                "type": "grid",
+            })
+        return result
+
+    def get_status(self) -> dict:
+        """Même interface que LiveStrategyRunner.get_status() + champs grid."""
+        return {
+            "name": self.name,
+            "capital": self._capital,
+            "net_pnl": self._stats.net_pnl,
+            "total_trades": self._stats.total_trades,
+            "wins": self._stats.wins,
+            "losses": self._stats.losses,
+            "win_rate": (
+                self._stats.wins / self._stats.total_trades * 100
+                if self._stats.total_trades > 0 else 0.0
+            ),
+            "is_active": self._stats.is_active,
+            "kill_switch": self._kill_switch_triggered,
+            "has_position": len(self._positions) > 0,
+            "open_positions": len(self._positions),
+            "max_positions": self._strategy.max_positions,
+            "avg_entry_price": (
+                sum(p.entry_price * p.quantity for p in self._positions)
+                / sum(p.quantity for p in self._positions)
+                if self._positions else 0.0
+            ),
+        }
+
+    def get_trades(self) -> list[tuple[str, TradeResult]]:
+        return list(self._trades)
+
+    def get_stats(self) -> RunnerStats:
+        return self._stats
+
+
 class Simulator:
     """Orchestrateur du paper trading.
 
-    Crée un LiveStrategyRunner par stratégie enabled.
+    Crée un LiveStrategyRunner ou GridStrategyRunner par stratégie enabled.
     Se câble sur le DataEngine via on_candle.
     """
 
@@ -395,10 +807,12 @@ class Simulator:
         self,
         data_engine: DataEngine,
         config: AppConfig,
+        db: Database | None = None,
     ) -> None:
         self._data_engine = data_engine
         self._config = config
-        self._runners: list[LiveStrategyRunner] = []
+        self._db = db
+        self._runners: list[LiveStrategyRunner | GridStrategyRunner] = []
         self._indicator_engine: IncrementalIndicatorEngine | None = None
         self._running = False
         self._trade_event_callback: Callable | None = None
@@ -438,17 +852,39 @@ class Simulator:
         )
         pm = PositionManager(pm_config)
 
-        # Créer un runner par stratégie
+        # Créer un runner par stratégie (grid ou mono-position)
         for strategy in strategies:
-            runner = LiveStrategyRunner(
-                strategy=strategy,
-                config=self._config,
-                indicator_engine=self._indicator_engine,
-                position_manager=pm,
-                data_engine=self._data_engine,
-            )
+            if is_grid_strategy(strategy.name):
+                gpm_config = PositionManagerConfig(
+                    leverage=getattr(strategy._config, "leverage", 15),
+                    maker_fee=self._config.risk.fees.maker_percent / 100,
+                    taker_fee=self._config.risk.fees.taker_percent / 100,
+                    slippage_pct=self._config.risk.slippage.default_estimate_percent / 100,
+                    high_vol_slippage_mult=self._config.risk.slippage.high_volatility_multiplier,
+                    max_risk_per_trade=self._config.risk.position.max_risk_per_trade_percent / 100,
+                )
+                gpm = GridPositionManager(gpm_config)
+                runner: LiveStrategyRunner | GridStrategyRunner = GridStrategyRunner(
+                    strategy=strategy,
+                    config=self._config,
+                    indicator_engine=self._indicator_engine,
+                    grid_position_manager=gpm,
+                    data_engine=self._data_engine,
+                )
+            else:
+                runner = LiveStrategyRunner(
+                    strategy=strategy,
+                    config=self._config,
+                    indicator_engine=self._indicator_engine,
+                    position_manager=pm,
+                    data_engine=self._data_engine,
+                )
             self._runners.append(runner)
-            logger.info("Simulator: stratégie '{}' ajoutée", strategy.name)
+            logger.info(
+                "Simulator: stratégie '{}' ajoutée ({})",
+                strategy.name,
+                "grid" if is_grid_strategy(strategy.name) else "mono",
+            )
 
         # Restaurer l'état AVANT d'enregistrer le callback on_candle
         if saved_state is not None:
@@ -457,7 +893,15 @@ class Simulator:
                 if runner.name in runners_state:
                     runner.restore_state(runners_state[runner.name])
 
-        # Câblage DataEngine → Simulator (APRÈS restauration)
+        # Warm-up grid runners depuis la DB
+        if self._db is not None:
+            symbols = self._data_engine.get_all_symbols()
+            for runner in self._runners:
+                if isinstance(runner, GridStrategyRunner):
+                    for symbol in symbols:
+                        await runner._warmup_from_db(self._db, symbol)
+
+        # Câblage DataEngine → Simulator (APRÈS restauration + warm-up)
         self._data_engine.on_candle(self._dispatch_candle)
         self._running = True
 
@@ -539,7 +983,11 @@ class Simulator:
         """Retourne les positions ouvertes de tous les runners."""
         positions = []
         for runner in self._runners:
-            if runner._position is not None and runner._position_symbol:
+            # Positions grid (GridStrategyRunner)
+            if hasattr(runner, "get_grid_positions"):
+                positions.extend(runner.get_grid_positions())
+            # Position mono-position (LiveStrategyRunner)
+            elif runner._position is not None and runner._position_symbol:
                 pos = runner._position
                 positions.append({
                     "symbol": runner._position_symbol,
@@ -733,5 +1181,5 @@ class Simulator:
         }
 
     @property
-    def runners(self) -> list[LiveStrategyRunner]:
+    def runners(self) -> list[LiveStrategyRunner | GridStrategyRunner]:
         return self._runners

@@ -18,7 +18,7 @@ from loguru import logger
 from backend.core.database import Database
 
 if TYPE_CHECKING:
-    from backend.backtesting.simulator import LiveStrategyRunner, Simulator
+    from backend.backtesting.simulator import GridStrategyRunner, LiveStrategyRunner, Simulator
 
 
 class StateManager:
@@ -41,10 +41,13 @@ class StateManager:
         self._task: asyncio.Task[None] | None = None
         self._running = False
 
-    async def save_runner_state(self, runners: list[LiveStrategyRunner]) -> None:
+    async def save_runner_state(
+        self, runners: list[LiveStrategyRunner | GridStrategyRunner],
+    ) -> None:
         """Sérialise l'état de tous les runners dans un fichier JSON.
 
         Écriture atomique : écrit dans un .tmp puis os.replace().
+        Supporte LiveStrategyRunner (mono-position) et GridStrategyRunner (multi-position).
         """
         state: dict[str, Any] = {
             "saved_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -52,6 +55,7 @@ class StateManager:
         }
 
         for runner in runners:
+            # Position mono (LiveStrategyRunner) — _position est toujours None pour grid
             position_data = None
             if runner._position is not None:
                 pos = runner._position
@@ -65,7 +69,7 @@ class StateManager:
                     "entry_fee": pos.entry_fee,
                 }
 
-            state["runners"][runner.name] = {
+            runner_state: dict[str, Any] = {
                 "capital": runner._capital,
                 "net_pnl": runner._stats.net_pnl,
                 "total_trades": runner._stats.total_trades,
@@ -76,6 +80,23 @@ class StateManager:
                 "position": position_data,
                 "position_symbol": runner._position_symbol,
             }
+
+            # Positions grid (GridStrategyRunner)
+            if hasattr(runner, "_positions") and isinstance(runner._positions, list) and runner._positions:
+                runner_state["grid_positions"] = [
+                    {
+                        "level": gp.level,
+                        "direction": gp.direction.value,
+                        "entry_price": gp.entry_price,
+                        "quantity": gp.quantity,
+                        "entry_time": gp.entry_time.isoformat(),
+                        "entry_fee": gp.entry_fee,
+                    }
+                    for gp in runner._positions
+                ]
+                runner_state["grid_symbol"] = getattr(runner, "_grid_symbol", None)
+
+            state["runners"][runner.name] = runner_state
 
         # Écriture atomique
         Path(self._state_file).parent.mkdir(parents=True, exist_ok=True)

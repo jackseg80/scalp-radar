@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
     simulator: Simulator | None = None
     state_manager: StateManager | None = None
     if engine is not None:
-        simulator = Simulator(data_engine=engine, config=config)
+        simulator = Simulator(data_engine=engine, config=config, db=db)
 
         # Crash recovery : charger l'état AVANT start
         state_manager = StateManager(db)

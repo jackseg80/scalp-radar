@@ -1,6 +1,6 @@
 # Stratégies de scalping
 vwap_rsi:
-  enabled: true
+  enabled: false       # Grade F — désactivé Sprint 11
   live_eligible: true  # Peut être répliquée en live par l'executor
   timeframe: "5m"
   trend_filter_timeframe: "15m"
@@ -16,7 +16,7 @@ vwap_rsi:
   per_asset: {}  # Overrides par asset (ex: SOL/USDT: {sl_percent: 0.5})
 
 liquidation:
-  enabled: true
+  enabled: false        # Grade F — désactivé Sprint 11
   live_eligible: false  # Données OI approximatives, paper trading only
   timeframe: "5m"
   oi_change_threshold: 5.0
@@ -38,7 +38,7 @@ orderflow:
   weight: 0.20
 
 momentum:
-  enabled: true
+  enabled: false       # Grade F — désactivé Sprint 11
   live_eligible: true  # Peut être répliquée en live par l'executor
   timeframe: "5m"
   trend_filter_timeframe: "15m"
@@ -52,7 +52,7 @@ momentum:
   per_asset: {}  # Overrides par asset (ex: SOL/USDT: {sl_percent: 0.5})
 
 funding:
-  enabled: true
+  enabled: false        # Grade F — désactivé Sprint 11
   live_eligible: false  # Données funding approximatives, paper trading only
   timeframe: "15m"
   extreme_positive_threshold: 0.03
@@ -64,7 +64,7 @@ funding:
   per_asset: {}  # Overrides par asset (ex: BTC/USDT: {extreme_positive_threshold: 0.05})
 
 bollinger_mr:
-  enabled: true
+  enabled: false       # Grade F — désactivé Sprint 11
   live_eligible: false
   timeframe: "1h"
   bb_period: 20
@@ -74,7 +74,7 @@ bollinger_mr:
   per_asset: {}
 
 donchian_breakout:
-  enabled: true
+  enabled: false       # Grade F — désactivé Sprint 11
   live_eligible: false
   timeframe: "1h"
   entry_lookback: 20
@@ -85,7 +85,7 @@ donchian_breakout:
   per_asset: {}
 
 supertrend:
-  enabled: true
+  enabled: false       # Grade F — désactivé Sprint 11
   live_eligible: false
   timeframe: "1h"
   atr_period: 10
@@ -96,14 +96,14 @@ supertrend:
   per_asset: {}
 
 envelope_dca:
-  enabled: true
+  enabled: true          # Paper trading Sprint 11
   live_eligible: false
   timeframe: "1h"
-  ma_period: 7
-  num_levels: 3
-  envelope_start: 0.07
-  envelope_step: 0.03
-  sl_percent: 25.0
+  ma_period: 7           # Optimisé WFO
+  num_levels: 2          # Optimisé WFO
+  envelope_start: 0.05   # Optimisé WFO
+  envelope_step: 0.02    # Optimisé WFO
+  sl_percent: 20.0       # Optimisé WFO
   sides: ["long"]
   leverage: 6
   weight: 0.20

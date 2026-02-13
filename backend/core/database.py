@@ -300,6 +300,49 @@ class Database:
         await self._conn.commit()
         return cursor.rowcount
 
+    async def get_recent_candles(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int = 50,
+    ) -> list[Candle]:
+        """Retourne les N dernières bougies (tous exchanges), triées par timestamp ASC.
+
+        Utilisé pour le warm-up des stratégies grid au démarrage du Simulator.
+        Pas de filtre exchange : les données 1h peuvent venir de Binance ou Bitget.
+        """
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            """SELECT exchange, symbol, timeframe, timestamp,
+                      open, high, low, close, volume, vwap, mark_price
+               FROM candles
+               WHERE symbol = ? AND timeframe = ?
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (symbol, timeframe, limit),
+        )
+        rows = await cursor.fetchall()
+
+        # Inverser pour ASC (les plus anciennes en premier)
+        rows = list(reversed(rows))
+
+        return [
+            Candle(
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                open=row["open"],
+                high=row["high"],
+                low=row["low"],
+                close=row["close"],
+                volume=row["volume"],
+                symbol=row["symbol"],
+                timeframe=TimeFrame.from_string(row["timeframe"]),
+                exchange=row["exchange"],
+                vwap=row["vwap"],
+                mark_price=row["mark_price"],
+            )
+            for row in rows
+        ]
+
     # ─── SIGNALS ────────────────────────────────────────────────────────────
 
     async def insert_signal(self, signal: Signal, source: str = "backtest") -> None:
