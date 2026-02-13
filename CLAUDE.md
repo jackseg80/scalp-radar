@@ -71,7 +71,7 @@ scalp-radar/
 ├── Dockerfile.frontend           # node:18 build → nginx:alpine
 ├── docker-compose.yml            # 2 services : backend (8000) + frontend (80)
 ├── nginx.conf                    # Proxy /api, /health, /ws → backend:8000
-├── deploy.sh                     # Déploiement : graceful shutdown + rollback
+├── deploy.sh                     # Déploiement : graceful shutdown + rollback (--clean pour fresh start)
 │
 ├── config/                       # ALL tunable parameters — no hardcoding in code
 │   ├── assets.yaml               # Traded pairs + correlation groups (5 assets, 2 groupes)
@@ -504,7 +504,7 @@ Plan détaillé : `docs/plans/sprint-4-production.md`
 - `Dockerfile.frontend` — node:18 build → nginx:alpine
 - `nginx.conf` — proxy vers `http://backend:8000` (service Docker Compose, pas localhost)
 - `docker-compose.yml` — 2 services + healthcheck + volumes persistants
-- `deploy.sh` — graceful shutdown (`docker compose down --timeout 30`) + rollback sur health check échoué
+- `deploy.sh` — graceful shutdown + rollback sur health check échoué. Flag `--clean` / `-c` : kill brutal + supprime state files (fresh start sans perdre la DB)
 
 **Lifespan complet :**
 

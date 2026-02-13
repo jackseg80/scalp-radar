@@ -129,8 +129,8 @@ tests/               # pytest (513 tests, 28 fichiers)
 # Sur le serveur Linux (192.168.1.200)
 ssh jack@192.168.1.200
 cd ~/scalp-radar
-bash deploy.sh
-# → graceful shutdown, git pull, docker build, health check, rollback si erreur
+bash deploy.sh          # normal : state préservé
+bash deploy.sh --clean  # fresh start : supprime state files (pas la DB)
 ```
 
 Le bot tourne H24 en Docker Compose : backend (port 8000) + frontend nginx (port 80).

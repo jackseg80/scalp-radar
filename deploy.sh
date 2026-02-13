@@ -4,16 +4,25 @@ set -e
 DEPLOY_DIR="${DEPLOY_DIR:-$HOME/scalp-radar}"
 cd "$DEPLOY_DIR"
 
+# Parse flags
+CLEAN=false
+for arg in "$@"; do
+    case "$arg" in
+        --clean|-c) CLEAN=true ;;
+    esac
+done
+
 echo "========================================"
 echo "  SCALP RADAR - Deploy"
+if [ "$CLEAN" = true ]; then
+    echo "  Mode: CLEAN (fresh start)"
+else
+    echo "  Mode: NORMAL (state preserved)"
+fi
 echo "========================================"
 
 # Créer les dossiers persistants si absents
 mkdir -p data logs
-
-# Graceful shutdown (SIGTERM → lifespan sauvegarde l'état)
-echo "[*] Arrêt propre des containers..."
-docker compose down --timeout 30 || true
 
 # Pull
 echo "[*] Mise à jour du code..."
@@ -22,6 +31,22 @@ git pull origin main
 # Build
 echo "[*] Build des images..."
 docker compose build
+
+if [ "$CLEAN" = true ]; then
+    # Kill brutal (pas de sauvegarde graceful au shutdown)
+    echo "[*] Kill backend (pas de sauvegarde état)..."
+    docker compose kill backend || true
+    docker compose down --timeout 5 || true
+
+    # Suppression des fichiers state (PAS la DB)
+    echo "[*] 🧹 State files cleaned (fresh start)"
+    rm -f data/simulator_state.json data/executor_state.json
+else
+    # Graceful shutdown (SIGTERM → lifespan sauvegarde l'état)
+    echo "[*] Arrêt propre des containers..."
+    docker compose down --timeout 30 || true
+    echo "[*] 📦 State files preserved"
+fi
 
 # Start
 echo "[*] Lancement..."
