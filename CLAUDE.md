@@ -12,6 +12,13 @@ and presents results via a real-time dashboard.
 - Local dev: D:\Python\scalp-radar (Windows + VSCode)
 - Production: Linux server at 192.168.1.200 (~/scalp-radar), deployed via Docker Compose
 
+## Documentation
+
+- **[ROADMAP.md](docs/ROADMAP.md)** — Roadmap complète Phases 1-7, sprints détaillés, état actuel
+  - **IMPORTANT pour Claude Code** : Mettre à jour ce fichier après chaque plan de sprint complété
+  - Ajouter les résultats, leçons apprises, bugs corrigés dans la section du sprint concerné
+  - Mettre à jour "ÉTAT ACTUEL" avec le nouveau nombre de tests et la prochaine étape
+
 ## Developer Profile
 
 - Experienced crypto trader (swing trading, futures x10-x30 on Bitget)
@@ -137,6 +144,7 @@ scalp-radar/
 │   │   ├── conditions_routes.py  # GET /api/simulator/conditions, /signals/matrix, /simulator/equity
 │   │   ├── arena_routes.py       # GET /api/arena/* (ranking, strategy detail)
 │   │   ├── signals_routes.py     # GET /api/signals/recent
+│   │   ├── executor_routes.py    # POST /api/executor/* (test-trade, test-close, status)
 │   │   └── websocket_routes.py   # WS /ws/live (push temps réel + prix + executor)
 │   │
 │   ├── alerts/
