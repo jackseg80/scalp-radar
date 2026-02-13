@@ -17,16 +17,13 @@ from loguru import logger
 
 from backend.backtesting.engine import BacktestConfig, BacktestEngine
 from backend.backtesting.metrics import calculate_metrics, format_metrics_table
+from backend.backtesting.multi_engine import MultiPositionEngine
 from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
 from backend.core.models import Candle
-from backend.strategies.vwap_rsi import VwapRsiStrategy
-
-
-STRATEGY_MAP = {
-    "vwap_rsi": lambda config: VwapRsiStrategy(config.strategies.vwap_rsi),
-}
+from backend.optimization import GRID_STRATEGIES
+from backend.strategies.factory import create_strategy
 
 
 async def load_candles(
@@ -58,18 +55,25 @@ def run_backtest(args: argparse.Namespace) -> None:
 
     # Stratégie
     strategy_name = args.strategy
-    if strategy_name not in STRATEGY_MAP:
-        logger.error("Stratégie inconnue : {}. Disponibles : {}", strategy_name, list(STRATEGY_MAP.keys()))
+    try:
+        strategy = create_strategy(strategy_name, config)
+    except ValueError:
+        logger.error("Stratégie inconnue : {}", strategy_name)
         sys.exit(1)
-
-    strategy = STRATEGY_MAP[strategy_name](config)
 
     # Dates
     end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=args.days)
 
-    # Leverage
-    leverage = args.leverage if args.leverage else config.risk.position.default_leverage
+    # Leverage : CLI > config stratégie > risk.yaml
+    strat_cfg = getattr(config.strategies, strategy_name, None)
+    strategy_leverage = getattr(strat_cfg, 'leverage', None) if strat_cfg else None
+    if args.leverage:
+        leverage = args.leverage
+    elif strategy_leverage is not None:
+        leverage = strategy_leverage
+    else:
+        leverage = config.risk.position.default_leverage
 
     # Config backtest
     bt_config = BacktestConfig(
@@ -88,16 +92,17 @@ def run_backtest(args: argparse.Namespace) -> None:
     # Charger les données
     logger.info("Chargement des données {} ({} jours)...", args.symbol, args.days)
 
-    # Timeframes nécessaires
-    vwap_rsi_config = config.strategies.vwap_rsi
-    timeframes = [vwap_rsi_config.timeframe, vwap_rsi_config.trend_filter_timeframe]
+    # Timeframes nécessaires (depuis la config stratégie)
+    main_tf = strat_cfg.timeframe if strat_cfg else "5m"
+    timeframes = [main_tf]
+    if hasattr(strat_cfg, 'trend_filter_timeframe'):
+        timeframes.append(strat_cfg.trend_filter_timeframe)
     timeframes = list(dict.fromkeys(timeframes))  # Dédoublonner en gardant l'ordre
 
     db = Database()
     candles_by_tf = asyncio.run(_load_data(db, args.symbol, timeframes, start_date, end_date))
 
     # Vérifier les données
-    main_tf = vwap_rsi_config.timeframe
     main_count = len(candles_by_tf.get(main_tf, []))
     if main_count == 0:
         logger.error(
@@ -113,8 +118,11 @@ def run_backtest(args: argparse.Namespace) -> None:
             main_count, strategy.min_candles.get(main_tf, 0),
         )
 
-    # Lancer le backtest
-    engine = BacktestEngine(bt_config, strategy)
+    # Lancer le backtest (moteur adapté au type de stratégie)
+    if strategy_name in GRID_STRATEGIES:
+        engine = MultiPositionEngine(bt_config, strategy)  # type: ignore[arg-type]
+    else:
+        engine = BacktestEngine(bt_config, strategy)
     result = engine.run(candles_by_tf, main_tf=main_tf)
 
     # Calculer les métriques

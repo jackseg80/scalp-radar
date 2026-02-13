@@ -65,6 +65,7 @@ class FinalReport:
     # Overfitting
     mc_p_value: float
     mc_significant: bool
+    mc_underpowered: bool
     dsr: float
     dsr_max_expected_sharpe: float
     stability: float
@@ -94,6 +95,7 @@ def compute_grade(
     dsr: float,
     stability: float,
     bitget_transfer: float,
+    mc_underpowered: bool = False,
 ) -> str:
     """Calcule le grade A-F selon les critères."""
     score = 0
@@ -109,7 +111,10 @@ def compute_grade(
         score += 10
 
     # Monte Carlo (max 25 points)
-    if mc_p_value < 0.05:
+    if mc_underpowered:
+        # Pas assez de trades pour un test MC fiable → score neutre (12/25)
+        score += 12
+    elif mc_p_value < 0.05:
         score += 25
     elif mc_p_value < 0.10:
         score += 15
@@ -199,9 +204,12 @@ async def validate_on_bitget(
             start_date=main_candles[0].timestamp,
             end_date=main_candles[-1].timestamp,
         )
+        # Override leverage si la stratégie en spécifie un (ex: envelope_dca=6)
+        if hasattr(default_cfg, 'leverage'):
+            bt_config.leverage = default_cfg.leverage
 
         # Charger extra_data si nécessaire (funding/OI Binance comme proxy)
-        from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
+        from backend.optimization import STRATEGIES_NEED_EXTRA_DATA, is_grid_strategy
         extra_data_map: dict[str, dict[str, Any]] | None = None
         if strategy_name in STRATEGIES_NEED_EXTRA_DATA:
             funding_rates = await db.get_funding_rates(symbol, exchange="binance")
@@ -211,11 +219,17 @@ async def validate_on_bitget(
                     main_candles, funding_rates, oi_records,
                 )
 
-        # Backtest
-        result = run_backtest_single(
-            strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,
-            extra_data_by_timestamp=extra_data_map,
-        )
+        # Backtest (moteur adapté au type de stratégie)
+        if is_grid_strategy(strategy_name):
+            from backend.backtesting.multi_engine import run_multi_backtest_single
+            result = run_multi_backtest_single(
+                strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,
+            )
+        else:
+            result = run_backtest_single(
+                strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,
+                extra_data_by_timestamp=extra_data_map,
+            )
         metrics = calculate_metrics(result)
 
         # Bootstrap CI sur le Sharpe Bitget
@@ -354,6 +368,7 @@ def _report_to_dict(report: FinalReport) -> dict[str, Any]:
         "overfitting": {
             "mc_p_value": report.mc_p_value,
             "mc_significant": report.mc_significant,
+            "mc_underpowered": report.mc_underpowered,
             "dsr": report.dsr,
             "dsr_max_expected_sharpe": report.dsr_max_expected_sharpe,
             "stability": report.stability,
@@ -497,9 +512,15 @@ def build_final_report(
         dsr=overfit.dsr.dsr,
         stability=overfit.stability.overall_stability,
         bitget_transfer=validation.transfer_ratio,
+        mc_underpowered=overfit.monte_carlo.underpowered,
     )
 
     warnings: list[str] = []
+    if overfit.monte_carlo.underpowered:
+        n_trades = len(wfo.all_oos_trades)
+        warnings.append(
+            f"Monte Carlo sous-puissant ({n_trades} trades OOS < 30) — score MC neutre (12/25)"
+        )
     if overfit.stability.cliff_params:
         warnings.append(
             f"Paramètres instables : {', '.join(overfit.stability.cliff_params)}"
@@ -527,6 +548,7 @@ def build_final_report(
         recommended_params=wfo.recommended_params,
         mc_p_value=overfit.monte_carlo.p_value,
         mc_significant=overfit.monte_carlo.significant,
+        mc_underpowered=overfit.monte_carlo.underpowered,
         dsr=overfit.dsr.dsr,
         dsr_max_expected_sharpe=overfit.dsr.max_expected_sharpe,
         stability=overfit.stability.overall_stability,

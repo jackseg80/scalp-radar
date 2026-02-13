@@ -240,10 +240,18 @@ def _run_single_backtest_worker(params: dict[str, Any]) -> _ISResult:
 
     Retour léger (pas de trades) pour minimiser le pickling inter-process.
     """
-    result = run_backtest_single(
-        _worker_strategy, params, _worker_candles, _worker_bt_config, _worker_main_tf,
-        extra_data_by_timestamp=_worker_extra_data,
-    )
+    from backend.optimization import is_grid_strategy
+
+    if is_grid_strategy(_worker_strategy):
+        from backend.backtesting.multi_engine import run_multi_backtest_single
+        result = run_multi_backtest_single(
+            _worker_strategy, params, _worker_candles, _worker_bt_config, _worker_main_tf,
+        )
+    else:
+        result = run_backtest_single(
+            _worker_strategy, params, _worker_candles, _worker_bt_config, _worker_main_tf,
+            extra_data_by_timestamp=_worker_extra_data,
+        )
     metrics = calculate_metrics(result)
 
     return (
@@ -265,11 +273,20 @@ def _run_single_backtest_sequential(
     extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
 ) -> _ISResult:
     """Version séquentielle (fallback si ProcessPoolExecutor crashe)."""
-    result = run_backtest_single(
-        strategy_name, params, candles_by_tf, bt_config, main_tf,
-        precomputed_indicators=precomputed_indicators,
-        extra_data_by_timestamp=extra_data_by_timestamp,
-    )
+    from backend.optimization import is_grid_strategy
+
+    if is_grid_strategy(strategy_name):
+        from backend.backtesting.multi_engine import run_multi_backtest_single
+        result = run_multi_backtest_single(
+            strategy_name, params, candles_by_tf, bt_config, main_tf,
+            precomputed_indicators=precomputed_indicators,
+        )
+    else:
+        result = run_backtest_single(
+            strategy_name, params, candles_by_tf, bt_config, main_tf,
+            precomputed_indicators=precomputed_indicators,
+            extra_data_by_timestamp=extra_data_by_timestamp,
+        )
     metrics = calculate_metrics(result)
     return (
         params,
@@ -287,6 +304,10 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "momentum": ["breakout_lookback"],
     "funding": [],
     "liquidation": [],
+    "bollinger_mr": ["bb_period", "bb_std"],
+    "donchian_breakout": ["entry_lookback", "atr_period"],
+    "supertrend": ["atr_period", "atr_multiplier"],
+    "envelope_dca": ["ma_period"],
 }
 
 
@@ -325,12 +346,19 @@ class WalkForwardOptimizer:
         oos_window_days = opt_config.get("oos_window_days", oos_window_days)
         step_days = opt_config.get("step_days", step_days)
         metric = opt_config.get("metric", metric)
+
+        # Per-strategy WFO config override (section `wfo:` dans param_grids.yaml)
+        strategy_grids_wfo = self._grids.get(strategy_name, {}).get("wfo", {})
+        if strategy_grids_wfo:
+            is_window_days = strategy_grids_wfo.get("is_days", is_window_days)
+            oos_window_days = strategy_grids_wfo.get("oos_days", oos_window_days)
+            step_days = strategy_grids_wfo.get("step_days", step_days)
         max_workers_cfg = opt_config.get("max_workers")
         if max_workers is None:
             max_workers = max_workers_cfg
 
         # Stratégie config pour le timeframe
-        from backend.optimization import STRATEGY_REGISTRY
+        from backend.optimization import STRATEGY_REGISTRY, is_grid_strategy
         if strategy_name not in STRATEGY_REGISTRY:
             raise ValueError(f"Stratégie '{strategy_name}' non optimisable")
 
@@ -430,6 +458,9 @@ class WalkForwardOptimizer:
             start_date=data_start,
             end_date=data_end,
         )
+        # Override leverage si la stratégie en spécifie un (ex: envelope_dca=6)
+        if hasattr(default_cfg, 'leverage'):
+            bt_config.leverage = default_cfg.leverage
         bt_config_dict = {
             "symbol": bt_config.symbol,
             "start_date": bt_config.start_date,
@@ -528,10 +559,16 @@ class WalkForwardOptimizer:
                         all_funding_rates, all_oi_records,
                     )
 
-                oos_result = run_backtest_single(
-                    strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf,
-                    extra_data_by_timestamp=oos_extra_data_map,
-                )
+                if is_grid_strategy(strategy_name):
+                    from backend.backtesting.multi_engine import run_multi_backtest_single
+                    oos_result = run_multi_backtest_single(
+                        strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf,
+                    )
+                else:
+                    oos_result = run_backtest_single(
+                        strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf,
+                        extra_data_by_timestamp=oos_extra_data_map,
+                    )
                 oos_metrics = calculate_metrics(oos_result)
 
                 all_oos_trades.extend(oos_result.trades)
@@ -649,7 +686,7 @@ class WalkForwardOptimizer:
         3. Séquentiel (si pool crashe)
         """
         # 1. Tenter le fast engine (stratégies supportées uniquement)
-        if strategy_name in ("vwap_rsi", "momentum"):
+        if strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca"):
             try:
                 results = self._run_fast(
                     grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
@@ -714,7 +751,9 @@ class WalkForwardOptimizer:
         Cache construit une seule fois, puis chaque combo = seuils numpy + boucle légère.
         """
         from backend.optimization.fast_backtest import run_backtest_from_cache
+        from backend.optimization.fast_multi_backtest import run_multi_backtest_from_cache
         from backend.optimization.indicator_cache import build_cache
+        from backend.optimization import is_grid_strategy
 
         bt_config = BacktestConfig(**bt_config_dict)
 
@@ -741,8 +780,13 @@ class WalkForwardOptimizer:
         total = len(grid)
         t_start = time.monotonic()
 
+        is_grid = is_grid_strategy(strategy_name)
+
         for i, params in enumerate(grid):
-            results.append(run_backtest_from_cache(strategy_name, params, cache, bt_config))
+            if is_grid:
+                results.append(run_multi_backtest_from_cache(strategy_name, params, cache, bt_config))
+            else:
+                results.append(run_backtest_from_cache(strategy_name, params, cache, bt_config))
             if (i + 1) % 50 == 0 or i == total - 1:
                 elapsed = time.monotonic() - t_start
                 avg_ms = elapsed / (i + 1) * 1000

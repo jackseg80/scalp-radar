@@ -63,6 +63,52 @@ funding:
   weight: 0.15
   per_asset: {}  # Overrides par asset (ex: BTC/USDT: {extreme_positive_threshold: 0.05})
 
+bollinger_mr:
+  enabled: true
+  live_eligible: false
+  timeframe: "1h"
+  bb_period: 20
+  bb_std: 2.0
+  sl_percent: 5.0
+  weight: 0.15
+  per_asset: {}
+
+donchian_breakout:
+  enabled: true
+  live_eligible: false
+  timeframe: "1h"
+  entry_lookback: 20
+  atr_period: 14
+  atr_tp_multiple: 3.0
+  atr_sl_multiple: 1.5
+  weight: 0.15
+  per_asset: {}
+
+supertrend:
+  enabled: true
+  live_eligible: false
+  timeframe: "1h"
+  atr_period: 10
+  atr_multiplier: 3.0
+  tp_percent: 4.0
+  sl_percent: 2.0
+  weight: 0.15
+  per_asset: {}
+
+envelope_dca:
+  enabled: true
+  live_eligible: false
+  timeframe: "1h"
+  ma_period: 7
+  num_levels: 3
+  envelope_start: 0.07
+  envelope_step: 0.03
+  sl_percent: 25.0
+  sides: ["long"]
+  leverage: 6
+  weight: 0.20
+  per_asset: {}
+
 # Stratégies custom (swing existantes, baseline pour l'Arena)
 custom_strategies:
   swing_baseline:

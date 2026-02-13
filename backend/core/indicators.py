@@ -299,3 +299,121 @@ def detect_market_regime(
         return MarketRegime.TRENDING_DOWN
 
     return MarketRegime.RANGING
+
+
+# ─── Bollinger Bands ─────────────────────────────────────────────────────────
+
+
+def bollinger_bands(
+    closes: np.ndarray,
+    period: int = 20,
+    std_dev: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Bollinger Bands : SMA ± std_dev × rolling std.
+
+    Retourne (sma_arr, upper_band, lower_band).
+    Les period-1 premières valeurs sont NaN.
+    """
+    n = len(closes)
+    if n < period:
+        nan_arr = np.full(n, np.nan, dtype=float)
+        return nan_arr.copy(), nan_arr.copy(), nan_arr.copy()
+
+    sma_arr = sma(closes, period)
+
+    # Rolling standard deviation
+    std_arr = np.full(n, np.nan, dtype=float)
+    for i in range(period - 1, n):
+        window = closes[i - period + 1 : i + 1]
+        std_arr[i] = float(np.std(window, ddof=0))
+
+    upper = sma_arr + std_dev * std_arr
+    lower = sma_arr - std_dev * std_arr
+
+    return sma_arr, upper, lower
+
+
+# ─── SuperTrend ──────────────────────────────────────────────────────────────
+
+
+def supertrend(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    closes: np.ndarray,
+    atr_arr: np.ndarray,
+    multiplier: float = 3.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """SuperTrend indicator.
+
+    Calcul itératif (la direction précédente détermine la bande active).
+
+    Retourne (supertrend_values, direction).
+    direction[i] = 1 (UP/bullish) ou -1 (DOWN/bearish).
+    NaN tant que l'ATR n'est pas disponible.
+    """
+    n = len(closes)
+    st_values = np.full(n, np.nan, dtype=float)
+    direction = np.full(n, np.nan, dtype=float)
+
+    # Trouver le premier index avec ATR valide
+    first_valid = -1
+    for i in range(n):
+        if not np.isnan(atr_arr[i]):
+            first_valid = i
+            break
+
+    if first_valid < 0 or first_valid >= n - 1:
+        return st_values, direction
+
+    # Initialiser au premier index valide
+    hl2 = (highs[first_valid] + lows[first_valid]) / 2.0
+    upper_band = hl2 + multiplier * atr_arr[first_valid]
+    lower_band = hl2 - multiplier * atr_arr[first_valid]
+    # Direction initiale basée sur close vs bandes
+    if closes[first_valid] > upper_band:
+        direction[first_valid] = 1.0
+        st_values[first_valid] = lower_band
+    else:
+        direction[first_valid] = -1.0
+        st_values[first_valid] = upper_band
+
+    prev_upper = upper_band
+    prev_lower = lower_band
+
+    for i in range(first_valid + 1, n):
+        if np.isnan(atr_arr[i]):
+            direction[i] = direction[i - 1]
+            st_values[i] = st_values[i - 1]
+            continue
+
+        hl2 = (highs[i] + lows[i]) / 2.0
+        upper_band = hl2 + multiplier * atr_arr[i]
+        lower_band = hl2 - multiplier * atr_arr[i]
+
+        # Ajuster les bandes : ne pas s'éloigner du prix
+        if closes[i - 1] <= prev_upper:
+            upper_band = min(upper_band, prev_upper)
+        if closes[i - 1] >= prev_lower:
+            lower_band = max(lower_band, prev_lower)
+
+        # Déterminer la direction
+        prev_dir = direction[i - 1]
+        if prev_dir == 1.0:  # Était UP (bullish)
+            if closes[i] < lower_band:
+                direction[i] = -1.0  # Flip DOWN
+                st_values[i] = upper_band
+            else:
+                direction[i] = 1.0
+                st_values[i] = lower_band
+        else:  # Était DOWN (bearish)
+            if closes[i] > upper_band:
+                direction[i] = 1.0  # Flip UP
+                st_values[i] = lower_band
+            else:
+                direction[i] = -1.0
+                st_values[i] = upper_band
+
+        prev_upper = upper_band
+        prev_lower = lower_band
+
+    return st_values, direction

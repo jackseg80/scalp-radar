@@ -23,6 +23,28 @@ from backend.core.models import Candle
 from backend.core.position_manager import TradeResult
 
 
+def _run_backtest_for_strategy(
+    strategy_name: str,
+    params: dict,
+    candles_by_tf: dict,
+    bt_config: BacktestConfig,
+    main_tf: str,
+    extra_data_by_timestamp: dict | None = None,
+):
+    """Dispatcher : mono-position ou multi-position selon le type de stratégie."""
+    from backend.optimization import is_grid_strategy
+
+    if is_grid_strategy(strategy_name):
+        from backend.backtesting.multi_engine import run_multi_backtest_single
+        return run_multi_backtest_single(
+            strategy_name, params, candles_by_tf, bt_config, main_tf,
+        )
+    return run_backtest_single(
+        strategy_name, params, candles_by_tf, bt_config, main_tf,
+        extra_data_by_timestamp=extra_data_by_timestamp,
+    )
+
+
 # ─── Dataclasses résultat ──────────────────────────────────────────────────
 
 
@@ -32,6 +54,7 @@ class MonteCarloResult:
     real_sharpe: float
     distribution: list[float]
     significant: bool  # p_value < 0.05
+    underpowered: bool = False  # True si < 30 trades (résultat non fiable)
 
 
 @dataclass
@@ -83,6 +106,7 @@ class OverfitDetector:
         all_symbols_results: dict[str, dict[str, Any]] | None = None,
         seed: int | None = 42,
         extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
+        main_tf: str | None = None,
     ) -> OverfitReport:
         """Analyse complète : Monte Carlo + DSR + stabilité + convergence."""
         mc = self.monte_carlo_block_bootstrap(trades, seed=seed)
@@ -94,6 +118,7 @@ class OverfitDetector:
             strategy_name, symbol, optimal_params,
             candles_by_tf, bt_config,
             extra_data_by_timestamp=extra_data_by_timestamp,
+            main_tf=main_tf,
         )
         convergence = None
         if all_symbols_results and len(all_symbols_results) >= 2:
@@ -115,7 +140,15 @@ class OverfitDetector:
     ) -> MonteCarloResult:
         """Permute des blocs de trades consécutifs pour respecter la corrélation temporelle.
 
+        Block size fixe à 7 pour préserver la corrélation temporelle des trades
+        (essentiel pour les stratégies DCA dont l'edge repose sur le timing).
+
+        - < 5 trades : pas de test (p=1.0, underpowered)
+        - < 30 trades : underpowered (p=0.50, score neutre 12/25)
+        - >= 30 trades : test MC complet avec block_size=7
+
         Args:
+            block_size: Taille des blocs (défaut 7).
             seed: Graine pour reproductibilité. None = aléatoire.
 
         Returns:
@@ -123,7 +156,19 @@ class OverfitDetector:
         """
         if len(trades) < 5:
             return MonteCarloResult(
-                p_value=1.0, real_sharpe=0.0, distribution=[], significant=False
+                p_value=1.0, real_sharpe=0.0, distribution=[], significant=False,
+                underpowered=True,
+            )
+
+        n_trades = len(trades)
+
+        # Seuil minimum crédible : < 30 trades → trop peu de blocs pour un test fiable
+        if n_trades < 30:
+            returns = self._trade_returns(trades)
+            real_sharpe = self._sharpe_from_returns(returns)
+            return MonteCarloResult(
+                p_value=0.50, real_sharpe=real_sharpe, distribution=[],
+                significant=False, underpowered=True,
             )
 
         # Rendements séquentiels
@@ -215,6 +260,7 @@ class OverfitDetector:
         bt_config: BacktestConfig,
         perturbation_pcts: list[float] | None = None,
         extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
+        main_tf: str | None = None,
     ) -> StabilityResult:
         """Perturbe chaque paramètre de ±pct et mesure l'impact sur le Sharpe.
 
@@ -224,10 +270,19 @@ class OverfitDetector:
         if perturbation_pcts is None:
             perturbation_pcts = [0.10, 0.20]
 
+        # Déterminer main_tf depuis le registry si non fourni
+        if main_tf is None:
+            from backend.optimization import STRATEGY_REGISTRY
+            if strategy_name in STRATEGY_REGISTRY:
+                cfg_cls, _ = STRATEGY_REGISTRY[strategy_name]
+                main_tf = cfg_cls().timeframe
+            else:
+                main_tf = "5m"
+
         # Sharpe de référence
         try:
-            ref_result = run_backtest_single(
-                strategy_name, optimal_params, candles_by_tf, bt_config,
+            ref_result = _run_backtest_for_strategy(
+                strategy_name, optimal_params, candles_by_tf, bt_config, main_tf,
                 extra_data_by_timestamp=extra_data_by_timestamp,
             )
             ref_sharpe = calculate_metrics(ref_result).sharpe_ratio
@@ -261,16 +316,16 @@ class OverfitDetector:
                     perturbed_params[param_name] = perturbed_value
 
                     try:
-                        p_result = run_backtest_single(
+                        p_result = _run_backtest_for_strategy(
                             strategy_name, perturbed_params,
-                            candles_by_tf, bt_config,
+                            candles_by_tf, bt_config, main_tf,
                             extra_data_by_timestamp=extra_data_by_timestamp,
                         )
                         p_sharpe = calculate_metrics(p_result).sharpe_ratio
                         del p_result
-                        if ref_sharpe > 0:
-                            drop = max(0, (ref_sharpe - p_sharpe) / ref_sharpe)
-                            max_drop = max(max_drop, drop)
+                        ref_abs = max(abs(ref_sharpe), 0.1)  # Floor 0.1 pour éviter /0
+                        drop = max(0, (ref_sharpe - p_sharpe) / ref_abs)
+                        max_drop = max(max_drop, drop)
                     except Exception:
                         max_drop = max(max_drop, 0.5)
 

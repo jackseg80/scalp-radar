@@ -221,6 +221,43 @@ class TestMonteCarlo:
         r2 = detector.monte_carlo_block_bootstrap(trades, seed=42)
         assert r1.p_value == r2.p_value
 
+    def test_mc_underpowered_10_trades(self):
+        """< 30 trades → underpowered=True, p=0.50, pas de simulation."""
+        trades = [_make_trade(10.0, i) for i in range(10)]
+        detector = OverfitDetector()
+        result = detector.monte_carlo_block_bootstrap(trades, seed=42)
+        assert result.underpowered is True
+        assert result.p_value == 0.50
+        assert not result.significant
+        assert result.distribution == []
+        assert result.real_sharpe > 0  # trades profitables
+
+    def test_mc_underpowered_25_trades(self):
+        """25 trades (< 30) → underpowered=True, p=0.50."""
+        trades = [_make_trade(10.0, i) for i in range(25)]
+        detector = OverfitDetector()
+        result = detector.monte_carlo_block_bootstrap(trades, seed=42)
+        assert result.underpowered is True
+        assert result.p_value == 0.50
+        assert result.distribution == []
+
+    def test_mc_30_trades_not_underpowered(self):
+        """30 trades (>= 30) → test MC complet, block_size=7."""
+        trades = [_make_trade(10.0, i) for i in range(30)]
+        detector = OverfitDetector()
+        result = detector.monte_carlo_block_bootstrap(trades, n_sims=300, seed=42)
+        assert not result.underpowered
+        assert len(result.distribution) == 300
+
+    def test_mc_block_size_default_7(self):
+        """Le block_size par défaut est 7 pour tous les cas >= 30 trades."""
+        trades = [_make_trade(5.0, i) for i in range(150)]
+        detector = OverfitDetector()
+        r_default = detector.monte_carlo_block_bootstrap(trades, n_sims=300, seed=42)
+        r_explicit = detector.monte_carlo_block_bootstrap(trades, n_sims=300, seed=42, block_size=7)
+        assert r_default.p_value == r_explicit.p_value
+        assert not r_default.underpowered
+
 
 # ─── Tests DSR ─────────────────────────────────────────────────────────────
 
@@ -347,6 +384,25 @@ class TestGrading:
         )
         assert grade in ("B", "C")
 
+    def test_grade_mc_underpowered(self):
+        """mc_underpowered=True → 12/25 pts MC (neutre), pas de pénalité."""
+        # Même params que test_grade_a, mais avec underpowered au lieu de mc_p < 0.05
+        grade_underpowered = compute_grade(
+            oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
+            stability=0.85, bitget_transfer=0.60,
+            mc_underpowered=True,
+        )
+        # Sans underpowered, mc_p=0.50 donnerait 0/25 pts → grade plus bas
+        grade_penalized = compute_grade(
+            oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
+            stability=0.85, bitget_transfer=0.60,
+            mc_underpowered=False,
+        )
+        # underpowered donne 12 pts de plus que pénalisé (0 → 12)
+        assert grade_underpowered < grade_penalized  # "A" < "B" alphabétiquement = meilleur grade
+        # Vérifier que underpowered ne bloque pas un bon grade
+        assert grade_underpowered in ("A", "B")
+
 
 # ─── Tests Bootstrap CI ──────────────────────────────────────────────────
 
@@ -381,7 +437,7 @@ class TestReport:
             wfo_avg_is_sharpe=1.8, wfo_avg_oos_sharpe=0.9,
             wfo_consistency_rate=0.75, wfo_n_windows=20,
             recommended_params={"rsi_period": 14}, mc_p_value=0.01,
-            mc_significant=True, dsr=0.96, dsr_max_expected_sharpe=3.5,
+            mc_significant=True, mc_underpowered=False, dsr=0.96, dsr_max_expected_sharpe=3.5,
             stability=0.85, cliff_params=[], convergence=0.80,
             divergent_params=[], validation=validation,
             oos_is_ratio=0.50, bitget_transfer=0.80,
@@ -523,7 +579,7 @@ class TestApplyYaml:
             wfo_avg_is_sharpe=1.8, wfo_avg_oos_sharpe=0.9,
             wfo_consistency_rate=0.75, wfo_n_windows=20,
             recommended_params={"tp_percent": 0.6, "sl_percent": 0.25},
-            mc_p_value=0.01, mc_significant=True, dsr=0.96,
+            mc_p_value=0.01, mc_significant=True, mc_underpowered=False, dsr=0.96,
             dsr_max_expected_sharpe=3.5, stability=0.85, cliff_params=[],
             convergence=0.80, divergent_params=[],
             validation=validation, oos_is_ratio=0.50, bitget_transfer=0.80,
@@ -553,7 +609,7 @@ class TestApplyYaml:
             wfo_avg_is_sharpe=0.5, wfo_avg_oos_sharpe=0.1,
             wfo_consistency_rate=0.3, wfo_n_windows=10,
             recommended_params={}, mc_p_value=0.5, mc_significant=False,
-            dsr=0.2, dsr_max_expected_sharpe=3.5, stability=0.3,
+            mc_underpowered=False, dsr=0.2, dsr_max_expected_sharpe=3.5, stability=0.3,
             cliff_params=["rsi_period"], convergence=None,
             divergent_params=[], validation=validation,
             oos_is_ratio=0.2, bitget_transfer=0.2,

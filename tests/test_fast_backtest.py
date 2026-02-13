@@ -542,6 +542,11 @@ class TestTradeSimulation:
             filter_adx=np.full(n, np.nan),
             filter_di_plus=np.full(n, np.nan),
             filter_di_minus=np.full(n, np.nan),
+            bb_sma={},
+            bb_upper={},
+            bb_lower={},
+            supertrend_direction={},
+            atr_by_period={},
         )
         params = {"rsi_period": 14}
 
@@ -586,6 +591,11 @@ class TestTradeSimulation:
             filter_adx=np.full(n, np.nan),
             filter_di_plus=np.full(n, np.nan),
             filter_di_minus=np.full(n, np.nan),
+            bb_sma={},
+            bb_upper={},
+            bb_lower={},
+            supertrend_direction={},
+            atr_by_period={},
         )
 
         # ADX (15) < 20 → exit

@@ -9,15 +9,23 @@ from __future__ import annotations
 from typing import Any
 
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bollinger_mr import BollingerMRStrategy
+from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
+from backend.strategies.envelope_dca import EnvelopeDCAStrategy
 from backend.strategies.funding import FundingStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
+from backend.strategies.supertrend import SuperTrendStrategy
 from backend.strategies.vwap_rsi import VwapRsiStrategy
 
 from backend.core.config import (
+    BollingerMRConfig,
+    DonchianBreakoutConfig,
+    EnvelopeDCAConfig,
     FundingConfig,
     LiquidationConfig,
     MomentumConfig,
+    SuperTrendConfig,
     VwapRsiConfig,
 )
 
@@ -27,10 +35,22 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
     "momentum": (MomentumConfig, MomentumStrategy),
     "funding": (FundingConfig, FundingStrategy),
     "liquidation": (LiquidationConfig, LiquidationStrategy),
+    "bollinger_mr": (BollingerMRConfig, BollingerMRStrategy),
+    "donchian_breakout": (DonchianBreakoutConfig, DonchianBreakoutStrategy),
+    "supertrend": (SuperTrendConfig, SuperTrendStrategy),
+    "envelope_dca": (EnvelopeDCAConfig, EnvelopeDCAStrategy),
 }
 
 # Stratégies qui nécessitent extra_data (funding rates, OI) pour le backtest
 STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation"}
+
+# Stratégies grid/DCA (utilisent MultiPositionEngine au lieu de BacktestEngine)
+GRID_STRATEGIES: set[str] = {"envelope_dca"}
+
+
+def is_grid_strategy(name: str) -> bool:
+    """Retourne True si la stratégie utilise le moteur multi-position."""
+    return name in GRID_STRATEGIES
 
 
 def create_strategy_with_params(

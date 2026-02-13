@@ -43,6 +43,12 @@ def run_backtest_from_cache(
         longs, shorts = _vwap_rsi_signals(params, cache)
     elif strategy_name == "momentum":
         longs, shorts = _momentum_signals(params, cache)
+    elif strategy_name == "bollinger_mr":
+        longs, shorts = _bollinger_mr_signals(params, cache)
+    elif strategy_name == "donchian_breakout":
+        longs, shorts = _donchian_signals(params, cache)
+    elif strategy_name == "supertrend":
+        longs, shorts = _supertrend_signals(params, cache)
     else:
         raise ValueError(f"Stratégie inconnue pour fast engine: {strategy_name}")
 
@@ -169,6 +175,77 @@ def _momentum_signals(
     return longs, shorts
 
 
+def _bollinger_mr_signals(
+    params: dict[str, Any], cache: IndicatorCache,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Génère les masques long/short pour Bollinger Mean Reversion.
+
+    LONG si close < lower band, SHORT si close > upper band.
+    """
+    bb_period = params["bb_period"]
+    bb_std = params["bb_std"]
+
+    bb_sma_arr = cache.bb_sma[bb_period]
+    bb_lower = cache.bb_lower[(bb_period, bb_std)]
+    bb_upper = cache.bb_upper[(bb_period, bb_std)]
+
+    valid = ~np.isnan(bb_sma_arr) & ~np.isnan(bb_lower) & ~np.isnan(bb_upper)
+
+    longs = valid & (cache.closes < bb_lower)
+    shorts = valid & (cache.closes > bb_upper)
+
+    return longs, shorts
+
+
+def _donchian_signals(
+    params: dict[str, Any], cache: IndicatorCache,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Génère les masques long/short pour Donchian Breakout.
+
+    LONG si close > rolling_high (N bougies précédentes),
+    SHORT si close < rolling_low.
+    """
+    lookback = params["entry_lookback"]
+    rolling_high = cache.rolling_high[lookback]
+    rolling_low = cache.rolling_low[lookback]
+
+    valid = ~np.isnan(rolling_high) & ~np.isnan(rolling_low)
+
+    longs = valid & (cache.closes > rolling_high)
+    shorts = valid & (cache.closes < rolling_low)
+
+    return longs, shorts
+
+
+def _supertrend_signals(
+    params: dict[str, Any], cache: IndicatorCache,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Génère les masques long/short pour SuperTrend.
+
+    LONG sur flip direction DOWN→UP, SHORT sur flip UP→DOWN.
+    """
+    key = (params["atr_period"], params["atr_multiplier"])
+    direction = cache.supertrend_direction[key]
+
+    n = len(direction)
+    longs = np.zeros(n, dtype=bool)
+    shorts = np.zeros(n, dtype=bool)
+
+    if n < 2:
+        return longs, shorts
+
+    # Flip detection : comparer direction[i] avec direction[i-1]
+    prev_dir = np.empty(n)
+    prev_dir[0] = np.nan
+    prev_dir[1:] = direction[:-1]
+
+    valid = ~np.isnan(prev_dir) & ~np.isnan(direction)
+    longs = valid & (prev_dir == -1.0) & (direction == 1.0)
+    shorts = valid & (prev_dir == 1.0) & (direction == -1.0)
+
+    return longs, shorts
+
+
 # ─── Trade simulation (boucle minimale) ─────────────────────────────────────
 
 
@@ -256,8 +333,15 @@ def _simulate_trades(
         if not in_position and (longs[i] or shorts[i]):
             direction = 1 if longs[i] else -1
 
+            # ATR variable selon la stratégie
+            if strategy_name in ("donchian_breakout", "supertrend"):
+                atr_p = params["atr_period"]
+                atr_val = float(cache.atr_by_period[atr_p][i])
+            else:
+                atr_val = cache.atr_arr[i]
+
             result = _open_trade(
-                direction, cache.closes[i], cache.atr_arr[i],
+                direction, cache.closes[i], atr_val,
                 strategy_name, params, capital,
                 max_risk_per_trade, taker_fee, slippage_pct,
             )
@@ -339,6 +423,17 @@ def _check_exit(
             return False
         return adx_val < 20
 
+    elif strategy_name == "bollinger_mr":
+        bb_period = params["bb_period"]
+        bb_sma_val = float(cache.bb_sma[bb_period][i])
+        close = float(cache.closes[i])
+        if math.isnan(bb_sma_val) or math.isnan(close):
+            return False
+        if direction == 1:  # LONG : close a croisé au-dessus de la SMA
+            return close >= bb_sma_val
+        else:  # SHORT : close a croisé en-dessous de la SMA
+            return close <= bb_sma_val
+
     return False
 
 
@@ -383,6 +478,18 @@ def _open_trade(
         max_sl = entry_price * sl_pct / 100
         tp_dist = min(atr_tp, max_tp)
         sl_dist = min(atr_sl, max_sl)
+    elif strategy_name == "bollinger_mr":
+        # TP très éloigné (désactivé), SL % fixe. check_exit gère le vrai TP.
+        sl_dist = entry_price * params["sl_percent"] / 100
+        tp_dist = entry_price  # tp = entry × 2 (LONG) ou entry × 0.5 (SHORT)
+    elif strategy_name == "donchian_breakout":
+        if math.isnan(atr_val) or atr_val <= 0:
+            return None
+        tp_dist = atr_val * params["atr_tp_multiple"]
+        sl_dist = atr_val * params["atr_sl_multiple"]
+    elif strategy_name == "supertrend":
+        tp_dist = entry_price * params["tp_percent"] / 100
+        sl_dist = entry_price * params["sl_percent"] / 100
     else:
         return None
 

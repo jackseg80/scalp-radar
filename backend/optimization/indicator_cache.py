@@ -19,9 +19,11 @@ import numpy as np
 from backend.core.indicators import (
     adx,
     atr,
+    bollinger_bands,
     detect_market_regime,
     rsi,
     sma,
+    supertrend,
     volume_sma,
     vwap_rolling,
 )
@@ -72,6 +74,17 @@ class IndicatorCache:
     filter_adx: np.ndarray               # (n_main,)
     filter_di_plus: np.ndarray
     filter_di_minus: np.ndarray
+
+    # Bollinger MR
+    bb_sma: dict[int, np.ndarray]                            # {period: sma_array}
+    bb_upper: dict[tuple[int, float], np.ndarray]             # {(period, std): upper_band}
+    bb_lower: dict[tuple[int, float], np.ndarray]             # {(period, std): lower_band}
+
+    # SuperTrend
+    supertrend_direction: dict[tuple[int, float], np.ndarray]  # {(atr_period, mult): direction}
+
+    # ATR multi-period (pour Donchian/SuperTrend avec atr_period variable)
+    atr_by_period: dict[int, np.ndarray]                       # {period: atr_array}
 
 
 def build_cache(
@@ -145,10 +158,12 @@ def build_cache(
         )
         regime_arr[i] = REGIME_TO_INT[r]
 
-    # --- Rolling high/low pour momentum ---
+    # --- Rolling high/low pour momentum + donchian ---
     lookbacks: set[int] = set()
     if "breakout_lookback" in param_grid_values:
         lookbacks.update(param_grid_values["breakout_lookback"])
+    if "entry_lookback" in param_grid_values:
+        lookbacks.update(param_grid_values["entry_lookback"])
     rolling_high_dict = {lb: _rolling_max(highs, lb) for lb in lookbacks}
     rolling_low_dict = {lb: _rolling_min(lows, lb) for lb in lookbacks}
 
@@ -157,6 +172,64 @@ def build_cache(
     filter_adx_aligned, filter_di_plus_aligned, filter_di_minus_aligned = (
         _build_aligned_filter(main_candles, filter_candles)
     )
+
+    # --- Bollinger Bands / SMA pour envelope_dca ---
+    bb_sma_dict: dict[int, np.ndarray] = {}
+    bb_upper_dict: dict[tuple[int, float], np.ndarray] = {}
+    bb_lower_dict: dict[tuple[int, float], np.ndarray] = {}
+
+    # Envelope DCA : seulement SMA par period (enveloppes calculées à la volée)
+    if strategy_name == "envelope_dca":
+        ma_periods: set[int] = set()
+        if "ma_period" in param_grid_values:
+            ma_periods.update(param_grid_values["ma_period"])
+        if not ma_periods:
+            ma_periods.add(7)
+        for period in ma_periods:
+            bb_sma_dict[period] = sma(closes, period)
+
+    if strategy_name == "bollinger_mr":
+        bb_periods: set[int] = set()
+        bb_stds: set[float] = set()
+        if "bb_period" in param_grid_values:
+            bb_periods.update(param_grid_values["bb_period"])
+        if "bb_std" in param_grid_values:
+            bb_stds.update(param_grid_values["bb_std"])
+        if not bb_periods:
+            bb_periods.add(20)
+        if not bb_stds:
+            bb_stds.add(2.0)
+        for period in bb_periods:
+            bb_sma_arr, _, _ = bollinger_bands(closes, period, 1.0)
+            bb_sma_dict[period] = bb_sma_arr
+            for std_dev in bb_stds:
+                _, upper, lower = bollinger_bands(closes, period, std_dev)
+                bb_upper_dict[(period, std_dev)] = upper
+                bb_lower_dict[(period, std_dev)] = lower
+
+    # --- ATR multi-period (pour donchian/supertrend) ---
+    atr_by_period_dict: dict[int, np.ndarray] = {}
+    if strategy_name in ("donchian_breakout", "supertrend"):
+        atr_periods: set[int] = set()
+        if "atr_period" in param_grid_values:
+            atr_periods.update(param_grid_values["atr_period"])
+        if not atr_periods:
+            atr_periods.add(14)
+        for p in atr_periods:
+            atr_by_period_dict[p] = atr(highs, lows, closes, p)
+
+    # --- SuperTrend ---
+    st_direction_dict: dict[tuple[int, float], np.ndarray] = {}
+    if strategy_name == "supertrend":
+        atr_multipliers: set[float] = set()
+        if "atr_multiplier" in param_grid_values:
+            atr_multipliers.update(param_grid_values["atr_multiplier"])
+        if not atr_multipliers:
+            atr_multipliers.add(3.0)
+        for p in atr_by_period_dict:
+            for mult in atr_multipliers:
+                _, direction_arr = supertrend(highs, lows, closes, atr_by_period_dict[p], mult)
+                st_direction_dict[(p, mult)] = direction_arr
 
     return IndicatorCache(
         n_candles=n,
@@ -181,6 +254,11 @@ def build_cache(
         filter_adx=filter_adx_aligned,
         filter_di_plus=filter_di_plus_aligned,
         filter_di_minus=filter_di_minus_aligned,
+        bb_sma=bb_sma_dict,
+        bb_upper=bb_upper_dict,
+        bb_lower=bb_lower_dict,
+        supertrend_direction=st_direction_dict,
+        atr_by_period=atr_by_period_dict,
     )
 
 

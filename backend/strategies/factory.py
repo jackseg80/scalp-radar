@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from backend.core.config import AppConfig
 from backend.strategies.base import BaseStrategy
+from backend.strategies.bollinger_mr import BollingerMRStrategy
+from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
+from backend.strategies.envelope_dca import EnvelopeDCAStrategy
 from backend.strategies.funding import FundingStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
+from backend.strategies.supertrend import SuperTrendStrategy
 from backend.strategies.vwap_rsi import VwapRsiStrategy
 
 
@@ -18,6 +22,10 @@ def create_strategy(name: str, config: AppConfig) -> BaseStrategy:
         "momentum": (MomentumStrategy, strategies_config.momentum),
         "funding": (FundingStrategy, strategies_config.funding),
         "liquidation": (LiquidationStrategy, strategies_config.liquidation),
+        "bollinger_mr": (BollingerMRStrategy, strategies_config.bollinger_mr),
+        "donchian_breakout": (DonchianBreakoutStrategy, strategies_config.donchian_breakout),
+        "supertrend": (SuperTrendStrategy, strategies_config.supertrend),
+        "envelope_dca": (EnvelopeDCAStrategy, strategies_config.envelope_dca),
     }
     if name not in mapping:
         raise ValueError(f"Stratégie inconnue : {name}")
@@ -39,5 +47,13 @@ def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
         strategies.append(FundingStrategy(strats.funding))
     if strats.liquidation.enabled:
         strategies.append(LiquidationStrategy(strats.liquidation))
+    if strats.bollinger_mr.enabled:
+        strategies.append(BollingerMRStrategy(strats.bollinger_mr))
+    if strats.donchian_breakout.enabled:
+        strategies.append(DonchianBreakoutStrategy(strats.donchian_breakout))
+    if strats.supertrend.enabled:
+        strategies.append(SuperTrendStrategy(strats.supertrend))
+    if strats.envelope_dca.enabled:
+        strategies.append(EnvelopeDCAStrategy(strats.envelope_dca))
 
     return strategies

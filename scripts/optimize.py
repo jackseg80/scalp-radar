@@ -55,8 +55,8 @@ async def check_data(config_dir: str = "config") -> None:
 
     symbols = [a.symbol for a in config.assets]
 
-    print("\nVérification des données pour l'optimisation")
-    print("─" * 50)
+    print("\nVerification des donnees pour l'optimisation")
+    print("-" * 50)
 
     for exchange in [main_exchange, val_exchange]:
         for symbol in symbols:
@@ -67,10 +67,10 @@ async def check_data(config_dir: str = "config") -> None:
                 first = candles[0].timestamp
                 last = candles[-1].timestamp
                 days = (last - first).days
-                mark = "✓"
+                mark = "OK"
             else:
                 days = 0
-                mark = "✗"
+                mark = "X"
 
             status = f"{symbol:<12s} {exchange:<8s} candles : {days:>4d} jours"
             if n_candles > 0:
@@ -89,17 +89,17 @@ async def check_data(config_dir: str = "config") -> None:
 
     # Données funding/OI (Binance seulement)
     print(f"\n  Funding Rates & Open Interest ({main_exchange})")
-    print("  " + "─" * 48)
+    print("  " + "-" * 48)
     for symbol in symbols:
         # Funding rates
         funding = await db.get_funding_rates(symbol, exchange=main_exchange)
         n_funding = len(funding)
         if n_funding > 0:
             f_days = (funding[-1]["timestamp"] - funding[0]["timestamp"]) / 1000 / 86400
-            f_mark = "✓" if f_days >= 360 else "⚠"
+            f_mark = "OK" if f_days >= 360 else "!"
             f_status = f"{symbol:<12s} funding  : {f_days:>4.0f} jours ({n_funding} rates) {f_mark}"
         else:
-            f_status = f"{symbol:<12s} funding  :    0 jours  ✗  → uv run python -m scripts.fetch_funding --symbol {symbol}"
+            f_status = f"{symbol:<12s} funding  :    0 jours  X  -> uv run python -m scripts.fetch_funding --symbol {symbol}"
         print(f"  {f_status}")
 
         # Open Interest
@@ -107,10 +107,10 @@ async def check_data(config_dir: str = "config") -> None:
         n_oi = len(oi)
         if n_oi > 0:
             o_days = (oi[-1]["timestamp"] - oi[0]["timestamp"]) / 1000 / 86400
-            o_mark = "✓" if o_days >= 360 else "⚠"
+            o_mark = "OK" if o_days >= 360 else "!"
             o_status = f"{symbol:<12s} OI 5m    : {o_days:>4.0f} jours ({n_oi // 1000}k records) {o_mark}"
         else:
-            o_status = f"{symbol:<12s} OI 5m    :    0 jours  ✗  → uv run python -m scripts.fetch_oi --symbol {symbol}"
+            o_status = f"{symbol:<12s} OI 5m    :    0 jours  X  -> uv run python -m scripts.fetch_oi --symbol {symbol}"
         print(f"  {o_status}")
 
     await db.close()
@@ -262,6 +262,9 @@ async def run_optimization(
             start_date=datetime.now(),
             end_date=datetime.now(),
         )
+    # Override leverage si la stratégie en spécifie un (ex: envelope_dca=6)
+    if hasattr(default_cfg, 'leverage'):
+        bt_config.leverage = default_cfg.leverage
 
     # Charger extra_data (funding/OI) si nécessaire pour la stabilité
     from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
@@ -277,7 +280,7 @@ async def run_optimization(
 
     overfit = detector.full_analysis(
         trades=wfo.all_oos_trades,
-        observed_sharpe=wfo.avg_oos_sharpe,
+        observed_sharpe=wfo.avg_is_sharpe,  # DSR teste le IS Sharpe (pas OOS)
         n_distinct_combos=wfo.n_distinct_combos,
         strategy_name=strategy_name,
         symbol=symbol,
@@ -286,11 +289,13 @@ async def run_optimization(
         bt_config=bt_config,
         all_symbols_results=all_symbols_results,
         extra_data_by_timestamp=stability_extra_data,
+        main_tf=main_tf,
     )
 
+    mc_suffix = " (underpowered)" if overfit.monte_carlo.underpowered else ""
     logger.info(
-        "Overfitting : MC p={:.3f}, DSR={:.2f}, Stabilité={:.2f}",
-        overfit.monte_carlo.p_value, overfit.dsr.dsr,
+        "Overfitting : MC p={:.3f}{}, DSR={:.2f}, Stabilité={:.2f}",
+        overfit.monte_carlo.p_value, mc_suffix, overfit.dsr.dsr,
         overfit.stability.overall_stability,
     )
 
@@ -325,53 +330,61 @@ async def run_optimization(
 
 def _print_report(report: FinalReport) -> None:
     """Affichage console du rapport."""
-    print(f"\n  {'═' * 55}")
-    print(f"  Optimisation {report.strategy_name.upper()} × {report.symbol}")
-    print(f"  {'═' * 55}")
+    print(f"\n  {'=' * 55}")
+    print(f"  Optimisation {report.strategy_name.upper()} x {report.symbol}")
+    print(f"  {'=' * 55}")
 
-    print(f"\n  Walk-Forward ({report.wfo_n_windows} fenêtres)")
-    print(f"  {'─' * 40}")
+    print(f"\n  Walk-Forward ({report.wfo_n_windows} fenetres)")
+    print(f"  {'-' * 40}")
     print(f"  IS Sharpe moyen     : {report.wfo_avg_is_sharpe:.2f}")
     print(f"  OOS Sharpe moyen    : {report.wfo_avg_oos_sharpe:.2f}")
     print(f"  OOS/IS ratio        : {report.oos_is_ratio:.2f}")
     print(f"  Consistance OOS+    : {report.wfo_consistency_rate:.0%}")
-    print(f"  Combinaisons testées: {report.n_distinct_combos}")
+    print(f"  Combinaisons testees: {report.n_distinct_combos}")
 
-    print(f"\n  Paramètres recommandés")
-    print(f"  {'─' * 40}")
+    print(f"\n  Parametres recommandes")
+    print(f"  {'-' * 40}")
     for k, v in sorted(report.recommended_params.items()):
         print(f"  {k:<25s}: {v}")
 
-    print(f"\n  Détection d'overfitting")
-    print(f"  {'─' * 40}")
-    mc_mark = "✓" if report.mc_significant else "✗"
-    print(f"  Monte Carlo p-value  : {report.mc_p_value:.3f} {mc_mark}")
-    dsr_mark = "✓" if report.dsr > 0.95 else ("~" if report.dsr > 0.80 else "✗")
+    print(f"\n  Detection d'overfitting")
+    print(f"  {'-' * 40}")
+    if report.mc_underpowered:
+        mc_mark = "!"
+        mc_extra = " (underpowered, score neutre 12/25)"
+    elif report.mc_significant:
+        mc_mark = "OK"
+        mc_extra = ""
+    else:
+        mc_mark = "X"
+        mc_extra = ""
+    print(f"  Monte Carlo p-value  : {report.mc_p_value:.3f} {mc_mark}{mc_extra}")
+    dsr_mark = "OK" if report.dsr > 0.95 else ("~" if report.dsr > 0.80 else "X")
     print(f"  DSR (n={report.n_distinct_combos}){'':>10s}: {report.dsr:.2f} {dsr_mark}")
-    stab_mark = "✓" if report.stability > 0.80 else ("~" if report.stability > 0.60 else "✗")
-    print(f"  Stabilité paramètres : {report.stability:.2f} {stab_mark}")
+    stab_mark = "OK" if report.stability > 0.80 else ("~" if report.stability > 0.60 else "X")
+    print(f"  Stabilite parametres : {report.stability:.2f} {stab_mark}")
     if report.convergence is not None:
-        conv_mark = "✓" if report.convergence > 0.70 else "✗"
+        conv_mark = "OK" if report.convergence > 0.70 else "X"
         print(f"  Convergence cross    : {report.convergence:.2f} {conv_mark}")
 
     print(f"\n  Validation Bitget")
-    print(f"  {'─' * 40}")
+    print(f"  {'-' * 40}")
     v = report.validation
-    print(f"  Sharpe Bitget        : {v.bitget_sharpe:.2f} [CI 95%: {v.bitget_sharpe_ci_low:.2f} — {v.bitget_sharpe_ci_high:.2f}]")
-    transfer_mark = "✓" if v.transfer_ratio > 0.50 else "✗"
+    print(f"  Sharpe Bitget        : {v.bitget_sharpe:.2f} [CI 95%: {v.bitget_sharpe_ci_low:.2f} - {v.bitget_sharpe_ci_high:.2f}]")
+    transfer_mark = "OK" if v.transfer_ratio > 0.50 else "X"
     print(f"  Transfer ratio       : {v.transfer_ratio:.2f} {transfer_mark}")
     vol_str = "Oui" if v.volume_warning else "Non"
     print(f"  Volume divergence    : {vol_str}")
 
-    print(f"\n  {'═' * 25}")
+    print(f"\n  {'=' * 25}")
     print(f"  GRADE : {report.grade}")
     print(f"  LIVE ELIGIBLE : {'Oui' if report.live_eligible else 'Non'}")
-    print(f"  {'═' * 25}")
+    print(f"  {'=' * 25}")
 
     if report.warnings:
         print(f"\n  Warnings :")
         for w in report.warnings:
-            print(f"    ⚠ {w}")
+            print(f"    ! {w}")
     print()
 
 
@@ -434,7 +447,7 @@ async def main() -> None:
     if args.dry_run:
         grids = _load_param_grids(f"{args.config_dir}/param_grids.yaml")
         print("\nPlan d'optimisation (dry-run)")
-        print("─" * 50)
+        print("-" * 50)
         total_combos = 0
         for strat in strategies:
             strat_grids = grids.get(strat, {})
@@ -443,7 +456,7 @@ async def main() -> None:
                 n = len(grid)
                 total_combos += n
                 coarse = min(n, 500)
-                print(f"  {strat} × {sym} : {n} combos (coarse: {coarse})")
+                print(f"  {strat} x {sym} : {n} combos (coarse: {coarse})")
         print(f"\n  Total : {total_combos} combinaisons")
         print(f"  Workers : {__import__('os').cpu_count()}")
         print()
@@ -473,13 +486,13 @@ async def main() -> None:
                 import traceback
                 traceback.print_exc()
 
-    # Récapitulatif
-    print(f"\n{'═' * 55}")
-    print("  Récapitulatif")
-    print(f"{'═' * 55}")
+    # Recapitulatif
+    print(f"\n{'=' * 55}")
+    print("  Recapitulatif")
+    print(f"{'=' * 55}")
     for r in all_reports:
-        elig = "✓ LIVE" if r.live_eligible else "✗"
-        print(f"  {r.strategy_name:<12s} × {r.symbol:<12s} : Grade {r.grade} {elig}")
+        elig = "OK LIVE" if r.live_eligible else "X"
+        print(f"  {r.strategy_name:<12s} x {r.symbol:<12s} : Grade {r.grade} {elig}")
     print()
 
     # Apply
