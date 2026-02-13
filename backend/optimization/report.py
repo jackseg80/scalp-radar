@@ -54,6 +54,7 @@ class FinalReport:
     symbol: str
     timestamp: datetime
     grade: str
+    total_score: int  # Score numérique 0-100
 
     # WFO
     wfo_avg_is_sharpe: float
@@ -96,8 +97,12 @@ def compute_grade(
     stability: float,
     bitget_transfer: float,
     mc_underpowered: bool = False,
-) -> str:
-    """Calcule le grade A-F selon les critères."""
+) -> tuple[str, int]:
+    """Calcule le grade A-F et le score numérique 0-100.
+
+    Returns:
+        (grade, score) — ex: ("B", 72)
+    """
     score = 0
 
     # OOS/IS ratio (max 25 points)
@@ -141,15 +146,19 @@ def compute_grade(
     elif bitget_transfer > 0.30:
         score += 8
 
+    # Déterminer la lettre
     if score >= 85:
-        return "A"
-    if score >= 70:
-        return "B"
-    if score >= 55:
-        return "C"
-    if score >= 40:
-        return "D"
-    return "F"
+        grade = "A"
+    elif score >= 70:
+        grade = "B"
+    elif score >= 55:
+        grade = "C"
+    elif score >= 40:
+        grade = "D"
+    else:
+        grade = "F"
+
+    return (grade, score)
 
 
 # ─── Validation Bitget ─────────────────────────────────────────────────────
@@ -329,8 +338,25 @@ def _check_volume_divergence(
 # ─── Sauvegarde JSON ──────────────────────────────────────────────────────
 
 
-def save_report(report: FinalReport, output_dir: str = "data/optimization") -> Path:
-    """Sauvegarde le rapport en JSON."""
+def save_report(
+    report: FinalReport,
+    wfo_windows: list[dict] | None = None,
+    duration: float | None = None,
+    timeframe: str | None = None,
+    output_dir: str = "data/optimization",
+    db_path: str | None = None,
+) -> Path:
+    """Sauvegarde le rapport en JSON et en DB.
+
+    Args:
+        report: FinalReport complet
+        wfo_windows: WindowResult sérialisés (pour la DB)
+        duration: Durée du run en secondes (ou None)
+        timeframe: Timeframe de la stratégie (ex: "5m", "1h")
+        output_dir: Répertoire JSON
+        db_path: Chemin DB SQLite (None = depuis config)
+    """
+    # 1. Sauvegarde JSON (existant)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -338,13 +364,29 @@ def save_report(report: FinalReport, output_dir: str = "data/optimization") -> P
     filename = f"{report.strategy_name}_{report.symbol.replace('/', '_')}_{ts}.json"
     filepath = out / filename
 
-    # Convertir en dict sérialisable
     data = _report_to_dict(report)
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str, ensure_ascii=False)
 
-    logger.info("Rapport sauvé : {}", filepath)
+    logger.info("Rapport JSON sauvé : {}", filepath)
+
+    # 2. Sauvegarde DB (nouveau)
+    if timeframe is not None:
+        from backend.core.config import get_config
+        from backend.optimization.optimization_db import save_result_sync
+
+        # Résoudre db_path depuis config si non fourni
+        if db_path is None:
+            config = get_config()
+            db_url = config.secrets.database_url
+            if db_url.startswith("sqlite:///"):
+                db_path = db_url[10:]  # Retirer "sqlite:///"
+            else:
+                db_path = "data/scalp_radar.db"  # Fallback
+
+        save_result_sync(db_path, report, wfo_windows, duration, timeframe)
+
     return filepath
 
 
@@ -356,6 +398,7 @@ def _report_to_dict(report: FinalReport) -> dict[str, Any]:
         "symbol": report.symbol,
         "timestamp": report.timestamp.isoformat(),
         "grade": report.grade,
+        "total_score": report.total_score,
         "live_eligible": report.live_eligible,
         "recommended_params": report.recommended_params,
         "wfo": {
@@ -506,7 +549,7 @@ def build_final_report(
         overfit.convergence.divergent_params if overfit.convergence else []
     )
 
-    grade = compute_grade(
+    grade, total_score = compute_grade(
         oos_is_ratio=wfo.oos_is_ratio,
         mc_p_value=overfit.monte_carlo.p_value,
         dsr=overfit.dsr.dsr,
@@ -541,6 +584,7 @@ def build_final_report(
         symbol=wfo.symbol,
         timestamp=datetime.now(),
         grade=grade,
+        total_score=total_score,
         wfo_avg_is_sharpe=wfo.avg_is_sharpe,
         wfo_avg_oos_sharpe=wfo.avg_oos_sharpe,
         wfo_consistency_rate=wfo.consistency_rate,

@@ -168,6 +168,7 @@ class Database:
             );
         """)
         await self._create_sprint7b_tables()
+        await self._create_sprint13_tables()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -197,6 +198,56 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_oi_lookup
                 ON open_interest (symbol, exchange, timeframe, timestamp);
+        """)
+
+    async def _create_sprint13_tables(self) -> None:
+        """Tables Sprint 13 : résultats WFO en DB."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS optimization_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+
+                -- Métadonnées
+                created_at TEXT NOT NULL,
+                duration_seconds REAL,
+
+                -- Grading
+                grade TEXT NOT NULL,
+                total_score REAL NOT NULL,
+                oos_sharpe REAL,
+                consistency REAL,
+                oos_is_ratio REAL,
+                dsr REAL,
+                param_stability REAL,
+                monte_carlo_pvalue REAL,
+                mc_underpowered INTEGER DEFAULT 0,
+                n_windows INTEGER NOT NULL,
+                n_distinct_combos INTEGER,
+
+                -- JSON blobs
+                best_params TEXT NOT NULL,
+                wfo_windows TEXT,
+                monte_carlo_summary TEXT,
+                validation_summary TEXT,
+                warnings TEXT,
+
+                -- Flag
+                is_latest INTEGER DEFAULT 1,
+
+                UNIQUE(strategy_name, asset, timeframe, created_at)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_opt_strategy_asset
+                ON optimization_results(strategy_name, asset);
+            CREATE INDEX IF NOT EXISTS idx_opt_grade
+                ON optimization_results(grade);
+            CREATE INDEX IF NOT EXISTS idx_opt_latest
+                ON optimization_results(is_latest) WHERE is_latest = 1;
+            CREATE INDEX IF NOT EXISTS idx_opt_created
+                ON optimization_results(created_at);
         """)
 
     # ─── CANDLES ────────────────────────────────────────────────────────────

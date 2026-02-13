@@ -317,7 +317,35 @@ async def run_optimization(
 
     # Build report
     report = build_final_report(wfo, overfit, validation)
-    save_report(report)
+
+    # Sérialiser les windows pour la DB
+    windows_serialized = [
+        {
+            "window_index": w.window_index,
+            "is_start": w.is_start.isoformat(),
+            "is_end": w.is_end.isoformat(),
+            "oos_start": w.oos_start.isoformat(),
+            "oos_end": w.oos_end.isoformat(),
+            "best_params": w.best_params,
+            "is_sharpe": w.is_sharpe,
+            "is_net_return_pct": w.is_net_return_pct,
+            "is_profit_factor": w.is_profit_factor,
+            "is_trades": w.is_trades,
+            "oos_sharpe": w.oos_sharpe if not _math.isnan(w.oos_sharpe) else None,
+            "oos_net_return_pct": w.oos_net_return_pct,
+            "oos_profit_factor": w.oos_profit_factor,
+            "oos_trades": w.oos_trades,
+        }
+        for w in wfo.windows
+    ]
+
+    # Sauvegarde JSON + DB
+    save_report(
+        report,
+        wfo_windows=windows_serialized,
+        duration=None,  # TODO: tracker la durée si nécessaire
+        timeframe=main_tf,
+    )
 
     # Affichage console
     _print_report(report)

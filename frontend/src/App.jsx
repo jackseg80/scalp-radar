@@ -3,6 +3,7 @@ import Header from './components/Header'
 import Scanner from './components/Scanner'
 import Heatmap from './components/Heatmap'
 import RiskCalc from './components/RiskCalc'
+import ResearchPage from './components/ResearchPage'
 import ActivePositions from './components/ActivePositions'
 import CollapsibleCard from './components/CollapsibleCard'
 import ExecutorPanel from './components/ExecutorPanel'
@@ -19,6 +20,7 @@ const TABS = [
   { id: 'scanner', label: 'Scanner' },
   { id: 'heatmap', label: 'Heatmap' },
   { id: 'risk', label: 'Risque' },
+  { id: 'research', label: 'Recherche' },
 ]
 
 const SIDEBAR_MIN = 280
@@ -109,6 +111,7 @@ export default function App() {
           {activeTab === 'scanner' && <Scanner wsData={wsData} />}
           {activeTab === 'heatmap' && <Heatmap />}
           {activeTab === 'risk' && <RiskCalc />}
+          {activeTab === 'research' && <ResearchPage />}
         </div>
 
         <div className="resize-handle" onMouseDown={onMouseDown} />

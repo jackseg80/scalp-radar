@@ -114,35 +114,57 @@ Système automatisé de trading crypto qui :
 
 ## PHASE 4 — RECHERCHE & VISUALISATION (Sprints 13-15) ← ON EST ICI
 
-### Sprint 13 — Résultats WFO en DB + Dashboard Visualisation
+| Sprint | Contenu                                                 | Status       |
+|--------|---------------------------------------------------------|--------------|
+| 13     | DB optimization_results, migration JSON, page Recherche | ✅           |
+| 14     | Explorateur paramètres (WFO en background)              | 🔜 Prochain  |
+| 15     | Monitoring DCA live amélioré                            | 📋 Planifié  |
+
+### Sprint 13 — Résultats WFO en DB + Dashboard Visualisation ✅
+
 **But** : Voir les résultats d'optimisation sans lire du JSON brut.
 
-**Problème actuel** : Les résultats WFO sont en JSON local (data/reports/). Pas accessibles depuis le dashboard serveur.
+**Implémenté** :
 
-**Backend** :
-- Table `optimization_results` en DB (remplace les JSON)
-  - Colonnes : id, strategy, symbol, grade, oos_sharpe, consistency, oos_is_ratio, dsr, stability, params_json, windows_json, timestamp
-  - Index : strategy, symbol, grade, timestamp
-- `optimize.py` écrit les résultats en DB (en plus ou à la place du JSON)
-- API endpoints :
-  - GET /api/optimization/results?strategy=&symbol=&min_grade= (tableau comparatif)
-  - GET /api/optimization/{id} (détail optimisation)
-  - GET /api/optimization/comparison?strategy1=&strategy2= (compare 2 stratégies)
+- Table `optimization_results` (22 colonnes + 4 index)
+  - Colonnes SQL : id, strategy_name, asset, timeframe, created_at, grade, total_score, oos_sharpe, consistency, oos_is_ratio, dsr, param_stability, mc_pvalue, mc_underpowered, n_windows, n_distinct_combos, duration_seconds, is_latest
+  - JSON blobs : best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings
+  - Index sur (strategy, asset), grade, is_latest, created_at
+- `optimization_db.py` : fonctions sync (optimize.py) + async (API)
+  - `save_result_sync()` : INSERT + is_latest transaction
+  - `get_results_async()`, `get_result_by_id_async()`, `get_comparison_async()`
+- `migrate_optimization.py` : script idempotent pour importer les 49 JSON existants
+  - Gestion défensive : .get() avec défauts, NaN/Infinity → None
+  - Merge final + intermediate (wfo_windows si dispo)
+  - Bug fix : filtre "intermediate" cherchait dans le chemin complet → `Path(f).name`
+- `optimize.py` : écrit en DB via `save_report()`
+  - Passe wfo_windows + duration + timeframe
+  - Backward compat JSON conservé
+- `report.py` : refactoring `compute_grade()` → retourne `(grade: str, score: int)`
+  - `total_score` ajouté au FinalReport (0-100)
+  - DB path résolu depuis config (pas hardcodé)
+- API `/api/optimization/*` : 3 endpoints
+  - GET /results (filtres + pagination)
+  - GET /{id} (détail complet)
+  - GET /comparison (matrice strategies × assets)
+- Frontend : page "Recherche" (4ème tab)
+  - Tableau comparatif avec tri cliquable (grade, score, OOS Sharpe, etc.)
+  - Vue détail : params, scores, WFO chart IS vs OOS
+  - Fetch au montage (pas de polling inutile)
+  - `WfoChart.jsx` : SVG natif, 2 lignes (IS/OOS), tooltips
+- 20 tests (100% passants)
+  - `test_optimization_db.py` : 9 tests (sync insert, is_latest, async queries, special values)
+  - `test_optimization_routes.py` : 6 tests (GET routes, filtres, pagination, 404)
+  - `test_migrate_optimization.py` : 5 tests (migration, idempotence, dry-run, missing fields)
 
-**Frontend — Page "Recherche"** (nouvelle tab dans Header) :
-- Tableau comparatif : toutes stratégies × tous assets, avec Grade, OOS Sharpe, consistance
-- Equity curve IS vs OOS par fenêtre (le décrochage = overfitting visible)
-- Détail d'une optimisation : paramètres retenus, stabilité, Monte Carlo, Bitget validation
-- Filtres : par stratégie, par asset, par grade minimum
-- Tri : par grade, par OOS Sharpe, par consistance
+**Résultat** : Les 49 résultats WFO existants sont maintenant visibles dans le dashboard. Nouveau runs s'enregistrent automatiquement.
 
-**Scope** : ~1-2 sessions. Visualisation des données existantes (324 combos × 5 assets déjà calculées).
+**Tests** : 533 passants (+20 depuis Sprint 12)
 
-**Dépendances** :
-- Migration DB : ajouter table optimization_results
-- optimize.py : écriture DB (backward compat JSON optionnel)
-- API routes : optimization_routes.py
-- Frontend : ResearchPage.jsx, OptimizationTable.jsx, OptimizationDetail.jsx
+**Leçons apprises** :
+- Filtre glob : toujours checker `Path(f).name`, jamais le chemin complet (sinon `test_migrate_with_intermediate0` trigger le filtre)
+- DB path : résoudre depuis config au lieu de hardcoder (config.secrets.database_url)
+- Polling : fetch once pour données quasi-statiques (résultats WFO), pas de polling 10s inutile
 
 ### Sprint 14 — Explorateur de Paramètres (Approche B)
 **But** : Tester visuellement des configurations de stratégie et voir l'impact.

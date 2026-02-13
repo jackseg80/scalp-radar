@@ -357,28 +357,30 @@ class TestConvergence:
 
 class TestGrading:
     def test_grade_a(self):
-        grade = compute_grade(
+        grade, score = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
         )
         assert grade == "A"
+        assert score == 100
 
     def test_grade_f(self):
-        grade = compute_grade(
+        grade, score = compute_grade(
             oos_is_ratio=0.1, mc_p_value=0.5, dsr=0.3,
             stability=0.2, bitget_transfer=0.1,
         )
         assert grade == "F"
+        assert score == 0
 
     def test_grade_c(self):
-        grade = compute_grade(
+        grade, score = compute_grade(
             oos_is_ratio=0.45, mc_p_value=0.08, dsr=0.85,
             stability=0.65, bitget_transfer=0.35,
         )
         assert grade in ("C", "D")  # ~55 points
 
     def test_grade_boundary_b(self):
-        grade = compute_grade(
+        grade, score = compute_grade(
             oos_is_ratio=0.55, mc_p_value=0.03, dsr=0.92,
             stability=0.70, bitget_transfer=0.40,
         )
@@ -387,13 +389,13 @@ class TestGrading:
     def test_grade_mc_underpowered(self):
         """mc_underpowered=True → 12/25 pts MC (neutre), pas de pénalité."""
         # Même params que test_grade_a, mais avec underpowered au lieu de mc_p < 0.05
-        grade_underpowered = compute_grade(
+        grade_underpowered, score_underpowered = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             mc_underpowered=True,
         )
         # Sans underpowered, mc_p=0.50 donnerait 0/25 pts → grade plus bas
-        grade_penalized = compute_grade(
+        grade_penalized, score_penalized = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             mc_underpowered=False,
@@ -433,7 +435,7 @@ class TestReport:
         )
         report = FinalReport(
             strategy_name="vwap_rsi", symbol="BTC/USDT",
-            timestamp=datetime.now(), grade="A",
+            timestamp=datetime.now(), grade="A", total_score=87,
             wfo_avg_is_sharpe=1.8, wfo_avg_oos_sharpe=0.9,
             wfo_consistency_rate=0.75, wfo_n_windows=20,
             recommended_params={"rsi_period": 14}, mc_p_value=0.01,
@@ -575,7 +577,7 @@ class TestApplyYaml:
         )
         report = FinalReport(
             strategy_name="vwap_rsi", symbol="BTC/USDT",
-            timestamp=datetime.now(), grade="A",
+            timestamp=datetime.now(), grade="A", total_score=87,
             wfo_avg_is_sharpe=1.8, wfo_avg_oos_sharpe=0.9,
             wfo_consistency_rate=0.75, wfo_n_windows=20,
             recommended_params={"tp_percent": 0.6, "sl_percent": 0.25},
@@ -605,7 +607,7 @@ class TestApplyYaml:
         )
         report = FinalReport(
             strategy_name="vwap_rsi", symbol="BTC/USDT",
-            timestamp=datetime.now(), grade="F",
+            timestamp=datetime.now(), grade="F", total_score=15,
             wfo_avg_is_sharpe=0.5, wfo_avg_oos_sharpe=0.1,
             wfo_consistency_rate=0.3, wfo_n_windows=10,
             recommended_params={}, mc_p_value=0.5, mc_significant=False,
