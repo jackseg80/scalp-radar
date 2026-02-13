@@ -367,6 +367,11 @@ class SecretsConfig(BaseSettings):
     live_trading: bool = False  # LIVE_TRADING env var, défaut false = simulation only
     bitget_sandbox: bool = False  # BITGET_SANDBOX env var, défaut false = mainnet
 
+    # Sync WFO local → serveur
+    sync_server_url: str = ""  # SYNC_SERVER_URL, ex: "http://192.168.1.200:8000"
+    sync_api_key: str = ""  # SYNC_API_KEY, secret partagé local ↔ serveur
+    sync_enabled: bool = False  # SYNC_ENABLED, désactivé par défaut
+
 
 # ─── APP CONFIG (agrégation) ────────────────────────────────────────────────
 

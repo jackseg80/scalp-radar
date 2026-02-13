@@ -234,8 +234,9 @@ class Database:
                 validation_summary TEXT,
                 warnings TEXT,
 
-                -- Flag
+                -- Flags
                 is_latest INTEGER DEFAULT 1,
+                source TEXT DEFAULT 'local',
 
                 UNIQUE(strategy_name, asset, timeframe, created_at)
             );
@@ -249,6 +250,23 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_opt_created
                 ON optimization_results(created_at);
         """)
+        await self._migrate_optimization_source()
+
+    async def _migrate_optimization_source(self) -> None:
+        """Migration idempotente : ajoute la colonne source à optimization_results si absente."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(optimization_results)")
+        columns = await cursor.fetchall()
+        if not columns:
+            return  # Table n'existe pas encore
+        col_names = [col["name"] for col in columns]
+        if "source" in col_names:
+            return  # Déjà migré
+        await self._conn.execute(
+            "ALTER TABLE optimization_results ADD COLUMN source TEXT DEFAULT 'local'"
+        )
+        await self._conn.commit()
+        logger.info("Migration optimization_results : colonne source ajoutée")
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
 

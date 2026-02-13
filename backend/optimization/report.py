@@ -387,6 +387,11 @@ def save_report(
 
         save_result_sync(db_path, report, wfo_windows, duration, timeframe)
 
+    # 3. Push serveur (best-effort, ne crashe jamais)
+    if timeframe is not None:
+        from backend.optimization.optimization_db import push_to_server
+        push_to_server(report, wfo_windows, duration, timeframe)
+
     return filepath
 
 

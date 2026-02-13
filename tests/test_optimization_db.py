@@ -1,4 +1,4 @@
-"""Tests pour optimization_db.py — Sprint 13."""
+"""Tests pour optimization_db.py — Sprint 13 + sync."""
 
 from __future__ import annotations
 
@@ -10,9 +10,12 @@ from pathlib import Path
 import pytest
 
 from backend.optimization.optimization_db import (
+    build_payload_from_db_row,
+    build_push_payload,
     get_comparison_async,
     get_result_by_id_async,
     get_results_async,
+    save_result_from_payload_sync,
     save_result_sync,
 )
 from backend.optimization.report import FinalReport, ValidationResult
@@ -48,6 +51,7 @@ def temp_db(tmp_path):
             validation_summary TEXT,
             warnings TEXT,
             is_latest INTEGER DEFAULT 1,
+            source TEXT DEFAULT 'local',
             UNIQUE(strategy_name, asset, timeframe, created_at)
         );
     """)
@@ -87,7 +91,8 @@ def test_save_result_sync_insert(temp_db):
     assert row[3] == "5m"  # timeframe
     assert row[6] == "A"  # grade
     assert row[7] == 87  # total_score
-    assert row[22] == 1  # is_latest (colonne 22, pas 21)
+    assert row[22] == 1  # is_latest
+    assert row[23] == "local"  # source
 
 
 def test_save_result_sync_updates_is_latest(temp_db):
@@ -341,3 +346,225 @@ def test_save_result_sync_special_values(temp_db):
     conn.close()
 
     assert row[0] is None  # NaN → None
+
+
+# ─── Tests sync local → serveur ──────────────────────────────────────────
+
+
+def _make_sample_payload(**overrides) -> dict:
+    """Construit un payload POST de test."""
+    base = {
+        "strategy_name": "vwap_rsi",
+        "asset": "BTC/USDT",
+        "timeframe": "5m",
+        "created_at": "2026-02-13T12:00:00",
+        "duration_seconds": 120.0,
+        "grade": "A",
+        "total_score": 87.0,
+        "oos_sharpe": 1.8,
+        "consistency": 0.85,
+        "oos_is_ratio": 0.92,
+        "dsr": 0.95,
+        "param_stability": 0.88,
+        "monte_carlo_pvalue": 0.02,
+        "mc_underpowered": 0,
+        "n_windows": 20,
+        "n_distinct_combos": 600,
+        "best_params": '{"rsi_period": 14}',
+        "wfo_windows": None,
+        "monte_carlo_summary": '{"p_value": 0.02}',
+        "validation_summary": '{"bitget_sharpe": 1.5}',
+        "warnings": '[]',
+        "source": "local",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_save_result_from_payload_sync_created(temp_db):
+    """Test insertion via payload dict → retourne 'created'."""
+    payload = _make_sample_payload()
+    status = save_result_from_payload_sync(temp_db, payload)
+    assert status == "created"
+
+    conn = sqlite3.connect(temp_db)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.execute("SELECT * FROM optimization_results")
+    row = dict(cursor.fetchone())
+    conn.close()
+
+    assert row["strategy_name"] == "vwap_rsi"
+    assert row["grade"] == "A"
+    assert row["is_latest"] == 1
+    assert row["source"] == "local"
+
+
+def test_save_result_from_payload_sync_duplicate(temp_db):
+    """Test doublon (même UNIQUE key) → retourne 'exists', is_latest intact."""
+    payload = _make_sample_payload()
+
+    status1 = save_result_from_payload_sync(temp_db, payload)
+    assert status1 == "created"
+
+    status2 = save_result_from_payload_sync(temp_db, payload)
+    assert status2 == "exists"
+
+    # Vérifier qu'il n'y a qu'une seule row et que is_latest est toujours 1
+    conn = sqlite3.connect(temp_db)
+    cursor = conn.execute("SELECT COUNT(*) FROM optimization_results")
+    count = cursor.fetchone()[0]
+    cursor = conn.execute("SELECT is_latest FROM optimization_results")
+    row = cursor.fetchone()
+    conn.close()
+
+    assert count == 1
+    assert row[0] == 1  # is_latest préservé
+
+
+def test_save_result_from_payload_sync_updates_is_latest(temp_db):
+    """Test que l'insertion d'un nouveau run met à jour is_latest des anciens."""
+    payload1 = _make_sample_payload(created_at="2026-02-12T10:00:00", grade="B", total_score=72)
+    payload2 = _make_sample_payload(created_at="2026-02-13T10:00:00", grade="A", total_score=87)
+
+    save_result_from_payload_sync(temp_db, payload1)
+    save_result_from_payload_sync(temp_db, payload2)
+
+    conn = sqlite3.connect(temp_db)
+    cursor = conn.execute(
+        "SELECT grade, is_latest FROM optimization_results ORDER BY created_at"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    assert len(rows) == 2
+    assert rows[0] == ("B", 0)  # ancien → is_latest=0
+    assert rows[1] == ("A", 1)  # nouveau → is_latest=1
+
+
+def test_save_result_from_payload_sync_json_as_dict(temp_db):
+    """Test que le payload peut contenir des JSON blobs comme dicts (pas seulement strings)."""
+    payload = _make_sample_payload(
+        best_params={"rsi_period": 14, "tp_percent": 0.8},
+        monte_carlo_summary={"p_value": 0.02, "significant": True},
+        validation_summary={"bitget_sharpe": 1.5},
+        warnings=["Test warning"],
+    )
+    status = save_result_from_payload_sync(temp_db, payload)
+    assert status == "created"
+
+    conn = sqlite3.connect(temp_db)
+    cursor = conn.execute("SELECT best_params, warnings FROM optimization_results")
+    row = cursor.fetchone()
+    conn.close()
+
+    # Les dicts/lists sont sérialisés en JSON strings en DB
+    assert json.loads(row[0]) == {"rsi_period": 14, "tp_percent": 0.8}
+    assert json.loads(row[1]) == ["Test warning"]
+
+
+def test_save_result_sync_with_source(temp_db):
+    """Test que save_result_sync respecte le paramètre source."""
+    validation = ValidationResult(
+        bitget_sharpe=1.5, bitget_net_return_pct=8.0, bitget_trades=25,
+        bitget_sharpe_ci_low=0.8, bitget_sharpe_ci_high=2.1,
+        binance_oos_avg_sharpe=1.3, transfer_ratio=0.85,
+        transfer_significant=True, volume_warning=False, volume_warning_detail="",
+    )
+    report = FinalReport(
+        strategy_name="vwap_rsi", symbol="BTC/USDT", timestamp=datetime(2026, 2, 13, 12, 0),
+        grade="A", total_score=87, wfo_avg_is_sharpe=2.0, wfo_avg_oos_sharpe=1.7,
+        wfo_consistency_rate=0.80, wfo_n_windows=20, recommended_params={"rsi_period": 14},
+        mc_p_value=0.02, mc_significant=True, mc_underpowered=False, dsr=0.95,
+        dsr_max_expected_sharpe=3.2, stability=0.88, cliff_params=[], convergence=0.75,
+        divergent_params=[], validation=validation, oos_is_ratio=0.85, bitget_transfer=0.85,
+        live_eligible=True, warnings=[], n_distinct_combos=600,
+    )
+
+    save_result_sync(temp_db, report, wfo_windows=None, duration=120.5, timeframe="5m", source="server")
+
+    conn = sqlite3.connect(temp_db)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.execute("SELECT source FROM optimization_results")
+    row = cursor.fetchone()
+    conn.close()
+
+    assert row["source"] == "server"
+
+
+def test_build_push_payload_structure():
+    """Test que build_push_payload retourne tous les champs requis sans NaN/Infinity."""
+    validation = ValidationResult(
+        bitget_sharpe=float("nan"), bitget_net_return_pct=float("inf"), bitget_trades=10,
+        bitget_sharpe_ci_low=0.0, bitget_sharpe_ci_high=0.0,
+        binance_oos_avg_sharpe=1.0, transfer_ratio=0.5,
+        transfer_significant=False, volume_warning=False, volume_warning_detail="",
+    )
+    report = FinalReport(
+        strategy_name="test", symbol="BTC/USDT", timestamp=datetime(2026, 2, 13, 12, 0),
+        grade="F", total_score=15, wfo_avg_is_sharpe=1.0, wfo_avg_oos_sharpe=float("nan"),
+        wfo_consistency_rate=0.20, wfo_n_windows=10, recommended_params={"rsi_period": 14},
+        mc_p_value=1.0, mc_significant=False, mc_underpowered=True, dsr=0.0,
+        dsr_max_expected_sharpe=3.0, stability=0.30, cliff_params=[], convergence=None,
+        divergent_params=[], validation=validation, oos_is_ratio=0.10, bitget_transfer=0.20,
+        live_eligible=False, warnings=["Test"], n_distinct_combos=100,
+    )
+
+    payload = build_push_payload(report, wfo_windows=None, duration=60.0, timeframe="5m")
+
+    # Champs requis
+    assert payload["strategy_name"] == "test"
+    assert payload["asset"] == "BTC/USDT"
+    assert payload["timeframe"] == "5m"
+    assert payload["grade"] == "F"
+    assert payload["n_windows"] == 10
+    assert payload["source"] == "local"
+
+    # NaN sanitizé
+    assert payload["oos_sharpe"] is None
+
+    # JSON blobs sont des strings
+    assert isinstance(payload["best_params"], str)
+    assert json.loads(payload["best_params"]) == {"rsi_period": 14}
+
+    # Pas de NaN/Infinity dans le payload (json.dumps ne crashe pas)
+    json.dumps(payload)  # Ne doit pas lever d'exception
+
+
+def test_build_payload_from_db_row():
+    """Test build_payload_from_db_row depuis une row DB simulée."""
+    row = {
+        "id": 1,
+        "strategy_name": "vwap_rsi",
+        "asset": "BTC/USDT",
+        "timeframe": "5m",
+        "created_at": "2026-02-13T12:00:00",
+        "duration_seconds": 120.0,
+        "grade": "A",
+        "total_score": 87.0,
+        "oos_sharpe": 1.8,
+        "consistency": 0.85,
+        "oos_is_ratio": 0.92,
+        "dsr": 0.95,
+        "param_stability": 0.88,
+        "monte_carlo_pvalue": 0.02,
+        "mc_underpowered": 0,
+        "n_windows": 20,
+        "n_distinct_combos": 600,
+        "best_params": '{"rsi_period": 14}',
+        "wfo_windows": None,
+        "monte_carlo_summary": '{"p_value": 0.02}',
+        "validation_summary": '{"bitget_sharpe": 1.5}',
+        "warnings": '[]',
+        "is_latest": 1,
+        "source": "local",
+    }
+
+    payload = build_payload_from_db_row(row)
+
+    assert payload["strategy_name"] == "vwap_rsi"
+    assert payload["asset"] == "BTC/USDT"
+    assert payload["source"] == "local"
+    assert payload["best_params"] == '{"rsi_period": 14}'
+    # id et is_latest ne sont PAS dans le payload (gérés côté serveur)
+    assert "id" not in payload
+    assert "is_latest" not in payload

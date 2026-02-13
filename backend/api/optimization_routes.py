@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Response
 
 from backend.core.config import get_config
 from backend.optimization.optimization_db import (
     get_comparison_async,
     get_result_by_id_async,
     get_results_async,
+    save_result_from_payload_sync,
 )
 
 router = APIRouter(prefix="/api/optimization", tags=["optimization"])
+
+
+def _get_db_path() -> str:
+    """Extrait le path DB depuis la config."""
+    config = get_config()
+    db_url = config.secrets.database_url
+    if db_url.startswith("sqlite:///"):
+        return db_url[10:]
+    return "data/scalp_radar.db"
 
 
 @router.get("/results")
@@ -30,13 +40,7 @@ async def get_optimization_results(
     oos_sharpe, consistency, oos_is_ratio, dsr, param_stability, n_windows,
     created_at, is_latest
     """
-    config = get_config()
-    # Extraire le path de la DB depuis database_url (format: "sqlite:///data/scalp_radar.db")
-    db_url = config.secrets.database_url
-    if db_url.startswith("sqlite:///"):
-        db_path = db_url[10:]  # Retirer "sqlite:///"
-    else:
-        db_path = "data/scalp_radar.db"  # Fallback par défaut
+    db_path = _get_db_path()
 
     results = await get_results_async(
         db_path=db_path,
@@ -67,12 +71,7 @@ async def get_optimization_comparison() -> dict:
 
     Cases vides (stratégie non testée sur un asset) : clé absente du dict.
     """
-    config = get_config()
-    db_url = config.secrets.database_url
-    if db_url.startswith("sqlite:///"):
-        db_path = db_url[10:]
-    else:
-        db_path = "data/scalp_radar.db"
+    db_path = _get_db_path()
 
     comparison = await get_comparison_async(db_path=db_path)
     return comparison
@@ -87,15 +86,59 @@ async def get_optimization_detail(result_id: int) -> dict:
 
     404 si result_id inexistant.
     """
-    config = get_config()
-    db_url = config.secrets.database_url
-    if db_url.startswith("sqlite:///"):
-        db_path = db_url[10:]
-    else:
-        db_path = "data/scalp_radar.db"
+    db_path = _get_db_path()
 
     result = await get_result_by_id_async(db_path=db_path, result_id=result_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Résultat {result_id} non trouvé")
 
     return result
+
+
+# ─── POST (sync local → serveur) ─────────────────────────────────────────
+
+# Champs NOT NULL du schéma optimization_results (hors id/is_latest/source auto-gérés)
+_REQUIRED_FIELDS = [
+    "strategy_name", "asset", "timeframe", "created_at",
+    "grade", "total_score", "n_windows", "best_params",
+]
+
+
+@router.post("/results", status_code=201)
+async def post_optimization_result(
+    payload: dict = Body(...),
+    x_api_key: str = Header(None, alias="X-API-Key"),
+    response: Response = None,
+) -> dict:
+    """Reçoit un résultat WFO depuis le local et l'insère en DB serveur.
+
+    - 201 si inséré
+    - 200 si doublon (déjà existant, UNIQUE constraint)
+    - 401 si clé API manquante/invalide
+    - 422 si champs obligatoires manquants
+    """
+    # Auth
+    config = get_config()
+    server_key = config.secrets.sync_api_key
+    if not server_key:
+        raise HTTPException(status_code=401, detail="Sync non configuré sur ce serveur")
+    if not x_api_key or x_api_key != server_key:
+        raise HTTPException(status_code=401, detail="Clé API invalide")
+
+    # Validation payload
+    missing = [f for f in _REQUIRED_FIELDS if f not in payload or payload[f] is None]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Champs obligatoires manquants : {', '.join(missing)}",
+        )
+
+    # Insert
+    db_path = _get_db_path()
+    status = save_result_from_payload_sync(db_path, payload)
+
+    if status == "exists":
+        response.status_code = 200
+        return {"status": "already_exists"}
+
+    return {"status": "created"}

@@ -50,6 +50,7 @@ def save_result_sync(
     wfo_windows: list[dict] | None,
     duration: float | None,
     timeframe: str,
+    source: str = "local",
 ) -> None:
     """Sauvegarde un résultat WFO en DB (sync pour optimize.py CLI).
 
@@ -59,6 +60,7 @@ def save_result_sync(
         wfo_windows: WindowResult sérialisés (ou None)
         duration: Durée du run en secondes (ou None)
         timeframe: Timeframe de la stratégie (ex: "5m", "1h")
+        source: Origine du résultat ("local" ou "server")
     """
     conn = sqlite3.connect(db_path)
     try:
@@ -107,8 +109,9 @@ def save_result_sync(
                 strategy_name, asset, timeframe, created_at, duration_seconds,
                 grade, total_score, oos_sharpe, consistency, oos_is_ratio, dsr,
                 param_stability, monte_carlo_pvalue, mc_underpowered, n_windows, n_distinct_combos,
-                best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings, is_latest
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings,
+                is_latest, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
             (
                 report.strategy_name,
                 report.symbol,
@@ -131,6 +134,7 @@ def save_result_sync(
                 mc_summary_json,
                 val_summary_json,
                 warnings_json,
+                source,
             ),
         )
 
@@ -141,6 +145,221 @@ def save_result_sync(
         )
     finally:
         conn.close()
+
+
+def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
+    """Insère un résultat WFO depuis un payload JSON brut (endpoint POST serveur).
+
+    Transaction sûre : INSERT d'abord, UPDATE is_latest ensuite seulement si inséré.
+    Évite de perdre le flag is_latest sur un doublon (INSERT OR IGNORE).
+
+    Returns:
+        "created" si inséré, "exists" si doublon (UNIQUE constraint).
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("BEGIN")
+
+        # 1. Tenter l'INSERT (OR IGNORE pour les doublons)
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO optimization_results (
+                strategy_name, asset, timeframe, created_at, duration_seconds,
+                grade, total_score, oos_sharpe, consistency, oos_is_ratio, dsr,
+                param_stability, monte_carlo_pvalue, mc_underpowered, n_windows, n_distinct_combos,
+                best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings,
+                is_latest, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+            (
+                payload["strategy_name"],
+                payload["asset"],
+                payload["timeframe"],
+                payload["created_at"],
+                payload.get("duration_seconds"),
+                payload["grade"],
+                payload["total_score"],
+                payload.get("oos_sharpe"),
+                payload.get("consistency"),
+                payload.get("oos_is_ratio"),
+                payload.get("dsr"),
+                payload.get("param_stability"),
+                payload.get("monte_carlo_pvalue"),
+                payload.get("mc_underpowered", 0),
+                payload["n_windows"],
+                payload.get("n_distinct_combos"),
+                payload["best_params"] if isinstance(payload["best_params"], str) else json.dumps(payload["best_params"]),
+                payload.get("wfo_windows") if isinstance(payload.get("wfo_windows"), str) else json.dumps(payload["wfo_windows"]) if payload.get("wfo_windows") is not None else None,
+                payload.get("monte_carlo_summary") if isinstance(payload.get("monte_carlo_summary"), str) else json.dumps(payload["monte_carlo_summary"]) if payload.get("monte_carlo_summary") is not None else None,
+                payload.get("validation_summary") if isinstance(payload.get("validation_summary"), str) else json.dumps(payload["validation_summary"]) if payload.get("validation_summary") is not None else None,
+                payload.get("warnings") if isinstance(payload.get("warnings"), str) else json.dumps(payload["warnings"]) if payload.get("warnings") is not None else None,
+                payload.get("source", "local"),
+            ),
+        )
+
+        if cursor.rowcount == 0:
+            # Doublon — ne pas toucher à is_latest
+            conn.commit()
+            return "exists"
+
+        # 2. Inséré avec succès → mettre is_latest=0 sur les anciens
+        new_id = cursor.lastrowid
+        conn.execute(
+            """UPDATE optimization_results SET is_latest=0
+               WHERE strategy_name=? AND asset=? AND timeframe=? AND is_latest=1 AND id!=?""",
+            (payload["strategy_name"], payload["asset"], payload["timeframe"], new_id),
+        )
+
+        conn.commit()
+        logger.info(
+            "Résultat WFO reçu (POST) : {} × {} (grade {})",
+            payload["strategy_name"], payload["asset"], payload["grade"],
+        )
+        return "created"
+    finally:
+        conn.close()
+
+
+def build_push_payload(
+    report: FinalReport,
+    wfo_windows: list[dict] | None,
+    duration: float | None,
+    timeframe: str,
+    source: str = "local",
+) -> dict:
+    """Construit le payload JSON pour POST vers le serveur.
+
+    Réutilise _sanitize_dict/_sanitize_json_value pour nettoyer NaN/Infinity.
+    """
+    best_params_json = json.dumps(_sanitize_dict(report.recommended_params))
+    wfo_windows_json = json.dumps(_sanitize_dict({"windows": wfo_windows})) if wfo_windows else None
+
+    mc_summary = json.dumps({
+        "p_value": _sanitize_json_value(report.mc_p_value),
+        "significant": report.mc_significant,
+        "underpowered": report.mc_underpowered,
+    })
+
+    val_summary = json.dumps({
+        "bitget_sharpe": _sanitize_json_value(report.validation.bitget_sharpe),
+        "bitget_net_return_pct": _sanitize_json_value(report.validation.bitget_net_return_pct),
+        "bitget_trades": report.validation.bitget_trades,
+        "bitget_sharpe_ci_low": _sanitize_json_value(report.validation.bitget_sharpe_ci_low),
+        "bitget_sharpe_ci_high": _sanitize_json_value(report.validation.bitget_sharpe_ci_high),
+        "binance_oos_avg_sharpe": _sanitize_json_value(report.validation.binance_oos_avg_sharpe),
+        "transfer_ratio": _sanitize_json_value(report.validation.transfer_ratio),
+        "transfer_significant": report.validation.transfer_significant,
+        "volume_warning": report.validation.volume_warning,
+        "volume_warning_detail": report.validation.volume_warning_detail,
+    })
+
+    return {
+        "strategy_name": report.strategy_name,
+        "asset": report.symbol,
+        "timeframe": timeframe,
+        "created_at": report.timestamp.isoformat(),
+        "duration_seconds": duration,
+        "grade": report.grade,
+        "total_score": report.total_score,
+        "oos_sharpe": _sanitize_json_value(report.wfo_avg_oos_sharpe),
+        "consistency": report.wfo_consistency_rate,
+        "oos_is_ratio": _sanitize_json_value(report.oos_is_ratio),
+        "dsr": _sanitize_json_value(report.dsr),
+        "param_stability": _sanitize_json_value(report.stability),
+        "monte_carlo_pvalue": _sanitize_json_value(report.mc_p_value),
+        "mc_underpowered": 1 if report.mc_underpowered else 0,
+        "n_windows": report.wfo_n_windows,
+        "n_distinct_combos": report.n_distinct_combos,
+        "best_params": best_params_json,
+        "wfo_windows": wfo_windows_json,
+        "monte_carlo_summary": mc_summary,
+        "validation_summary": val_summary,
+        "warnings": json.dumps(report.warnings),
+        "source": source,
+    }
+
+
+def build_payload_from_db_row(row: dict) -> dict:
+    """Construit un payload POST depuis une row DB (pour sync_to_server.py).
+
+    Les colonnes DB correspondent déjà au format POST attendu.
+    Les JSON blobs restent en string (le serveur les stocke tels quels).
+    """
+    return {
+        "strategy_name": row["strategy_name"],
+        "asset": row["asset"],
+        "timeframe": row["timeframe"],
+        "created_at": row["created_at"],
+        "duration_seconds": row.get("duration_seconds"),
+        "grade": row["grade"],
+        "total_score": row["total_score"],
+        "oos_sharpe": row.get("oos_sharpe"),
+        "consistency": row.get("consistency"),
+        "oos_is_ratio": row.get("oos_is_ratio"),
+        "dsr": row.get("dsr"),
+        "param_stability": row.get("param_stability"),
+        "monte_carlo_pvalue": row.get("monte_carlo_pvalue"),
+        "mc_underpowered": row.get("mc_underpowered", 0),
+        "n_windows": row["n_windows"],
+        "n_distinct_combos": row.get("n_distinct_combos"),
+        "best_params": row["best_params"],
+        "wfo_windows": row.get("wfo_windows"),
+        "monte_carlo_summary": row.get("monte_carlo_summary"),
+        "validation_summary": row.get("validation_summary"),
+        "warnings": row.get("warnings"),
+        "source": row.get("source", "local"),
+    }
+
+
+def push_to_server(
+    report: FinalReport,
+    wfo_windows: list[dict] | None,
+    duration: float | None,
+    timeframe: str,
+) -> None:
+    """Pousse un résultat WFO vers le serveur de production (best-effort).
+
+    Ne crashe JAMAIS le run local. Log warning si erreur.
+    """
+    try:
+        from backend.core.config import get_config
+        config = get_config()
+
+        if not config.secrets.sync_enabled:
+            return
+        if not config.secrets.sync_server_url:
+            logger.warning("sync_enabled=true mais sync_server_url vide — push ignoré")
+            return
+        if not config.secrets.sync_api_key:
+            logger.warning("sync_enabled=true mais sync_api_key vide — push ignoré")
+            return
+
+        import httpx
+
+        payload = build_push_payload(report, wfo_windows, duration, timeframe)
+        url = f"{config.secrets.sync_server_url.rstrip('/')}/api/optimization/results"
+
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                url,
+                json=payload,
+                headers={"X-API-Key": config.secrets.sync_api_key},
+            )
+
+        if resp.status_code in (200, 201):
+            status = resp.json().get("status", "ok")
+            logger.info(
+                "Résultat pushé au serveur : {} × {} → {} ({})",
+                report.strategy_name, report.symbol, resp.status_code, status,
+            )
+        else:
+            logger.warning(
+                "Push serveur échoué : {} × {} → HTTP {} : {}",
+                report.strategy_name, report.symbol, resp.status_code, resp.text[:200],
+            )
+    except Exception as exc:
+        logger.warning(
+            "Push serveur échoué (réseau) : {} × {} → {}",
+            report.strategy_name, report.symbol, exc,
+        )
 
 
 # ─── Fonctions ASYNC (pour l'API FastAPI) ──────────────────────────────────

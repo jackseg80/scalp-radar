@@ -1,4 +1,4 @@
-"""Tests pour les routes API d'optimisation WFO — Sprint 13."""
+"""Tests pour les routes API d'optimisation WFO — Sprint 13 + sync."""
 
 from __future__ import annotations
 
@@ -6,6 +6,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.server import app
+
+
+# ─── Helper ──────────────────────────────────────────────────────────────
+
+def _make_test_config(monkeypatch, sync_api_key: str = ""):
+    """Configure un AppConfig de test avec monkeypatch."""
+    from backend.core.config import AppConfig
+    test_config = AppConfig()
+    test_config.secrets.database_url = "sqlite:///data/test.db"
+    test_config.secrets.sync_api_key = sync_api_key
+    monkeypatch.setattr("backend.api.optimization_routes.get_config", lambda: test_config)
+    return test_config
 
 
 def test_get_results_ok(monkeypatch):
@@ -249,3 +261,120 @@ def test_get_comparison(monkeypatch):
     assert "BTC/USDT" in data["matrix"]["vwap_rsi"]
     assert data["matrix"]["vwap_rsi"]["BTC/USDT"]["grade"] == "A"
     assert data["matrix"]["envelope_dca"]["ETH/USDT"]["grade"] == "B"
+
+
+# ─── Tests POST /api/optimization/results ─────────────────────────────────
+
+
+def _make_post_payload(**overrides) -> dict:
+    """Payload de test pour POST."""
+    base = {
+        "strategy_name": "vwap_rsi",
+        "asset": "BTC/USDT",
+        "timeframe": "5m",
+        "created_at": "2026-02-13T12:00:00",
+        "grade": "A",
+        "total_score": 87.0,
+        "n_windows": 20,
+        "best_params": '{"rsi_period": 14}',
+        "source": "local",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_post_result_created(monkeypatch):
+    """Test POST /api/optimization/results : 201 + created."""
+    _make_test_config(monkeypatch, sync_api_key="test-secret-key")
+
+    def mock_save(*args, **kwargs):
+        return "created"
+
+    monkeypatch.setattr(
+        "backend.api.optimization_routes.save_result_from_payload_sync", mock_save
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/optimization/results",
+        json=_make_post_payload(),
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert response.status_code == 201
+    assert response.json()["status"] == "created"
+
+
+def test_post_result_duplicate(monkeypatch):
+    """Test POST doublon → 200 + already_exists."""
+    _make_test_config(monkeypatch, sync_api_key="test-secret-key")
+
+    def mock_save(*args, **kwargs):
+        return "exists"
+
+    monkeypatch.setattr(
+        "backend.api.optimization_routes.save_result_from_payload_sync", mock_save
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/optimization/results",
+        json=_make_post_payload(),
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "already_exists"
+
+
+def test_post_result_no_api_key(monkeypatch):
+    """Test POST sans header X-API-Key → 401."""
+    _make_test_config(monkeypatch, sync_api_key="test-secret-key")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/optimization/results",
+        json=_make_post_payload(),
+    )
+    assert response.status_code == 401
+
+
+def test_post_result_wrong_api_key(monkeypatch):
+    """Test POST avec mauvaise clé → 401."""
+    _make_test_config(monkeypatch, sync_api_key="test-secret-key")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/optimization/results",
+        json=_make_post_payload(),
+        headers={"X-API-Key": "wrong-key"},
+    )
+    assert response.status_code == 401
+    assert "invalide" in response.json()["detail"]
+
+
+def test_post_result_no_server_key(monkeypatch):
+    """Test POST quand sync_api_key vide côté serveur → 401."""
+    _make_test_config(monkeypatch, sync_api_key="")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/optimization/results",
+        json=_make_post_payload(),
+        headers={"X-API-Key": "any-key"},
+    )
+    assert response.status_code == 401
+    assert "non configuré" in response.json()["detail"]
+
+
+def test_post_result_invalid_payload(monkeypatch):
+    """Test POST avec champs obligatoires manquants → 422."""
+    _make_test_config(monkeypatch, sync_api_key="test-secret-key")
+
+    client = TestClient(app)
+    # Payload incomplet : manque strategy_name, grade, etc.
+    response = client.post(
+        "/api/optimization/results",
+        json={"asset": "BTC/USDT"},
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert response.status_code == 422
+    assert "manquants" in response.json()["detail"]

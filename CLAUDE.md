@@ -129,6 +129,16 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - `.env` never committed, IP whitelist to 192.168.1.200
 - API key permissions: futures read + trade ONLY, no withdrawal
 
+### Sync WFO local → serveur (NEW)
+
+- Après chaque run d'optimisation local, push automatique du résultat vers le serveur prod via POST API
+- Best-effort : serveur down ne casse jamais un run local
+- Endpoint `POST /api/optimization/results` avec auth `X-API-Key`
+- Transaction sûre : INSERT OR IGNORE + UPDATE is_latest seulement si inséré (pas de perte du flag)
+- Script `sync_to_server.py` pour pousser l'historique existant (idempotent)
+- Colonne `source` ('local' ou 'server') pour tracer l'origine des résultats
+- Config : `SYNC_ENABLED`, `SYNC_SERVER_URL`, `SYNC_API_KEY` dans `.env`
+
 ## Config Files (5 YAML)
 
 - `assets.yaml` — 5 assets (BTC, ETH, SOL, DOGE, LINK), timeframes [1m, 5m, 15m, 1h], groupes corrélation
@@ -139,7 +149,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-13) : 533 tests passants**
+**Sprints complétés (1-13) : 555 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -199,6 +209,15 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - TP client-side (SMA dynamique, détecté par GridStrategyRunner)
 - State persistence round-trip (`grid_states` dans get_state/restore_positions)
 - Réconciliation grid au boot (`_reconcile_grid_symbol`)
+
+**Sync WFO (NEW) :**
+
+- Push automatique après chaque run local : `save_report()` → `push_to_server()` (best-effort)
+- Transaction sûre : INSERT OR IGNORE d'abord, UPDATE is_latest seulement si inséré
+- Endpoint `POST /api/optimization/results` avec auth X-API-Key (refuse si `sync_api_key` vide côté serveur)
+- 4 nouvelles fonctions dans `optimization_db.py` : `save_result_from_payload_sync`, `build_push_payload`, `build_payload_from_db_row`, `push_to_server`
+- Script `sync_to_server.py` pour pousser l'historique (idempotent, --dry-run)
+- Colonne `source TEXT DEFAULT 'local'` + migration ALTER TABLE idempotente
 
 ## Lifespan Complet (server.py)
 
