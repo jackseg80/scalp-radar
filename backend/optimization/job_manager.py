@@ -371,13 +371,23 @@ class JobManager:
         # Lancer run_optimization dans un event loop dédié à ce thread
         from scripts.optimize import run_optimization
 
+        # Normaliser params_override : convertir valeurs scalaires en listes
+        normalized_params = None
+        if job.params_override:
+            normalized_params = {}
+            for key, value in job.params_override.items():
+                if isinstance(value, list):
+                    normalized_params[key] = value
+                else:
+                    normalized_params[key] = [value]
+
         try:
             report, result_id = asyncio.run(run_optimization(
                 strategy_name=job.strategy_name,
                 symbol=job.asset,
                 progress_callback=progress_callback,
                 cancel_event=cancel_event,
-                params_override=job.params_override,
+                params_override=normalized_params,
             ))
             # result_id retourné directement par save_report() → plus fiable que re-query
             return result_id
