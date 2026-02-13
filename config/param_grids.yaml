@@ -86,7 +86,7 @@ supertrend:
     tp_percent: [3.0, 4.0, 6.0, 8.0]
     sl_percent: [1.5, 2.0, 3.0, 4.0]
 
-# Envelope DCA : ~216 combos (3×3×3×3×4 = 324, réduit par coarse sampling)
+# Envelope DCA : 324 combos (3×3×3×3×4), coarse LHS 200
 envelope_dca:
   wfo:
     is_days: 180

@@ -75,10 +75,10 @@ scalp-radar/
 │
 ├── config/                       # ALL tunable parameters — no hardcoding in code
 │   ├── assets.yaml               # Traded pairs + correlation groups (5 assets, 2 groupes)
-│   ├── strategies.yaml           # Strategy parameters (5 stratégies + custom + per_asset)
+│   ├── strategies.yaml           # Strategy parameters (8 stratégies + custom + per_asset)
 │   ├── risk.yaml                 # Kill switch, position sizing, fees, slippage, margin, SL/TP
 │   ├── exchanges.yaml            # Bitget: WebSocket, rate limits par catégorie, API config
-│   └── param_grids.yaml          # Espaces de recherche pour l'optimisation WFO
+│   └── param_grids.yaml          # Espaces de recherche pour l'optimisation WFO (5m + 1h)
 │
 ├── backend/
 │   ├── __init__.py
@@ -89,9 +89,10 @@ scalp-radar/
 │   │   ├── models.py             # Enums + 15 modèles Pydantic (Candle, Signal, Trade, Position...)
 │   │   ├── config.py             # YAML loader + validation croisée (Pydantic)
 │   │   ├── database.py           # SQLite async (aiosqlite, WAL mode)
-│   │   ├── indicators.py          # RSI, VWAP, ADX+DI, ATR, SMA, EMA, régime (pur numpy)
+│   │   ├── indicators.py          # RSI, VWAP, ADX+DI, ATR, SMA, EMA, Bollinger, SuperTrend, régime (pur numpy)
 │   │   ├── incremental_indicators.py # Buffers rolling pour indicateurs live (Simulator)
-│   │   ├── position_manager.py   # Sizing, fees, slippage, TP/SL (réutilisé par engine + simulator)
+│   │   ├── position_manager.py   # Sizing, fees, slippage, TP/SL (mono-position, réutilisé par engine + simulator)
+│   │   ├── grid_position_manager.py # Sizing multi-position DCA (N niveaux, prix moyen, TP/SL global)
 │   │   ├── state_manager.py      # Crash recovery : save/load état runners (JSON atomique)
 │   │   ├── data_engine.py        # ccxt Pro WebSocket + polling OI/funding + buffer rolling
 │   │   ├── rate_limiter.py       # Token bucket par catégorie d'endpoint
@@ -99,21 +100,31 @@ scalp-radar/
 │   │
 │   ├── strategies/
 │   │   ├── base.py               # BaseStrategy ABC, StrategyContext, StrategySignal, EXTRA_* constants
+│   │   ├── base_grid.py          # BaseGridStrategy ABC pour stratégies grid/DCA multi-position
 │   │   ├── factory.py            # create_strategy() + get_enabled_strategies()
-│   │   ├── vwap_rsi.py           # VWAP+RSI mean reversion (RANGING)
-│   │   ├── momentum.py           # Momentum Breakout (TRENDING)
-│   │   ├── funding.py            # Funding Rate Arbitrage (paper trading only)
-│   │   └── liquidation.py        # Liquidation Zone Hunting (paper trading only)
+│   │   ├── vwap_rsi.py           # VWAP+RSI mean reversion (5m, RANGING)
+│   │   ├── momentum.py           # Momentum Breakout (5m, TRENDING)
+│   │   ├── funding.py            # Funding Rate Arbitrage (15m, paper trading only)
+│   │   ├── liquidation.py        # Liquidation Zone Hunting (5m, paper trading only)
+│   │   ├── bollinger_mr.py       # Bollinger Band Mean Reversion (1h)
+│   │   ├── donchian_breakout.py  # Donchian Channel Breakout (1h)
+│   │   ├── supertrend.py         # SuperTrend trend-following (1h)
+│   │   └── envelope_dca.py       # Envelope DCA multi-niveaux (1h, grid/DCA)
 │   ├── optimization/
-│   │   ├── __init__.py           # STRATEGY_REGISTRY + create_strategy_with_params()
+│   │   ├── __init__.py           # STRATEGY_REGISTRY + create_strategy_with_params() + is_grid_strategy()
 │   │   ├── walk_forward.py       # WFO grid search 2 passes + ProcessPool/fallback séquentiel
 │   │   ├── overfitting.py        # Monte Carlo, DSR, stabilité, convergence cross-asset
-│   │   └── report.py             # Grading A-F, validation Bitget, apply_to_yaml
+│   │   ├── report.py             # Grading A-F, validation Bitget, apply_to_yaml
+│   │   ├── indicator_cache.py    # Cache numpy pré-calculé pour fast engine (toutes variantes du grid)
+│   │   ├── fast_backtest.py      # Fast engine mono-position (5m + 1h simple, numpy-only)
+│   │   └── fast_multi_backtest.py # Fast engine multi-position (grid/DCA, numpy-only)
 │   ├── backtesting/
-│   │   ├── engine.py             # Moteur event-driven (délègue au PositionManager)
+│   │   ├── engine.py             # Moteur event-driven mono-position (délègue au PositionManager)
+│   │   ├── multi_engine.py       # Moteur event-driven multi-position (grid/DCA, GridPositionManager)
 │   │   ├── metrics.py            # BacktestMetrics + format table console
-│   │   ├── simulator.py          # LiveStrategyRunner + Simulator (paper trading live)
-│   │   └── arena.py              # StrategyArena (classement parallèle)
+│   │   ├── simulator.py          # LiveStrategyRunner + GridStrategyRunner + Simulator (paper trading)
+│   │   ├── arena.py              # StrategyArena (classement parallèle)
+│   │   └── extra_data_builder.py # Alignement funding/OI par timestamp (forward-fill)
 │   ├── execution/
 │   │   ├── executor.py          # Executor multi-position (3 paires × 4 stratégies, SL/TP, watchOrders)
 │   │   ├── risk_manager.py      # LiveRiskManager (pre-trade checks, kill switch, corrélation groups)
@@ -157,19 +168,23 @@ scalp-radar/
 │           ├── Heatmap.jsx       # Matrice assets × stratégies (conditions colorées)
 │           ├── RiskCalc.jsx      # Calculatrice de risque client-side
 │           ├── ExecutorPanel.jsx # Statut executor + multi-positions + selector
+│           ├── ActivePositions.jsx # Multi-position display
+│           ├── ActivityFeed.jsx  # Trade activity timeline
 │           ├── SessionStats.jsx  # Sidebar P&L, trades, win rate (via WS)
 │           ├── EquityCurve.jsx   # Courbe d'equity SVG (poll 30s)
 │           ├── AlertFeed.jsx     # Timeline signaux chronologique
 │           ├── TradeHistory.jsx  # Trades récents collapsible (poll 10s)
-│           └── ArenaRankingMini.jsx # Classement compact arena (via WS)
+│           ├── ArenaRankingMini.jsx # Classement compact arena (via WS)
+│           ├── Tooltip.jsx       # Tooltips explicatifs
+│           └── CollapsibleCard.jsx # Conteneur réutilisable collapsible
 │
 ├── tests/
 │   ├── conftest.py               # Fixtures partagées (config_dir temporaire)
 │   ├── test_models.py            # 17 tests : enums, Candle, OrderBook, Trade, Signal, SessionState
 │   ├── test_config.py            # 11 tests : chargement, validation, erreurs
 │   ├── test_database.py          # 12 tests : CRUD candles, session state, signals, trades (async)
-│   ├── test_indicators.py        # 22 tests : RSI, VWAP, ADX, ATR, SMA, EMA, régime
-│   ├── test_strategy_vwap_rsi.py # 11 tests : signaux, filtres, check_exit, compute_indicators
+│   ├── test_indicators.py        # 27 tests : RSI, VWAP, ADX, ATR, SMA, EMA, Bollinger, SuperTrend, régime
+│   ├── test_strategy_vwap_rsi.py # 13 tests : signaux, filtres, check_exit, compute_indicators
 │   ├── test_backtesting.py       # 17 tests : engine, métriques, OHLC, sizing, Sortino
 │   ├── test_position_manager.py  # 10 tests : sizing, fees, slippage, TP/SL, heuristique
 │   ├── test_incremental_indicators.py # 5 tests : buffer rolling, trim, indicateurs
@@ -186,12 +201,20 @@ scalp-radar/
 │   ├── test_executor.py         # 53 tests : multi-position, selector, persistence, reconciliation
 │   ├── test_risk_manager.py     # 19 tests : pre-trade checks, kill switch, corrélation groups
 │   ├── test_adaptive_selector.py # 12 tests : critères perf, live_eligible, symboles actifs
-│   └── test_optimization.py      # 46 tests : WFO, Monte Carlo, DSR, stabilité, convergence, grading
+│   ├── test_optimization.py      # 52 tests : WFO, Monte Carlo, DSR, stabilité, convergence, grading
+│   ├── test_funding_oi_data.py  # 23 tests : fetch funding/OI, extra_data_builder, alignement
+│   ├── test_new_strategies.py   # 48 tests : bollinger_mr, donchian_breakout, supertrend (1h)
+│   ├── test_fast_backtest.py    # 18 tests : fast engine, indicator_cache, parité
+│   ├── test_multi_engine.py     # 32 tests : MultiPositionEngine, grid/DCA backtest
+│   └── test_grid_runner.py      # 28 tests : GridStrategyRunner, paper trading grid/DCA
 │
 ├── scripts/
 │   ├── fetch_history.py          # Backfill async ccxt REST + tqdm (6 mois, reprise auto, --exchange)
+│   ├── fetch_funding.py          # Fetch historique funding rates (Bitget API)
+│   ├── fetch_oi.py               # Fetch historique open interest (Binance API)
 │   ├── run_backtest.py           # CLI backtest runner (--symbol, --days, --json)
 │   ├── optimize.py               # CLI optimisation WFO (--all, --apply, --check-data, --dry-run)
+│   ├── parity_check.py           # Compare moteurs mono vs multi-position
 │   └── __main__.py               # python -m scripts support
 │
 ├── data/                         # SQLite DB + données (gitignored)
@@ -201,10 +224,18 @@ scalp-radar/
     │   ├── sprint-1-foundations.md
     │   ├── sprint-2-backtesting.md
     │   ├── sprint-3-simulator-arena.md
-    │   ├── sprint-4-production.md  # Plan détaillé Sprint 4 (crash recovery, Telegram, Docker)
-│   ├── sprint-5a-executor.md   # Plan détaillé Sprint 5a (executor live, risk manager)
-    │   ├── sprint-5b-scaling.md    # Plan détaillé Sprint 5b (multi-position, selector)
-    │   └── sprint-6-dashboard-v2.md # Plan détaillé Sprint 6 (dashboard V2)
+    │   ├── sprint-4-production.md
+    │   ├── sprint-5a-executor.md
+    │   ├── sprint-5b-scaling.md
+    │   ├── sprint-6-dashboard-v2.md
+    │   ├── sprint-6b-dashboard-ux-overhaul.md
+    │   ├── sprint-7-optimization.md
+    │   ├── sprint-7b-funding-oi-optimization.md
+    │   ├── sprint-8-backtest-dashboard.md
+    │   ├── sprint-9-new-1h-strategies.md
+    │   ├── sprint-10-multi-position-engine.md
+    │   ├── sprint-11-paper-trading-grid.md
+    │   └── hotfix-monte-carlo-underpowered.md
     └── prototypes/
         └── Scalp radar v2.jsx    # Prototype React (référence design Sprint 3)
 ```
@@ -235,6 +266,38 @@ scalp-radar/
 ### Strategy 5 — Funding Rate Arbitrage
 - Extreme negative funding → go long, extreme positive → go short
 - Slower frequency, highly automatable, complementary to faster strategies
+
+### Strategy 6 — Bollinger Band Mean Reversion (1h)
+
+- Timeframe: 1h
+- Entry: prix touche bande inférieure (long) ou supérieure (short) de Bollinger
+- Exit: retour à la SMA (TP dynamique via check_exit, pas un prix fixe)
+- TP distant fictif (entry×2 / entry×0.5) — le vrai TP est géré par check_exit (SMA crossing)
+- Parité fast engine / BacktestEngine
+
+### Strategy 7 — Donchian Channel Breakout (1h)
+
+- Timeframe: 1h
+- Entry: cassure du canal Donchian (N bougies high/low)
+- TP/SL basés sur ATR multiples
+- Trend-following, complémentaire au mean reversion
+
+### Strategy 8 — SuperTrend (1h)
+
+- Timeframe: 1h
+- Entry: changement de direction SuperTrend (ATR-based)
+- TP/SL en pourcentage configurable
+- Trend-following
+
+### Strategy 9 — Envelope DCA Multi-Niveaux (1h, grid)
+
+- Timeframe: 1h, stratégie grid/DCA (multi-position)
+- SMA + N enveloppes asymétriques (bandes pas symétriques, asymétrie log-return)
+- Entrée à chaque niveau touché (DCA progressif)
+- TP = retour à la SMA. SL = % depuis prix moyen pondéré
+- Hérite de BaseGridStrategy (pas BaseStrategy directement)
+- Gérée par GridStrategyRunner (paper) et MultiPositionEngine (backtest)
+- Seule stratégie `enabled: true` actuellement (paper trading Sprint 11)
 
 ## Multi-Strategy Arena
 
@@ -309,9 +372,10 @@ Les 4 fichiers YAML dans `config/` sont la source de vérité pour tous les para
 Voir les fichiers directement — ils sont exhaustifs et commentés.
 
 - `assets.yaml` — 5 assets (BTC, ETH, SOL, DOGE, LINK), timeframes [1m, 5m, 15m, 1h], groupes de corrélation
-- `strategies.yaml` — 5 stratégies scalping + section custom_strategies (swing baseline)
+- `strategies.yaml` — 8 stratégies (4 scalp 5m + 3 swing 1h + 1 grid/DCA 1h) + custom_strategies (swing baseline)
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, SL/TP server-side
 - `exchanges.yaml` — Bitget: WebSocket, rate limits par catégorie, API config (USDT-M, mark_price)
+- `param_grids.yaml` — Espaces de recherche WFO par stratégie (5m + 1h) + per-strategy WFO config (is_days, oos_days, step_days)
 
 ## Sprint Plan
 
@@ -667,6 +731,164 @@ Plan détaillé : `docs/plans/sprint-7-optimization.md`
 - Migration DB avec backup auto horodaté avant altération du schéma
 
 - 330 tests passants (46 nouveaux + 284 existants, 0 régression)
+
+### Sprint 6b — Dashboard UX Overhaul ✅
+
+Complet. Refonte UX du dashboard : positions actives, sidebar redimensionnable, sections collapsibles.
+
+**Fichiers créés :**
+
+- `frontend/src/components/ActivePositions.jsx` — Bannière positions live + paper avec P&L
+- `frontend/src/components/CollapsibleCard.jsx` — Wrapper collapsible réutilisable (localStorage)
+- `frontend/src/components/ActivityFeed.jsx` — Timeline trades (renommé depuis AlertFeed)
+- `frontend/src/components/Tooltip.jsx` — Tooltips explicatifs
+
+**Fichiers modifiés :**
+
+- `simulator.py` : tuples `(symbol, trade)`, `get_all_trades()` enrichi (symbol, tp/sl, exit_reason), `get_open_positions()`
+- `websocket_routes.py` : push `simulator_positions` dans WS `/ws/live`
+- `App.jsx` : layout refactoré (resize handler, collapsible, ActivePositions bannière)
+- `Scanner.jsx` : panneau détail avec barres de conditions
+- `TradeHistory.jsx` : colonnes asset, entry→exit, exit_reason, durée
+- `SessionStats.jsx` : kill switch red-tinted card
+- `styles.css` : ~80 nouvelles classes (active-positions, resize-handle, condition bars)
+
+### Sprint 7b — Funding/OI Historiques + Optimisation ✅
+
+Complet. Données funding rates et open interest historiques, injection dans le moteur de backtest, WFO activé pour funding et liquidation.
+Plan détaillé : `docs/plans/sprint-7b-funding-oi-optimization.md`
+
+**Fichiers créés :**
+
+- `scripts/fetch_funding.py` — Fetch historique funding rates (Bitget API)
+- `scripts/fetch_oi.py` — Fetch historique open interest (Binance API)
+- `backend/backtesting/extra_data_builder.py` — Alignement funding/OI par timestamp (forward-fill)
+- `tests/test_funding_oi_data.py` — 23 tests
+
+**Fichiers modifiés :**
+
+- `database.py` : 2 nouvelles tables (funding_rates, open_interest) + 6 méthodes CRUD
+- `config.py` : `per_asset` + `get_params_for_symbol()` sur FundingConfig, LiquidationConfig
+- `engine.py` : paramètre `extra_data_by_timestamp` dans `run()`
+- `walk_forward.py` : chargement extra_data, propagation aux workers/OOS
+- `param_grids.yaml` : grids funding (192 combos), liquidation (576 combos)
+
+**Décisions clés :**
+
+- Forward-fill funding rates entre les updates 8h
+- OI change % calculé vs snapshot précédent (parité DataEngine)
+- Binance OI pour validation (pas d'API historique Bitget)
+
+- 352 tests passants (22 nouveaux)
+
+### Sprint 8 — Backtest Dashboard (planifié, non implémenté)
+
+Plan détaillé : `docs/plans/sprint-8-backtest-dashboard.md`
+Sprint planifié mais non exécuté — les composants frontend prévus n'ont pas été créés.
+
+### Sprint 9 — 3 Nouvelles Stratégies 1h ✅
+
+Complet. 3 stratégies haute timeframe (1h) + fast engine + support WFO.
+Plan détaillé : `docs/plans/sprint-9-new-1h-strategies.md`
+
+**Fichiers créés :**
+
+- `backend/strategies/bollinger_mr.py` — Bollinger Bands mean reversion (TP dynamique SMA crossing)
+- `backend/strategies/donchian_breakout.py` — Donchian channel breakout (TP/SL ATR multiples)
+- `backend/strategies/supertrend.py` — SuperTrend direction flips
+- `backend/optimization/indicator_cache.py` — Cache numpy pré-calculé (toutes variantes du grid)
+- `backend/optimization/fast_backtest.py` — Fast engine mono-position (numpy-only, ~10× plus rapide)
+- `tests/test_new_strategies.py` — 48 tests
+- `tests/test_fast_backtest.py` — 18 tests
+
+**Fichiers modifiés :**
+
+- `indicators.py` : `bollinger_bands()`, `supertrend()` fonctions pure numpy
+- `config.py` : BollingerMRConfig, DonchianBreakoutConfig, SuperTrendConfig + per_asset
+- `factory.py` : create/enable pour les 3 nouvelles stratégies
+- `walk_forward.py` : `_INDICATOR_PARAMS` pour les 3 stratégies, sélection fast engine automatique
+- `param_grids.yaml` : grids + per-strategy WFO configs (IS: 180j, OOS: 60j, step: 60j)
+
+**Décisions clés Sprint 9 :**
+
+- 1h = plus de données → meilleure validation WFO qu'en 5m
+- Bollinger TP dynamique (SMA crossing dans `check_exit()`, pas un % fixe)
+- SuperTrend pré-calculé (boucle itérative, ~5ms/48k pts)
+- ATR multi-period support (Donchian et SuperTrend utilisent `atr_period` variable)
+- `live_eligible: false` pour les 3 (paper trading only jusqu'à grade A/B)
+
+- 419 tests passants (89 nouveaux)
+
+### Sprint 10 — Moteur Multi-Position Modulaire ✅
+
+Complet. Infrastructure grid/DCA : BaseGridStrategy, GridPositionManager, MultiPositionEngine, fast engine multi-position.
+Plan détaillé : `docs/plans/sprint-10-multi-position-engine.md`
+
+**Fichiers créés :**
+
+- `backend/strategies/base_grid.py` — BaseGridStrategy ABC héritant de BaseStrategy
+- `backend/core/grid_position_manager.py` — GridPositionManager pour N positions simultanées
+- `backend/backtesting/multi_engine.py` — MultiPositionEngine parallèle au BacktestEngine
+- `backend/strategies/envelope_dca.py` — Envelope DCA mean reversion (enveloppes asymétriques, TP retour SMA)
+- `backend/optimization/fast_multi_backtest.py` — Fast engine multi-position (numpy-only)
+- `scripts/parity_check.py` — Compare moteurs mono vs multi-position
+- `tests/test_multi_engine.py` — 32 tests
+
+**Fichiers modifiés :**
+
+- `config.py` : EnvelopeDCAConfig + StrategiesConfig
+- `optimization/__init__.py` : GRID_STRATEGIES set, `is_grid_strategy()` helper
+- `walk_forward.py` : leverage depuis config stratégie, switch engine auto, per-strategy WFO
+- `indicator_cache.py` : SMA par période pour envelope_dca
+- `strategies.yaml` : section envelope_dca
+- `param_grids.yaml` : grid envelope_dca + WFO config
+
+**Décisions clés Sprint 10 :**
+
+- Deux moteurs indépendants (mono inchangé pour la vitesse)
+- BaseGridStrategy hérite BaseStrategy pour compatibilité Arena/Simulator/Dashboard
+- Allocation fixe par niveau : `notional = capital/levels × leverage` (pas risk-based)
+- TP/SL global (pas par position), SMA dynamic TP
+- Un seul côté actif (positions LONG → pas de niveaux SHORT)
+- Enveloppes asymétriques : `upper = 1/(1-lower) - 1` (aller-retour cohérent)
+- Leverage 6 depuis config (pas le défaut 15)
+
+- 451 tests passants (32 nouveaux)
+
+### Sprint 11 — Paper Trading Grid/DCA (Envelope DCA) ✅
+
+Complet. Envelope DCA en paper trading live (Simulator uniquement, pas Executor).
+Plan détaillé : `docs/plans/sprint-11-paper-trading-grid.md`
+
+**Fichiers créés :**
+
+- `tests/test_grid_runner.py` — 28 tests
+
+**Fichiers modifiés :**
+
+- `simulator.py` : classe `GridStrategyRunner` (~250 lignes), détection dans `start()`, support `get_open_positions()`
+- `state_manager.py` : sérialisation/restauration grid_positions dans l'état runner
+- `database.py` : `get_recent_candles()` pour le warm-up
+- `server.py` : passage `db` au Simulator
+- `strategies.yaml` : `envelope_dca` seul enabled, stratégies Grade F désactivées
+
+**Décisions clés Sprint 11 :**
+
+- GridStrategyRunner parallèle à LiveStrategyRunner (même duck-type interface)
+- Buffer SMA interne + merge dans indicators dict (pas de modification d'IncrementalIndicatorEngine)
+- Warm-up depuis DB (N candles injectées dans le runner AVANT on_candle)
+- TradeEvent format pour opens/closes grid (prêt pour futur Executor)
+- Détection régime via ADX/ATR si disponible, sinon RANGING (DCA non filtré)
+
+- 484 tests passants (28 nouveaux + hotfix Monte Carlo)
+
+### Hotfix — Monte Carlo underpowered detection ✅
+
+Fix détection underpowered dans Monte Carlo (pénalisait incorrectement les stratégies à faible nombre de trades comme envelope_dca).
+
+- Seuil underpowered < 30 trades → retourne p_value=0.50 (score neutre 12/25 pts)
+- ASCII fallback pour console Windows (cp1252 compat)
+- Impact : BTC envelope_dca Grade D → B
 
 ## Dev Workflow
 
