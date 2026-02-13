@@ -80,8 +80,8 @@ export default function HeatmapChart({ data }) {
     const availableWidth = containerWidth - marginLeft - marginRight
     const calculatedSize = Math.floor(availableWidth / x_values.length)
 
-    // Min 60px, max 120px
-    return Math.max(60, Math.min(120, calculatedSize))
+    // Min 60px, max 300px (pour remplir l'espace)
+    return Math.max(60, Math.min(300, calculatedSize))
   }, [containerWidth, x_values.length])
 
   // Dimensions
@@ -96,11 +96,11 @@ export default function HeatmapChart({ data }) {
   const svgHeight = chartHeight + marginTop + marginBottom
 
   return (
-    <div ref={containerRef} style={{ width: '100%', overflowX: 'auto' }}>
+    <div ref={containerRef} style={{ width: '100%', height: '100%', overflowX: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
       <svg
         width={svgWidth}
         height={svgHeight}
-        style={{ background: '#0d1117', fontFamily: 'monospace', minWidth: '600px' }}
+        style={{ background: '#0d1117', fontFamily: 'monospace', minWidth: '400px' }}
       >
         {/* Cellules */}
         {cells.map((row, rowIdx) => {

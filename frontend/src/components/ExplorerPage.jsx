@@ -678,6 +678,7 @@ export default function ExplorerPage({ wsData }) {
           overflow: auto;
           display: flex;
           flex-direction: column;
+          min-height: 400px;
         }
 
         .heatmap-header {
