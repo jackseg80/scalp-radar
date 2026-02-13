@@ -718,7 +718,8 @@ export default function ExplorerPage({ wsData }) {
           border: 1px solid #333;
           border-radius: 8px;
           padding: 16px;
-          max-height: 200px;
+          min-height: 250px;
+          max-height: 50vh;
           overflow: hidden;
           display: flex;
           flex-direction: column;
