@@ -149,7 +149,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-13) : 555 tests passants**
+**Sprints complétés (1-14) : 597 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -170,12 +170,13 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 7 : WFO grid search (2 passes, ProcessPool), overfitting detection (Monte Carlo, DSR, stabilité), grading A-F (330 tests)
 - Sprint 7b : Funding/OI historiques (fetch scripts, extra_data_builder) (352 tests)
 
-### Sprint 9-13 : Advanced Strategies & Research
+### Sprint 9-14 : Advanced Strategies & Research
 - Sprint 9 : 3 stratégies 1h (Bollinger, Donchian, SuperTrend) + fast engine numpy (419 tests)
 - Sprint 10 : Infrastructure grid/DCA (BaseGridStrategy, GridPositionManager, MultiPositionEngine) (451 tests)
 - Sprint 11 : GridStrategyRunner paper trading (envelope_dca live simulation) (484 tests)
 - Sprint 12 : Executor grid/DCA support (multi-niveaux Bitget, 8 bugs corrigés) (513 tests)
 - Sprint 13 : DB optimization_results + page Recherche (visualisation WFO, migration 49 JSON) (533 tests)
+- Sprint 14 : Explorateur de paramètres (JobManager, WFO background, heatmap 2D, 6 endpoints API) (597 tests)
 - Hotfix : Monte Carlo underpowered detection fix (envelope_dca Grade D→B)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
@@ -209,6 +210,16 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - TP client-side (SMA dynamique, détecté par GridStrategyRunner)
 - State persistence round-trip (`grid_states` dans get_state/restore_positions)
 - Réconciliation grid au boot (`_reconcile_grid_symbol`)
+
+**Explorateur WFO (Sprint 14) :**
+- JobManager : file FIFO asyncio.Queue (max 5 pending), worker loop avec `asyncio.to_thread()`
+- Thread-safety : sqlite3 sync + `run_coroutine_threadsafe()` pour broadcast WebSocket
+- Progress callback : appelé à chaque fenêtre WFO, met à jour DB + broadcast WS temps réel
+- Annulation : `threading.Event` vérifié dans callback, interrompt le WFO proprement
+- Normalisation `params_override` : frontend envoie scalaires `{ma_period: 7}`, backend convertit en listes `{ma_period: [7]}`
+- Recovery boot : jobs "running" orphelins → status failed (serveur redémarré)
+- Heatmap responsive : ResizeObserver + cellSize 60-300px + flexbox centering
+- 6 endpoints API : run, jobs (liste), jobs/{id}, cancel, param-grid, heatmap
 
 **Sync WFO (NEW) :**
 

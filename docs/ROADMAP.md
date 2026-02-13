@@ -117,8 +117,8 @@ Système automatisé de trading crypto qui :
 | Sprint | Contenu                                                 | Status       |
 |--------|---------------------------------------------------------|--------------|
 | 13     | DB optimization_results, migration JSON, page Recherche | ✅           |
-| 14     | Explorateur paramètres (WFO en background)              | 🔜 Prochain  |
-| 15     | Monitoring DCA live amélioré                            | 📋 Planifié  |
+| 14     | Explorateur paramètres (WFO en background)              | ✅           |
+| 15     | Monitoring DCA live amélioré                            | 🔜 Prochain  |
 
 ### Sprint 13 — Résultats WFO en DB + Dashboard Visualisation ✅
 
@@ -166,34 +166,62 @@ Système automatisé de trading crypto qui :
 - DB path : résoudre depuis config au lieu de hardcoder (config.secrets.database_url)
 - Polling : fetch once pour données quasi-statiques (résultats WFO), pas de polling 10s inutile
 
-### Sprint 14 — Explorateur de Paramètres (Approche B)
-**But** : Tester visuellement des configurations de stratégie et voir l'impact.
+### Sprint 14 — Explorateur de Paramètres ✅
 
-**Use case** : Tester envelope_dca sur BTC avec 2 vs 3 vs 4 niveaux, start 3% vs 5% vs 7%, etc.
+**But** : Lancer des WFO depuis le dashboard avec suivi en temps réel + heatmap 2D interactive.
 
-**Backend** :
-- Endpoint POST /api/optimization/run (lance un backtest WFO en background)
-  - Body : {strategy, symbol, params_override, wfo_config}
-  - Retourne : {job_id, status: "queued"}
-- WebSocket pour le progress (% completion, fenêtre courante)
-- File d'attente si plusieurs runs simultanés (queue FIFO)
-- Job status : queued → running → completed/failed
-- Résultats dans optimization_results (même table Sprint 13)
+**Implémenté** :
 
-**Frontend — Page "Explorer"** (nouvelle tab) :
-- Sélecteur : stratégie + asset
-- Sliders/inputs pour les paramètres (ex: envelope_dca → nb niveaux, start %, step %, SL %)
-- Heatmap interactive : 2 axes paramétriques au choix (ex: start × step), couleur = métrique au choix (OOS Sharpe, consistance, etc.)
-- Bouton "Lancer WFO" → progress bar → résultats dans le tableau Sprint 13
-- Comparaison avant/après quand on change un paramètre (equity curve overlay)
+- **Table `optimization_jobs`** (DB) : id, strategy_name, asset, status, progress_pct, current_phase, params_override, created_at, started_at, completed_at, duration_seconds, result_id, error_message
+- **JobManager** (backend/optimization/job_manager.py) :
+  - File FIFO asyncio.Queue (max 5 pending)
+  - Worker loop avec `asyncio.to_thread()` pour WFO
+  - Progress callback thread-safe : sqlite3 sync + `run_coroutine_threadsafe` pour broadcast WS
+  - Annulation : `threading.Event` vérifié à chaque fenêtre WFO
+  - Recovery au boot : jobs "running" orphelins → failed
+  - Normalisation `params_override` : scalaires → listes (fix 'float' object is not iterable)
+- **Progress callback WFO** : `walk_forward.optimize()` + `scripts/optimize.py` acceptent `progress_callback` et `cancel_event` (optionnels, zéro régression CLI)
+- **6 endpoints API** (optimization_routes.py) :
+  - POST /api/optimization/run (submit job)
+  - GET /api/optimization/jobs (liste avec filtre status)
+  - GET /api/optimization/jobs/{id} (détail)
+  - DELETE /api/optimization/jobs/{id} (annulation)
+  - GET /api/optimization/param-grid/{strategy} (params disponibles depuis param_grids.yaml)
+  - GET /api/optimization/heatmap (matrice 2D depuis optimization_results)
+- **Frontend ExplorerPage.jsx** (~800 lignes) :
+  - Layout CSS Grid : config panel (320px gauche), heatmap (flex-1 centre), jobs (250px-50vh bas)
+  - Sélection stratégie + asset → charge param-grid dynamiquement
+  - Sliders discrets (snap aux valeurs YAML) pour chaque paramètre
+  - Sélection axes heatmap (X, Y) + métrique couleur (total_score, oos_sharpe, consistency, dsr)
+  - Bouton "Lancer WFO" → POST run → progress bar temps réel via WebSocket
+  - Jobs table : status, progress, phase, durée
+- **HeatmapChart.jsx** (~240 lignes) :
+  - SVG pur, cellSize responsive (60-300px selon espace disponible)
+  - Échelle couleur rouge→jaune→vert (interpolation linéaire min-max)
+  - Cellules vides (pas de données) : gris foncé (#2a2a2a)
+  - Hover : tooltip avec params + métrique + grade
+  - ResizeObserver pour adapter la taille au conteneur
+  - Centré dans le conteneur via flexbox
 
-**Scope** : ~2-3 sessions. Le gros du travail c'est le lanceur async + la heatmap.
+**Bugs corrigés** :
+1. `params_override` scalaires vs listes : frontend envoie `{ma_period: 7}`, WFO attend `{ma_period: [7]}` → normalisation dans JobManager
+2. Heatmap trop petite : cellSize max 120px → 300px, SVG centré dans le conteneur
+3. Jobs section trop petite : `max-height: 200px` → `min-height: 250px; max-height: 50vh;` (dynamique)
 
-**Dépendances** :
-- Background job manager (asyncio.Queue ou task tracking)
-- WebSocket progress push
-- Heatmap component (SVG ou canvas)
-- Explorer page avec param inputs
+**Tests** : 597 passants (+42 depuis Sprint 13)
+- `test_job_manager.py` : 13 tests (DB CRUD, submit, cancel, FIFO, progress, erreurs)
+- `test_job_manager_wfo_integration.py` : 1 test (WFO complet bout en bout)
+- `test_optimization_routes_sprint14.py` : 14 tests (endpoints POST/GET/DELETE, param-grid, heatmap)
+- `test_walk_forward_callback.py` : 14 tests (progress callback, cancel_event, compteurs)
+
+**Résultat** : L'utilisateur peut maintenant tester visuellement l'impact de chaque paramètre sur une stratégie, lancer des WFO depuis le navigateur, et voir les résultats dans une heatmap 2D cliquable.
+
+**Leçons apprises** :
+- Thread-safety WFO : `asyncio.to_thread()` avec event loop dédié fonctionne parfaitement
+- Progress callback : utiliser `run_coroutine_threadsafe()` pour le broadcast WS depuis le thread
+- Heatmap responsive : ResizeObserver + cellSize dynamique (min/max) + flexbox centering
+- Normalisation params : toujours convertir scalaires → listes avant de passer au WFO
+- Jobs recovery : scanner les "running" au boot évite les jobs zombies après un crash
 
 ### Sprint 15 — Monitoring DCA Live Amélioré
 **But** : Voir l'état du DCA en temps réel, pas juste les trades clôturés.
@@ -390,12 +418,13 @@ Phase 3: Paper/Live ready   ✅   Sprint 14: Explorer   Sprint 17: SHORT
 
 ## ÉTAT ACTUEL (13 février 2026)
 
-- **513 tests**, 0 régression
-- **12 sprints** complétés
+- **597 tests**, 0 régression
+- **14 sprints** complétés (Phases 1-4 terminées)
 - **1 stratégie validée** : envelope_dca Grade B (BTC)
 - **Paper trading actif** : 20 trades backfill, en attente de trades live
 - **Executor Grid prêt** : LIVE_TRADING=false, à activer après validation paper
-- **Prochaine étape** : Sprint 13 (résultats WFO en DB + dashboard)
+- **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D interactive
+- **Prochaine étape** : Sprint 15 (monitoring DCA live amélioré)
 
 ---
 
