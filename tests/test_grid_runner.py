@@ -176,7 +176,7 @@ class TestGridRunnerOnCandle:
         await runner.on_candle("BTC/USDT", "5m", candle)
 
         # Aucune position ouverte
-        assert len(runner._positions) == 0
+        assert len(runner._positions.get("BTC/USDT", [])) == 0
 
     @pytest.mark.asyncio
     async def test_not_enough_data_skips(self):
@@ -187,7 +187,7 @@ class TestGridRunnerOnCandle:
 
         await runner.on_candle("BTC/USDT", "1h", candle)
         # Seulement 1 close dans le buffer, il faut 7
-        assert len(runner._positions) == 0
+        assert len(runner._positions.get("BTC/USDT", [])) == 0
 
     @pytest.mark.asyncio
     async def test_level_touched_opens_position(self):
@@ -204,10 +204,11 @@ class TestGridRunnerOnCandle:
         candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
         await runner.on_candle("BTC/USDT", "1h", candle)
 
-        assert len(runner._positions) == 1
-        assert runner._positions[0].entry_price == 95_000.0
-        assert runner._positions[0].direction == Direction.LONG
-        assert runner._grid_symbol == "BTC/USDT"
+        positions = runner._positions.get("BTC/USDT", [])
+        assert len(positions) == 1
+        assert positions[0].entry_price == 95_000.0
+        assert positions[0].direction == Direction.LONG
+        assert "BTC/USDT" in runner._positions
 
     @pytest.mark.asyncio
     async def test_two_levels_progressively(self):
@@ -226,7 +227,7 @@ class TestGridRunnerOnCandle:
             ts=datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc),
         )
         await runner.on_candle("BTC/USDT", "1h", candle1)
-        assert len(runner._positions) == 1
+        assert len(runner._positions.get("BTC/USDT", [])) == 1
 
         # Deuxième bougie : touche niveau 1
         strategy.compute_grid.return_value = [
@@ -237,7 +238,7 @@ class TestGridRunnerOnCandle:
             ts=datetime(2024, 6, 15, 13, 0, tzinfo=timezone.utc),
         )
         await runner.on_candle("BTC/USDT", "1h", candle2)
-        assert len(runner._positions) == 2
+        assert len(runner._positions.get("BTC/USDT", [])) == 2
 
     @pytest.mark.asyncio
     async def test_tp_global_closes_all(self):
@@ -247,14 +248,13 @@ class TestGridRunnerOnCandle:
         _fill_buffer(runner, n=10, base_close=100_000.0)
 
         # Pré-remplir une position
-        runner._positions = [
+        runner._positions["BTC/USDT"] = [
             GridPosition(
                 level=0, direction=Direction.LONG, entry_price=95_000.0,
                 quantity=0.01, entry_time=datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc),
                 entry_fee=0.57,
             ),
         ]
-        runner._grid_symbol = "BTC/USDT"
 
         # TP = SMA ~ 100045, le high de la bougie dépasse
         strategy.get_tp_price.return_value = 100_000.0
@@ -263,10 +263,9 @@ class TestGridRunnerOnCandle:
         candle = _make_candle(close=101_000.0, high=101_500.0, low=99_000.0)
         await runner.on_candle("BTC/USDT", "1h", candle)
 
-        assert len(runner._positions) == 0
+        assert len(runner._positions.get("BTC/USDT", [])) == 0
         assert runner._stats.total_trades == 1
         assert runner._stats.net_pnl != 0.0
-        assert runner._grid_symbol is None
 
     @pytest.mark.asyncio
     async def test_sl_global_closes_all(self):
@@ -275,14 +274,13 @@ class TestGridRunnerOnCandle:
         runner = _make_grid_runner(strategy=strategy)
         _fill_buffer(runner, n=10, base_close=100_000.0)
 
-        runner._positions = [
+        runner._positions["BTC/USDT"] = [
             GridPosition(
                 level=0, direction=Direction.LONG, entry_price=95_000.0,
                 quantity=0.01, entry_time=datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc),
                 entry_fee=0.57,
             ),
         ]
-        runner._grid_symbol = "BTC/USDT"
 
         strategy.get_tp_price.return_value = 100_000.0
         strategy.get_sl_price.return_value = 90_000.0  # SL à 90k
@@ -291,7 +289,7 @@ class TestGridRunnerOnCandle:
         candle = _make_candle(close=89_000.0, low=88_000.0, high=92_000.0)
         await runner.on_candle("BTC/USDT", "1h", candle)
 
-        assert len(runner._positions) == 0
+        assert len(runner._positions.get("BTC/USDT", [])) == 0
         assert runner._stats.total_trades == 1
 
     @pytest.mark.asyncio
@@ -303,7 +301,7 @@ class TestGridRunnerOnCandle:
 
         candle = _make_candle()
         await runner.on_candle("BTC/USDT", "1h", candle)
-        assert len(runner._positions) == 0
+        assert len(runner._positions.get("BTC/USDT", [])) == 0
 
     @pytest.mark.asyncio
     async def test_kill_switch_triggered_on_big_loss(self):
@@ -408,6 +406,7 @@ class TestGridRunnerState:
             "is_active": True,
             "grid_positions": [
                 {
+                    "symbol": "BTC/USDT",
                     "level": 0,
                     "direction": "LONG",
                     "entry_price": 95_000.0,
@@ -416,6 +415,7 @@ class TestGridRunnerState:
                     "entry_fee": 0.57,
                 },
                 {
+                    "symbol": "BTC/USDT",
                     "level": 1,
                     "direction": "LONG",
                     "entry_price": 92_000.0,
@@ -424,16 +424,16 @@ class TestGridRunnerState:
                     "entry_fee": 0.55,
                 },
             ],
-            "grid_symbol": "BTC/USDT",
         }
         runner.restore_state(state)
 
-        assert len(runner._positions) == 2
-        assert runner._positions[0].level == 0
-        assert runner._positions[0].direction == Direction.LONG
-        assert runner._positions[0].entry_price == 95_000.0
-        assert runner._positions[1].level == 1
-        assert runner._grid_symbol == "BTC/USDT"
+        positions = runner._positions.get("BTC/USDT", [])
+        assert len(positions) == 2
+        assert positions[0].level == 0
+        assert positions[0].direction == Direction.LONG
+        assert positions[0].entry_price == 95_000.0
+        assert positions[1].level == 1
+        assert "BTC/USDT" in runner._positions
 
     def test_restore_state_no_grid_positions_backward_compat(self):
         """Sans grid_positions dans le state → positions vide."""
@@ -449,11 +449,12 @@ class TestGridRunnerState:
         }
         runner.restore_state(state)
         assert len(runner._positions) == 0
+        assert runner._positions == {}
 
     def test_get_status_format(self):
         """get_status retourne les champs grid spécifiques."""
         runner = _make_grid_runner()
-        runner._positions = [
+        runner._positions["BTC/USDT"] = [
             GridPosition(
                 level=0, direction=Direction.LONG, entry_price=95_000.0,
                 quantity=0.01, entry_time=datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc),
@@ -510,8 +511,7 @@ class TestGridRunnerDashboard:
     def test_get_grid_positions_format(self):
         """get_grid_positions retourne le bon format avec symbole."""
         runner = _make_grid_runner()
-        runner._grid_symbol = "BTC/USDT"
-        runner._positions = [
+        runner._positions["BTC/USDT"] = [
             GridPosition(
                 level=0, direction=Direction.LONG, entry_price=95_000.0,
                 quantity=0.01, entry_time=datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc),
@@ -638,14 +638,13 @@ class TestSimulatorGridIntegration:
         # Ajouter manuellement une position grid
         grid_runner = sim._runners[0]
         assert isinstance(grid_runner, GridStrategyRunner)
-        grid_runner._positions = [
+        grid_runner._positions["BTC/USDT"] = [
             GridPosition(
                 level=0, direction=Direction.LONG, entry_price=95_000.0,
                 quantity=0.01, entry_time=datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc),
                 entry_fee=0.57,
             ),
         ]
-        grid_runner._grid_symbol = "BTC/USDT"
 
         positions = sim.get_open_positions()
         assert len(positions) == 1

@@ -82,19 +82,21 @@ class StateManager:
             }
 
             # Positions grid (GridStrategyRunner)
-            if hasattr(runner, "_positions") and isinstance(runner._positions, list) and runner._positions:
-                runner_state["grid_positions"] = [
-                    {
-                        "level": gp.level,
-                        "direction": gp.direction.value,
-                        "entry_price": gp.entry_price,
-                        "quantity": gp.quantity,
-                        "entry_time": gp.entry_time.isoformat(),
-                        "entry_fee": gp.entry_fee,
-                    }
-                    for gp in runner._positions
-                ]
-                runner_state["grid_symbol"] = getattr(runner, "_grid_symbol", None)
+            if hasattr(runner, "_positions") and isinstance(runner._positions, dict):
+                all_grid_positions = []
+                for symbol, positions in runner._positions.items():
+                    for gp in positions:
+                        all_grid_positions.append({
+                            "symbol": symbol,
+                            "level": gp.level,
+                            "direction": gp.direction.value,
+                            "entry_price": gp.entry_price,
+                            "quantity": gp.quantity,
+                            "entry_time": gp.entry_time.isoformat(),
+                            "entry_fee": gp.entry_fee,
+                        })
+                if all_grid_positions:
+                    runner_state["grid_positions"] = all_grid_positions
 
             state["runners"][runner.name] = runner_state
 

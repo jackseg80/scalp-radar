@@ -420,8 +420,7 @@ class GridStrategyRunner:
 
         self._initial_capital = 10_000.0
         self._capital = self._initial_capital
-        self._positions: list[GridPosition] = []
-        self._grid_symbol: str | None = None  # Symbole actif de la grille
+        self._positions: dict[str, list[GridPosition]] = {}  # Positions par symbol
         self._trades: list[tuple[str, TradeResult]] = []
         self._current_regime = MarketRegime.RANGING
         self._kill_switch_triggered = False
@@ -539,19 +538,20 @@ class GridStrategyRunner:
             config=self._config,
         )
 
+        # Récupérer les positions de ce symbol uniquement
+        positions = self._positions.get(symbol, [])
+
         # Construire le GridState
-        grid_state = self._gpm.compute_grid_state(
-            self._positions, candle.close
-        )
+        grid_state = self._gpm.compute_grid_state(positions, candle.close)
 
         # 1. Si positions ouvertes → check TP/SL global
-        if self._positions:
+        if positions:
             tp_price = self._strategy.get_tp_price(grid_state, main_ind)
             sl_price = self._strategy.get_sl_price(grid_state, main_ind)
 
             # Check via OHLC heuristic
             exit_reason, exit_price = self._gpm.check_global_tp_sl(
-                self._positions, candle, tp_price, sl_price
+                positions, candle, tp_price, sl_price
             )
 
             # Si pas de TP/SL OHLC, check should_close_all (signal)
@@ -563,22 +563,21 @@ class GridStrategyRunner:
 
             if exit_reason:
                 trade = self._gpm.close_all_positions(
-                    self._positions, exit_price,
+                    positions, exit_price,
                     candle.timestamp, exit_reason,
                     self._current_regime,
                 )
                 self._record_trade(trade, symbol)
-                self._positions = []
-                self._grid_symbol = None
+                self._positions[symbol] = []
                 self._emit_close_event(symbol, trade)
                 return
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
-        if len(self._positions) < self._strategy.max_positions:
+        if len(positions) < self._strategy.max_positions:
             levels = self._strategy.compute_grid(ctx, grid_state)
 
             for level in levels:
-                if level.index in {p.level for p in self._positions}:
+                if level.index in {p.level for p in positions}:
                     continue
 
                 touched = False
@@ -594,8 +593,7 @@ class GridStrategyRunner:
                         self._strategy.max_positions,
                     )
                     if position:
-                        self._positions.append(position)
-                        self._grid_symbol = symbol
+                        self._positions.setdefault(symbol, []).append(position)
                         logger.info(
                             "[{}] GRID {} level {} @ {:.2f} ({}) — {}/{} positions",
                             self.name,
@@ -603,7 +601,7 @@ class GridStrategyRunner:
                             level.index,
                             level.entry_price,
                             symbol,
-                            len(self._positions),
+                            len(self._positions[symbol]),
                             self._strategy.max_positions,
                         )
                         self._emit_open_event(symbol, level, position)
@@ -696,27 +694,28 @@ class GridStrategyRunner:
         self._stats.losses = state.get("losses", 0)
         self._stats.is_active = state.get("is_active", True)
 
-        # Restaurer les positions grid ouvertes
+        # Restaurer les positions grid ouvertes (groupées par symbol)
         grid_positions = state.get("grid_positions", [])
-        self._positions = []
+        self._positions = {}
         for gp in grid_positions:
-            self._positions.append(GridPosition(
+            symbol = gp.get("symbol", "UNKNOWN")
+            pos = GridPosition(
                 level=gp["level"],
                 direction=Direction(gp["direction"]),
                 entry_price=gp["entry_price"],
                 quantity=gp["quantity"],
                 entry_time=datetime.fromisoformat(gp["entry_time"]),
                 entry_fee=gp["entry_fee"],
-            ))
-        if self._positions:
-            self._grid_symbol = state.get("grid_symbol", "UNKNOWN")
+            )
+            self._positions.setdefault(symbol, []).append(pos)
 
+        total_positions = sum(len(p) for p in self._positions.values())
         logger.info(
             "[{}] État restauré : capital={:.2f}, trades={}, positions_grid={}, kill_switch={}",
             self.name,
             self._capital,
             self._stats.total_trades,
-            len(self._positions),
+            total_positions,
             self._kill_switch_triggered,
         )
 
@@ -751,21 +750,25 @@ class GridStrategyRunner:
     def get_grid_positions(self) -> list[dict]:
         """Retourne les positions grid ouvertes pour le dashboard."""
         result = []
-        for p in self._positions:
-            result.append({
-                "symbol": self._grid_symbol or "UNKNOWN",
-                "strategy": self.name,
-                "direction": p.direction.value,
-                "entry_price": p.entry_price,
-                "quantity": p.quantity,
-                "entry_time": p.entry_time.isoformat(),
-                "level": p.level,
-                "type": "grid",
-            })
+        for symbol, positions in self._positions.items():
+            for p in positions:
+                result.append({
+                    "symbol": symbol,
+                    "strategy": self.name,
+                    "direction": p.direction.value,
+                    "entry_price": p.entry_price,
+                    "quantity": p.quantity,
+                    "entry_time": p.entry_time.isoformat(),
+                    "level": p.level,
+                    "type": "grid",
+                })
         return result
 
     def get_status(self) -> dict:
         """Même interface que LiveStrategyRunner.get_status() + champs grid."""
+        total_positions = sum(len(positions) for positions in self._positions.values())
+        all_positions = [p for positions in self._positions.values() for p in positions]
+
         return {
             "name": self.name,
             "capital": self._capital,
@@ -779,13 +782,13 @@ class GridStrategyRunner:
             ),
             "is_active": self._stats.is_active,
             "kill_switch": self._kill_switch_triggered,
-            "has_position": len(self._positions) > 0,
-            "open_positions": len(self._positions),
+            "has_position": total_positions > 0,
+            "open_positions": total_positions,
             "max_positions": self._strategy.max_positions,
             "avg_entry_price": (
-                sum(p.entry_price * p.quantity for p in self._positions)
-                / sum(p.quantity for p in self._positions)
-                if self._positions else 0.0
+                sum(p.entry_price * p.quantity for p in all_positions)
+                / sum(p.quantity for p in all_positions)
+                if all_positions else 0.0
             ),
         }
 
