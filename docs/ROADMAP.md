@@ -119,6 +119,7 @@ Système automatisé de trading crypto qui :
 | 13     | DB optimization_results, migration JSON, page Recherche | ✅           |
 | 14     | Explorateur paramètres (WFO en background)              | ✅           |
 | 14b    | Heatmap dense + Charts analytiques + Tooltips           | ✅           |
+| 14c    | DiagnosticPanel (Analyse intelligente WFO)              | ✅           |
 | 15     | Stratégie Envelope DCA SHORT (miroir LONG)              | ✅           |
 
 ### Sprint 13 — Résultats WFO en DB + Dashboard Visualisation ✅
@@ -291,6 +292,43 @@ Système automatisé de trading crypto qui :
 - React standard ne supporte pas `<style jsx>` (feature de Next.js styled-jsx) → fichiers CSS séparés obligatoires
 - UX : toujours montrer l'état par défaut explicitement (slider décoché = toutes valeurs, pas valeur default unique)
 - n_windows_evaluated crucial pour distinguer combos partielles (2-pass coarse+fine grid)
+
+### Sprint 14c — DiagnosticPanel (Analyse intelligente WFO) ✅
+
+**But** : Aider l'utilisateur à comprendre en 10 secondes si une stratégie est viable via des verdicts textuels en langage clair.
+
+**Implémenté** :
+
+**Frontend — Diagnostic automatique** :
+
+
+- **DiagnosticPanel.jsx** (~180 lignes) : composant 100% frontend, 6 règles d'analyse
+  - Règle 1 : Grade global (A/B = vert viable, C = orange moyenne, D/F = rouge non viable)
+  - Règle 2 : Consistance du best combo (profitable dans X/12 fenêtres)
+  - Règle 3 : Transfert IS→OOS (ratio OOS/IS, détection overfitting si IS > 5 et OOS < 1)
+  - Règle 4 : Edge structurel (distribution OOS Sharpe : % combos > 1, > 0.5, > 0)
+  - Règle 5 : Volume de trades (min 30 pour signification statistique)
+  - Règle 6 : Fenêtres partielles (combos évaluées sur < 12 fenêtres, moins fiables)
+- **DiagnosticPanel.css** (~80 lignes) : dark theme cohérent
+  - Background #111827, border-left 4px colorée selon verdict le plus sévère (rouge/orange/vert)
+  - SVG inline pour icônes (cercles colorés + graphique barres)
+  - Responsive (max-height 300px, scroll si > 6 verdicts)
+- **ExplorerPage.jsx** : import + useMemo selectedRun + insertion diagnostic AVANT Top10
+  - `nWindows` calculé dynamiquement depuis `combos.n_windows_evaluated` (pas de hardcode)
+
+**Position** : Section "Analyse des combos", **première chose visible** après la heatmap (avant le Top10 et les charts).
+
+**0 changement backend** : tout calculé côté frontend depuis `comboResults.combos` (déjà fetchées) et `selectedRun.grade/total_score` (déjà chargés).
+
+**Tests** : 628 passants (0 régression, build frontend OK)
+
+**Résultat** : L'utilisateur voit immédiatement si sa stratégie a un edge structurel, si elle est robuste, et où sont les faiblesses (consistance, overfitting, données insuffisantes).
+
+**Leçons apprises** :
+
+- Verdicts textuels > métriques brutes pour la compréhension rapide
+- Border-left colorée (rouge/orange/vert) = signal visuel immédiat de santé globale
+- `nWindows` dynamique depuis combos (pas de hardcode 12) = robuste si WFO config change
 
 ### Sprint 15 — Stratégie Envelope DCA SHORT ✅
 
@@ -604,14 +642,14 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 ## ÉTAT ACTUEL (14 février 2026)
 
 - **628 tests**, 0 régression
-- **15 sprints + 1 hotfix** complétés (Phase 1-4 terminées)
+- **15 sprints + 1 hotfix + Sprint 14c** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
 - **1 stratégie SHORT prête pour WFO** : envelope_dca_short (enabled: false, validation WFO en attente)
 - **Paper trading actif** : envelope_dca sur 5 assets (+101.76% en 20 trades, 70% win rate)
 - **Hotfix P&L overflow** : margin accounting + realized_pnl tracking dans GridStrategyRunner
 - **Executor Grid prêt** : LIVE_TRADING=false, à activer après validation paper
-- **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques
+- **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques, **diagnostic automatique en langage clair (6 règles)**
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---
