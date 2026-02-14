@@ -33,6 +33,7 @@ export default function ExplorerPage({ wsData }) {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [paramsExpanded, setParamsExpanded] = useState(false)
 
   // Sprint 14b : Run selector + combo results
   const [availableRuns, setAvailableRuns] = useState([])
@@ -451,66 +452,76 @@ export default function ExplorerPage({ wsData }) {
           {paramGrid && (
             <>
               <div className="divider" />
-              <h4>Sous-grille de paramètres</h4>
-              <div className="params-list">
-                {Object.entries(paramGrid.params).map(([pName, pConfig]) => {
-                  const { values, default: defaultVal } = pConfig
-                  const isActive = activeParams.has(pName)
-                  const currentVal = isActive ? (paramsOverride[pName] ?? defaultVal) : null
-                  const idx = isActive && currentVal !== null ? values.indexOf(currentVal) : 0
+              <h4
+                className="collapsible-header"
+                onClick={() => setParamsExpanded((v) => !v)}
+              >
+                <span className={`collapse-arrow ${paramsExpanded ? 'expanded' : ''}`}>▶</span>
+                Sous-grille de paramètres
+                <span className="combo-badge">{comboCount} combos</span>
+              </h4>
+              {paramsExpanded && (
+                <>
+                  <div className="params-list">
+                    {Object.entries(paramGrid.params).map(([pName, pConfig]) => {
+                      const { values, default: defaultVal } = pConfig
+                      const isActive = activeParams.has(pName)
+                      const currentVal = isActive ? (paramsOverride[pName] ?? defaultVal) : null
+                      const idx = isActive && currentVal !== null ? values.indexOf(currentVal) : 0
 
-                  return (
-                    <div key={pName} className={`param-item ${isActive ? 'active' : 'inactive'}`}>
-                      <div className="param-header">
-                        <input
-                          type="checkbox"
-                          checked={isActive}
-                          onChange={() => toggleParamActive(pName)}
-                          className="param-checkbox"
-                        />
-                        <label onClick={() => toggleParamActive(pName)} className="param-label">
-                          {pName}
-                          {isActive ? ` : ${currentVal}` : ` : toutes (${values.join(', ')})`}
-                        </label>
-                      </div>
-                      <div className="param-controls">
-                        <input
-                          type="range"
-                          min={0}
-                          max={values.length - 1}
-                          step={1}
-                          value={idx >= 0 ? idx : 0}
-                          onChange={(e) => {
-                            if (!isActive) return // Ne rien faire si inactif
-                            const newIdx = parseInt(e.target.value, 10)
-                            setParamsOverride((prev) => ({
-                              ...prev,
-                              [pName]: values[newIdx],
-                            }))
-                          }}
-                          className="range-input"
-                          disabled={!isActive}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+                      return (
+                        <div key={pName} className={`param-item ${isActive ? 'active' : 'inactive'}`}>
+                          <div className="param-header">
+                            <input
+                              type="checkbox"
+                              checked={isActive}
+                              onChange={() => toggleParamActive(pName)}
+                              className="param-checkbox"
+                            />
+                            <label onClick={() => toggleParamActive(pName)} className="param-label">
+                              {pName}
+                              {isActive ? ` : ${currentVal}` : ` : toutes (${values.join(', ')})`}
+                            </label>
+                          </div>
+                          <div className="param-controls">
+                            <input
+                              type="range"
+                              min={0}
+                              max={values.length - 1}
+                              step={1}
+                              value={idx >= 0 ? idx : 0}
+                              onChange={(e) => {
+                                if (!isActive) return
+                                const newIdx = parseInt(e.target.value, 10)
+                                setParamsOverride((prev) => ({
+                                  ...prev,
+                                  [pName]: values[newIdx],
+                                }))
+                              }}
+                              className="range-input"
+                              disabled={!isActive}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
 
-              {/* Résumé du nombre de combos */}
-              <div className="combo-count-summary">
-                <strong>Grille :</strong> {comboCount} combo{comboCount > 1 ? 's' : ''}
-                {comboCount > 1 && paramGrid && (
-                  <span className="combo-breakdown">
-                    {' '}
-                    (
-                    {Object.entries(paramGrid.params)
-                      .map(([pName, pConfig]) => (activeParams.has(pName) ? '1' : pConfig.values.length))
-                      .join('×')}
-                    )
-                  </span>
-                )}
-              </div>
+                  <div className="combo-count-summary">
+                    <strong>Grille :</strong> {comboCount} combo{comboCount > 1 ? 's' : ''}
+                    {comboCount > 1 && paramGrid && (
+                      <span className="combo-breakdown">
+                        {' '}
+                        (
+                        {Object.entries(paramGrid.params)
+                          .map(([pName, pConfig]) => (activeParams.has(pName) ? '1' : pConfig.values.length))
+                          .join('×')}
+                        )
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
 
               <div className="divider" />
               <h4>Axes de la heatmap</h4>

@@ -67,9 +67,9 @@ scalp-radar/
 │   ├── api/                      # server, health, simulator_routes, conditions_routes, arena_routes, executor_routes, websocket_routes
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
-├── frontend/                     # React + Vite (20 components: Scanner, Heatmap, RiskCalc, ExecutorPanel, etc.)
-├── tests/                        # 679 tests (pytest)
-├── scripts/                      # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator
+├── frontend/                     # React + Vite (28 components: Scanner, Heatmap, Explorer, Research, Diagnostic, etc.)
+├── tests/                        # 679 tests (pytest, 41 fichiers)
+├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
 └── docs/plans/                   # Sprint plans 1-15 archivés
 ```
 

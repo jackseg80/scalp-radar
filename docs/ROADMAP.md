@@ -777,6 +777,9 @@ scripts/
   fetch_funding.py    # Backfill funding rates (Bitget)
   fetch_oi.py         # Backfill open interest (Binance)
   parity_check.py     # Compare moteurs mono vs multi-position
+  reset_simulator.py  # Purge état simulateur (--executor flag)
+  sync_to_server.py   # Push historique WFO vers serveur prod (idempotent)
+  migrate_optimization.py # Import résultats JSON → DB (Sprint 13)
 
 data/                 # SQLite DB + reports JSON (gitignored)
 docs/plans/          # 16 sprint plans (1-12 + hotfix)
@@ -826,7 +829,7 @@ docs/plans/          # 16 sprint plans (1-12 + hotfix)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 628 passants, 0 régression
+- **Tests** : 679 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

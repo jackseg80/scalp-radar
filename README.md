@@ -1,7 +1,7 @@
 # Scalp Radar
 
 Outil de trading multi-stratégies pour crypto futures (Bitget).
-8 stratégies (4 scalp 5m + 3 swing 1h + 1 grid/DCA 1h), optimisation Walk-Forward automatique,
+9 stratégies (4 scalp 5m + 3 swing 1h + 2 grid/DCA 1h), optimisation Walk-Forward automatique,
 paper trading live, executor mainnet, et dashboard temps réel.
 
 ## Prérequis
@@ -49,13 +49,13 @@ ENABLE_WEBSOCKET=false
 ## Télécharger l'historique
 
 ```bash
-# 6 mois complets (BTC, ETH, SOL, DOGE, LINK × 4 timeframes)
+# Backfill candles Binance (API publique, sans clé) — données WFO depuis 2020
+uv run python -m scripts.backfill_candles
+uv run python -m scripts.backfill_candles --symbol BTC/USDT --since 2023-01-01 --timeframe 4h
+
+# Candles via ccxt (Bitget ou Binance) — données live récentes
 uv run python -m scripts.fetch_history
-
-# Test rapide : 7 jours, un seul symbole
 uv run python -m scripts.fetch_history --symbol BTC/USDT --timeframe 5m --days 7
-
-# Données Binance (pour WFO cross-exchange)
 uv run python -m scripts.fetch_history --exchange binance
 
 # Funding rates historiques
@@ -71,7 +71,7 @@ uv run python -m scripts.fetch_oi
 uv run pytest tests/ -v
 ```
 
-513 tests couvrant : modèles, config, database, indicateurs, 8 stratégies (4 scalp 5m + 3 swing 1h + 1 grid/DCA), backtesting (mono + multi-position), simulator, arena, API, state manager, telegram, watchdog, executor (mono + grid DCA), risk manager, optimisation WFO, fast engines, funding/OI data.
+679 tests couvrant : modèles, config, database, indicateurs, 9 stratégies (4 scalp 5m + 3 swing 1h + 2 grid/DCA), backtesting (mono + multi-position), simulator, arena, API, state manager, telegram, watchdog, executor (mono + grid DCA), risk manager, optimisation WFO, fast engines, funding/OI data, regime analysis, combo results.
 
 ## Endpoints
 
@@ -111,16 +111,16 @@ Voir [CLAUDE.md](CLAUDE.md) pour l'architecture complète et les décisions tech
 ```text
 config/              # Paramètres YAML (assets, strategies, risk, exchanges, param_grids)
 backend/core/        # Modèles, config, database, data engine, indicateurs, position managers (mono + grid)
-backend/strategies/  # 8 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian, supertrend, envelope_dca) + base_grid + factory
+backend/strategies/  # 9 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian, supertrend, envelope_dca, envelope_dca_short) + base_grid + factory
 backend/optimization/# WFO, overfitting detection, fast engines (mono + multi), indicator cache, grading
 backend/backtesting/ # Engines (mono + multi-position), metrics, simulator (paper trading), arena
 backend/execution/   # Executor live trading (Bitget), risk manager, adaptive selector
 backend/api/         # FastAPI + endpoints simulator/arena/signals/executor + WebSocket
 backend/alerts/      # Telegram client, Notifier, Heartbeat
 backend/monitoring/  # Watchdog (data freshness, WS, stratégies)
-scripts/             # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check
-frontend/src/        # React dashboard (19 composants, Scanner/Heatmap/Risque, hooks polling + WS)
-tests/               # pytest (513 tests, 28 fichiers)
+scripts/             # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
+frontend/src/        # React dashboard (28 composants, Scanner/Heatmap/Explorer/Research/Diagnostic)
+tests/               # pytest (679 tests, 41 fichiers)
 ```
 
 ## Déploiement production
@@ -192,3 +192,9 @@ uv run python -m scripts.optimize --all --apply
 - [x] Sprint 10 — Moteur multi-position modulaire (grid/DCA, EnvelopeDCA)
 - [x] Sprint 11 — Paper trading Grid/DCA (GridStrategyRunner, warm-up, state persistence)
 - [x] Sprint 12 — Executor Grid DCA + Alertes Telegram (8 bugs corrigés, multi-niveaux live)
+- [x] Sprint 13 — Résultats WFO en DB + page Recherche (migration 49 JSON, visualisation)
+- [x] Sprint 14 — Explorateur de paramètres (WFO background, heatmap 2D, 6 endpoints API)
+- [x] Sprint 14b — Heatmap dense (wfo_combo_results), charts analytiques, tooltips
+- [x] Sprint 14c — DiagnosticPanel (analyse intelligente WFO, 6 règles)
+- [x] Sprint 15 — Stratégie Envelope DCA SHORT (miroir LONG, fast engine direction=-1)
+- [x] Sprint 15b — Analyse par régime de marché (Bull/Bear/Range/Crash)
