@@ -104,47 +104,59 @@ def compute_grade(
         (grade, score) — ex: ("B", 72)
     """
     score = 0
+    breakdown: dict[str, int] = {}
 
     # OOS/IS ratio (max 25 points)
     if oos_is_ratio > 0.6:
-        score += 25
+        breakdown["oos_is_ratio"] = 25
     elif oos_is_ratio > 0.5:
-        score += 20
+        breakdown["oos_is_ratio"] = 20
     elif oos_is_ratio > 0.4:
-        score += 15
+        breakdown["oos_is_ratio"] = 15
     elif oos_is_ratio > 0.3:
-        score += 10
+        breakdown["oos_is_ratio"] = 10
+    else:
+        breakdown["oos_is_ratio"] = 0
 
     # Monte Carlo (max 25 points)
     if mc_underpowered:
-        # Pas assez de trades pour un test MC fiable → score neutre (12/25)
-        score += 12
+        breakdown["monte_carlo"] = 12
     elif mc_p_value < 0.05:
-        score += 25
+        breakdown["monte_carlo"] = 25
     elif mc_p_value < 0.10:
-        score += 15
+        breakdown["monte_carlo"] = 15
+    else:
+        breakdown["monte_carlo"] = 0
 
     # DSR (max 20 points)
     if dsr > 0.95:
-        score += 20
+        breakdown["dsr"] = 20
     elif dsr > 0.90:
-        score += 15
+        breakdown["dsr"] = 15
     elif dsr > 0.80:
-        score += 10
+        breakdown["dsr"] = 10
+    else:
+        breakdown["dsr"] = 0
 
     # Stability (max 15 points)
     if stability > 0.80:
-        score += 15
+        breakdown["stability"] = 15
     elif stability > 0.60:
-        score += 10
+        breakdown["stability"] = 10
     elif stability > 0.40:
-        score += 5
+        breakdown["stability"] = 5
+    else:
+        breakdown["stability"] = 0
 
     # Bitget transfer (max 15 points)
     if bitget_transfer > 0.50:
-        score += 15
+        breakdown["bitget_transfer"] = 15
     elif bitget_transfer > 0.30:
-        score += 8
+        breakdown["bitget_transfer"] = 8
+    else:
+        breakdown["bitget_transfer"] = 0
+
+    score = sum(breakdown.values())
 
     # Déterminer la lettre
     if score >= 85:
@@ -157,6 +169,18 @@ def compute_grade(
         grade = "D"
     else:
         grade = "F"
+
+    logger.info(
+        "compute_grade: {} ({}/100) — oos_is_ratio={:.2f}→{}/25, "
+        "mc_p={:.3f}(underpow={})→{}/25, dsr={:.2f}→{}/20, "
+        "stability={:.2f}→{}/15, bitget={:.2f}→{}/15",
+        grade, score,
+        oos_is_ratio, breakdown["oos_is_ratio"],
+        mc_p_value, mc_underpowered, breakdown["monte_carlo"],
+        dsr, breakdown["dsr"],
+        stability, breakdown["stability"],
+        bitget_transfer, breakdown["bitget_transfer"],
+    )
 
     return (grade, score)
 

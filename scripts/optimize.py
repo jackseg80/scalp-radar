@@ -301,7 +301,7 @@ async def run_optimization(
 
     overfit = detector.full_analysis(
         trades=wfo.all_oos_trades,
-        observed_sharpe=wfo.avg_is_sharpe,  # DSR teste le IS Sharpe (pas OOS)
+        observed_sharpe=wfo.avg_oos_sharpe,  # DSR teste le OOS Sharpe (pas IS)
         n_distinct_combos=wfo.n_distinct_combos,
         strategy_name=strategy_name,
         symbol=symbol,

@@ -109,7 +109,9 @@ class OverfitDetector:
         main_tf: str | None = None,
     ) -> OverfitReport:
         """Analyse complète : Monte Carlo + DSR + stabilité + convergence."""
-        mc = self.monte_carlo_block_bootstrap(trades, seed=seed)
+        mc = self.monte_carlo_block_bootstrap(
+            trades, seed=seed, observed_sharpe=observed_sharpe,
+        )
         dsr = self.deflated_sharpe_ratio(
             observed_sharpe, n_distinct_combos, len(trades),
             trades,
@@ -137,6 +139,7 @@ class OverfitDetector:
         n_sims: int = 1000,
         block_size: int = 7,
         seed: int | None = 42,
+        observed_sharpe: float | None = None,
     ) -> MonteCarloResult:
         """Permute des blocs de trades consécutifs pour respecter la corrélation temporelle.
 
@@ -150,13 +153,17 @@ class OverfitDetector:
         Args:
             block_size: Taille des blocs (défaut 7).
             seed: Graine pour reproductibilité. None = aléatoire.
+            observed_sharpe: Sharpe OOS du best combo. Si fourni, le MC compare
+                les shuffles à cette valeur au lieu du Sharpe calculé depuis les
+                trades (qui mélangent plusieurs jeux de params).
 
         Returns:
             MonteCarloResult avec p_value et distribution des Sharpe permutés.
         """
         if len(trades) < 5:
             return MonteCarloResult(
-                p_value=1.0, real_sharpe=0.0, distribution=[], significant=False,
+                p_value=1.0, real_sharpe=observed_sharpe or 0.0,
+                distribution=[], significant=False,
                 underpowered=True,
             )
 
@@ -165,7 +172,7 @@ class OverfitDetector:
         # Seuil minimum crédible : < 30 trades → trop peu de blocs pour un test fiable
         if n_trades < 30:
             returns = self._trade_returns(trades)
-            real_sharpe = self._sharpe_from_returns(returns)
+            real_sharpe = observed_sharpe if observed_sharpe is not None else self._sharpe_from_returns(returns)
             return MonteCarloResult(
                 p_value=0.50, real_sharpe=real_sharpe, distribution=[],
                 significant=False, underpowered=True,
@@ -173,7 +180,9 @@ class OverfitDetector:
 
         # Rendements séquentiels
         returns = self._trade_returns(trades)
-        real_sharpe = self._sharpe_from_returns(returns)
+        trades_sharpe = self._sharpe_from_returns(returns)
+        # Utiliser le OOS Sharpe du best combo si disponible
+        real_sharpe = observed_sharpe if observed_sharpe is not None else trades_sharpe
 
         # Découper en blocs
         blocks = []
@@ -192,7 +201,7 @@ class OverfitDetector:
             sim_sharpe = self._sharpe_from_returns(shuffled_returns)
             distribution.append(sim_sharpe)
 
-        # p-value = % de simulations avec Sharpe >= Sharpe réel
+        # p-value = % de simulations avec Sharpe >= Sharpe observé
         p_value = sum(1 for s in distribution if s >= real_sharpe) / max(len(distribution), 1)
 
         return MonteCarloResult(

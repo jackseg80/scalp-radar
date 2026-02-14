@@ -225,6 +225,32 @@ class TestMonteCarlo:
         assert r_default.p_value == r_explicit.p_value
         assert not r_default.underpowered
 
+    def test_mc_observed_sharpe_high_gives_low_pvalue(self):
+        """Quand observed_sharpe (best combo OOS) est élevé, p-value doit être bas.
+
+        Bug historique : MC ne recevait pas observed_sharpe → comparait les shuffles
+        au real_sharpe calculé depuis des trades mélangés (multi-params) → p-value
+        artificiellement élevé (0.889 pour DOGE avec 93% consistance).
+        """
+        # Trades modérément profitables (mix de params, comme wfo.all_oos_trades)
+        rng = np.random.default_rng(99)
+        trades = [_make_trade(rng.normal(2.0, 5.0), i) for i in range(300)]
+        detector = OverfitDetector()
+
+        # Sans observed_sharpe : real_sharpe est calculé depuis les trades mixtes
+        r_without = detector.monte_carlo_block_bootstrap(trades, n_sims=500, seed=42)
+
+        # Avec observed_sharpe élevé (best combo OOS Sharpe = 7.40, comme DOGE)
+        r_with = detector.monte_carlo_block_bootstrap(
+            trades, n_sims=500, seed=42, observed_sharpe=7.40,
+        )
+
+        # Avec un observed_sharpe élevé, très peu de shuffles le dépassent
+        assert r_with.p_value < 0.5, (
+            f"p-value ({r_with.p_value:.3f}) devrait être < 0.5 avec observed_sharpe=7.40"
+        )
+        assert r_with.real_sharpe == 7.40
+
 
 # ─── Tests DSR ─────────────────────────────────────────────────────────────
 
@@ -260,6 +286,29 @@ class TestDSR:
     def test_expected_max_sharpe(self):
         ems = OverfitDetector._expected_max_sharpe(700)
         assert ems > 2.0  # sqrt(2*log(700)) ≈ 3.6
+
+    def test_dsr_oos_sharpe_not_inflated_by_is(self):
+        """Quand OOS > IS, le DSR avec OOS Sharpe ne doit pas être artificiellement bas.
+
+        Bug historique : observed_sharpe=IS (plus bas) faisait chuter le DSR
+        alors que le OOS Sharpe est supérieur.
+        """
+        trades = [_make_trade(15.0, i) for i in range(100)]
+        detector = OverfitDetector()
+
+        # DSR avec IS Sharpe (plus bas) — ancien comportement bugué
+        dsr_is = detector.deflated_sharpe_ratio(
+            observed_sharpe=1.0, n_trials=500, n_trades=100, trades=trades,
+        )
+        # DSR avec OOS Sharpe (plus haut) — comportement correct
+        dsr_oos = detector.deflated_sharpe_ratio(
+            observed_sharpe=2.5, n_trials=500, n_trades=100, trades=trades,
+        )
+
+        # Le DSR avec le OOS Sharpe (plus élevé) doit être >= DSR avec IS
+        assert dsr_oos.dsr >= dsr_is.dsr, (
+            f"DSR(oos={dsr_oos.dsr:.3f}) devrait être >= DSR(is={dsr_is.dsr:.3f})"
+        )
 
 
 # ─── Tests Stabilité ──────────────────────────────────────────────────────

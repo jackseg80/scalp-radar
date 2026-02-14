@@ -88,7 +88,7 @@ def combo_score(oos_sharpe: float, consistency: float, total_trades: int) -> flo
     plutôt que le simple max(oos_sharpe).
     """
     sharpe = max(oos_sharpe, 0.0)
-    trade_factor = min(1.0, total_trades / 50)
+    trade_factor = min(1.0, total_trades / 100)
     return sharpe * (0.4 + 0.6 * consistency) * trade_factor
 
 
@@ -848,10 +848,19 @@ class WalkForwardOptimizer:
                 )
                 best_combo["is_best"] = True
                 recommended = best_combo["params"]
+
+                # Mettre à jour les métriques WFO-level pour refléter le best combo
+                # (ces valeurs alimentent compute_grade via build_final_report)
+                avg_oos = best_combo["oos_sharpe"]
+                consistency = best_combo["consistency"]
+                oos_is_ratio = best_combo["oos_is_ratio"]
+
                 logger.info(
-                    "Best combo par score composite : sharpe={}, consistency={}, trades={}, params={}",
+                    "Best combo par score composite : sharpe={}, consistency={}, trades={}, "
+                    "oos_is_ratio={}, params={}",
                     best_combo["oos_sharpe"], best_combo["consistency"],
-                    best_combo["oos_trades"], recommended,
+                    best_combo["oos_trades"], best_combo["oos_is_ratio"],
+                    recommended,
                 )
 
             # Retirer params_key des résultats (champ interne)

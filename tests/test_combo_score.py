@@ -18,23 +18,37 @@ def test_combo_score_prefers_high_consistency():
 
     assert score_a > score_b, f"Score A ({score_a:.2f}) devrait battre Score B ({score_b:.2f})"
 
-    # Vérification valeurs attendues
-    # A = 7.5 * (0.4 + 0.6*0.93) * min(1, 300/50) = 7.5 * 0.958 * 1.0 = 7.185
-    # B = 8.8 * (0.4 + 0.6*0.63) * min(1, 32/50) = 8.8 * 0.778 * 0.64 = 4.382
+    # Vérification valeurs attendues (seuil = 100 trades)
+    # A = 7.5 * (0.4 + 0.6*0.93) * min(1, 300/100) = 7.5 * 0.958 * 1.0 = 7.185
+    # B = 8.8 * (0.4 + 0.6*0.63) * min(1, 32/100) = 8.8 * 0.778 * 0.32 = 2.191
     assert score_a == pytest.approx(7.185, abs=0.01)
-    assert score_b == pytest.approx(4.382, abs=0.01)
+    assert score_b == pytest.approx(2.191, abs=0.01)
 
 
 # ─── Test 2 : Pénalité pour faible volume de trades ─────────────────────
 
 def test_combo_score_penalizes_low_trades():
-    """Combo avec 20 trades pénalisé vs combo avec 100 trades (même Sharpe/consistance)."""
+    """Combo avec 20 trades pénalisé vs combo avec 200 trades (même Sharpe/consistance)."""
     score_low = combo_score(oos_sharpe=2.0, consistency=0.8, total_trades=20)
-    score_high = combo_score(oos_sharpe=2.0, consistency=0.8, total_trades=100)
+    score_high = combo_score(oos_sharpe=2.0, consistency=0.8, total_trades=200)
 
-    # Le trade_factor pénalise : 20/50=0.4 vs min(1,100/50)=1.0
+    # Le trade_factor pénalise : 20/100=0.2 vs min(1,200/100)=1.0
     assert score_high > score_low
-    assert score_high / score_low == pytest.approx(1.0 / 0.4, abs=0.01)
+    assert score_high / score_low == pytest.approx(1.0 / 0.2, abs=0.01)
+
+
+def test_combo_score_39_trades_loses_to_111_trades():
+    """Cas ETH : combo 39 trades/Sharpe 7.92 perd face à combo 111 trades/Sharpe 5.81."""
+    # Combo #1 : haut Sharpe mais 39 trades (< 100 → trade_factor = 0.39)
+    score_1 = combo_score(oos_sharpe=7.92, consistency=0.80, total_trades=39)
+    # Combo #2 : Sharpe plus bas mais 111 trades (> 100 → trade_factor = 1.0)
+    score_2 = combo_score(oos_sharpe=5.81, consistency=0.80, total_trades=111)
+
+    # #1 = 7.92 * (0.4 + 0.6*0.80) * 0.39 = 7.92 * 0.88 * 0.39 = 2.718
+    # #2 = 5.81 * (0.4 + 0.6*0.80) * 1.00 = 5.81 * 0.88 * 1.00 = 5.113
+    assert score_2 > score_1, f"111 trades ({score_2:.2f}) devrait battre 39 trades ({score_1:.2f})"
+    assert score_1 == pytest.approx(2.718, abs=0.01)
+    assert score_2 == pytest.approx(5.113, abs=0.01)
 
 
 def test_combo_score_negative_sharpe_is_zero():
