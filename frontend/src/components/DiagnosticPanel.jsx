@@ -215,12 +215,12 @@ function analyzeResults(combos, grade, totalScore, nWindows) {
   return verdicts
 }
 
-// Couleurs et labels par régime
+// Couleurs et labels par régime (clés minuscules = format backend)
 const REGIME_CONFIG = {
-  Bull: { color: '#10b981', emoji: '\u25b2', label: 'Bull' },
-  Bear: { color: '#ef4444', emoji: '\u25bc', label: 'Bear' },
-  Range: { color: '#f59e0b', emoji: '\u25c6', label: 'Range' },
-  Crash: { color: '#dc2626', emoji: '\u26a0', label: 'Crash' },
+  bull: { color: '#10b981', emoji: '\u25b2', label: 'Bull' },
+  bear: { color: '#ef4444', emoji: '\u25bc', label: 'Bear' },
+  range: { color: '#f59e0b', emoji: '\u25c6', label: 'Range' },
+  crash: { color: '#dc2626', emoji: '\u26a0', label: 'Crash' },
 }
 
 /**
@@ -254,7 +254,7 @@ function analyzeRegimes(regimeAnalysis) {
 
   if (weakRegimes.length > 0) {
     const weakNames = weakRegimes.join(', ')
-    if (weakRegimes.includes('Crash')) {
+    if (weakRegimes.includes('crash')) {
       return {
         level: 'red',
         title: 'Vulnérable aux crashs',
@@ -343,7 +343,7 @@ export default function DiagnosticPanel({ combos, grade, totalScore, nWindows, r
                   <div className="regime-card-header">
                     <span className="regime-emoji">{config.emoji}</span>
                     <span className="regime-label">{config.label}</span>
-                    <span className="regime-count">{data.count} fen.</span>
+                    <span className="regime-count">{data.n_windows} fen.</span>
                   </div>
                   <div className="regime-stats">
                     <div className="regime-stat">
