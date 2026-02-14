@@ -307,8 +307,8 @@ class TestGridRunnerOnCandle:
         assert len(runner._positions.get("BTC/USDT", [])) == 0
 
     @pytest.mark.asyncio
-    async def test_kill_switch_triggered_on_big_loss(self):
-        """Le kill switch se déclenche si la perte dépasse le seuil."""
+    async def test_kill_switch_not_triggered_on_big_loss(self):
+        """Le kill switch NE se déclenche PAS pour les grid/DCA (pertes temporaires normales)."""
         strategy = _make_mock_strategy()
         runner = _make_grid_runner(strategy=strategy)
 
@@ -329,8 +329,8 @@ class TestGridRunnerOnCandle:
         )
         runner._record_trade(trade, "BTC/USDT")
 
-        assert runner._kill_switch_triggered is True
-        assert runner._stats.is_active is False
+        # Grid/DCA : pas de kill switch (protection par SL individuel)
+        assert runner._kill_switch_triggered is False
 
     @pytest.mark.asyncio
     async def test_capital_decremented_on_open(self):
@@ -952,6 +952,76 @@ class TestGridRunnerWarmup:
 
         assert runner._is_warming_up is False
         assert runner._capital == 12_000.0
+
+    @pytest.mark.asyncio
+    async def test_restore_state_ignores_kill_switch(self):
+        """Même si le state sauvegardé a kill_switch=True, le grid l'ignore."""
+        runner = _make_grid_runner()
+
+        runner.restore_state({
+            "capital": 8_000.0,
+            "kill_switch": True,
+            "realized_pnl": -2_000.0,
+            "total_trades": 3,
+            "wins": 0,
+            "losses": 3,
+        })
+
+        assert runner._kill_switch_triggered is False
+        assert runner._capital == 8_000.0
+
+
+class TestGridKillSwitchDisabled:
+    def test_grid_no_kill_switch_on_large_loss(self):
+        """Un grid runner ne déclenche pas le kill switch après une grosse perte."""
+        runner = _make_grid_runner()
+
+        # Simuler un trade avec perte > 5% du capital (seuil = 5%)
+        trade = TradeResult(
+            direction=Direction.LONG,
+            entry_price=100_000.0,
+            exit_price=90_000.0,
+            quantity=0.01,
+            entry_time=datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc),
+            exit_time=datetime(2024, 6, 15, 13, 0, tzinfo=timezone.utc),
+            gross_pnl=-1_000.0,
+            fee_cost=5.0,
+            slippage_cost=2.0,
+            net_pnl=-1_007.0,  # 10.07% de 10k — dépasse le seuil de 5%
+            exit_reason="sl",
+            market_regime=MarketRegime.RANGING,
+        )
+        runner._record_trade(trade, "BTC/USDT")
+
+        assert runner.is_kill_switch_triggered is False
+        assert runner._stats.is_active is not False
+        assert runner._stats.total_trades == 1
+        assert runner._stats.net_pnl == pytest.approx(-1_007.0)
+
+    def test_grid_multiple_losses_no_kill_switch(self):
+        """Même après plusieurs pertes cumulées, pas de kill switch grid."""
+        runner = _make_grid_runner()
+
+        for i in range(5):
+            trade = TradeResult(
+                direction=Direction.LONG,
+                entry_price=100_000.0,
+                exit_price=98_000.0,
+                quantity=0.01,
+                entry_time=datetime(2024, 6, 15, i, 0, tzinfo=timezone.utc),
+                exit_time=datetime(2024, 6, 15, i, 30, tzinfo=timezone.utc),
+                gross_pnl=-200.0,
+                fee_cost=3.0,
+                slippage_cost=1.0,
+                net_pnl=-204.0,
+                exit_reason="sl",
+                market_regime=MarketRegime.RANGING,
+            )
+            runner._record_trade(trade, "BTC/USDT")
+
+        # 5 × -204 = -1020, soit ~10.2% de perte cumulée
+        assert runner.is_kill_switch_triggered is False
+        assert runner._stats.total_trades == 5
 
 
 # ─── Tests Database get_recent_candles ────────────────────────────────────────

@@ -813,18 +813,9 @@ class GridStrategyRunner:
             except RuntimeError:
                 _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
 
-        # Kill switch
-        session_loss_pct = (
-            abs(min(0, self._stats.net_pnl)) / self._initial_capital * 100
-        )
-        max_session = self._config.risk.kill_switch.max_session_loss_percent
-        if session_loss_pct >= max_session:
-            self._kill_switch_triggered = True
-            self._stats.is_active = False
-            logger.warning(
-                "[{}] KILL SWITCH : perte session {:.1f}% >= {:.1f}%",
-                self.name, session_loss_pct, max_session,
-            )
+        # Kill switch désactivé pour grid/DCA : les pertes temporaires
+        # sont normales (achète les dips). Protection assurée par le SL
+        # individuel par position côté serveur.
 
     def _emit_open_event(
         self, symbol: str, level: GridLevel, position: GridPosition
@@ -872,7 +863,8 @@ class GridStrategyRunner:
         self._is_warming_up = False
 
         self._capital = state.get("capital", self._initial_capital)
-        self._kill_switch_triggered = state.get("kill_switch", False)
+        # Grid/DCA : kill switch désactivé (pertes temporaires normales)
+        self._kill_switch_triggered = False
         # Restaurer le P&L réalisé (backward compat : fallback sur net_pnl)
         self._realized_pnl = state.get("realized_pnl", state.get("net_pnl", 0.0))
 
