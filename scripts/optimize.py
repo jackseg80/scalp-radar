@@ -187,10 +187,6 @@ async def run_optimization(
     logger.info("  Optimisation {} × {}", strategy_name.upper(), symbol)
     logger.info("═" * 55)
 
-    # Exchange source : CLI > config principale
-    config = get_config(config_dir)
-    main_exchange = exchange or config.exchange.name.lower()
-
     # Phase 1 : WFO
     logger.info("")
     logger.info(">>> PHASE 1/3 : WALK-FORWARD OPTIMIZATION <<<")
@@ -198,7 +194,7 @@ async def run_optimization(
     optimizer = WalkForwardOptimizer(config_dir)
     wfo = await optimizer.optimize(
         strategy_name, symbol,
-        exchange=main_exchange,
+        exchange=exchange,  # None = auto-détection (exchange avec le plus de candles)
         progress_callback=progress_callback,
         cancel_event=cancel_event,
         params_override=params_override,
@@ -242,6 +238,10 @@ async def run_optimization(
     tfs = [main_tf]
     if hasattr(default_cfg, "trend_filter_timeframe"):
         tfs.append(default_cfg.trend_filter_timeframe)
+
+    # Exchange pour la Phase 2 : CLI > auto-détection
+    from backend.optimization.walk_forward import _detect_best_exchange
+    main_exchange = exchange or _detect_best_exchange(db.db_path, symbol, main_tf)
 
     # Charger seulement les IS_WINDOW_DAYS derniers jours pour la stabilité
     # (34k bougies au lieu de 207k → ~6x plus rapide)

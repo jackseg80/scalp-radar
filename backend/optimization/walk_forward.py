@@ -30,7 +30,6 @@ from loguru import logger
 from backend.backtesting.engine import BacktestConfig, BacktestResult, run_backtest_single
 from backend.backtesting.extra_data_builder import build_extra_data_map
 from backend.backtesting.metrics import calculate_metrics
-from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.models import Candle, TimeFrame
 from backend.core.position_manager import TradeResult
@@ -201,6 +200,44 @@ def _slice_candles(
 ) -> list[Candle]:
     """Extrait les candles dans [start, end)."""
     return [c for c in candles if start <= c.timestamp < end]
+
+
+def _detect_best_exchange(db_path: str, symbol: str, timeframe: str) -> str:
+    """Détecte l'exchange avec le plus de candles pour un symbol/timeframe.
+
+    Utilise sqlite3 synchrone (cohérent avec le WFO qui tourne en thread).
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        rows = conn.execute(
+            "SELECT exchange, COUNT(*) as n "
+            "FROM candles WHERE symbol = ? AND timeframe = ? "
+            "GROUP BY exchange ORDER BY n DESC",
+            (symbol, timeframe),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        raise ValueError(
+            f"Aucune candle en DB pour {symbol} {timeframe} (aucun exchange)"
+        )
+
+    best_exchange, best_count = rows[0]
+    if len(rows) > 1:
+        others = ", ".join(f"{r[0]}={r[1]}" for r in rows[1:])
+        logger.info(
+            "Auto-détection exchange : {} ({} candles pour {} {}). Autres : {}",
+            best_exchange, best_count, symbol, timeframe, others,
+        )
+    else:
+        logger.info(
+            "Auto-détection exchange : {} ({} candles pour {} {})",
+            best_exchange, best_count, symbol, timeframe,
+        )
+    return best_exchange
 
 
 def _classify_regime(candles: list[Candle]) -> dict[str, Any]:
@@ -431,9 +468,6 @@ class WalkForwardOptimizer:
             params_override: Sous-grille custom {param_name: [values]} fusionnée dans "default".
         """
         opt_config = self._grids.get("optimization", {})
-        if exchange is None:
-            cfg = get_config(self._config_dir)
-            exchange = cfg.exchange.name.lower()
         is_window_days = opt_config.get("is_window_days", is_window_days)
         oos_window_days = opt_config.get("oos_window_days", oos_window_days)
         step_days = opt_config.get("step_days", step_days)
@@ -461,13 +495,17 @@ class WalkForwardOptimizer:
         if hasattr(default_cfg, "trend_filter_timeframe"):
             tfs_needed.append(default_cfg.trend_filter_timeframe)
 
+        # Auto-détection exchange si non spécifié
+        db = Database()
+        await db.init()
+        if exchange is None:
+            exchange = _detect_best_exchange(db.db_path, symbol, main_tf)
+
         # Charger les candles depuis la DB
         logger.info(
             "Chargement candles {} {} depuis {} ...",
             symbol, tfs_needed, exchange,
         )
-        db = Database()
-        await db.init()
 
         all_candles_by_tf: dict[str, list[Candle]] = {}
         for tf in tfs_needed:
