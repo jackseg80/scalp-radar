@@ -176,6 +176,7 @@ async def run_optimization(
     progress_callback: Callable[[float, str], None] | None = None,
     cancel_event: threading.Event | None = None,
     params_override: dict | None = None,
+    exchange: str | None = None,
 ) -> tuple[FinalReport, int | None]:
     """Optimise une stratégie sur un asset.
 
@@ -186,9 +187,9 @@ async def run_optimization(
     logger.info("  Optimisation {} × {}", strategy_name.upper(), symbol)
     logger.info("═" * 55)
 
-    # Exchange source depuis la config principale (infrastructure)
+    # Exchange source : CLI > config principale
     config = get_config(config_dir)
-    main_exchange = config.exchange.name.lower()
+    main_exchange = exchange or config.exchange.name.lower()
 
     # Phase 1 : WFO
     logger.info("")
@@ -197,6 +198,7 @@ async def run_optimization(
     optimizer = WalkForwardOptimizer(config_dir)
     wfo = await optimizer.optimize(
         strategy_name, symbol,
+        exchange=main_exchange,
         progress_callback=progress_callback,
         cancel_event=cancel_event,
         params_override=params_override,
@@ -461,6 +463,7 @@ async def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Appliquer les paramètres grade A/B")
     parser.add_argument("-v", "--verbose", action="store_true", help="Affichage détaillé")
     parser.add_argument("--config-dir", type=str, default="config", help="Répertoire de config")
+    parser.add_argument("--exchange", type=str, default=None, help="Exchange source des candles (défaut: config)")
     args = parser.parse_args()
 
     setup_logging(level="INFO")
@@ -537,6 +540,7 @@ async def main() -> None:
                 report, result_id = await run_optimization(
                     strat, sym, args.config_dir, args.verbose,
                     all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
+                    exchange=args.exchange,
                 )
                 all_reports.append(report)
                 symbol_results[sym] = report.recommended_params
