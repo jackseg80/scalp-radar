@@ -117,13 +117,16 @@ def _make_grid_runner(
     data_engine.get_funding_rate.return_value = None
     data_engine.get_open_interest.return_value = []
 
-    return GridStrategyRunner(
+    runner = GridStrategyRunner(
         strategy=strategy,
         config=config,
         indicator_engine=indicator_engine,
         grid_position_manager=gpm,
         data_engine=data_engine,
     )
+    # Par défaut les tests sont en mode live (pas warm-up)
+    runner._is_warming_up = False
+    return runner
 
 
 def _fill_buffer(runner: GridStrategyRunner, symbol: str = "BTC/USDT", n: int = 10, base_close: float = 100_000.0):
@@ -790,6 +793,165 @@ class TestGridRunnerWarmup:
         await runner._warmup_from_db(db, "BTC/USDT")
 
         assert "BTC/USDT" not in runner._close_buffer
+
+    @pytest.mark.asyncio
+    async def test_warmup_capped_at_max(self):
+        """_warmup_from_db plafonne le nombre de candles à MAX_WARMUP_CANDLES."""
+        runner = _make_grid_runner()
+        runner._is_warming_up = True
+        db = AsyncMock()
+        db.get_recent_candles = AsyncMock(return_value=[])
+
+        await runner._warmup_from_db(db, "BTC/USDT")
+
+        # Vérifie que le limit passé à get_recent_candles <= MAX_WARMUP_CANDLES
+        call_args = db.get_recent_candles.call_args
+        limit_arg = call_args[0][2]  # 3ème argument positionnel = limit
+        assert limit_arg <= GridStrategyRunner.MAX_WARMUP_CANDLES
+
+    @pytest.mark.asyncio
+    async def test_warmup_capital_not_modified(self):
+        """Pendant le warm-up, le capital ne bouge pas malgré les trades."""
+        strategy = _make_mock_strategy()
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+        ]
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = True
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        initial_capital = runner._capital
+
+        # Candle ancienne (warm-up) qui touche le niveau
+        candle = _make_candle(
+            close=96_000.0, low=94_500.0, high=97_000.0,
+            ts=datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        # Position ouverte mais capital inchangé
+        assert len(runner._positions.get("BTC/USDT", [])) == 1
+        assert runner._capital == initial_capital
+
+    @pytest.mark.asyncio
+    async def test_warmup_trade_recorded_without_stats(self):
+        """Pendant le warm-up, les trades sont enregistrés mais les stats ne bougent pas."""
+        strategy = _make_mock_strategy()
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = True
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        # Pré-remplir une position warm-up
+        runner._positions["BTC/USDT"] = [
+            GridPosition(
+                level=0, direction=Direction.LONG, entry_price=95_000.0,
+                quantity=0.01, entry_time=datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc),
+                entry_fee=0.57,
+            ),
+        ]
+
+        strategy.get_tp_price.return_value = 100_000.0
+        strategy.get_sl_price.return_value = 80_000.0
+
+        candle = _make_candle(
+            close=101_000.0, high=101_500.0, low=99_000.0,
+            ts=datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        # Trade en historique
+        assert len(runner._trades) == 1
+        # Stats non modifiées (warm-up)
+        assert runner._stats.total_trades == 0
+        assert runner._stats.net_pnl == 0.0
+
+    @pytest.mark.asyncio
+    async def test_warmup_ends_on_recent_candle(self):
+        """Le warm-up se termine quand une candle récente arrive."""
+        from datetime import timedelta as td
+
+        strategy = _make_mock_strategy()
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = True
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        assert runner._is_warming_up is True
+
+        # Candle récente (< 2h) → fin du warm-up
+        now = datetime.now(tz=timezone.utc)
+        candle = _make_candle(
+            close=100_000.0,
+            ts=now - td(minutes=30),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        assert runner._is_warming_up is False
+
+    @pytest.mark.asyncio
+    async def test_end_warmup_resets_capital_and_stats(self):
+        """_end_warmup() reset capital, stats et positions mais garde les trades."""
+        runner = _make_grid_runner()
+        runner._is_warming_up = True
+
+        # Simuler des trades et positions warm-up
+        runner._capital = 50_000.0  # Capital gonflé par warm-up
+        runner._realized_pnl = 40_000.0
+        runner._stats.total_trades = 100
+        runner._stats.wins = 60
+        runner._stats.losses = 40
+        runner._trades = [("BTC/USDT", MagicMock())] * 5
+        runner._positions["BTC/USDT"] = [MagicMock()]
+
+        runner._end_warmup()
+
+        assert runner._is_warming_up is False
+        assert runner._capital == 10_000.0
+        assert runner._realized_pnl == 0.0
+        assert runner._stats.total_trades == 0
+        assert runner._stats.wins == 0
+        assert runner._stats.losses == 0
+        # Trades conservés en historique
+        assert len(runner._trades) == 5
+        # Positions fermées
+        assert len(runner._positions) == 0
+
+    @pytest.mark.asyncio
+    async def test_warmup_no_executor_events(self):
+        """Pendant le warm-up, aucun événement Executor n'est émis."""
+        strategy = _make_mock_strategy()
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+        ]
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = True
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        candle = _make_candle(
+            close=96_000.0, low=94_500.0, high=97_000.0,
+            ts=datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        # Pas d'événements Executor pendant warm-up
+        assert len(runner._pending_events) == 0
+
+    @pytest.mark.asyncio
+    async def test_restore_state_disables_warmup(self):
+        """Restaurer un état sauvegardé désactive le warm-up."""
+        runner = _make_grid_runner()
+        runner._is_warming_up = True
+
+        runner.restore_state({
+            "capital": 12_000.0,
+            "kill_switch": False,
+            "realized_pnl": 2_000.0,
+            "total_trades": 5,
+            "wins": 3,
+            "losses": 2,
+        })
+
+        assert runner._is_warming_up is False
+        assert runner._capital == 12_000.0
 
 
 # ─── Tests Database get_recent_candles ────────────────────────────────────────

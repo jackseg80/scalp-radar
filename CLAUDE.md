@@ -150,7 +150,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15b + hotfixes) : 650 tests passants**
+**Sprints complétés (1-15b + hotfixes) : 662 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -184,6 +184,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix : P&L overflow GridStrategyRunner — margin accounting + realized_pnl tracking (628 tests)
 - Hotfix : Orphan cleanup + collision warning — positions orphelines au boot, détection collision paper (632 tests)
 - Sprint 15b : Analyse par régime de marché (Bull/Bear/Range/Crash) + fix exchange WFO depuis config principale (650 tests)
+- Hotfix : Warm-up compound overflow — capital fixe 10k pendant warm-up, candles plafonnées à 200, reset auto (662 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 
@@ -215,6 +216,16 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Entry fees inclus dans `net_pnl` à la fermeture (pas déduites à l'ouverture, sinon double-counting)
 - StateManager sauvegarde `realized_pnl` avec guard `isinstance(..., (int, float))` (MagicMock-safe)
 - `scripts/reset_simulator.py` pour purger un état corrompu (idempotent, `--executor` flag)
+
+**Warm-up Compound Overflow (Hotfix) :**
+
+- Au démarrage, `watch_ohlcv()` retourne un gros batch de candles historiques → GridStrategyRunner les traitait avec compound sizing → capital de 10k à 83M$
+- Fix 1 : `_warmup_from_db()` plafonné à `MAX_WARMUP_CANDLES = 200` (était dynamique, ~50)
+- Fix 2 : Flag `_is_warming_up = True` dans GridStrategyRunner, capital fixé à `_initial_capital` (10k) pendant le warm-up
+- Détection auto fin warm-up : candle avec age < `WARMUP_AGE_THRESHOLD` (2h) → `_end_warmup()`
+- `_end_warmup()` : reset capital/realized_pnl/stats, ferme positions, garde trades en historique
+- Pendant warm-up : pas de modification de `_capital`, pas d'événements Executor, trades enregistrés en historique seulement
+- `restore_state()` désactive automatiquement le warm-up (restart = pas besoin de re-warmer)
 
 **Orphan Cleanup & Collision (Hotfix) :**
 - Au boot, `_cleanup_orphan_runners()` détecte les runners dans saved_state non présents dans enabled_names

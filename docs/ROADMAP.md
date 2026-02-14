@@ -676,13 +676,14 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 
 ## ÉTAT ACTUEL (14 février 2026)
 
-- **650 tests**, 0 régression
+- **662 tests**, 0 régression
 - **15 sprints + 1 hotfix + Sprint 14c + Sprint 15b** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
 - **1 stratégie SHORT prête pour WFO** : envelope_dca_short (enabled: false, validation WFO en attente)
 - **Paper trading actif** : envelope_dca sur 5 assets (+101.76% en 20 trades, 70% win rate)
 - **Hotfix P&L overflow** : margin accounting + realized_pnl tracking dans GridStrategyRunner
+- **Hotfix warm-up overflow** : capital fixe pendant warm-up (pas de compound sur candles historiques), warm-up plafonné à 200 candles, reset auto capital/stats en fin de warm-up
 - **Executor Grid prêt** : LIVE_TRADING=false, à activer après validation paper
 - **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques, **diagnostic automatique en langage clair (6 règles)**
 - **Sprint 15b** : Analyse par régime de marché (Bull/Bear/Range/Crash) par fenêtre OOS, agrégation par régime dans DiagnosticPanel, conclusion automatique

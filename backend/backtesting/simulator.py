@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
@@ -496,6 +496,11 @@ class GridStrategyRunner:
     - Un "trade" = cycle complet (toutes positions ouvertes → toutes fermées)
     """
 
+    # Nombre max de candles chargées depuis la DB pour le warm-up indicateurs
+    MAX_WARMUP_CANDLES = 200
+    # Seuil d'âge : une candle plus récente que ça = fin du warm-up
+    WARMUP_AGE_THRESHOLD = timedelta(hours=2)
+
     def __init__(
         self,
         strategy: BaseGridStrategy,
@@ -540,6 +545,9 @@ class GridStrategyRunner:
         self._ma_period = getattr(strategy._config, "ma_period", 7)
         self._close_buffer: dict[str, deque] = {}
 
+        # Warm-up : capital fixe pendant le replay des candles historiques
+        self._is_warming_up = True
+
     @property
     def name(self) -> str:
         return self._strategy.name
@@ -558,7 +566,7 @@ class GridStrategyRunner:
 
     async def _warmup_from_db(self, db: Database, symbol: str) -> None:
         """Pré-charge les bougies historiques depuis la DB pour le warm-up SMA."""
-        needed = max(self._ma_period + 20, 50)
+        needed = min(max(self._ma_period + 20, 50), self.MAX_WARMUP_CANDLES)
         candles = await db.get_recent_candles(symbol, self._strategy_tf, needed)
         if not candles:
             logger.info(
@@ -581,6 +589,29 @@ class GridStrategyRunner:
             self.name, len(candles), self._strategy_tf, symbol,
         )
 
+    def _end_warmup(self) -> None:
+        """Termine le warm-up : reset capital, stats, positions. Trades restent en historique."""
+        warmup_trade_count = len(self._trades)
+
+        # Fermer toutes les positions warm-up (pas de record trade)
+        self._positions.clear()
+
+        # Reset capital à 10k (le warm-up ne doit pas affecter le live)
+        self._capital = self._initial_capital
+        self._realized_pnl = 0.0
+
+        # Reset stats (seul le live compte)
+        self._stats = RunnerStats(
+            capital=self._capital,
+            initial_capital=self._initial_capital,
+        )
+
+        self._is_warming_up = False
+        logger.info(
+            "[{}] Warm-up terminé : {} trades historiques, capital reset à {:.0f}$",
+            self.name, warmup_trade_count, self._capital,
+        )
+
     async def on_candle(
         self, symbol: str, timeframe: str, candle: Candle
     ) -> None:
@@ -591,6 +622,13 @@ class GridStrategyRunner:
         # Filtre strict : seul le timeframe de la stratégie est traité
         if timeframe != self._strategy_tf:
             return
+
+        # Détection fin warm-up : candle récente = données live
+        if self._is_warming_up:
+            now = datetime.now(tz=timezone.utc)
+            candle_age = now - candle.timestamp
+            if candle_age <= self.WARMUP_AGE_THRESHOLD:
+                self._end_warmup()
 
         # Maintenir le buffer de closes
         if symbol not in self._close_buffer:
@@ -625,6 +663,9 @@ class GridStrategyRunner:
             main_ind.get("atr_sma", float("nan")),
         )
 
+        # Capital utilisé pour le sizing : fixe pendant warm-up, réel en live
+        sizing_capital = self._initial_capital if self._is_warming_up else self._capital
+
         # Construire le contexte
         ctx = StrategyContext(
             symbol=symbol,
@@ -632,7 +673,7 @@ class GridStrategyRunner:
             candles={},
             indicators=indicators,
             current_position=None,
-            capital=self._capital,
+            capital=sizing_capital,
             config=self._config,
         )
 
@@ -665,16 +706,22 @@ class GridStrategyRunner:
                     p.entry_price * p.quantity for p in positions
                 )
                 margin_to_return = total_notional / self._leverage
-                self._capital += margin_to_return
+                if not self._is_warming_up:
+                    self._capital += margin_to_return
 
                 trade = self._gpm.close_all_positions(
                     positions, exit_price,
                     candle.timestamp, exit_reason,
                     self._current_regime,
                 )
-                self._record_trade(trade, symbol)
+                if self._is_warming_up:
+                    # Warm-up : enregistrer dans l'historique sans modifier capital/stats
+                    self._trades.append((symbol, trade))
+                else:
+                    self._record_trade(trade, symbol)
                 self._positions[symbol] = []
-                self._emit_close_event(symbol, trade)
+                if not self._is_warming_up:
+                    self._emit_close_event(symbol, trade)
                 return
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
@@ -692,24 +739,27 @@ class GridStrategyRunner:
                     touched = candle.high >= level.entry_price
 
                 if touched:
+                    # Warm-up : sizing fixe à initial_capital ; Live : capital réel
+                    pos_capital = self._initial_capital if self._is_warming_up else self._capital
                     position = self._gpm.open_grid_position(
                         level, candle.timestamp,
-                        self._capital,
+                        pos_capital,
                         self._strategy.max_positions,
                     )
                     if position:
                         # Réserver la marge (les fees sont dans net_pnl à la fermeture)
                         notional = position.entry_price * position.quantity
                         margin_used = notional / self._leverage
-                        if self._capital < margin_used:
-                            logger.warning(
-                                "[{}] Capital insuffisant pour level {} "
-                                "({:.2f} requis, {:.2f} disponible)",
-                                self.name, level.index,
-                                margin_used, self._capital,
-                            )
-                            continue
-                        self._capital -= margin_used
+                        if not self._is_warming_up:
+                            if self._capital < margin_used:
+                                logger.warning(
+                                    "[{}] Capital insuffisant pour level {} "
+                                    "({:.2f} requis, {:.2f} disponible)",
+                                    self.name, level.index,
+                                    margin_used, self._capital,
+                                )
+                                continue
+                            self._capital -= margin_used
                         self._positions.setdefault(symbol, []).append(position)
                         logger.info(
                             "[{}] GRID {} level {} @ {:.2f} ({}) — {}/{} positions "
@@ -724,7 +774,8 @@ class GridStrategyRunner:
                             margin_used,
                             self._capital,
                         )
-                        self._emit_open_event(symbol, level, position)
+                        if not self._is_warming_up:
+                            self._emit_open_event(symbol, level, position)
 
     def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
         """Enregistre un trade grid (fermeture de toutes les positions)."""
@@ -817,6 +868,9 @@ class GridStrategyRunner:
 
     def restore_state(self, state: dict) -> None:
         """Restaure l'état du runner depuis un snapshot sauvegardé."""
+        # Si on restaure un état, le warm-up n'a pas lieu (on reprend le live)
+        self._is_warming_up = False
+
         self._capital = state.get("capital", self._initial_capital)
         self._kill_switch_triggered = state.get("kill_switch", False)
         # Restaurer le P&L réalisé (backward compat : fallback sur net_pnl)
