@@ -482,7 +482,7 @@ async def get_results_async(
             LEFT JOIN wfo_combo_results c ON c.optimization_result_id = r.id
             WHERE {where_sql}
             GROUP BY r.id
-            ORDER BY r.total_score DESC, r.created_at DESC
+            ORDER BY r.created_at DESC
             LIMIT ? OFFSET ?
         """
         cursor = await conn.execute(query, params + [limit, offset])

@@ -108,8 +108,8 @@ export default function ExplorerPage({ wsData }) {
     fetchParamGrid()
   }, [strategy])
 
-  // Sprint 14b : Charger les runs disponibles quand strategy/asset changent
-  useEffect(() => {
+  // Fonction réutilisable pour charger les runs disponibles
+  const fetchAvailableRuns = async (autoSelect = true) => {
     if (!strategy || !asset) {
       setAvailableRuns([])
       setSelectedRunId(null)
@@ -117,42 +117,45 @@ export default function ExplorerPage({ wsData }) {
       return
     }
 
-    const fetchAvailableRuns = async () => {
-      try {
-        const params = new URLSearchParams({
-          strategy,
-          asset,
-          latest_only: 'false',
-          limit: '20',
-        })
-        const resp = await fetch(`/api/optimization/results?${params}`)
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-        const data = await resp.json()
+    try {
+      const params = new URLSearchParams({
+        strategy,
+        asset,
+        latest_only: 'false',
+        limit: '20',
+      })
+      const resp = await fetch(`/api/optimization/results?${params}`)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const data = await resp.json()
 
-        setAvailableRuns(data.results || [])
+      setAvailableRuns(data.results || [])
 
-        // Auto-sélectionner le meilleur run : préférer le run avec le plus de combos
-        // (un run à 1-5 combos = params verrouillés, pas de heatmap utile)
-        const runs = data.results || []
-        const MIN_COMBOS_FOR_HEATMAP = 10
-        const fullRuns = runs.filter((r) => (r.combo_count || 0) >= MIN_COMBOS_FOR_HEATMAP)
+      if (!autoSelect) return
 
-        if (fullRuns.length > 0) {
-          // Parmi les runs complets, prendre le plus récent
-          const bestRun = fullRuns.reduce((a, b) =>
-            new Date(b.created_at) > new Date(a.created_at) ? b : a
-          )
-          setSelectedRunId(bestRun.id)
-        } else if (runs.length > 0) {
-          // Fallback : prendre le premier run (trié par score desc)
-          setSelectedRunId(runs[0].id)
-        }
-      } catch (err) {
-        console.error('Erreur fetch available runs:', err)
-        setAvailableRuns([])
+      // Auto-sélectionner le meilleur run : préférer le run avec le plus de combos
+      // (un run à 1-5 combos = params verrouillés, pas de heatmap utile)
+      const runs = data.results || []
+      const MIN_COMBOS_FOR_HEATMAP = 10
+      const fullRuns = runs.filter((r) => (r.combo_count || 0) >= MIN_COMBOS_FOR_HEATMAP)
+
+      if (fullRuns.length > 0) {
+        // Parmi les runs complets, prendre le plus récent
+        const bestRun = fullRuns.reduce((a, b) =>
+          new Date(b.created_at) > new Date(a.created_at) ? b : a
+        )
+        setSelectedRunId(bestRun.id)
+      } else if (runs.length > 0) {
+        // Fallback : prendre le premier run (trié par score desc)
+        setSelectedRunId(runs[0].id)
       }
+    } catch (err) {
+      console.error('Erreur fetch available runs:', err)
+      setAvailableRuns([])
     }
+  }
 
+  // Sprint 14b : Charger les runs disponibles quand strategy/asset changent
+  useEffect(() => {
     fetchAvailableRuns()
   }, [strategy, asset])
 
@@ -235,10 +238,10 @@ export default function ExplorerPage({ wsData }) {
         )
       )
 
-      // Si le job est completed, recharger la heatmap et les jobs
+      // Si le job est completed, recharger les runs + jobs + heatmap
       if (wsData.status === 'completed') {
         fetchJobs()
-        // Trigger heatmap refresh (la heatmap se met à jour via useEffect déjà)
+        fetchAvailableRuns()  // Rafraîchir la liste des runs et auto-sélectionner le nouveau
       }
     }
   }, [wsData])
