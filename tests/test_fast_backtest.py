@@ -515,16 +515,15 @@ class TestTradeSimulation:
         # mais jamais de double entry (1 position à la fois)
         assert len(trade_pnls) > 0
 
-    def test_check_exit_vwap_rsi(self):
+    def test_check_exit_vwap_rsi(self, make_indicator_cache):
         """Test 12 : VWAP+RSI check_exit (RSI normalisé + en profit)."""
-        # Créer un cache minimal
         n = 10
-        cache = IndicatorCache(
-            n_candles=n,
+        cache = make_indicator_cache(
+            n=n,
+            closes=np.full(n, 105.0),  # au-dessus de l'entrée (100)
             opens=np.full(n, 100.0),
             highs=np.full(n, 110.0),
             lows=np.full(n, 90.0),
-            closes=np.full(n, 105.0),  # au-dessus de l'entrée (100)
             volumes=np.full(n, 1000.0),
             total_days=1.0,
             rsi={14: np.full(n, 55.0)},  # RSI > 50
@@ -533,20 +532,7 @@ class TestTradeSimulation:
             adx_arr=np.full(n, 30.0),
             di_plus=np.full(n, 20.0),
             di_minus=np.full(n, 10.0),
-            atr_arr=np.full(n, 1.0),
-            atr_sma=np.full(n, 1.0),
             volume_sma_arr=np.full(n, 500.0),
-            regime=np.zeros(n, dtype=np.int8),
-            rolling_high={},
-            rolling_low={},
-            filter_adx=np.full(n, np.nan),
-            filter_di_plus=np.full(n, np.nan),
-            filter_di_minus=np.full(n, np.nan),
-            bb_sma={},
-            bb_upper={},
-            bb_lower={},
-            supertrend_direction={},
-            atr_by_period={},
         )
         params = {"rsi_period": 14}
 
@@ -565,37 +551,20 @@ class TestTradeSimulation:
         cache.closes[:] = 95.0
         assert _check_exit("vwap_rsi", cache, 5, -1, 100.0, params) is True
 
-    def test_check_exit_momentum(self):
+    def test_check_exit_momentum(self, make_indicator_cache):
         """Test 13 : Momentum check_exit (ADX < 20)."""
         n = 10
-        cache = IndicatorCache(
-            n_candles=n,
-            opens=np.full(n, 100.0),
+        cache = make_indicator_cache(
+            n=n,
             highs=np.full(n, 110.0),
             lows=np.full(n, 90.0),
-            closes=np.full(n, 100.0),
             volumes=np.full(n, 1000.0),
             total_days=1.0,
-            rsi={14: np.full(n, 50.0)},
             vwap=np.full(n, 100.0),
             vwap_distance_pct=np.zeros(n),
             adx_arr=np.full(n, 15.0),  # ADX < 20
             di_plus=np.full(n, 20.0),
-            di_minus=np.full(n, 10.0),
-            atr_arr=np.full(n, 1.0),
-            atr_sma=np.full(n, 1.0),
             volume_sma_arr=np.full(n, 500.0),
-            regime=np.zeros(n, dtype=np.int8),
-            rolling_high={},
-            rolling_low={},
-            filter_adx=np.full(n, np.nan),
-            filter_di_plus=np.full(n, np.nan),
-            filter_di_minus=np.full(n, np.nan),
-            bb_sma={},
-            bb_upper={},
-            bb_lower={},
-            supertrend_direction={},
-            atr_by_period={},
         )
 
         # ADX (15) < 20 → exit

@@ -275,46 +275,7 @@ class TestConfigPerAsset:
         assert params["oi_change_threshold"] == 7.0
 
 
-# ─── Tests STRATEGY_REGISTRY ────────────────────────────────────────────
-
-
-class TestStrategyRegistry:
-    def test_registry_has_funding_and_liquidation(self):
-        from backend.optimization import STRATEGY_REGISTRY
-
-        assert "funding" in STRATEGY_REGISTRY
-        assert "liquidation" in STRATEGY_REGISTRY
-        assert "vwap_rsi" in STRATEGY_REGISTRY
-        assert "momentum" in STRATEGY_REGISTRY
-
-    def test_create_funding_strategy(self):
-        from backend.optimization import create_strategy_with_params
-
-        strategy = create_strategy_with_params("funding", {
-            "extreme_positive_threshold": 0.05,
-            "tp_percent": 0.3,
-            "sl_percent": 0.15,
-        })
-        assert strategy.name == "funding"
-
-    def test_funding_mirroring(self):
-        """extreme_negative_threshold = -extreme_positive_threshold automatiquement."""
-        from backend.optimization import create_strategy_with_params
-
-        strategy = create_strategy_with_params("funding", {
-            "extreme_positive_threshold": 0.05,
-        })
-        # La config interne devrait avoir le mirroring
-        assert strategy._config.extreme_negative_threshold == -0.05
-
-    def test_create_liquidation_strategy(self):
-        from backend.optimization import create_strategy_with_params
-
-        strategy = create_strategy_with_params("liquidation", {
-            "oi_change_threshold": 7.0,
-            "leverage_estimate": 20,
-        })
-        assert strategy.name == "liquidation"
+# ─── Registry tests → centralisés dans test_strategy_registry.py ─────────
 
 
 # ─── Tests BacktestEngine avec extra_data ────────────────────────────────

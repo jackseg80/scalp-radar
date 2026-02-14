@@ -630,19 +630,7 @@ class TestSuperTrendStrategy:
 
 
 class TestRegistryAndConfig:
-    def test_strategies_in_registry(self):
-        """Les 3 stratégies sont dans le STRATEGY_REGISTRY."""
-        from backend.optimization import STRATEGY_REGISTRY
-        assert "bollinger_mr" in STRATEGY_REGISTRY
-        assert "donchian_breakout" in STRATEGY_REGISTRY
-        assert "supertrend" in STRATEGY_REGISTRY
-
-    def test_create_strategy_with_params(self):
-        """create_strategy_with_params fonctionne pour les 3."""
-        from backend.optimization import create_strategy_with_params
-        for name in ("bollinger_mr", "donchian_breakout", "supertrend"):
-            strategy = create_strategy_with_params(name, {})
-            assert strategy.name == name
+    # Registry tests → centralisés dans test_strategy_registry.py
 
     def test_bollinger_config_validation(self):
         """BollingerMRConfig valide les bornes."""
@@ -787,22 +775,20 @@ class TestFastEngine:
         assert len(result) == 5
         assert result[4] >= 0
 
-    def test_bollinger_mr_check_exit_in_fast(self):
+    def test_bollinger_mr_check_exit_in_fast(self, make_indicator_cache):
         """Le fast engine ferme les positions Bollinger MR sur SMA crossing."""
         from backend.optimization.fast_backtest import _check_exit
-        from backend.optimization.indicator_cache import IndicatorCache
 
         n = 10
         closes = np.array([95, 96, 97, 98, 99, 100, 101, 102, 103, 104], dtype=float)
         bb_sma = np.full(n, 100.0)
 
-        cache = IndicatorCache(
-            n_candles=n,
+        cache = make_indicator_cache(
+            n=n,
             opens=closes,
             highs=closes + 1,
             lows=closes - 1,
             closes=closes,
-            volumes=np.full(n, 100.0),
             total_days=10.0,
             rsi={},
             vwap=np.full(n, np.nan),
@@ -813,17 +799,10 @@ class TestFastEngine:
             atr_arr=np.full(n, np.nan),
             atr_sma=np.full(n, np.nan),
             volume_sma_arr=np.full(n, np.nan),
-            regime=np.zeros(n, dtype=np.int8),
-            rolling_high={},
-            rolling_low={},
             filter_adx=np.full(n, np.nan),
             filter_di_plus=np.full(n, np.nan),
             filter_di_minus=np.full(n, np.nan),
             bb_sma={20: bb_sma},
-            bb_upper={},
-            bb_lower={},
-            supertrend_direction={},
-            atr_by_period={},
         )
 
         params = {"bb_period": 20}

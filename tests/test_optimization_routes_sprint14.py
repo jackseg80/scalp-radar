@@ -46,7 +46,7 @@ def _create_tables(db_path: str) -> None:
             dsr REAL,
             param_stability REAL,
             monte_carlo_pvalue REAL,
-            mc_underpowered INTEGER,
+            mc_underpowered INTEGER DEFAULT 0,
             n_windows INTEGER NOT NULL,
             n_distinct_combos INTEGER,
             best_params TEXT NOT NULL,
@@ -54,10 +54,31 @@ def _create_tables(db_path: str) -> None:
             monte_carlo_summary TEXT,
             validation_summary TEXT,
             warnings TEXT,
-            is_latest INTEGER DEFAULT 0,
+            is_latest INTEGER DEFAULT 1,
             source TEXT DEFAULT 'local',
-            regime_analysis TEXT
+            regime_analysis TEXT,
+            UNIQUE(strategy_name, asset, timeframe, created_at)
         );
+
+        CREATE TABLE IF NOT EXISTS wfo_combo_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            optimization_result_id INTEGER NOT NULL,
+            params TEXT NOT NULL,
+            oos_sharpe REAL,
+            oos_return_pct REAL,
+            oos_trades INTEGER,
+            oos_win_rate REAL,
+            is_sharpe REAL,
+            is_return_pct REAL,
+            is_trades INTEGER,
+            consistency REAL,
+            oos_is_ratio REAL,
+            is_best INTEGER DEFAULT 0,
+            n_windows_evaluated INTEGER,
+            FOREIGN KEY (optimization_result_id) REFERENCES optimization_results(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_combo_opt_id ON wfo_combo_results(optimization_result_id);
+        CREATE INDEX IF NOT EXISTS idx_combo_best ON wfo_combo_results(is_best) WHERE is_best = 1;
     """)
     conn.close()
 

@@ -8,14 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.models import Candle
 from backend.optimization.optimization_db import (
     build_push_payload,
     get_combo_results_async,
     save_combo_results_sync,
     save_result_from_payload_sync,
 )
-from backend.optimization.walk_forward import WalkForwardOptimizer
 from backend.optimization.report import FinalReport, ValidationResult
 
 
@@ -83,110 +81,6 @@ def db_path():
     yield db_path_str
     Path(db_path_str).unlink(missing_ok=True)
 
-
-@pytest.fixture
-def mini_candles():
-    """Dataset minimal pour WFO : 180 jours de bougies 1h."""
-    base_time = datetime(2024, 1, 1)
-    candles = []
-    for i in range(180 * 24):  # 180 jours × 24h
-        candles.append(
-            Candle(
-                symbol="BTC/USDT",
-                timeframe="1h",
-                timestamp=base_time.timestamp() + i * 3600,
-                open=100.0 + (i % 10),
-                high=105.0 + (i % 10),
-                low=95.0 + (i % 10),
-                close=100.0 + (i % 10),
-                volume=1000.0,
-            )
-        )
-    return candles
-
-
-@pytest.mark.skip(reason="API WFO changée - optimize() nécessite DB+config, pas candles_by_tf direct")
-def test_wfo_combo_results_populated(mini_candles):
-    """Test 1 : WFO avec mini-grid retourne combo_results non vide."""
-    from backend.strategies.envelope_dca import EnvelopeDCAStrategy
-
-    # Mini-grid : 2×2 = 4 combos
-    grid_values = {
-        "ma_period": [5, 7],
-        "num_levels": [2, 3],
-        "envelope_start": [0.05],
-        "envelope_step": [0.03],
-        "sl_percent": [20.0],
-    }
-
-    optimizer = WalkForwardOptimizer(strategy_class=EnvelopeDCAStrategy)
-    wfo = optimizer.optimize(
-        strategy_name="envelope_dca",
-        symbol="BTC/USDT",
-        candles_by_tf={"1h": mini_candles},
-        grid_values=grid_values,
-        is_window_days=60,
-        oos_window_days=30,
-        step_days=30,
-        metric="sharpe_ratio",
-        n_workers=1,
-    )
-
-    # Vérifier que combo_results est non vide
-    assert wfo.combo_results is not None
-    assert len(wfo.combo_results) > 0
-
-    # Vérifier qu'il y a 4 combos (2×2)
-    assert len(wfo.combo_results) == 4
-
-    # Vérifier que chaque combo a les champs requis
-    for combo in wfo.combo_results:
-        assert "params" in combo
-        assert "oos_sharpe" in combo
-        assert "is_sharpe" in combo
-        assert "consistency" in combo
-        assert "oos_is_ratio" in combo
-        assert "is_best" in combo
-        assert "n_windows_evaluated" in combo
-
-
-@pytest.mark.skip(reason="API WFO changée - optimize() nécessite DB+config, pas candles_by_tf direct")
-def test_combo_results_aggregation(mini_candles):
-    """Test 2 : Vérifier que l'agrégation cross-fenêtre est correcte."""
-    from backend.strategies.envelope_dca import EnvelopeDCAStrategy
-
-    grid_values = {
-        "ma_period": [5],
-        "num_levels": [2],
-        "envelope_start": [0.05],
-        "envelope_step": [0.03],
-        "sl_percent": [20.0],
-    }
-
-    optimizer = WalkForwardOptimizer(strategy_class=EnvelopeDCAStrategy)
-    wfo = optimizer.optimize(
-        strategy_name="envelope_dca",
-        symbol="BTC/USDT",
-        candles_by_tf={"1h": mini_candles},
-        grid_values=grid_values,
-        is_window_days=60,
-        oos_window_days=30,
-        step_days=30,
-        metric="sharpe_ratio",
-        n_workers=1,
-    )
-
-    # Une seule combo → n_windows_evaluated devrait être égal au nombre de fenêtres
-    assert len(wfo.combo_results) == 1
-    combo = wfo.combo_results[0]
-    assert combo["n_windows_evaluated"] == len(wfo.windows)
-
-    # Vérifier que IS Sharpe moyen est cohérent
-    is_sharpes = [w.is_sharpe for w in wfo.windows]
-    import numpy as np
-
-    expected_avg_is = float(np.nanmean(is_sharpes))
-    assert abs(combo["is_sharpe"] - expected_avg_is) < 0.01
 
 
 def test_combo_best_flag():

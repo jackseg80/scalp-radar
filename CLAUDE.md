@@ -41,7 +41,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (632 passants) |
+| Testing            | pytest            | Critical components must have unit tests (679 passants) |
 
 ## Key Architecture Principles
 
@@ -68,7 +68,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (20 components: Scanner, Heatmap, RiskCalc, ExecutorPanel, etc.)
-├── tests/                        # 650 tests (pytest)
+├── tests/                        # 679 tests (pytest)
 ├── scripts/                      # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator
 └── docs/plans/                   # Sprint plans 1-15 archivés
 ```
@@ -150,7 +150,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15b + hotfixes) : 662 tests passants**
+**Sprints complétés (1-15b + hotfixes) : 679 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -185,6 +185,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix : Orphan cleanup + collision warning — positions orphelines au boot, détection collision paper (632 tests)
 - Sprint 15b : Analyse par régime de marché (Bull/Bear/Range/Crash) + fix exchange WFO depuis config principale (650 tests)
 - Hotfix : Warm-up compound overflow — capital fixe 10k pendant warm-up, candles plafonnées à 200, reset auto (662 tests)
+- Nettoyage tests : registry centralisé (test_strategy_registry.py), fixture make_indicator_cache, fix schéma DB, suppression doublons (679 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 

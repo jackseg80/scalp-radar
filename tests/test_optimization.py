@@ -20,7 +20,6 @@ from backend.backtesting.metrics import calculate_metrics
 from backend.core.config import MomentumConfig, VwapRsiConfig
 from backend.core.models import Candle, Direction, MarketRegime, TimeFrame
 from backend.core.position_manager import TradeResult
-from backend.optimization import STRATEGY_REGISTRY, create_strategy_with_params
 from backend.optimization.overfitting import (
     ConvergenceResult,
     DSRResult,
@@ -91,39 +90,7 @@ def _make_trade(net_pnl: float, idx: int = 0) -> TradeResult:
     )
 
 
-# ─── Tests Registre ───────────────────────────────────────────────────────
-
-
-class TestStrategyRegistry:
-    def test_registry_contains_optimizable(self):
-        assert "vwap_rsi" in STRATEGY_REGISTRY
-        assert "momentum" in STRATEGY_REGISTRY
-
-    def test_registry_excludes_non_optimizable(self):
-        assert "orderflow" not in STRATEGY_REGISTRY
-
-    def test_registry_contains_funding_liquidation(self):
-        """Sprint 7b : funding et liquidation sont maintenant optimisables."""
-        assert "funding" in STRATEGY_REGISTRY
-        assert "liquidation" in STRATEGY_REGISTRY
-
-    def test_create_strategy_with_params(self):
-        strategy = create_strategy_with_params("vwap_rsi", {"rsi_period": 20})
-        assert strategy.name == "vwap_rsi"
-        assert strategy._config.rsi_period == 20
-
-    def test_create_strategy_unknown_raises(self):
-        with pytest.raises(ValueError, match="non optimisable"):
-            create_strategy_with_params("unknown", {})
-
-    def test_create_strategy_default_params(self):
-        strategy = create_strategy_with_params("vwap_rsi", {})
-        assert strategy._config.rsi_period == 14  # default
-
-    def test_create_momentum_with_params(self):
-        strategy = create_strategy_with_params("momentum", {"breakout_lookback": 30})
-        assert strategy.name == "momentum"
-        assert strategy._config.breakout_lookback == 30
+# ─── Tests Registre → centralisés dans test_strategy_registry.py ──────────
 
 
 # ─── Tests Grid ────────────────────────────────────────────────────────────

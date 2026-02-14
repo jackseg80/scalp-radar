@@ -519,10 +519,9 @@ class TestMultiPositionEngine:
 class TestFastMultiBacktest:
     """Tests du fast engine multi-position."""
 
-    def _make_cache(self, n: int = 100):
+    @staticmethod
+    def _make_cache(n: int = 100, *, factory):
         """Crée un IndicatorCache minimal pour envelope_dca."""
-        from backend.optimization.indicator_cache import IndicatorCache
-
         rng = np.random.default_rng(42)
         prices = 100.0 + np.cumsum(rng.normal(0, 0.5, n))
         volumes = rng.uniform(50, 200, n)
@@ -532,42 +531,22 @@ class TestFastMultiBacktest:
         for i in range(6, n):
             sma_arr[i] = np.mean(prices[i - 6:i + 1])
 
-        return IndicatorCache(
-            n_candles=n,
+        return factory(
+            n=n,
             opens=prices + rng.uniform(-0.3, 0.3, n),
             highs=prices + np.abs(rng.normal(0.5, 0.3, n)),
             lows=prices - np.abs(rng.normal(0.5, 0.3, n)),
             closes=prices,
             volumes=volumes,
-            total_days=n / 24,
-            rsi={14: np.full(n, 50.0)},
-            vwap=np.full(n, np.nan),
-            vwap_distance_pct=np.full(n, np.nan),
-            adx_arr=np.full(n, 25.0),
-            di_plus=np.full(n, 15.0),
-            di_minus=np.full(n, 10.0),
-            atr_arr=np.full(n, 1.0),
-            atr_sma=np.full(n, 1.0),
-            volume_sma_arr=np.full(n, 100.0),
-            regime=np.zeros(n, dtype=np.int8),
-            rolling_high={},
-            rolling_low={},
-            filter_adx=np.full(n, np.nan),
-            filter_di_plus=np.full(n, np.nan),
-            filter_di_minus=np.full(n, np.nan),
             bb_sma={7: sma_arr},
-            bb_upper={},
-            bb_lower={},
-            supertrend_direction={},
-            atr_by_period={},
         )
 
-    def test_run_multi_backtest_from_cache(self):
+    def test_run_multi_backtest_from_cache(self, make_indicator_cache):
         """Fast engine retourne un résultat valide."""
         from backend.backtesting.engine import BacktestConfig
         from backend.optimization.fast_multi_backtest import run_multi_backtest_from_cache
 
-        cache = self._make_cache()
+        cache = self._make_cache(factory=make_indicator_cache)
         bt_config = BacktestConfig(
             symbol="BTC/USDT",
             start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -586,12 +565,12 @@ class TestFastMultiBacktest:
         assert len(result) == 5  # (params, sharpe, return, PF, n_trades)
         assert result[0] == params
 
-    def test_unknown_strategy_raises(self):
+    def test_unknown_strategy_raises(self, make_indicator_cache):
         """Stratégie inconnue lève ValueError."""
         from backend.backtesting.engine import BacktestConfig
         from backend.optimization.fast_multi_backtest import run_multi_backtest_from_cache
 
-        cache = self._make_cache()
+        cache = self._make_cache(factory=make_indicator_cache)
         bt_config = BacktestConfig(
             symbol="BTC/USDT",
             start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -643,12 +622,12 @@ class TestFastMultiBacktest:
         assert 7 in cache.bb_sma
         assert len(cache.bb_sma[7]) == 50
 
-    def test_fast_engine_allocation_fixe(self):
+    def test_fast_engine_allocation_fixe(self, make_indicator_cache):
         """Le fast engine utilise l'allocation fixe (comme GPM)."""
         from backend.backtesting.engine import BacktestConfig
         from backend.optimization.fast_multi_backtest import _simulate_envelope_dca
 
-        cache = self._make_cache(200)
+        cache = self._make_cache(200, factory=make_indicator_cache)
         bt_config = BacktestConfig(
             symbol="BTC/USDT",
             start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -671,66 +650,5 @@ class TestFastMultiBacktest:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 27-32 : WFO integration & config
+# Registry tests → centralisés dans test_strategy_registry.py
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestWFOIntegration:
-    """Tests d'intégration WFO, registry, factory, config."""
-
-    def test_envelope_dca_in_registry(self):
-        """envelope_dca est dans STRATEGY_REGISTRY."""
-        from backend.optimization import STRATEGY_REGISTRY
-
-        assert "envelope_dca" in STRATEGY_REGISTRY
-        config_cls, strategy_cls = STRATEGY_REGISTRY["envelope_dca"]
-        assert config_cls is EnvelopeDCAConfig
-
-    def test_is_grid_strategy(self):
-        """is_grid_strategy retourne True pour envelope_dca."""
-        from backend.optimization import is_grid_strategy
-
-        assert is_grid_strategy("envelope_dca") is True
-        assert is_grid_strategy("vwap_rsi") is False
-        assert is_grid_strategy("momentum") is False
-
-    def test_grid_strategies_set(self):
-        """GRID_STRATEGIES contient envelope_dca."""
-        from backend.optimization import GRID_STRATEGIES
-
-        assert "envelope_dca" in GRID_STRATEGIES
-
-    def test_indicator_params_has_envelope_dca(self):
-        """_INDICATOR_PARAMS a envelope_dca → ['ma_period']."""
-        from backend.optimization.walk_forward import _INDICATOR_PARAMS
-
-        assert "envelope_dca" in _INDICATOR_PARAMS
-        assert _INDICATOR_PARAMS["envelope_dca"] == ["ma_period"]
-
-    def test_create_strategy_with_params(self):
-        """create_strategy_with_params crée un EnvelopeDCAStrategy."""
-        from backend.optimization import create_strategy_with_params
-        from backend.strategies.envelope_dca import EnvelopeDCAStrategy
-
-        params = {
-            "ma_period": 10, "num_levels": 4,
-            "envelope_start": 0.05, "envelope_step": 0.02,
-            "sl_percent": 20.0, "sides": ["long"], "leverage": 6,
-        }
-        strategy = create_strategy_with_params("envelope_dca", params)
-        assert isinstance(strategy, EnvelopeDCAStrategy)
-        assert strategy.max_positions == 4
-
-    def test_envelope_dca_config_validation(self):
-        """EnvelopeDCAConfig valide les bornes."""
-        # Valid
-        cfg = EnvelopeDCAConfig(ma_period=5, num_levels=2, leverage=4)
-        assert cfg.leverage == 4
-
-        # ma_period < 2
-        with pytest.raises(Exception):
-            EnvelopeDCAConfig(ma_period=1)
-
-        # num_levels < 1
-        with pytest.raises(Exception):
-            EnvelopeDCAConfig(num_levels=0)

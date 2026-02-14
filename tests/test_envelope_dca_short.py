@@ -121,10 +121,8 @@ def _make_grid_state(
     )
 
 
-def _make_cache(n: int = 100):
+def _make_cache(n: int = 100, *, factory=None):
     """Crée un IndicatorCache minimal pour envelope_dca_short."""
-    from backend.optimization.indicator_cache import IndicatorCache
-
     rng = np.random.default_rng(42)
     prices = 100.0 + np.cumsum(rng.normal(0, 0.5, n))
     volumes = rng.uniform(50, 200, n)
@@ -134,34 +132,14 @@ def _make_cache(n: int = 100):
     for i in range(6, n):
         sma_arr[i] = np.mean(prices[i - 6:i + 1])
 
-    return IndicatorCache(
-        n_candles=n,
+    return factory(
+        n=n,
         opens=prices + rng.uniform(-0.3, 0.3, n),
         highs=prices + np.abs(rng.normal(0.5, 0.3, n)),
         lows=prices - np.abs(rng.normal(0.5, 0.3, n)),
         closes=prices,
         volumes=volumes,
-        total_days=n / 24,
-        rsi={14: np.full(n, 50.0)},
-        vwap=np.full(n, np.nan),
-        vwap_distance_pct=np.full(n, np.nan),
-        adx_arr=np.full(n, 25.0),
-        di_plus=np.full(n, 15.0),
-        di_minus=np.full(n, 10.0),
-        atr_arr=np.full(n, 1.0),
-        atr_sma=np.full(n, 1.0),
-        volume_sma_arr=np.full(n, 100.0),
-        regime=np.zeros(n, dtype=np.int8),
-        rolling_high={},
-        rolling_low={},
-        filter_adx=np.full(n, np.nan),
-        filter_di_plus=np.full(n, np.nan),
-        filter_di_minus=np.full(n, np.nan),
         bb_sma={7: sma_arr},
-        bb_upper={},
-        bb_lower={},
-        supertrend_direction={},
-        atr_by_period={},
     )
 
 
@@ -305,12 +283,12 @@ class TestEnvelopeDCAShortSignals:
 class TestFastEngineShort:
     """Tests du fast engine multi-position en direction SHORT."""
 
-    def test_run_multi_backtest_short(self):
+    def test_run_multi_backtest_short(self, make_indicator_cache):
         """Fast engine retourne un résultat valide pour envelope_dca_short."""
         from backend.backtesting.engine import BacktestConfig
         from backend.optimization.fast_multi_backtest import run_multi_backtest_from_cache
 
-        cache = _make_cache()
+        cache = _make_cache(factory=make_indicator_cache)
         bt_config = BacktestConfig(
             symbol="BTC/USDT",
             start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -329,12 +307,12 @@ class TestFastEngineShort:
         assert len(result) == 5  # (params, sharpe, return, PF, n_trades)
         assert result[0] == params
 
-    def test_simulate_short_direction(self):
+    def test_simulate_short_direction(self, make_indicator_cache):
         """_simulate_envelope_dca avec direction=-1 produit des trades."""
         from backend.backtesting.engine import BacktestConfig
         from backend.optimization.fast_multi_backtest import _simulate_envelope_dca
 
-        cache = _make_cache(200)
+        cache = _make_cache(200, factory=make_indicator_cache)
         bt_config = BacktestConfig(
             symbol="BTC/USDT",
             start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -356,12 +334,12 @@ class TestFastEngineShort:
         assert final > 0
         assert final < 1_000_000
 
-    def test_long_backward_compatible(self):
+    def test_long_backward_compatible(self, make_indicator_cache):
         """_simulate_envelope_dca(direction=1) reste compatible avec l'ancien comportement."""
         from backend.backtesting.engine import BacktestConfig
         from backend.optimization.fast_multi_backtest import _simulate_envelope_dca
 
-        cache = _make_cache(200)
+        cache = _make_cache(200, factory=make_indicator_cache)
         bt_config = BacktestConfig(
             symbol="BTC/USDT",
             start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -388,7 +366,7 @@ class TestFastEngineShort:
         assert pnls_long == pnls_default
         assert final_long == final_default
 
-    def test_short_envelope_offsets_asymmetric(self):
+    def test_short_envelope_offsets_asymmetric(self, make_indicator_cache):
         """Le fast engine SHORT utilise les offsets asymétriques."""
         from backend.backtesting.engine import BacktestConfig
         from backend.optimization.fast_multi_backtest import _simulate_envelope_dca
@@ -406,36 +384,10 @@ class TestFastEngineShort:
         for i in range(30, 40):
             prices[i] = 99.0  # Retour sous la SMA → TP
 
-        from backend.optimization.indicator_cache import IndicatorCache
-        rng = np.random.default_rng(42)
-        cache = IndicatorCache(
-            n_candles=n,
-            opens=prices.copy(),
-            highs=prices + 1.0,
-            lows=prices - 1.0,
-            closes=prices,
-            volumes=np.full(n, 100.0),
-            total_days=n / 24,
-            rsi={14: np.full(n, 50.0)},
-            vwap=np.full(n, np.nan),
-            vwap_distance_pct=np.full(n, np.nan),
-            adx_arr=np.full(n, 25.0),
-            di_plus=np.full(n, 15.0),
-            di_minus=np.full(n, 10.0),
-            atr_arr=np.full(n, 1.0),
-            atr_sma=np.full(n, 1.0),
-            volume_sma_arr=np.full(n, 100.0),
-            regime=np.zeros(n, dtype=np.int8),
-            rolling_high={},
-            rolling_low={},
-            filter_adx=np.full(n, np.nan),
-            filter_di_plus=np.full(n, np.nan),
-            filter_di_minus=np.full(n, np.nan),
+        cache = make_indicator_cache(
+            n=n, closes=prices, opens=prices.copy(),
+            highs=prices + 1.0, lows=prices - 1.0,
             bb_sma={7: sma_arr},
-            bb_upper={},
-            bb_lower={},
-            supertrend_direction={},
-            atr_by_period={},
         )
 
         bt_config = BacktestConfig(
@@ -466,51 +418,9 @@ class TestFastEngineShort:
 
 
 class TestEnvelopeDCAShortIntegration:
-    """Tests d'intégration WFO / registry / config."""
-
-    def test_in_registry(self):
-        """envelope_dca_short est dans STRATEGY_REGISTRY."""
-        from backend.optimization import STRATEGY_REGISTRY
-
-        assert "envelope_dca_short" in STRATEGY_REGISTRY
-        config_cls, strategy_cls = STRATEGY_REGISTRY["envelope_dca_short"]
-        assert config_cls is EnvelopeDCAShortConfig
-        assert strategy_cls is EnvelopeDCAShortStrategy
-
-    def test_is_grid_strategy(self):
-        """is_grid_strategy retourne True pour envelope_dca_short."""
-        from backend.optimization import is_grid_strategy
-
-        assert is_grid_strategy("envelope_dca_short") is True
-        # Vérifier que LONG n'est pas cassé
-        assert is_grid_strategy("envelope_dca") is True
-
-    def test_grid_strategies_set(self):
-        """GRID_STRATEGIES contient envelope_dca_short."""
-        from backend.optimization import GRID_STRATEGIES
-
-        assert "envelope_dca_short" in GRID_STRATEGIES
-
-    def test_indicator_params(self):
-        """_INDICATOR_PARAMS a envelope_dca_short → ['ma_period']."""
-        from backend.optimization.walk_forward import _INDICATOR_PARAMS
-
-        assert "envelope_dca_short" in _INDICATOR_PARAMS
-        assert _INDICATOR_PARAMS["envelope_dca_short"] == ["ma_period"]
-
-    def test_create_strategy_with_params(self):
-        """create_strategy_with_params crée un EnvelopeDCAShortStrategy."""
-        from backend.optimization import create_strategy_with_params
-
-        params = {
-            "ma_period": 10, "num_levels": 4,
-            "envelope_start": 0.05, "envelope_step": 0.02,
-            "sl_percent": 20.0, "sides": ["short"], "leverage": 6,
-        }
-        strategy = create_strategy_with_params("envelope_dca_short", params)
-        assert isinstance(strategy, EnvelopeDCAShortStrategy)
-        assert strategy.name == "envelope_dca_short"
-        assert strategy.max_positions == 4
+    """Tests spécifiques config / cache / TP / SL envelope_dca_short.
+    Registry tests → centralisés dans test_strategy_registry.py.
+    """
 
     def test_config_defaults(self):
         """EnvelopeDCAShortConfig a sides=['short'] par défaut."""
