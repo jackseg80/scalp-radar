@@ -1,0 +1,76 @@
+/**
+ * DiagnosticPanel.css — Styles pour le panel de diagnostic WFO
+ * Sprint 14c
+ */
+
+.diagnostic-panel {
+  background: #111827; /* légèrement différent du fond #1a1a1a */
+  border: 1px solid #333;
+  border-left: 4px solid #666; /* couleur dynamique via style inline */
+  border-radius: 8px;
+  padding: 16px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.diagnostic-title {
+  margin: 0 0 12px 0;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diagnostic-verdicts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.verdict-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.verdict-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.verdict-title {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.verdict-text {
+  color: #9ca3af; /* gris clair */
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+/* Responsive : réduire padding sur petits écrans */
+@media (max-width: 768px) {
+  .diagnostic-panel {
+    padding: 12px;
+    max-height: 250px;
+  }
+
+  .diagnostic-title {
+    font-size: 13px;
+  }
+
+  .verdict-title {
+    font-size: 12px;
+  }
+
+  .verdict-text {
+    font-size: 11px;
+  }
+}

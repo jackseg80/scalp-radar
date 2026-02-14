@@ -9,6 +9,7 @@ import Top10Table from './Top10Table'
 import ScatterChart from './ScatterChart'
 import DistributionChart from './DistributionChart'
 import InfoTooltip from './InfoTooltip'
+import DiagnosticPanel from './DiagnosticPanel'
 import './ExplorerPage.css'
 
 const STATUS_COLORS = {
@@ -364,6 +365,11 @@ export default function ExplorerPage({ wsData }) {
     return jobs.filter((j) => j.status === 'pending' || j.status === 'running').length
   }, [jobs])
 
+  // Sprint 14c : Run sélectionné (pour DiagnosticPanel)
+  const selectedRun = useMemo(() => {
+    return availableRuns.find((r) => r.id === selectedRunId) || null
+  }, [availableRuns, selectedRunId])
+
   return (
     <div className="explorer-page">
       {/* Layout Grid : Config (gauche) + Heatmap (centre) */}
@@ -594,6 +600,14 @@ export default function ExplorerPage({ wsData }) {
       {comboResults && comboResults.combos && comboResults.combos.length > 0 && (
         <div className="analysis-section">
           <h3>Analyse des combos ({comboResults.combos.length} testées)</h3>
+
+          {/* Sprint 14c : Diagnostic — première chose visible */}
+          <DiagnosticPanel
+            combos={comboResults.combos}
+            grade={selectedRun?.grade || '?'}
+            totalScore={selectedRun?.total_score || 0}
+            nWindows={Math.max(...comboResults.combos.map((c) => c.n_windows_evaluated || 0))}
+          />
 
           {/* Top 10 pleine largeur */}
           <div className="analysis-top10">
