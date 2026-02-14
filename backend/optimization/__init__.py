@@ -12,6 +12,7 @@ from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
 from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
 from backend.strategies.envelope_dca import EnvelopeDCAStrategy
+from backend.strategies.envelope_dca_short import EnvelopeDCAShortStrategy
 from backend.strategies.funding import FundingStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
@@ -22,6 +23,7 @@ from backend.core.config import (
     BollingerMRConfig,
     DonchianBreakoutConfig,
     EnvelopeDCAConfig,
+    EnvelopeDCAShortConfig,
     FundingConfig,
     LiquidationConfig,
     MomentumConfig,
@@ -39,13 +41,14 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
     "donchian_breakout": (DonchianBreakoutConfig, DonchianBreakoutStrategy),
     "supertrend": (SuperTrendConfig, SuperTrendStrategy),
     "envelope_dca": (EnvelopeDCAConfig, EnvelopeDCAStrategy),
+    "envelope_dca_short": (EnvelopeDCAShortConfig, EnvelopeDCAShortStrategy),
 }
 
 # Stratégies qui nécessitent extra_data (funding rates, OI) pour le backtest
 STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation"}
 
 # Stratégies grid/DCA (utilisent MultiPositionEngine au lieu de BacktestEngine)
-GRID_STRATEGIES: set[str] = {"envelope_dca"}
+GRID_STRATEGIES: set[str] = {"envelope_dca", "envelope_dca_short"}
 
 
 def is_grid_strategy(name: str) -> bool:

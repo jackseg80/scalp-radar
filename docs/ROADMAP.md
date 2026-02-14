@@ -112,13 +112,14 @@ Système automatisé de trading crypto qui :
 
 ---
 
-## PHASE 4 — RECHERCHE & VISUALISATION (Sprints 13-15) ← ON EST ICI
+## PHASE 4 — RECHERCHE & VISUALISATION (Sprints 13-15) ✅ TERMINÉ
 
 | Sprint | Contenu                                                 | Status       |
 |--------|---------------------------------------------------------|--------------|
 | 13     | DB optimization_results, migration JSON, page Recherche | ✅           |
 | 14     | Explorateur paramètres (WFO en background)              | ✅           |
-| 15     | Monitoring DCA live amélioré                            | 🔜 Prochain  |
+| 14b    | Heatmap dense + Charts analytiques + Tooltips           | ✅           |
+| 15     | Stratégie Envelope DCA SHORT (miroir LONG)              | ✅           |
 
 ### Sprint 13 — Résultats WFO en DB + Dashboard Visualisation ✅
 
@@ -291,7 +292,91 @@ Système automatisé de trading crypto qui :
 - UX : toujours montrer l'état par défaut explicitement (slider décoché = toutes valeurs, pas valeur default unique)
 - n_windows_evaluated crucial pour distinguer combos partielles (2-pass coarse+fine grid)
 
-### Sprint 15 — Monitoring DCA Live Amélioré
+### Sprint 15 — Stratégie Envelope DCA SHORT ✅
+
+**But** : Créer le miroir SHORT de la stratégie envelope_dca (LONG) pour doubler les opportunités de trading.
+
+**Décision architecturale** : Sous-classe minimale (EnvelopeDCAShortStrategy) au lieu de paramétrer l'existant, pour :
+- Éviter toute régression sur la stratégie LONG en production
+- Supporter deux grilles WFO indépendantes (LONG vs SHORT)
+- Simplifier l'identification par nom dans le système (registry, dashboard, executor)
+
+**Implémenté** :
+
+**Backend — Stratégie** :
+- **EnvelopeDCAShortStrategy** (26 lignes) : sous-classe qui réutilise 100% de la logique de EnvelopeDCAStrategy
+  - Seuls le `name` et `sides` par défaut changent
+  - Compute_grid() et should_close_all() gèrent déjà les deux directions
+- **EnvelopeDCAShortConfig** : config identique à LONG avec `sides: ["short"]` par défaut
+- **Entrées config** : strategies.yaml + param_grids.yaml (`enabled: false` pour validation WFO d'abord)
+
+**Backend — Fast Engine SHORT** :
+- **fast_multi_backtest.py** : ajout paramètre `direction: int = 1` (backward compatible)
+  - Dispatch : `envelope_dca` → direction=1, `envelope_dca_short` → direction=-1
+  - Enveloppes asymétriques SHORT : `upper_offset = round(1/(1-lower_offset) - 1, 3)`
+  - Inversion SL/TP checks : `sl_hit = high >= sl_price`, `tp_hit = low <= tp_price`
+  - OHLC heuristic inversée : bougie rouge (close < open) favorable pour SHORT → TP
+- **indicator_cache.py** : condition étendue `if strategy_name in ("envelope_dca", "envelope_dca_short")`
+- **walk_forward.py** : 3 whitelists mises à jour (_INDICATOR_PARAMS, collect_combo_results, fast engine)
+
+**Backend — Registry & API** :
+- **optimization/__init__.py** : ajout dans STRATEGY_REGISTRY et GRID_STRATEGIES
+- **strategies/factory.py** : ajout dans create_strategy() et get_enabled_strategies()
+- **adaptive_selector.py** : ajout mapping
+- **optimization_routes.py** : nouvel endpoint `/api/optimization/strategies` (dynamique depuis STRATEGY_REGISTRY + param_grids.yaml)
+
+**Frontend — Découverte dynamique** :
+- **ExplorerPage.jsx** : fetch stratégies depuis API au lieu de liste hardcodée
+- **Conséquence** : futures stratégies apparaissent automatiquement sans modification frontend
+
+**Tests** : 613 passants (+16 depuis Sprint 14b)
+- **test_envelope_dca_short.py** : 22 tests (signal generation SHORT, enveloppes asymétriques, direction lock, TP/SL global, fast engine SHORT, registry, config)
+- **0 régression** sur les 603 tests existants
+
+**Résultat** :
+- 9 stratégies totales (8 mono + 1 grid/DCA LONG → 8 mono + 2 grid/DCA LONG+SHORT)
+- Infrastructure WFO prête pour optimiser envelope_dca_short
+- Frontend adaptatif (pas de hardcoding stratégies)
+
+**Leçons apprises** :
+- Sous-classe minimale > paramétrage quand le fast engine doit dispatcher (zéro risque régression)
+- OHLC heuristic doit être inversée pour SHORT (rouge = favorable, vert = défavorable)
+- Enveloppes asymétriques critiques : aller-retour cohérent (entry_long → SMA → entry_short doit être symétrique en log-return)
+- Découverte dynamique backend → frontend évite les oublis futurs (nouvelle stratégie apparaît automatiquement)
+
+---
+
+## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19) ← ON EST ICI
+
+### Sprint 16 — WFO envelope_dca_short + Passage Live
+**But** : Valider SHORT via WFO, puis passer envelope_dca LONG en live si paper trading OK.
+
+**Phase A — WFO SHORT (prioritaire)** :
+- [ ] Lancer WFO envelope_dca_short sur BTC/ETH/SOL (via Explorateur dashboard)
+- [ ] Analyser les résultats (grade, OOS Sharpe, consistency, heatmap)
+- [ ] Comparer LONG vs SHORT dans ResearchPage
+- [ ] Décision : enabled: true si Grade >= C
+
+**Phase B — Passage Live LONG (si paper trading validé)** :
+**Prérequis** : Paper trading envelope_dca cohérent (1-2 semaines observation).
+
+**Checklist** :
+- [ ] Paper trading cohérent (trades sur candles 1h fraîches, pas juste replay)
+- [ ] Pas de bugs critiques (SL placés, TP détectés, P&L cohérent)
+- [ ] Capital suffisant sur Bitget (minimum ~100-200 USDT pour des trades significatifs)
+- [ ] Monitoring étroit les premiers jours (alertes Telegram actives)
+
+**Actions** :
+- Ajouter du capital sur Bitget (minimum ~100-200 USDT pour des trades significatés)
+- `LIVE_TRADING=true` dans .env
+- `live_eligible: true` dans strategies.yaml (déjà fait pour LONG)
+- Redéployer avec deploy.sh (sans --clean pour garder le state paper)
+- Observer les premiers trades en live
+- Vérifier : ordres passés, SL placés, TP détectés, P&L cohérent
+
+**Scope** : ~1-2 sessions (WFO SHORT + surveillance live LONG si validé).
+
+### Sprint 17 — Monitoring DCA Live Amélioré
 **But** : Voir l'état du DCA en temps réel, pas juste les trades clôturés.
 
 **Frontend — Onglet "DCA" ou amélioration Scanner** :
@@ -312,49 +397,6 @@ Système automatisé de trading crypto qui :
 - GridStrategyRunner expose grid_levels calculés
 - API endpoint grid-state
 - Frontend GridMonitor.jsx ou amélioration Scanner.jsx
-
----
-
-## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19)
-
-### Sprint 16 — Passage Live envelope_dca
-**Prérequis** : Paper trading validé (cohérence trades, pas de bugs, 1-2 semaines observation).
-
-**Checklist** :
-- [ ] Paper trading cohérent (trades sur candles 1h fraîches, pas juste replay)
-- [ ] Pas de bugs critiques (SL placés, TP détectés, P&L cohérent)
-- [ ] Capital suffisant sur Bitget (minimum ~100-200 USDT pour des trades significatifs)
-- [ ] Monitoring étroit les premiers jours (alertes Telegram actives)
-
-**Actions** :
-- Ajouter du capital sur Bitget (minimum ~100-200 USDT pour des trades significatifs)
-- `LIVE_TRADING=true` dans .env
-- `live_eligible: true` dans strategies.yaml (déjà fait)
-- Redéployer avec deploy.sh (sans --clean pour garder le state paper)
-- Observer les premiers trades en live
-- Vérifier : ordres passés, SL placés, TP détectés, P&L cohérent
-
-**Scope** : ~1 session (préparation + surveillance initiale).
-
-### Sprint 17 — Envelope DCA SHORT
-**But** : Doubler les opportunités (actuellement LONG only).
-
-**Concept** : Prix au-dessus de la SMA → enveloppes SHORT (ex: SMA × 1.05, 1.07, 1.09). TP = retour à la SMA par le bas. SL = prix monte.
-
-**Backend** :
-- Adapter `compute_grid()` pour les enveloppes au-dessus de la SMA
-- Adapter le TP (retour à la SMA par le bas) et le SL (prix monte)
-- Backtester et optimiser WFO comme pour le LONG
-- Vérifier que les deux côtés ne s'annulent pas (exclusion mutuelle ou coexistence)
-
-**Frontend** :
-- Support positions SHORT dans le dashboard (direction badge)
-
-**Scope** : ~1-2 sessions.
-
-**Questions** :
-- Exclusion mutuelle LONG/SHORT sur le même asset ? (oui probablement, sinon hedging involontaire)
-- Params différents LONG vs SHORT ? (à tester via WFO)
 
 ### Sprint 18 — Multi-asset Live
 **But** : Déployer envelope_dca sur ETH, SOL (et potentiellement DOGE, LINK si grades OK après reoptimisation).
@@ -484,15 +526,17 @@ Phase 3: Paper/Live ready   ✅   Sprint 14: Explorer   Sprint 17: SHORT
 
 ---
 
-## ÉTAT ACTUEL (13 février 2026)
+## ÉTAT ACTUEL (14 février 2026)
 
-- **597 tests**, 0 régression
-- **14 sprints** complétés (Phases 1-4 terminées)
-- **1 stratégie validée** : envelope_dca Grade B (BTC)
-- **Paper trading actif** : 20 trades backfill, en attente de trades live
+- **613 tests**, 0 régression
+- **15 sprints** complétés (Phase 1-4 terminées)
+- **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
+- **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
+- **1 stratégie SHORT prête pour WFO** : envelope_dca_short (enabled: false, validation WFO en attente)
+- **Paper trading actif** : envelope_dca sur 5 assets
 - **Executor Grid prêt** : LIVE_TRADING=false, à activer après validation paper
-- **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D interactive
-- **Prochaine étape** : Sprint 15 (monitoring DCA live amélioré)
+- **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques
+- **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---
 

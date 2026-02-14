@@ -41,7 +41,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (513 passants) |
+| Testing            | pytest            | Critical components must have unit tests (613 passants) |
 
 ## Key Architecture Principles
 
@@ -60,7 +60,7 @@ scalp-radar/
 ├── config/                       # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/                     # models, config, database, indicators, position_manager, grid_position_manager, state_manager, data_engine
-│   ├── strategies/               # base, base_grid, factory + 8 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca)
+│   ├── strategies/               # base, base_grid, factory + 9 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short)
 │   ├── optimization/             # walk_forward, overfitting, report, indicator_cache, fast_backtest, fast_multi_backtest
 │   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder
 │   ├── execution/                # executor, risk_manager, adaptive_selector
@@ -68,12 +68,12 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (20 components: Scanner, Heatmap, RiskCalc, ExecutorPanel, etc.)
-├── tests/                        # 513 tests (pytest)
+├── tests/                        # 613 tests (pytest)
 ├── scripts/                      # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check
-└── docs/plans/                   # Sprint plans 1-13 archivés
+└── docs/plans/                   # Sprint plans 1-15 archivés
 ```
 
-## Trading Strategies (8 implémentées)
+## Trading Strategies (9 implémentées)
 
 ### 5m Scalp (4)
 
@@ -88,9 +88,10 @@ scalp-radar/
 2. **Donchian Breakout** — TP/SL ATR multiples
 3. **SuperTrend** — Trend-following ATR-based
 
-### 1h Grid/DCA (1)
+### 1h Grid/DCA (2)
 
-1. **Envelope DCA** — Multi-niveaux asymétriques, TP=SMA, SL=% prix moyen (seule `enabled: true` actuellement)
+1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: true`, paper trading actif)
+2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
 
 ## Multi-Strategy Arena
 
@@ -142,14 +143,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 ## Config Files (5 YAML)
 
 - `assets.yaml` — 5 assets (BTC, ETH, SOL, DOGE, LINK), timeframes [1m, 5m, 15m, 1h], groupes corrélation
-- `strategies.yaml` — 8 stratégies + custom + per_asset overrides
+- `strategies.yaml` — 9 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
 - `param_grids.yaml` — Espaces de recherche WFO + per-strategy config (is_days, oos_days, step_days)
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-14) : 597 tests passants**
+**Sprints complétés (1-15) : 613 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -170,13 +171,15 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 7 : WFO grid search (2 passes, ProcessPool), overfitting detection (Monte Carlo, DSR, stabilité), grading A-F (330 tests)
 - Sprint 7b : Funding/OI historiques (fetch scripts, extra_data_builder) (352 tests)
 
-### Sprint 9-14 : Advanced Strategies & Research
+### Sprint 9-15 : Advanced Strategies & Research
 - Sprint 9 : 3 stratégies 1h (Bollinger, Donchian, SuperTrend) + fast engine numpy (419 tests)
 - Sprint 10 : Infrastructure grid/DCA (BaseGridStrategy, GridPositionManager, MultiPositionEngine) (451 tests)
 - Sprint 11 : GridStrategyRunner paper trading (envelope_dca live simulation) (484 tests)
 - Sprint 12 : Executor grid/DCA support (multi-niveaux Bitget, 8 bugs corrigés) (513 tests)
 - Sprint 13 : DB optimization_results + page Recherche (visualisation WFO, migration 49 JSON) (533 tests)
 - Sprint 14 : Explorateur de paramètres (JobManager, WFO background, heatmap 2D, 6 endpoints API) (597 tests)
+- Sprint 14b : Heatmap dense (wfo_combo_results), charts analytiques, tooltips (603 tests)
+- Sprint 15 : Stratégie Envelope DCA SHORT (miroir LONG, fast engine direction=-1) (613 tests)
 - Hotfix : Monte Carlo underpowered detection fix (envelope_dca Grade D→B)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
@@ -263,4 +266,4 @@ Windows (VSCode)                    Linux Server (192.168.1.200)
 - Bitget API docs: <https://www.bitget.com/api-doc/>
 - ccxt Bitget: <https://docs.ccxt.com/#/exchanges/bitget>
 - Frontend prototype: `docs/prototypes/Scalp radar v2.jsx` (référence design)
-- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-13 archivés)
+- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-15 archivés)

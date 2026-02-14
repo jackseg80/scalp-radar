@@ -203,6 +203,27 @@ class EnvelopeDCAConfig(BaseModel):
         return {**base, **overrides}
 
 
+class EnvelopeDCAShortConfig(BaseModel):
+    enabled: bool = False
+    live_eligible: bool = False
+    timeframe: str = "1h"
+    ma_period: int = Field(default=7, ge=2, le=50)
+    num_levels: int = Field(default=3, ge=1, le=6)
+    envelope_start: float = Field(default=0.07, gt=0)
+    envelope_step: float = Field(default=0.03, gt=0)
+    sl_percent: float = Field(default=25.0, gt=0)
+    sides: list[str] = Field(default=["short"])
+    leverage: int = Field(default=6, ge=1, le=20)
+    weight: float = Field(default=0.20, ge=0, le=1)
+    per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:
+        """Retourne les paramètres avec overrides per_asset appliqués."""
+        base = self.model_dump(exclude={"per_asset", "enabled", "live_eligible", "weight"})
+        overrides = self.per_asset.get(symbol, {})
+        return {**base, **overrides}
+
+
 class CustomStrategyConfig(BaseModel):
     enabled: bool = False
     timeframe: str = "1h"
@@ -219,6 +240,7 @@ class StrategiesConfig(BaseModel):
     donchian_breakout: DonchianBreakoutConfig = Field(default_factory=DonchianBreakoutConfig)
     supertrend: SuperTrendConfig = Field(default_factory=SuperTrendConfig)
     envelope_dca: EnvelopeDCAConfig = Field(default_factory=EnvelopeDCAConfig)
+    envelope_dca_short: EnvelopeDCAShortConfig = Field(default_factory=EnvelopeDCAShortConfig)
     custom_strategies: dict[str, CustomStrategyConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -228,7 +250,7 @@ class StrategiesConfig(BaseModel):
                 self.vwap_rsi, self.liquidation, self.orderflow,
                 self.momentum, self.funding,
                 self.bollinger_mr, self.donchian_breakout, self.supertrend,
-                self.envelope_dca,
+                self.envelope_dca, self.envelope_dca_short,
             ]
             if s.enabled
         ]

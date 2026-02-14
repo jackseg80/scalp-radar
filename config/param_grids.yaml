@@ -98,3 +98,16 @@ envelope_dca:
     envelope_start: [0.05, 0.07, 0.10]
     envelope_step: [0.02, 0.03, 0.05]
     sl_percent: [15.0, 20.0, 25.0, 30.0]
+
+# Envelope DCA SHORT : même grille que LONG, à ajuster après WFO
+envelope_dca_short:
+  wfo:
+    is_days: 180
+    oos_days: 60
+    step_days: 60
+  default:
+    ma_period: [5, 7, 10]
+    num_levels: [2, 3, 4]
+    envelope_start: [0.05, 0.07, 0.10]
+    envelope_step: [0.02, 0.03, 0.05]
+    sl_percent: [15.0, 20.0, 25.0, 30.0]

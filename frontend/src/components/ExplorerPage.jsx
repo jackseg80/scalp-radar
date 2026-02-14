@@ -38,17 +38,8 @@ export default function ExplorerPage({ wsData }) {
   const [selectedRunId, setSelectedRunId] = useState(null)
   const [comboResults, setComboResults] = useState(null)
 
-  // Stratégies disponibles
-  const strategies = [
-    'vwap_rsi',
-    'momentum',
-    'funding',
-    'liquidation',
-    'bollinger_mr',
-    'donchian_breakout',
-    'supertrend',
-    'envelope_dca',
-  ]
+  // Stratégies disponibles (chargées dynamiquement depuis le backend)
+  const [strategies, setStrategies] = useState([])
 
   // Assets disponibles
   const assets = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'LINK/USDT']
@@ -62,6 +53,22 @@ export default function ExplorerPage({ wsData }) {
     { value: 'is_sharpe', label: 'IS Sharpe' },
     { value: 'total_score', label: 'Score Total (legacy)' },
   ]
+
+  // Charger la liste des stratégies optimisables au montage
+  useEffect(() => {
+    const fetchStrategies = async () => {
+      try {
+        const resp = await fetch('/api/optimization/strategies')
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data = await resp.json()
+        setStrategies(data.strategies || [])
+      } catch (err) {
+        console.error('Erreur fetch strategies:', err)
+        setStrategies([])
+      }
+    }
+    fetchStrategies()
+  }, [])
 
   // Charger la grille de paramètres quand la stratégie change
   useEffect(() => {

@@ -23,6 +23,7 @@ _STRATEGY_CONFIG_ATTR = {
     "funding": "funding",
     "liquidation": "liquidation",
     "envelope_dca": "envelope_dca",
+    "envelope_dca_short": "envelope_dca_short",
     "bollinger_mr": "bollinger_mr",
     "donchian_breakout": "donchian_breakout",
     "supertrend": "supertrend",

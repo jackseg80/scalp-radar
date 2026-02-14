@@ -312,6 +312,7 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "donchian_breakout": ["entry_lookback", "atr_period"],
     "supertrend": ["atr_period", "atr_multiplier"],
     "envelope_dca": ["ma_period"],
+    "envelope_dca_short": ["ma_period"],
 }
 
 
@@ -497,7 +498,7 @@ class WalkForwardOptimizer:
 
         # Accumulateur combo results cross-fenêtre (Sprint 14b)
         # Skip si stratégie sans fast engine (trop lent)
-        collect_combo_results = strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca")
+        collect_combo_results = strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short")
         combo_accumulator: dict[str, list[dict]] = {}
 
         for w_idx, (is_start, is_end, oos_start, oos_end) in enumerate(windows):
@@ -798,7 +799,7 @@ class WalkForwardOptimizer:
         3. Séquentiel (si pool crashe)
         """
         # 1. Tenter le fast engine (stratégies supportées uniquement)
-        if strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca"):
+        if strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short"):
             try:
                 results = self._run_fast(
                     grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,

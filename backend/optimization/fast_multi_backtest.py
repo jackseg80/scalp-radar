@@ -30,7 +30,11 @@ def run_multi_backtest_from_cache(
     """
     if strategy_name == "envelope_dca":
         trade_pnls, trade_returns, final_capital = _simulate_envelope_dca(
-            cache, params, bt_config,
+            cache, params, bt_config, direction=1,
+        )
+    elif strategy_name == "envelope_dca_short":
+        trade_pnls, trade_returns, final_capital = _simulate_envelope_dca(
+            cache, params, bt_config, direction=-1,
         )
     else:
         raise ValueError(f"Stratégie grid inconnue pour fast engine: {strategy_name}")
@@ -45,11 +49,14 @@ def _simulate_envelope_dca(
     cache: IndicatorCache,
     params: dict[str, Any],
     bt_config: BacktestConfig,
+    direction: int = 1,
 ) -> tuple[list[float], list[float], float]:
-    """Simulation multi-position Envelope DCA.
+    """Simulation multi-position Envelope DCA (LONG ou SHORT).
 
     SMA depuis le cache, enveloppes à la volée.
     Allocation fixe par niveau : notional = capital/levels × leverage.
+
+    direction: 1 = LONG (enveloppes basses), -1 = SHORT (enveloppes hautes).
     """
     capital = bt_config.initial_capital
     leverage = bt_config.leverage
@@ -68,6 +75,11 @@ def _simulate_envelope_dca(
         params["envelope_start"] + lvl * params["envelope_step"]
         for lvl in range(num_levels)
     ]
+    if direction == -1:
+        # SHORT : enveloppes hautes asymétriques (comme EnvelopeDCAStrategy.compute_grid)
+        envelope_offsets = [round(1 / (1 - e) - 1, 3) for e in lower_offsets]
+    else:
+        envelope_offsets = lower_offsets
 
     trade_pnls: list[float] = []
     trade_returns: list[float] = []
@@ -84,33 +96,48 @@ def _simulate_envelope_dca(
             total_qty = sum(p[2] for p in positions)
             avg_entry = sum(p[1] * p[2] for p in positions) / total_qty
 
-            # OHLC heuristic : bougie verte → low d'abord (SL check), puis high (TP)
-            # Bougie rouge → high d'abord (TP), puis low (SL)
             is_green = cache.closes[i] > cache.opens[i]
 
-            sl_price = avg_entry * (1 - sl_pct)
-            tp_price = sma_arr[i]  # Dynamique
+            tp_price = sma_arr[i]  # Dynamique (retour vers la SMA)
 
-            sl_hit = cache.lows[i] <= sl_price
-            tp_hit = cache.highs[i] >= tp_price
+            if direction == 1:
+                # LONG : SL en dessous, TP au-dessus
+                sl_price = avg_entry * (1 - sl_pct)
+                sl_hit = cache.lows[i] <= sl_price
+                tp_hit = cache.highs[i] >= tp_price
+            else:
+                # SHORT : SL au-dessus, TP en dessous
+                sl_price = avg_entry * (1 + sl_pct)
+                sl_hit = cache.highs[i] >= sl_price
+                tp_hit = cache.lows[i] <= tp_price
 
             exit_reason = None
             exit_price = 0.0
 
             if tp_hit and sl_hit:
                 # Heuristique OHLC
-                if is_green:
-                    # Bougie verte : LONG favorable → TP
-                    exit_reason = "tp_global"
-                    exit_price = tp_price
-                elif cache.closes[i] < cache.opens[i]:
-                    # Bougie rouge : LONG défavorable → SL
-                    exit_reason = "sl_global"
-                    exit_price = sl_price
+                if direction == 1:
+                    # LONG : bougie verte → favorable → TP
+                    if is_green:
+                        exit_reason = "tp_global"
+                        exit_price = tp_price
+                    elif cache.closes[i] < cache.opens[i]:
+                        exit_reason = "sl_global"
+                        exit_price = sl_price
+                    else:
+                        exit_reason = "sl_global"
+                        exit_price = sl_price
                 else:
-                    # Doji → SL (conservateur)
-                    exit_reason = "sl_global"
-                    exit_price = sl_price
+                    # SHORT : bougie rouge → favorable → TP
+                    if cache.closes[i] < cache.opens[i]:
+                        exit_reason = "tp_global"
+                        exit_price = tp_price
+                    elif is_green:
+                        exit_reason = "sl_global"
+                        exit_price = sl_price
+                    else:
+                        exit_reason = "sl_global"
+                        exit_price = sl_price
             elif sl_hit:
                 exit_reason = "sl_global"
                 exit_price = sl_price
@@ -123,7 +150,7 @@ def _simulate_envelope_dca(
                     positions, exit_price,
                     maker_fee if exit_reason == "tp_global" else taker_fee,
                     slippage_pct if exit_reason != "tp_global" else 0.0,
-                    1,  # LONG
+                    direction,
                 )
                 trade_pnls.append(pnl)
                 if capital > 0:
@@ -141,11 +168,22 @@ def _simulate_envelope_dca(
                 if len(positions) >= num_levels:
                     break
 
-                entry_price = sma_arr[i] * (1 - lower_offsets[lvl])
+                if direction == 1:
+                    # LONG : entrée sous la SMA
+                    entry_price = sma_arr[i] * (1 - envelope_offsets[lvl])
+                else:
+                    # SHORT : entrée au-dessus de la SMA
+                    entry_price = sma_arr[i] * (1 + envelope_offsets[lvl])
+
                 if math.isnan(entry_price) or entry_price <= 0:
                     continue
 
-                if cache.lows[i] <= entry_price:
+                if direction == 1:
+                    triggered = cache.lows[i] <= entry_price
+                else:
+                    triggered = cache.highs[i] >= entry_price
+
+                if triggered:
                     # Allocation fixe par niveau
                     notional = capital * (1.0 / num_levels) * leverage
                     qty = notional / entry_price
@@ -157,7 +195,7 @@ def _simulate_envelope_dca(
     # Force close fin de données
     if positions:
         exit_price = float(cache.closes[n - 1])
-        pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, 1)
+        pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
         trade_pnls.append(pnl)
         if capital > 0:
             trade_returns.append(pnl / capital)

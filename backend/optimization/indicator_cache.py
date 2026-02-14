@@ -179,7 +179,7 @@ def build_cache(
     bb_lower_dict: dict[tuple[int, float], np.ndarray] = {}
 
     # Envelope DCA : seulement SMA par period (enveloppes calculées à la volée)
-    if strategy_name == "envelope_dca":
+    if strategy_name in ("envelope_dca", "envelope_dca_short"):
         ma_periods: set[int] = set()
         if "ma_period" in param_grid_values:
             ma_periods.update(param_grid_values["ma_period"])

@@ -109,6 +109,20 @@ envelope_dca:
   weight: 0.20
   per_asset: {}
 
+envelope_dca_short:
+  enabled: false          # Validation WFO d'abord
+  live_eligible: false
+  timeframe: "1h"
+  ma_period: 7
+  num_levels: 2
+  envelope_start: 0.05
+  envelope_step: 0.02
+  sl_percent: 20.0
+  sides: ["short"]
+  leverage: 6
+  weight: 0.20
+  per_asset: {}
+
 # Stratégies custom (swing existantes, baseline pour l'Arena)
 custom_strategies:
   swing_baseline:

@@ -7,6 +7,7 @@ from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
 from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
 from backend.strategies.envelope_dca import EnvelopeDCAStrategy
+from backend.strategies.envelope_dca_short import EnvelopeDCAShortStrategy
 from backend.strategies.funding import FundingStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
@@ -26,6 +27,7 @@ def create_strategy(name: str, config: AppConfig) -> BaseStrategy:
         "donchian_breakout": (DonchianBreakoutStrategy, strategies_config.donchian_breakout),
         "supertrend": (SuperTrendStrategy, strategies_config.supertrend),
         "envelope_dca": (EnvelopeDCAStrategy, strategies_config.envelope_dca),
+        "envelope_dca_short": (EnvelopeDCAShortStrategy, strategies_config.envelope_dca_short),
     }
     if name not in mapping:
         raise ValueError(f"Stratégie inconnue : {name}")
@@ -55,5 +57,7 @@ def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
         strategies.append(SuperTrendStrategy(strats.supertrend))
     if strats.envelope_dca.enabled:
         strategies.append(EnvelopeDCAStrategy(strats.envelope_dca))
+    if strats.envelope_dca_short.enabled:
+        strategies.append(EnvelopeDCAShortStrategy(strats.envelope_dca_short))
 
     return strategies

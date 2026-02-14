@@ -263,6 +263,29 @@ async def cancel_optimization_job(request: Request, job_id: str) -> dict:
     return {"status": "cancelled"}
 
 
+@router.get("/strategies")
+async def get_optimizable_strategies() -> dict:
+    """Retourne la liste des stratégies optimisables (celles qui ont un param_grid).
+
+    Returns:
+        {"strategies": ["vwap_rsi", "momentum", ..., "envelope_dca_short"]}
+    """
+    import yaml
+    from pathlib import Path
+    from backend.optimization import STRATEGY_REGISTRY
+
+    with open(Path("config/param_grids.yaml"), encoding="utf-8") as f:
+        grids = yaml.safe_load(f)
+
+    # Stratégies qui sont à la fois dans le registry ET ont un param_grid
+    strategies = [
+        name for name in STRATEGY_REGISTRY
+        if name in grids and grids[name].get("default")
+    ]
+
+    return {"strategies": sorted(strategies)}
+
+
 @router.get("/param-grid/{strategy_name}")
 async def get_param_grid(strategy_name: str) -> dict:
     """Retourne la grille de paramètres pour une stratégie.
