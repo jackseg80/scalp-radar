@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock
 
+import asyncio
+
 import pytest
 
 from backend.core.models import Candle, Direction, MarketRegime, TimeFrame
@@ -752,6 +754,9 @@ class TestTradePersistence:
         )
         runner._record_trade(trade, symbol="BTC/USDT")
 
+        # Laisser le thread pool terminer l'écriture (run_in_executor est fire-and-forget)
+        await asyncio.sleep(0.1)
+
         # Vérifier la DB
         conn = sqlite3.connect(db_path)
         cursor = conn.execute("SELECT * FROM simulation_trades")
@@ -818,6 +823,9 @@ class TestTradePersistence:
                 market_regime=MarketRegime.RANGING,
             )
             runner._record_trade(trade, symbol="BTC/USDT")
+
+        # Laisser le thread pool terminer les écritures (run_in_executor fire-and-forget)
+        await asyncio.sleep(0.5)
 
         # Vider la mémoire (simule restart)
         runner._trades = []

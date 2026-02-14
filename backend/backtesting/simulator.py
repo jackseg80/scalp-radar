@@ -321,9 +321,17 @@ class LiveStrategyRunner:
             trade.exit_reason,
         )
 
-        # Persister en DB
+        # Persister en DB (non-bloquant via thread)
         if self._db_path and symbol:
-            _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    None, _save_trade_to_db_sync,
+                    self._db_path, self.name, symbol, trade,
+                )
+            except RuntimeError:
+                _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
 
         # Sprint 5a : notifier l'Executor
         if symbol:
@@ -742,9 +750,17 @@ class GridStrategyRunner:
             trade.exit_reason,
         )
 
-        # Persister en DB
+        # Persister en DB (non-bloquant via thread)
         if self._db_path and symbol:
-            _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    None, _save_trade_to_db_sync,
+                    self._db_path, self.name, symbol, trade,
+                )
+            except RuntimeError:
+                _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
 
         # Kill switch
         session_loss_pct = (
