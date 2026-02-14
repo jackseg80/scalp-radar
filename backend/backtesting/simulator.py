@@ -607,6 +607,7 @@ class GridStrategyRunner:
         )
 
         self._is_warming_up = False
+        self._warmup_ended_at = datetime.now(tz=timezone.utc)
         logger.info(
             "[{}] Warm-up terminé : {} trades historiques, capital reset à {:.0f}$",
             self.name, warmup_trade_count, self._capital,
@@ -1009,9 +1010,107 @@ class Simulator:
         self._equity_cache: list[dict] | None = None
         self._trade_count_at_cache: int = 0
 
+        # Kill switch global (filet de sécurité toutes stratégies)
+        self._capital_snapshots: deque[tuple[datetime, float]] = deque(maxlen=1440)
+        self._global_kill_switch = False
+        self._notifier: Any = None
+        self._warmup_ended_at: datetime | None = None
+
     def set_trade_event_callback(self, callback: Callable) -> None:
         """Enregistre le callback de l'Executor pour recevoir les TradeEvent."""
         self._trade_event_callback = callback
+
+    def set_notifier(self, notifier: Any) -> None:
+        """Injecte le Notifier pour les alertes kill switch global."""
+        self._notifier = notifier
+
+    # ─── Kill switch global ──────────────────────────────────────────────
+
+    def _snapshot_capital(self) -> None:
+        """Prend un snapshot du capital total (toutes stratégies)."""
+        if not self._runners:
+            return
+        total = sum(r._capital for r in self._runners)
+        self._capital_snapshots.append(
+            (datetime.now(tz=timezone.utc), total)
+        )
+
+    async def _check_global_kill_switch(self) -> None:
+        """Vérifie le drawdown global sur la fenêtre glissante.
+
+        Déclenche le kill switch si le drawdown depuis le pic dans la
+        fenêtre dépasse le seuil configuré.
+        """
+        if self._global_kill_switch:
+            return
+        if not self._capital_snapshots:
+            return
+
+        # Grace period : pas de check pendant 1h après la fin du warm-up
+        # Les candles historiques post-warmup arrivent en rafale et faussent
+        # le drawdown calculé.
+        if self._warmup_ended_at is None:
+            # Récupérer le dernier warm-up terminé parmi les grid runners
+            for r in self._runners:
+                ended = getattr(r, "_warmup_ended_at", None)
+                if isinstance(ended, datetime):
+                    if self._warmup_ended_at is None or ended > self._warmup_ended_at:
+                        self._warmup_ended_at = ended
+        if self._warmup_ended_at is not None:
+            elapsed = (datetime.now(tz=timezone.utc) - self._warmup_ended_at).total_seconds()
+            if elapsed < 3600:
+                return  # Grace period 1h après warm-up
+
+        # Guard MagicMock-safe (tests avec config=MagicMock())
+        window_hours = self._config.risk.kill_switch.global_window_hours
+        threshold_pct = self._config.risk.kill_switch.global_max_loss_pct
+        if not isinstance(window_hours, (int, float)) or not isinstance(
+            threshold_pct, (int, float)
+        ):
+            return
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=window_hours)
+
+        # Capital max dans la fenêtre
+        in_window = [cap for ts, cap in self._capital_snapshots if ts >= cutoff]
+        if not in_window:
+            return
+        capital_max = max(in_window)
+        if capital_max <= 0:
+            return
+
+        # Capital actuel
+        current_capital = sum(r._capital for r in self._runners)
+        drawdown_pct = (capital_max - current_capital) / capital_max * 100
+
+        if drawdown_pct >= threshold_pct:
+            self._global_kill_switch = True
+            self._stop_all_runners()
+            logger.critical(
+                "KILL SWITCH GLOBAL : drawdown {:.1f}% sur {}h >= {:.0f}%",
+                drawdown_pct, window_hours, threshold_pct,
+            )
+            if self._notifier:
+                try:
+                    from backend.alerts.notifier import AnomalyType
+                    await self._notifier.notify_anomaly(
+                        AnomalyType.KILL_SWITCH_GLOBAL,
+                        f"Drawdown {drawdown_pct:.1f}% sur {window_hours}h "
+                        f"(seuil {threshold_pct:.0f}%)",
+                    )
+                except Exception as e:
+                    logger.error("Erreur notification kill switch global: {}", e)
+
+    def _stop_all_runners(self) -> None:
+        """Coupe tous les runners (kill switch global)."""
+        for runner in self._runners:
+            runner._kill_switch_triggered = True
+            runner._stats.is_active = False
+
+    async def periodic_check(self) -> None:
+        """Snapshot capital + check global kill switch (appelé toutes les 60s)."""
+        self._snapshot_capital()
+        await self._check_global_kill_switch()
 
     # ─── Orphan cleanup ─────────────────────────────────────────────────
 
@@ -1209,6 +1308,20 @@ class Simulator:
                     for symbol in symbols:
                         await runner._warmup_from_db(self._db, symbol)
 
+        # Restaurer le kill switch global
+        if saved_state is not None:
+            self._global_kill_switch = saved_state.get(
+                "global_kill_switch", False,
+            )
+            if self._global_kill_switch:
+                self._stop_all_runners()
+                logger.critical(
+                    "KILL SWITCH GLOBAL restauré — tous les runners sont stoppés"
+                )
+
+        # Snapshot initial du capital (référence pour la fenêtre glissante)
+        self._snapshot_capital()
+
         # Câblage DataEngine → Simulator (APRÈS restauration + warm-up)
         self._data_engine.on_candle(self._dispatch_candle)
         self._running = True
@@ -1226,6 +1339,10 @@ class Simulator:
         if not self._running or not self._indicator_engine:
             return
 
+        # Kill switch global : plus aucun dispatch
+        if self._global_kill_switch:
+            return
+
         # Mettre à jour les indicateurs (une seule fois pour tous les runners)
         self._indicator_engine.update(symbol, timeframe, candle)
 
@@ -1236,6 +1353,9 @@ class Simulator:
         positions_before: dict[str, set[str]] = {
             r.name: self._get_position_symbols(r) for r in self._runners
         }
+
+        # Compteur trades pour détecter les fermetures
+        trades_before = sum(r._stats.total_trades for r in self._runners)
 
         # Dispatcher à chaque runner
         for runner in self._runners:
@@ -1279,6 +1399,12 @@ class Simulator:
                             "'{}' a déjà une position",
                             runner.name, new_sym, other.name,
                         )
+
+        # Kill switch global : snapshot + check si un trade a été enregistré
+        trades_after = sum(r._stats.total_trades for r in self._runners)
+        if trades_after > trades_before:
+            self._snapshot_capital()
+            await self._check_global_kill_switch()
 
     async def stop(self) -> None:
         """Arrête le simulateur."""
@@ -1345,7 +1471,9 @@ class Simulator:
         return positions
 
     def is_kill_switch_triggered(self) -> bool:
-        """Vérifie si au moins un runner a déclenché le kill switch."""
+        """Vérifie si le kill switch global ou un runner a déclenché le kill switch."""
+        if self._global_kill_switch:
+            return True
         return any(r.is_kill_switch_triggered for r in self._runners)
 
     def get_conditions(self) -> dict:

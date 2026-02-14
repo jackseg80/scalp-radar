@@ -701,7 +701,7 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 
 ## ÉTAT ACTUEL (14 février 2026)
 
-- **679 tests**, 0 régression
+- **689 tests**, 0 régression
 - **15 sprints + 1 hotfix + Sprint 14c + Sprint 15b** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
@@ -716,6 +716,8 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 - **Hotfix exchange** : WFO lit l'exchange depuis la config principale (`exchanges.yaml`) au lieu d'un hardcode "binance" dans `param_grids.yaml`
 - **Hotfix Explorer heatmap** : push serveur parasite (SYNC bidirectionnel accidentel) volait `is_latest` avec des runs à 2 combos → 3 couches de protection (POST endpoint, API results, frontend auto-sélection)
 - **Backfill Binance** : `scripts/backfill_candles.py` — télécharge candles via API publique Binance (httpx, sans clé API), idempotent, reprise incrémentale, retry 3× backoff. WFO default exchange = "binance" (suppression `_detect_best_exchange`)
+- **Kill switch grid/DCA désactivé** : les pertes temporaires DCA sont normales, protection via SL individuel serveur (682 tests)
+- **Kill switch global Simulator** : drawdown 30% sur fenêtre glissante 24h, coupe tous les runners (y compris grid/DCA), alerte Telegram, persisté dans state, grace period 1h post-warmup (689 tests)
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---
@@ -829,7 +831,7 @@ docs/plans/          # 16 sprint plans (1-12 + hotfix)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 679 passants, 0 régression
+- **Tests** : 689 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

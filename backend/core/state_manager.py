@@ -42,7 +42,9 @@ class StateManager:
         self._running = False
 
     async def save_runner_state(
-        self, runners: list[LiveStrategyRunner | GridStrategyRunner],
+        self,
+        runners: list[LiveStrategyRunner | GridStrategyRunner],
+        global_kill_switch: bool = False,
     ) -> None:
         """Sérialise l'état de tous les runners dans un fichier JSON.
 
@@ -51,6 +53,7 @@ class StateManager:
         """
         state: dict[str, Any] = {
             "saved_at": datetime.now(tz=timezone.utc).isoformat(),
+            "global_kill_switch": global_kill_switch,
             "runners": {},
         }
 
@@ -191,7 +194,12 @@ class StateManager:
             try:
                 await asyncio.sleep(interval)
                 if self._running and simulator.runners:
-                    await self.save_runner_state(simulator.runners)
+                    # Snapshot capital + check kill switch global (toutes les 60s)
+                    await simulator.periodic_check()
+                    await self.save_runner_state(
+                        simulator.runners,
+                        global_kill_switch=simulator._global_kill_switch,
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:

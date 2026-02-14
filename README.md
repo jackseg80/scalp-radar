@@ -71,7 +71,7 @@ uv run python -m scripts.fetch_oi
 uv run pytest tests/ -v
 ```
 
-679 tests couvrant : modèles, config, database, indicateurs, 9 stratégies (4 scalp 5m + 3 swing 1h + 2 grid/DCA), backtesting (mono + multi-position), simulator, arena, API, state manager, telegram, watchdog, executor (mono + grid DCA), risk manager, optimisation WFO, fast engines, funding/OI data, regime analysis, combo results.
+689 tests couvrant : modèles, config, database, indicateurs, 9 stratégies (4 scalp 5m + 3 swing 1h + 2 grid/DCA), backtesting (mono + multi-position), simulator, arena, API, state manager, telegram, watchdog, executor (mono + grid DCA), risk manager, optimisation WFO, fast engines, funding/OI data, regime analysis, combo results.
 
 ## Endpoints
 
@@ -120,7 +120,7 @@ backend/alerts/      # Telegram client, Notifier, Heartbeat
 backend/monitoring/  # Watchdog (data freshness, WS, stratégies)
 scripts/             # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
 frontend/src/        # React dashboard (28 composants, Scanner/Heatmap/Explorer/Research/Diagnostic)
-tests/               # pytest (679 tests, 41 fichiers)
+tests/               # pytest (689 tests, 41 fichiers)
 ```
 
 ## Déploiement production

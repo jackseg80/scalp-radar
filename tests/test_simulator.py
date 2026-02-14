@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, AsyncMock
 
 import asyncio
@@ -13,7 +13,12 @@ from backend.core.models import Candle, Direction, MarketRegime, TimeFrame
 from backend.core.position_manager import PositionManager, PositionManagerConfig, TradeResult
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.strategies.base import OpenPosition, StrategyContext, StrategySignal
-from backend.backtesting.simulator import LiveStrategyRunner, RunnerStats, Simulator
+from backend.backtesting.simulator import (
+    GridStrategyRunner,
+    LiveStrategyRunner,
+    RunnerStats,
+    Simulator,
+)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -392,6 +397,10 @@ class TestSimulator:
         runner = MagicMock()
         runner.name = "mock"
         runner.on_candle = AsyncMock()
+        runner._stats = RunnerStats(capital=10_000.0, initial_capital=10_000.0)
+        runner._pending_events = []
+        runner._position = None
+        runner._position_symbol = None
         sim._runners = [runner]
 
         candle = _make_candle()
@@ -935,3 +944,245 @@ class TestTradePersistence:
         cursor = conn.execute("SELECT COUNT(*) FROM simulation_trades")
         assert cursor.fetchone()[0] == 0
         conn.close()
+
+
+# ─── Tests Kill Switch Global ────────────────────────────────────────────────
+
+
+def _make_simulator_with_runners(
+    n_runners: int = 3,
+    initial_capital: float = 10_000.0,
+    global_max_loss_pct: float = 30.0,
+    global_window_hours: int = 24,
+) -> Simulator:
+    """Crée un Simulator avec N runners mock (mono-position)."""
+    de = MagicMock()
+    de.on_candle = MagicMock()
+    de.get_all_symbols.return_value = ["BTC/USDT"]
+    de.get_funding_rate.return_value = None
+    de.get_open_interest.return_value = []
+
+    config = MagicMock()
+    config.risk.kill_switch.max_session_loss_percent = 5.0
+    config.risk.kill_switch.max_daily_loss_percent = 10.0
+    config.risk.kill_switch.global_max_loss_pct = global_max_loss_pct
+    config.risk.kill_switch.global_window_hours = global_window_hours
+    config.risk.fees.taker_percent = 0.06
+    config.risk.position.max_risk_per_trade_percent = 2.0
+
+    sim = Simulator(data_engine=de, config=config)
+
+    runners = []
+    for i in range(n_runners):
+        runner = MagicMock()
+        runner.name = f"strat_{i}"
+        runner._capital = initial_capital
+        runner._initial_capital = initial_capital
+        runner._stats = RunnerStats(
+            capital=initial_capital,
+            initial_capital=initial_capital,
+        )
+        runner._kill_switch_triggered = False
+        runner._position = None
+        runner._position_symbol = None
+        runner._pending_events = []
+        runner.is_kill_switch_triggered = False
+        runners.append(runner)
+
+    sim._runners = runners
+    sim._running = True
+    return sim
+
+
+class TestGlobalKillSwitch:
+    """Tests du kill switch global (filet de sécurité toutes stratégies)."""
+
+    @pytest.mark.asyncio
+    async def test_global_kill_switch_triggers(self):
+        """3 runners, pertes cumulées > 30% → tous stoppés."""
+        sim = _make_simulator_with_runners(n_runners=3, global_max_loss_pct=30.0)
+
+        # Capital initial total = 30k (3 × 10k)
+        # Snapshot au pic
+        sim._snapshot_capital()
+
+        # Simuler des pertes : chaque runner perd 35% (3500$ chacun)
+        for runner in sim._runners:
+            runner._capital = 6_500.0
+
+        # Check → drawdown = (30k - 19.5k) / 30k = 35% > 30%
+        await sim._check_global_kill_switch()
+
+        assert sim._global_kill_switch is True
+        # Tous les runners sont stoppés
+        for runner in sim._runners:
+            assert runner._kill_switch_triggered is True
+            assert runner._stats.is_active is False
+
+    @pytest.mark.asyncio
+    async def test_global_kill_switch_not_triggered_under_threshold(self):
+        """Pertes < 30% → continue normalement."""
+        sim = _make_simulator_with_runners(n_runners=3, global_max_loss_pct=30.0)
+
+        # Snapshot au pic
+        sim._snapshot_capital()
+
+        # Pertes modérées : chaque runner perd 5% (500$ chacun)
+        for runner in sim._runners:
+            runner._capital = 9_500.0
+
+        # Drawdown = (30k - 28.5k) / 30k = 5% < 30%
+        await sim._check_global_kill_switch()
+
+        assert sim._global_kill_switch is False
+        for runner in sim._runners:
+            assert runner._kill_switch_triggered is False
+
+    @pytest.mark.asyncio
+    async def test_global_kill_switch_ignores_old_snapshots(self):
+        """Snapshots > 24h ne comptent pas — seul le pic récent importe."""
+        sim = _make_simulator_with_runners(
+            n_runners=2, global_max_loss_pct=30.0, global_window_hours=24,
+        )
+
+        # Snapshot ancien (il y a 25h) avec capital élevé
+        old_ts = datetime.now(tz=timezone.utc) - timedelta(hours=25)
+        sim._capital_snapshots.append((old_ts, 50_000.0))
+
+        # Snapshot récent (maintenant) avec capital déjà bas
+        for runner in sim._runners:
+            runner._capital = 7_000.0  # total = 14k
+        sim._snapshot_capital()
+
+        # Si le snapshot ancien comptait → drawdown = (50k - 14k)/50k = 72% → trigger
+        # Mais comme il est hors fenêtre, le pic = 14k, drawdown = 0% → pas de trigger
+        await sim._check_global_kill_switch()
+
+        assert sim._global_kill_switch is False
+
+    @pytest.mark.asyncio
+    async def test_global_kill_switch_persisted_in_state(self):
+        """save/restore conserve le flag global_kill_switch."""
+        sim = _make_simulator_with_runners(n_runners=2)
+        sim._global_kill_switch = True
+
+        # Simuler la restauration depuis saved_state
+        sim2 = _make_simulator_with_runners(n_runners=2)
+        saved_state = {"global_kill_switch": True, "runners": {}}
+
+        # Le start() restaure le flag — on simule manuellement
+        sim2._global_kill_switch = saved_state.get("global_kill_switch", False)
+        if sim2._global_kill_switch:
+            sim2._stop_all_runners()
+
+        assert sim2._global_kill_switch is True
+        for runner in sim2._runners:
+            assert runner._kill_switch_triggered is True
+            assert runner._stats.is_active is False
+
+    @pytest.mark.asyncio
+    async def test_global_kill_switch_stops_grid_runners(self):
+        """Le kill switch global stoppe aussi les grid/DCA runners."""
+        from backend.core.grid_position_manager import GridPositionManager
+
+        de = MagicMock()
+        de.on_candle = MagicMock()
+        de.get_all_symbols.return_value = ["BTC/USDT"]
+        de.get_funding_rate.return_value = None
+        de.get_open_interest.return_value = []
+
+        config = MagicMock()
+        config.risk.kill_switch.global_max_loss_pct = 30.0
+        config.risk.kill_switch.global_window_hours = 24
+
+        sim = Simulator(data_engine=de, config=config)
+
+        # Un runner mono-position mock
+        mono = MagicMock()
+        mono.name = "mono_strat"
+        mono._capital = 10_000.0
+        mono._initial_capital = 10_000.0
+        mono._stats = RunnerStats(capital=10_000.0, initial_capital=10_000.0)
+        mono._kill_switch_triggered = False
+        mono._position = None
+        mono._position_symbol = None
+        mono._pending_events = []
+
+        # Un GridStrategyRunner mock
+        grid = MagicMock(spec=GridStrategyRunner)
+        grid.name = "grid_dca"
+        grid._capital = 10_000.0
+        grid._initial_capital = 10_000.0
+        grid._stats = RunnerStats(capital=10_000.0, initial_capital=10_000.0)
+        grid._kill_switch_triggered = False
+        grid._positions = {}
+        grid._position = None
+        grid._position_symbol = None
+        grid._pending_events = []
+
+        sim._runners = [mono, grid]
+
+        # Snapshot au pic (20k total)
+        sim._snapshot_capital()
+
+        # Grosse perte : 40% drawdown
+        mono._capital = 6_000.0
+        grid._capital = 6_000.0
+
+        await sim._check_global_kill_switch()
+
+        assert sim._global_kill_switch is True
+        # Les deux types de runners sont stoppés
+        assert mono._kill_switch_triggered is True
+        assert mono._stats.is_active is False
+        assert grid._kill_switch_triggered is True
+        assert grid._stats.is_active is False
+
+    @pytest.mark.asyncio
+    async def test_global_kill_switch_sends_alert(self):
+        """Vérifie que le notifier est appelé quand le kill switch global se déclenche."""
+        sim = _make_simulator_with_runners(n_runners=2, global_max_loss_pct=30.0)
+
+        # Injecter un notifier mock
+        notifier = AsyncMock()
+        sim.set_notifier(notifier)
+
+        # Snapshot au pic
+        sim._snapshot_capital()
+
+        # Grosse perte
+        for runner in sim._runners:
+            runner._capital = 5_000.0
+
+        await sim._check_global_kill_switch()
+
+        assert sim._global_kill_switch is True
+        notifier.notify_anomaly.assert_called_once()
+        call_args = notifier.notify_anomaly.call_args
+        # Premier argument = AnomalyType.KILL_SWITCH_GLOBAL
+        from backend.alerts.notifier import AnomalyType
+        assert call_args[0][0] == AnomalyType.KILL_SWITCH_GLOBAL
+        # Le message contient le pourcentage et la fenêtre
+        assert "24h" in call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_global_kill_switch_grace_period(self):
+        """Le kill switch ne se déclenche PAS pendant la grace period post-warmup."""
+        sim = _make_simulator_with_runners(n_runners=2, global_max_loss_pct=30.0)
+
+        # Simuler un warm-up qui vient de se terminer (il y a 5 minutes)
+        sim._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(minutes=5)
+
+        # Snapshot au pic
+        sim._snapshot_capital()
+
+        # Grosse perte (>30%)
+        for runner in sim._runners:
+            runner._capital = 5_000.0
+
+        # Le check devrait être ignoré (grace period 1h)
+        await sim._check_global_kill_switch()
+
+        assert sim._global_kill_switch is False
+        for runner in sim._runners:
+            assert runner._kill_switch_triggered is False

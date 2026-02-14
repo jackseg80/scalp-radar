@@ -92,6 +92,9 @@ async def lifespan(app: FastAPI):
         state_manager = StateManager(db)
         saved_state = await state_manager.load_runner_state()
 
+        # Notifier pour le kill switch global
+        simulator.set_notifier(notifier)
+
         # start() crée les runners avec le bon état ET enregistre le callback on_candle
         await simulator.start(saved_state=saved_state)
 
@@ -175,7 +178,10 @@ async def lifespan(app: FastAPI):
         logger.info("Executor live arrêté et état sauvegardé")
 
     if state_manager and simulator:
-        await state_manager.save_runner_state(simulator.runners)
+        await state_manager.save_runner_state(
+            simulator.runners,
+            global_kill_switch=simulator._global_kill_switch,
+        )
         await state_manager.stop()
     if simulator:
         await simulator.stop()
