@@ -715,6 +715,7 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 - **Sprint 15b** : Analyse par régime de marché (Bull/Bear/Range/Crash) par fenêtre OOS, agrégation par régime dans DiagnosticPanel, conclusion automatique
 - **Hotfix exchange** : WFO lit l'exchange depuis la config principale (`exchanges.yaml`) au lieu d'un hardcode "binance" dans `param_grids.yaml`
 - **Hotfix Explorer heatmap** : push serveur parasite (SYNC bidirectionnel accidentel) volait `is_latest` avec des runs à 2 combos → 3 couches de protection (POST endpoint, API results, frontend auto-sélection)
+- **Backfill Binance** : `scripts/backfill_candles.py` — télécharge candles via API publique Binance (httpx, sans clé API), idempotent, reprise incrémentale, retry 3× backoff. WFO default exchange = "binance" (suppression `_detect_best_exchange`)
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---
@@ -728,7 +729,7 @@ Le pipeline WFO + Monte Carlo + DSR + grading existe pour ça. Toute nouvelle st
 Le TP d'envelope_dca = SMA courante (change à chaque bougie). Il ne peut pas être placé comme trigger order sur Bitget → client-side. Si le bot crash, le SL protège (server-side).
 
 ### 3. Données Locales vs Serveur
-Les backtests tournent en local (candles Binance 1h). Le serveur n'a que les données Bitget live. Sprint 13 adresse le stockage des résultats en DB.
+Les backtests/WFO tournent en local sur données Binance (candles 1h depuis 2020, via `scripts/backfill_candles.py`). Le serveur n'a que les données Bitget live. Routage exchange : WFO/backtest → binance, simulateur/warm-up → bitget, live → bitget, validation croisée → bitget.
 
 ### 4. Monte Carlo Inadapté au DCA
 Le block bootstrap détruit la corrélation temporelle qui est le mécanisme même de l'edge DCA. Fix : trades < 30 → underpowered (12/25 pts au lieu de 0/25).
@@ -771,7 +772,8 @@ frontend/             # React (Scanner, Heatmap, Equity, Trades, Arena, Executor
 scripts/
   optimize.py         # CLI WFO (--all, --apply, --check-data, --dry-run, -v)
   run_backtest.py     # CLI backtest simple (--symbol, --days, --json)
-  fetch_history.py    # Backfill candles (Binance/Bitget)
+  backfill_candles.py # Backfill candles Binance API publique (httpx, sans clé)
+  fetch_history.py    # Backfill candles via ccxt (Binance/Bitget)
   fetch_funding.py    # Backfill funding rates (Bitget)
   fetch_oi.py         # Backfill open interest (Binance)
   parity_check.py     # Compare moteurs mono vs multi-position
