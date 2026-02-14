@@ -63,46 +63,66 @@ def _save_trade_to_db_sync(
     symbol: str,
     trade: TradeResult,
 ) -> None:
-    """Sauvegarde synchrone d'un trade dans la DB.
+    """Sauvegarde synchrone d'un trade dans la DB avec retry sur lock.
 
     Backward compatible : log warning si table absente, ne crashe jamais.
+    Retry automatique sur 'database is locked' (race condition WFO concurrent).
     """
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.execute(
-            """INSERT INTO simulation_trades
-               (strategy_name, symbol, direction, entry_price, exit_price, quantity,
-                gross_pnl, fee_cost, slippage_cost, net_pnl, exit_reason,
-                market_regime, entry_time, exit_time)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                strategy_name,
-                symbol,
-                trade.direction.value,
-                trade.entry_price,
-                trade.exit_price,
-                trade.quantity,
-                trade.gross_pnl,
-                trade.fee_cost,
-                trade.slippage_cost,
-                trade.net_pnl,
-                trade.exit_reason,
-                trade.market_regime.value if trade.market_regime else None,
-                trade.entry_time.isoformat(),
-                trade.exit_time.isoformat(),
-            ),
-        )
-        conn.commit()
-        conn.close()
-    except sqlite3.OperationalError as e:
-        if "no such table" in str(e).lower():
-            logger.warning(
-                "Table simulation_trades absente (DB ancienne), trade non persisté"
+    import time
+
+    max_retries = 5
+    retry_delay = 0.1  # 100ms initial
+
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(db_path, timeout=5.0)  # 5s timeout
+            conn.execute(
+                """INSERT INTO simulation_trades
+                   (strategy_name, symbol, direction, entry_price, exit_price, quantity,
+                    gross_pnl, fee_cost, slippage_cost, net_pnl, exit_reason,
+                    market_regime, entry_time, exit_time)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    strategy_name,
+                    symbol,
+                    trade.direction.value,
+                    trade.entry_price,
+                    trade.exit_price,
+                    trade.quantity,
+                    trade.gross_pnl,
+                    trade.fee_cost,
+                    trade.slippage_cost,
+                    trade.net_pnl,
+                    trade.exit_reason,
+                    trade.market_regime.value if trade.market_regime else None,
+                    trade.entry_time.isoformat(),
+                    trade.exit_time.isoformat(),
+                ),
             )
-        else:
-            logger.warning("Erreur sauvegarde trade en DB: {}", e)
-    except Exception as e:
-        logger.warning("Erreur inattendue sauvegarde trade: {}", e)
+            conn.commit()
+            conn.close()
+            return  # Success
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e).lower():
+                logger.warning(
+                    "Table simulation_trades absente (DB ancienne), trade non persisté"
+                )
+                return  # Don't retry for missing table
+            elif "database is locked" in str(e).lower():
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    logger.error(
+                        f"Trade non sauvegardé après {max_retries} tentatives (DB locked): {strategy_name} {symbol} {trade.net_pnl:.2f}"
+                    )
+            else:
+                logger.warning(f"Erreur sauvegarde trade en DB: {e}")
+                return
+        except Exception as e:
+            logger.warning(f"Erreur inattendue sauvegarde trade: {e}")
+            return
 
 
 @dataclass
