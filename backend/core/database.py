@@ -170,6 +170,7 @@ class Database:
         await self._create_sprint7b_tables()
         await self._create_sprint13_tables()
         await self._create_sprint14_tables()
+        await self._create_simulator_trades_table()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -331,6 +332,35 @@ class Database:
                 ON wfo_combo_results(optimization_result_id);
             CREATE INDEX IF NOT EXISTS idx_combo_best
                 ON wfo_combo_results(is_best) WHERE is_best = 1;
+        """)
+
+    async def _create_simulator_trades_table(self) -> None:
+        """Table pour les trades du simulateur (paper trading)."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS simulation_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                gross_pnl REAL NOT NULL,
+                fee_cost REAL NOT NULL,
+                slippage_cost REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                exit_reason TEXT NOT NULL,
+                market_regime TEXT,
+                entry_time TEXT NOT NULL,
+                exit_time TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sim_trades_strategy
+                ON simulation_trades(strategy_name);
+            CREATE INDEX IF NOT EXISTS idx_sim_trades_exit_time
+                ON simulation_trades(exit_time);
         """)
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
@@ -669,6 +699,55 @@ class Database:
         if row and row["ts"]:
             return row["ts"]
         return None
+
+    # ─── SIMULATION TRADES ──────────────────────────────────────────────────
+
+    async def get_simulation_trades(
+        self,
+        strategy_name: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Retourne les trades du simulateur triés par exit_time DESC."""
+        assert self._conn is not None
+        query = "SELECT * FROM simulation_trades"
+        params: list[object] = []
+
+        if strategy_name is not None:
+            query += " WHERE strategy_name = ?"
+            params.append(strategy_name)
+
+        query += " ORDER BY exit_time DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row["id"],
+                "strategy": row["strategy_name"],
+                "symbol": row["symbol"],
+                "direction": row["direction"],
+                "entry_price": row["entry_price"],
+                "exit_price": row["exit_price"],
+                "quantity": row["quantity"],
+                "gross_pnl": row["gross_pnl"],
+                "fee_cost": row["fee_cost"],
+                "slippage_cost": row["slippage_cost"],
+                "net_pnl": row["net_pnl"],
+                "exit_reason": row["exit_reason"],
+                "market_regime": row["market_regime"],
+                "entry_time": row["entry_time"],
+                "exit_time": row["exit_time"],
+            }
+            for row in rows
+        ]
+
+    async def clear_simulation_trades(self) -> int:
+        """Vide la table simulation_trades. Retourne le nombre de lignes supprimées."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("DELETE FROM simulation_trades")
+        await self._conn.commit()
+        return cursor.rowcount
 
     # ─── SESSION STATE ──────────────────────────────────────────────────────
 

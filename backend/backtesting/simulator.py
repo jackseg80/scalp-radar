@@ -8,6 +8,7 @@ Sprint 11 : GridStrategyRunner pour les stratégies grid/DCA (envelope_dca).
 
 from __future__ import annotations
 
+import sqlite3
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -56,6 +57,54 @@ def _safe_round(val: Any, decimals: int = 1) -> float | None:
         return None
 
 
+def _save_trade_to_db_sync(
+    db_path: str,
+    strategy_name: str,
+    symbol: str,
+    trade: TradeResult,
+) -> None:
+    """Sauvegarde synchrone d'un trade dans la DB.
+
+    Backward compatible : log warning si table absente, ne crashe jamais.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """INSERT INTO simulation_trades
+               (strategy_name, symbol, direction, entry_price, exit_price, quantity,
+                gross_pnl, fee_cost, slippage_cost, net_pnl, exit_reason,
+                market_regime, entry_time, exit_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                strategy_name,
+                symbol,
+                trade.direction.value,
+                trade.entry_price,
+                trade.exit_price,
+                trade.quantity,
+                trade.gross_pnl,
+                trade.fee_cost,
+                trade.slippage_cost,
+                trade.net_pnl,
+                trade.exit_reason,
+                trade.market_regime.value if trade.market_regime else None,
+                trade.entry_time.isoformat(),
+                trade.exit_time.isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            logger.warning(
+                "Table simulation_trades absente (DB ancienne), trade non persisté"
+            )
+        else:
+            logger.warning("Erreur sauvegarde trade en DB: {}", e)
+    except Exception as e:
+        logger.warning("Erreur inattendue sauvegarde trade: {}", e)
+
+
 @dataclass
 class OrphanClosure:
     """Position orpheline fermée au boot (stratégie désactivée)."""
@@ -95,12 +144,14 @@ class LiveStrategyRunner:
         indicator_engine: IncrementalIndicatorEngine,
         position_manager: PositionManager,
         data_engine: DataEngine,
+        db_path: str | None = None,
     ) -> None:
         self._strategy = strategy
         self._config = config
         self._indicator_engine = indicator_engine
         self._pm = position_manager
         self._data_engine = data_engine
+        self._db_path = db_path
 
         self._initial_capital = 10_000.0
         self._capital = self._initial_capital
@@ -253,6 +304,10 @@ class LiveStrategyRunner:
             trade.net_pnl,
             trade.exit_reason,
         )
+
+        # Persister en DB
+        if self._db_path and symbol:
+            _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
 
         # Sprint 5a : notifier l'Executor
         if symbol:
@@ -424,12 +479,14 @@ class GridStrategyRunner:
         indicator_engine: IncrementalIndicatorEngine,
         grid_position_manager: GridPositionManager,
         data_engine: DataEngine,
+        db_path: str | None = None,
     ) -> None:
         self._strategy = strategy
         self._config = config
         self._indicator_engine = indicator_engine
         self._gpm = grid_position_manager
         self._data_engine = data_engine
+        self._db_path = db_path
 
         self._initial_capital = 10_000.0
         self._capital = self._initial_capital
@@ -668,6 +725,10 @@ class GridStrategyRunner:
             trade.net_pnl,
             trade.exit_reason,
         )
+
+        # Persister en DB
+        if self._db_path and symbol:
+            _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
 
         # Kill switch
         session_loss_pct = (
@@ -1011,6 +1072,9 @@ class Simulator:
         )
         pm = PositionManager(pm_config)
 
+        # Extraire db_path pour les runners
+        db_path = self._db.db_path if self._db else None
+
         # Créer un runner par stratégie (grid ou mono-position)
         for strategy in strategies:
             if is_grid_strategy(strategy.name):
@@ -1029,6 +1093,7 @@ class Simulator:
                     indicator_engine=self._indicator_engine,
                     grid_position_manager=gpm,
                     data_engine=self._data_engine,
+                    db_path=db_path,
                 )
             else:
                 runner = LiveStrategyRunner(
@@ -1037,6 +1102,7 @@ class Simulator:
                     indicator_engine=self._indicator_engine,
                     position_manager=pm,
                     data_engine=self._data_engine,
+                    db_path=db_path,
                 )
             self._runners.append(runner)
             logger.info(

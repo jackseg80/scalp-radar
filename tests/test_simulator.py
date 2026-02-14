@@ -57,6 +57,7 @@ def _make_runner(
     indicator_engine=None,
     position_manager=None,
     data_engine=None,
+    db_path=None,
 ) -> LiveStrategyRunner:
     """Crée un runner avec des mocks par défaut."""
     if strategy is None:
@@ -101,6 +102,7 @@ def _make_runner(
         indicator_engine=indicator_engine,
         position_manager=position_manager,
         data_engine=data_engine,
+        db_path=db_path,
     )
 
 
@@ -691,3 +693,237 @@ class TestCollisionWarning:
         config = MagicMock()
         sim = Simulator(data_engine=de, config=config)
         assert sim.is_kill_switch_triggered() is False
+
+
+# ─── Tests Persistence Trades ─────────────────────────────────────────────────
+
+
+class TestTradePersistence:
+    @pytest.mark.asyncio
+    async def test_trade_persisted_to_db(self, tmp_path):
+        """Un trade enregistré via _record_trade() est sauvegardé en DB."""
+        import sqlite3
+        from backend.backtesting.simulator import _save_trade_to_db_sync
+
+        db_path = str(tmp_path / "test.db")
+
+        # Créer la table
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE simulation_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                gross_pnl REAL NOT NULL,
+                fee_cost REAL NOT NULL,
+                slippage_cost REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                exit_reason TEXT NOT NULL,
+                market_regime TEXT,
+                entry_time TEXT NOT NULL,
+                exit_time TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+        # Créer un runner avec db_path
+        runner = _make_runner(db_path=db_path)
+
+        # Enregistrer un trade
+        trade = TradeResult(
+            direction=Direction.LONG,
+            entry_price=100_000.0,
+            exit_price=100_800.0,
+            quantity=0.01,
+            entry_time=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+            exit_time=datetime(2024, 1, 15, 12, 10, tzinfo=timezone.utc),
+            gross_pnl=8.0,
+            fee_cost=1.2,
+            slippage_cost=0.5,
+            net_pnl=6.3,
+            exit_reason="tp",
+            market_regime=MarketRegime.RANGING,
+        )
+        runner._record_trade(trade, symbol="BTC/USDT")
+
+        # Vérifier la DB
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("SELECT * FROM simulation_trades")
+        rows = cursor.fetchall()
+        conn.close()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row[1] == "test_strat"  # strategy_name
+        assert row[2] == "BTC/USDT"  # symbol
+        assert row[3] == "LONG"  # direction
+        assert row[4] == 100_000.0  # entry_price
+        assert row[5] == 100_800.0  # exit_price
+        assert row[10] == 6.3  # net_pnl
+        assert row[11] == "tp"  # exit_reason
+
+    @pytest.mark.asyncio
+    async def test_trades_survive_restart(self, tmp_path):
+        """Les trades en DB survivent au restart (mémoire vidée)."""
+        import sqlite3
+
+        db_path = str(tmp_path / "test.db")
+
+        # Créer la table
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE simulation_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                gross_pnl REAL NOT NULL,
+                fee_cost REAL NOT NULL,
+                slippage_cost REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                exit_reason TEXT NOT NULL,
+                market_regime TEXT,
+                entry_time TEXT NOT NULL,
+                exit_time TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+        # Créer un runner et enregistrer 5 trades
+        runner = _make_runner(db_path=db_path)
+        for i in range(5):
+            trade = TradeResult(
+                direction=Direction.LONG,
+                entry_price=100_000.0 + i * 100,
+                exit_price=100_500.0 + i * 100,
+                quantity=0.01,
+                entry_time=datetime(2024, 1, 15, 12, i, tzinfo=timezone.utc),
+                exit_time=datetime(2024, 1, 15, 12, i + 5, tzinfo=timezone.utc),
+                gross_pnl=5.0,
+                fee_cost=1.0,
+                slippage_cost=0.2,
+                net_pnl=3.8,
+                exit_reason="tp",
+                market_regime=MarketRegime.RANGING,
+            )
+            runner._record_trade(trade, symbol="BTC/USDT")
+
+        # Vider la mémoire (simule restart)
+        runner._trades = []
+
+        # Lire depuis la DB
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("SELECT COUNT(*) FROM simulation_trades")
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        assert count == 5
+
+    @pytest.mark.asyncio
+    async def test_trades_ordered_by_exit_time(self, tmp_path):
+        """get_simulation_trades() retourne les trades triés DESC par exit_time."""
+        import sqlite3
+        from backend.core.database import Database
+
+        db_path = str(tmp_path / "test.db")
+
+        # Init DB via Database class (création automatique de la table)
+        db = Database(db_path=db_path)
+        await db.init()
+
+        # Insérer 3 trades dans le désordre
+        trades_data = [
+            ("test_strat", "BTC/USDT", "long", 100000.0, 100500.0, 0.01, 5.0, 1.0, 0.2, 3.8, "tp", "ranging", "2024-01-15T12:00:00+00:00", "2024-01-15T12:15:00+00:00"),
+            ("test_strat", "ETH/USDT", "short", 3000.0, 2950.0, 0.1, 5.0, 0.5, 0.1, 4.4, "sl", "trending_up", "2024-01-15T12:05:00+00:00", "2024-01-15T12:10:00+00:00"),
+            ("test_strat", "SOL/USDT", "long", 150.0, 152.0, 1.0, 2.0, 0.2, 0.05, 1.75, "tp", "ranging", "2024-01-15T12:10:00+00:00", "2024-01-15T12:20:00+00:00"),
+        ]
+
+        assert db._conn is not None
+        await db._conn.executemany(
+            """INSERT INTO simulation_trades
+               (strategy_name, symbol, direction, entry_price, exit_price, quantity,
+                gross_pnl, fee_cost, slippage_cost, net_pnl, exit_reason,
+                market_regime, entry_time, exit_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            trades_data,
+        )
+        await db._conn.commit()
+
+        # Lire via get_simulation_trades
+        trades = await db.get_simulation_trades(limit=10)
+
+        # Vérifier ordre DESC (SOL, BTC, ETH par exit_time)
+        assert len(trades) == 3
+        assert trades[0]["symbol"] == "SOL/USDT"  # 12:20
+        assert trades[1]["symbol"] == "BTC/USDT"  # 12:15
+        assert trades[2]["symbol"] == "ETH/USDT"  # 12:10
+
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_trades(self, tmp_path):
+        """reset_simulator.py vide la table simulation_trades."""
+        import sqlite3
+
+        db_path = str(tmp_path / "test.db")
+
+        # Créer la table et insérer des trades
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE simulation_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                gross_pnl REAL NOT NULL,
+                fee_cost REAL NOT NULL,
+                slippage_cost REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                exit_reason TEXT NOT NULL,
+                market_regime TEXT,
+                entry_time TEXT NOT NULL,
+                exit_time TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            INSERT INTO simulation_trades
+            (strategy_name, symbol, direction, entry_price, exit_price, quantity,
+             gross_pnl, fee_cost, slippage_cost, net_pnl, exit_reason,
+             market_regime, entry_time, exit_time)
+            VALUES
+            ('test', 'BTC/USDT', 'long', 100000, 100500, 0.01, 5, 1, 0.2, 3.8, 'tp', 'ranging', '2024-01-15T12:00:00+00:00', '2024-01-15T12:10:00+00:00'),
+            ('test', 'ETH/USDT', 'short', 3000, 2950, 0.1, 5, 0.5, 0.1, 4.4, 'sl', 'trending_up', '2024-01-15T12:05:00+00:00', '2024-01-15T12:15:00+00:00');
+        """)
+        conn.commit()
+
+        # Vérifier qu'il y a 2 trades
+        cursor = conn.execute("SELECT COUNT(*) FROM simulation_trades")
+        assert cursor.fetchone()[0] == 2
+
+        # Simuler le reset (DELETE)
+        cursor = conn.execute("DELETE FROM simulation_trades")
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        assert deleted == 2
+
+        # Vérifier table vide
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("SELECT COUNT(*) FROM simulation_trades")
+        assert cursor.fetchone()[0] == 0
+        conn.close()

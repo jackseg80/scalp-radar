@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -73,10 +73,32 @@ def mock_app():
         "performance": {"name": "vwap_rsi", "net_pnl": 200.0},
     }
 
+    # DB mock avec get_simulation_trades async
+    db = MagicMock()
+    db._conn = True
+    db.get_simulation_trades = AsyncMock(return_value=[
+        {
+            "id": 1,
+            "strategy": "vwap_rsi",
+            "symbol": "BTC/USDT",
+            "direction": "LONG",
+            "entry_price": 100_000.0,
+            "exit_price": 100_800.0,
+            "quantity": 0.01,
+            "gross_pnl": 8.0,
+            "fee_cost": 1.2,
+            "slippage_cost": 0.5,
+            "net_pnl": 6.3,
+            "exit_reason": "tp",
+            "market_regime": "RANGING",
+            "entry_time": "2024-01-15T12:00:00+00:00",
+            "exit_time": "2024-01-15T12:05:00+00:00",
+        }
+    ])
+
     app.state.simulator = sim
     app.state.arena = arena
-    app.state.db = MagicMock()
-    app.state.db._conn = True
+    app.state.db = db
     app.state.engine = None
     app.state.config = MagicMock()
     app.state.start_time = MagicMock()

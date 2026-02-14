@@ -50,7 +50,14 @@ async def simulator_trades(
     request: Request,
     limit: int = Query(default=50, ge=1, le=500),
 ) -> dict:
-    """Trades récents (paginé)."""
+    """Trades récents (paginé) — lit depuis la DB."""
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        # Lire depuis la DB (source permanente)
+        trades = await db.get_simulation_trades(limit=limit)
+        return {"trades": trades}
+
+    # Fallback : mémoire (backward compat si DB absente)
     simulator = getattr(request.app.state, "simulator", None)
     if simulator is None:
         return {"trades": []}
