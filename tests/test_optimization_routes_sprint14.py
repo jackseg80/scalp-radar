@@ -55,7 +55,8 @@ def _create_tables(db_path: str) -> None:
             validation_summary TEXT,
             warnings TEXT,
             is_latest INTEGER DEFAULT 0,
-            source TEXT DEFAULT 'local'
+            source TEXT DEFAULT 'local',
+            regime_analysis TEXT
         );
     """)
     conn.close()

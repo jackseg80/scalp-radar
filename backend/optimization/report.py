@@ -346,6 +346,7 @@ def save_report(
     output_dir: str = "data/optimization",
     db_path: str | None = None,
     combo_results: list[dict] | None = None,
+    regime_analysis: dict | None = None,
 ) -> tuple[Path, int | None]:
     """Sauvegarde le rapport en JSON et en DB.
 
@@ -357,6 +358,7 @@ def save_report(
         output_dir: Répertoire JSON
         db_path: Chemin DB SQLite (None = depuis config)
         combo_results: Combo results du WFO (Sprint 14b, optionnel)
+        regime_analysis: Analyse par régime du best combo (Sprint 15b, optionnel)
 
     Returns:
         (filepath, result_id) : chemin JSON + ID DB (ou None si pas sauvé en DB)
@@ -391,7 +393,10 @@ def save_report(
             else:
                 db_path = "data/scalp_radar.db"  # Fallback
 
-        result_id = save_result_sync(db_path, report, wfo_windows, duration, timeframe)
+        result_id = save_result_sync(
+            db_path, report, wfo_windows, duration, timeframe,
+            regime_analysis=regime_analysis,
+        )
 
         # Sauver les combo results si présents (Sprint 14b)
         if result_id and combo_results:
@@ -402,7 +407,10 @@ def save_report(
     # 3. Push serveur (best-effort, ne crashe jamais)
     if timeframe is not None:
         from backend.optimization.optimization_db import push_to_server
-        push_to_server(report, wfo_windows, duration, timeframe, combo_results=combo_results)
+        push_to_server(
+            report, wfo_windows, duration, timeframe,
+            combo_results=combo_results, regime_analysis=regime_analysis,
+        )
 
     return filepath, result_id
 

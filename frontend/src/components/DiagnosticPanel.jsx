@@ -215,6 +215,66 @@ function analyzeResults(combos, grade, totalScore, nWindows) {
   return verdicts
 }
 
+// Couleurs et labels par régime
+const REGIME_CONFIG = {
+  Bull: { color: '#10b981', emoji: '\u25b2', label: 'Bull' },
+  Bear: { color: '#ef4444', emoji: '\u25bc', label: 'Bear' },
+  Range: { color: '#f59e0b', emoji: '\u25c6', label: 'Range' },
+  Crash: { color: '#dc2626', emoji: '\u26a0', label: 'Crash' },
+}
+
+/**
+ * Produit un verdict de conclusion basé sur l'analyse par régime.
+ */
+function analyzeRegimes(regimeAnalysis) {
+  if (!regimeAnalysis) return null
+
+  const regimes = Object.keys(regimeAnalysis)
+  if (regimes.length === 0) return null
+
+  // Identifier les régimes faibles (Sharpe < 0 ou consistance < 0.3)
+  const weakRegimes = regimes.filter((r) => {
+    const d = regimeAnalysis[r]
+    return d.avg_oos_sharpe < 0 || d.consistency < 0.3
+  })
+
+  // Identifier les régimes forts (Sharpe > 0.5 et consistance > 0.5)
+  const strongRegimes = regimes.filter((r) => {
+    const d = regimeAnalysis[r]
+    return d.avg_oos_sharpe > 0.5 && d.consistency > 0.5
+  })
+
+  if (weakRegimes.length === 0 && strongRegimes.length === regimes.length) {
+    return {
+      level: 'green',
+      title: 'Robuste tous régimes',
+      text: `Performante dans tous les régimes de marché testés (${regimes.join(', ')}).`,
+    }
+  }
+
+  if (weakRegimes.length > 0) {
+    const weakNames = weakRegimes.join(', ')
+    if (weakRegimes.includes('Crash')) {
+      return {
+        level: 'red',
+        title: 'Vulnérable aux crashs',
+        text: `La stratégie sous-performe en régime ${weakNames}. Risque élevé en conditions extrêmes.`,
+      }
+    }
+    return {
+      level: 'orange',
+      title: 'Dépendante du régime',
+      text: `Faible en régime ${weakNames}. Performances inégales selon les conditions de marché.`,
+    }
+  }
+
+  return {
+    level: 'orange',
+    title: 'Performance mixte',
+    text: `Résultats variables selon le régime. Aucun point faible critique identifié.`,
+  }
+}
+
 /**
  * Composant DiagnosticPanel
  *
@@ -222,8 +282,9 @@ function analyzeResults(combos, grade, totalScore, nWindows) {
  * @param {string} grade - Grade A-F
  * @param {number} totalScore - Score 0-100
  * @param {number} nWindows - Nombre de fenêtres WFO
+ * @param {Object|null} regimeAnalysis - Analyse par régime (Sprint 15b)
  */
-export default function DiagnosticPanel({ combos, grade, totalScore, nWindows }) {
+export default function DiagnosticPanel({ combos, grade, totalScore, nWindows, regimeAnalysis }) {
   // Guard : pas de données
   if (!combos || combos.length === 0 || !nWindows || nWindows <= 0) {
     return null
@@ -233,9 +294,14 @@ export default function DiagnosticPanel({ combos, grade, totalScore, nWindows })
     return analyzeResults(combos, grade, totalScore, nWindows)
   }, [combos, grade, totalScore, nWindows])
 
+  const regimeVerdict = useMemo(() => {
+    return analyzeRegimes(regimeAnalysis)
+  }, [regimeAnalysis])
+
   // Déterminer la couleur de la bordure gauche (plus sévère)
-  const hasSevere = verdicts.some((v) => v.level === 'red')
-  const hasWarning = verdicts.some((v) => v.level === 'orange')
+  const allVerdicts = regimeVerdict ? [...verdicts, regimeVerdict] : verdicts
+  const hasSevere = allVerdicts.some((v) => v.level === 'red')
+  const hasWarning = allVerdicts.some((v) => v.level === 'orange')
   const borderColor = hasSevere ? '#ef4444' : hasWarning ? '#f59e0b' : '#10b981'
 
   return (
@@ -256,6 +322,70 @@ export default function DiagnosticPanel({ combos, grade, totalScore, nWindows })
           </div>
         ))}
       </div>
+
+      {/* Sprint 15b : Section Analyse par Régime */}
+      {regimeAnalysis && Object.keys(regimeAnalysis).length > 0 && (
+        <div className="regime-section">
+          <h5 className="regime-title">PERFORMANCE PAR REGIME</h5>
+
+          <div className="regime-grid">
+            {Object.entries(regimeAnalysis).map(([regime, data]) => {
+              const config = REGIME_CONFIG[regime] || { color: '#6b7280', emoji: '?', label: regime }
+              const sharpeColor =
+                data.avg_oos_sharpe > 0.5
+                  ? '#10b981'
+                  : data.avg_oos_sharpe > 0
+                    ? '#f59e0b'
+                    : '#ef4444'
+
+              return (
+                <div key={regime} className="regime-card" style={{ borderTopColor: config.color }}>
+                  <div className="regime-card-header">
+                    <span className="regime-emoji">{config.emoji}</span>
+                    <span className="regime-label">{config.label}</span>
+                    <span className="regime-count">{data.count} fen.</span>
+                  </div>
+                  <div className="regime-stats">
+                    <div className="regime-stat">
+                      <span className="regime-stat-label">Sharpe</span>
+                      <span className="regime-stat-value" style={{ color: sharpeColor }}>
+                        {data.avg_oos_sharpe.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="regime-stat">
+                      <span className="regime-stat-label">Consist.</span>
+                      <span className="regime-stat-value">
+                        {Math.round(data.consistency * 100)}%
+                      </span>
+                    </div>
+                    <div className="regime-stat">
+                      <span className="regime-stat-label">Return</span>
+                      <span
+                        className="regime-stat-value"
+                        style={{ color: data.avg_return_pct > 0 ? '#10b981' : '#ef4444' }}
+                      >
+                        {data.avg_return_pct > 0 ? '+' : ''}
+                        {data.avg_return_pct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Verdict régime */}
+          {regimeVerdict && (
+            <div className="verdict-item regime-verdict">
+              <StatusCircle level={regimeVerdict.level} />
+              <div>
+                <div className="verdict-title">{regimeVerdict.title}</div>
+                <div className="verdict-text">{regimeVerdict.text}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

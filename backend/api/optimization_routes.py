@@ -573,9 +573,10 @@ async def get_combo_results(result_id: int) -> dict:
 
     combos = await get_combo_results_async(db_path, result_id)
 
+    # Toujours chercher le résultat parent pour regime_analysis
+    result = await get_result_by_id_async(db_path, result_id)
+
     if not combos:
-        # Vérifier si le result_id existe
-        result = await get_result_by_id_async(db_path, result_id)
         if result is None:
             raise HTTPException(404, f"Résultat {result_id} non trouvé")
 
@@ -583,10 +584,15 @@ async def get_combo_results(result_id: int) -> dict:
         return {
             "result_id": result_id,
             "combos": [],
+            "regime_analysis": result.get("regime_analysis") if result else None,
             "message": "Données détaillées non disponibles pour ce run (lancez un nouveau WFO)",
         }
 
-    return {"result_id": result_id, "combos": combos}
+    return {
+        "result_id": result_id,
+        "combos": combos,
+        "regime_analysis": result.get("regime_analysis") if result else None,
+    }
 
 
 # ─── GET /{result_id} (catch-all à la fin) ───────────────────────────────

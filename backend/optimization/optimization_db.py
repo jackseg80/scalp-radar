@@ -51,6 +51,7 @@ def save_result_sync(
     duration: float | None,
     timeframe: str,
     source: str = "local",
+    regime_analysis: dict | None = None,
 ) -> int:
     """Sauvegarde un résultat WFO en DB (sync pour optimize.py CLI).
 
@@ -61,6 +62,7 @@ def save_result_sync(
         duration: Durée du run en secondes (ou None)
         timeframe: Timeframe de la stratégie (ex: "5m", "1h")
         source: Origine du résultat ("local" ou "server")
+        regime_analysis: Analyse par régime du best combo (Sprint 15b, optionnel)
 
     Returns:
         result_id (int) : ID du résultat inséré
@@ -95,6 +97,7 @@ def save_result_sync(
         val_summary_json = json.dumps(val_summary)
 
         warnings_json = json.dumps(report.warnings)
+        regime_analysis_json = json.dumps(_sanitize_dict(regime_analysis)) if regime_analysis else None
 
         # Transaction is_latest
         conn.execute("BEGIN")
@@ -113,8 +116,8 @@ def save_result_sync(
                 grade, total_score, oos_sharpe, consistency, oos_is_ratio, dsr,
                 param_stability, monte_carlo_pvalue, mc_underpowered, n_windows, n_distinct_combos,
                 best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings,
-                is_latest, source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                is_latest, source, regime_analysis
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
             (
                 report.strategy_name,
                 report.symbol,
@@ -138,6 +141,7 @@ def save_result_sync(
                 val_summary_json,
                 warnings_json,
                 source,
+                regime_analysis_json,
             ),
         )
         result_id = cursor.lastrowid
@@ -165,6 +169,10 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
     try:
         conn.execute("BEGIN")
 
+        # Sérialiser regime_analysis si présent
+        ra = payload.get("regime_analysis")
+        regime_analysis_val = ra if isinstance(ra, str) else json.dumps(ra) if ra is not None else None
+
         # 1. Tenter l'INSERT (OR IGNORE pour les doublons)
         cursor = conn.execute(
             """INSERT OR IGNORE INTO optimization_results (
@@ -172,8 +180,8 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
                 grade, total_score, oos_sharpe, consistency, oos_is_ratio, dsr,
                 param_stability, monte_carlo_pvalue, mc_underpowered, n_windows, n_distinct_combos,
                 best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings,
-                is_latest, source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                is_latest, source, regime_analysis
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
             (
                 payload["strategy_name"],
                 payload["asset"],
@@ -197,6 +205,7 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
                 payload.get("validation_summary") if isinstance(payload.get("validation_summary"), str) else json.dumps(payload["validation_summary"]) if payload.get("validation_summary") is not None else None,
                 payload.get("warnings") if isinstance(payload.get("warnings"), str) else json.dumps(payload["warnings"]) if payload.get("warnings") is not None else None,
                 payload.get("source", "local"),
+                regime_analysis_val,
             ),
         )
 
@@ -237,6 +246,7 @@ def build_push_payload(
     timeframe: str,
     source: str = "local",
     combo_results: list[dict] | None = None,
+    regime_analysis: dict | None = None,
 ) -> dict:
     """Construit le payload JSON pour POST vers le serveur.
 
@@ -244,6 +254,7 @@ def build_push_payload(
 
     Args:
         combo_results: Combo results du WFO (Sprint 14b, optionnel)
+        regime_analysis: Analyse par régime du best combo (Sprint 15b, optionnel)
     """
     best_params_json = json.dumps(_sanitize_dict(report.recommended_params))
     wfo_windows_json = json.dumps(_sanitize_dict({"windows": wfo_windows})) if wfo_windows else None
@@ -296,6 +307,10 @@ def build_push_payload(
     if combo_results:
         payload["combo_results"] = combo_results
 
+    # Ajouter regime_analysis si présent (Sprint 15b)
+    if regime_analysis:
+        payload["regime_analysis"] = json.dumps(_sanitize_dict(regime_analysis))
+
     return payload
 
 
@@ -328,6 +343,7 @@ def build_payload_from_db_row(row: dict) -> dict:
         "validation_summary": row.get("validation_summary"),
         "warnings": row.get("warnings"),
         "source": row.get("source", "local"),
+        "regime_analysis": row.get("regime_analysis"),
     }
 
 
@@ -337,6 +353,7 @@ def push_to_server(
     duration: float | None,
     timeframe: str,
     combo_results: list[dict] | None = None,
+    regime_analysis: dict | None = None,
 ) -> None:
     """Pousse un résultat WFO vers le serveur de production (best-effort).
 
@@ -344,6 +361,7 @@ def push_to_server(
 
     Args:
         combo_results: Combo results du WFO (Sprint 14b, optionnel)
+        regime_analysis: Analyse par régime du best combo (Sprint 15b, optionnel)
     """
     try:
         from backend.core.config import get_config
@@ -360,7 +378,10 @@ def push_to_server(
 
         import httpx
 
-        payload = build_push_payload(report, wfo_windows, duration, timeframe, combo_results=combo_results)
+        payload = build_push_payload(
+            report, wfo_windows, duration, timeframe,
+            combo_results=combo_results, regime_analysis=regime_analysis,
+        )
         url = f"{config.secrets.sync_server_url.rstrip('/')}/api/optimization/results"
 
         with httpx.Client(timeout=10.0) as client:
@@ -477,6 +498,8 @@ async def get_result_by_id_async(db_path: str, result_id: int) -> dict[str, Any]
             result["validation_summary"] = json.loads(result["validation_summary"])
         if result["warnings"]:
             result["warnings"] = json.loads(result["warnings"])
+        if result.get("regime_analysis"):
+            result["regime_analysis"] = json.loads(result["regime_analysis"])
 
         return result
 

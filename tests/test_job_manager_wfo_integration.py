@@ -88,8 +88,9 @@ async def test_worker_real_wfo_short_window(manager_with_wfo):
     job = await manager_with_wfo.get_job(job_id)
 
     # Vérifier que le job a abouti (completed ou failed si pas de candles)
-    if job.status == "failed" and "Pas de candles" in (job.error_message or ""):
-        pytest.skip("Pas de candles en DB pour ce test")
+    err = job.error_message or ""
+    if job.status == "failed" and ("Pas de candles" in err or "Pas assez de donn" in err):
+        pytest.skip(f"Données insuffisantes en DB pour ce test : {err}")
 
     # Si completed : vérifier les champs
     if job.status == "completed":
@@ -144,8 +145,9 @@ async def test_progress_updates_via_callback(temp_db):
 
     job = await mgr.get_job(job_id)
 
-    if job.status == "failed" and "Pas de candles" in (job.error_message or ""):
-        pytest.skip("Pas de candles en DB")
+    err = job.error_message or ""
+    if job.status == "failed" and ("Pas de candles" in err or "Pas assez de donn" in err):
+        pytest.skip(f"Données insuffisantes en DB : {err}")
 
     # Vérifier que le broadcast a été appelé plusieurs fois (running + progress + completed)
     assert len(broadcasts) >= 3, f"Expected ≥3 broadcasts, got {len(broadcasts)}"

@@ -253,6 +253,7 @@ class Database:
                 ON optimization_results(created_at);
         """)
         await self._migrate_optimization_source()
+        await self._migrate_regime_analysis()
 
     async def _migrate_optimization_source(self) -> None:
         """Migration idempotente : ajoute la colonne source à optimization_results si absente."""
@@ -269,6 +270,22 @@ class Database:
         )
         await self._conn.commit()
         logger.info("Migration optimization_results : colonne source ajoutée")
+
+    async def _migrate_regime_analysis(self) -> None:
+        """Migration idempotente : ajoute regime_analysis à optimization_results (Sprint 15b)."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(optimization_results)")
+        columns = await cursor.fetchall()
+        if not columns:
+            return
+        col_names = [col["name"] for col in columns]
+        if "regime_analysis" in col_names:
+            return
+        await self._conn.execute(
+            "ALTER TABLE optimization_results ADD COLUMN regime_analysis TEXT"
+        )
+        await self._conn.commit()
+        logger.info("Migration optimization_results : colonne regime_analysis ajoutée")
 
     async def _create_sprint14_tables(self) -> None:
         """Tables Sprint 14 : jobs d'optimisation WFO."""

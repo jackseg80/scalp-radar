@@ -460,6 +460,41 @@ Système automatisé de trading crypto qui :
 - `LiveStrategyRunner.name` est une property read-only → setter via `runner._strategy.name`
 - `getattr(getattr(...), ...)` pour accès config MagicMock-safe (pas de `hasattr`)
 
+### Sprint 15b — Analyse par régime de marché ✅
+
+**Objectif** : Classifier chaque fenêtre OOS du WFO selon le régime de marché et afficher la performance par régime dans le DiagnosticPanel.
+
+**Classification `_classify_regime()`** (walk_forward.py) :
+
+- Crash : max drawdown > 30% en < 14 jours (prioritaire, algorithme O(n) via deque glissant)
+- Bull : rendement fenêtre > +20%
+- Bear : rendement fenêtre < -20%
+- Range : entre -20% et +20%
+
+**Backend** :
+
+- `_classify_regime()` appelé sur chaque fenêtre OOS → `window_regimes[]`
+- `regime_analysis` agrégé pour le best combo (avg_oos_sharpe, consistency, avg_return_pct par régime)
+- `WFOResult` : 2 nouveaux champs (`window_regimes`, `regime_analysis`)
+- Migration DB idempotente : colonne `regime_analysis TEXT` dans `optimization_results`
+- API `/combo-results/{id}` retourne `regime_analysis`
+- Sérialisation windows : champs `regime`, `regime_return_pct`, `regime_max_dd_pct`
+
+**Frontend** (DiagnosticPanel.jsx) :
+
+- Section "PERFORMANCE PAR RÉGIME DE MARCHÉ" avec icônes SVG (Bull/Bear/Range/Crash)
+- Métriques : Sharpe moyen OOS + consistance par régime + cercle couleur (vert/orange/rouge)
+- Conclusion automatique : all-weather, mean-reversion, momentum, meilleur régime
+
+**Hotfix exchange** :
+
+- WFO lisait `main_exchange: "binance"` hardcodé dans `param_grids.yaml`
+- Fix : lecture depuis `config.exchange.name.lower()` (config principale `exchanges.yaml`)
+- `main_exchange` supprimé de `param_grids.yaml` (paramètre d'infrastructure, pas d'optimisation)
+- `validation_exchange` reste dans `param_grids.yaml` (c'est un paramètre d'optimisation)
+
+**Tests** : 650 passants (+18 depuis hotfix orphan)
+
 ---
 
 ## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19) ← ON EST ICI
@@ -641,8 +676,8 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 
 ## ÉTAT ACTUEL (14 février 2026)
 
-- **628 tests**, 0 régression
-- **15 sprints + 1 hotfix + Sprint 14c** complétés (Phase 1-4 terminées)
+- **650 tests**, 0 régression
+- **15 sprints + 1 hotfix + Sprint 14c + Sprint 15b** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
 - **1 stratégie SHORT prête pour WFO** : envelope_dca_short (enabled: false, validation WFO en attente)
@@ -650,6 +685,8 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 - **Hotfix P&L overflow** : margin accounting + realized_pnl tracking dans GridStrategyRunner
 - **Executor Grid prêt** : LIVE_TRADING=false, à activer après validation paper
 - **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques, **diagnostic automatique en langage clair (6 règles)**
+- **Sprint 15b** : Analyse par régime de marché (Bull/Bear/Range/Crash) par fenêtre OOS, agrégation par régime dans DiagnosticPanel, conclusion automatique
+- **Hotfix exchange** : WFO lit l'exchange depuis la config principale (`exchanges.yaml`) au lieu d'un hardcode "binance" dans `param_grids.yaml`
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---

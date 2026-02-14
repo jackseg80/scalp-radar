@@ -607,6 +607,7 @@ export default function ExplorerPage({ wsData }) {
             grade={selectedRun?.grade || '?'}
             totalScore={selectedRun?.total_score || 0}
             nWindows={Math.max(...comboResults.combos.map((c) => c.n_windows_evaluated || 0))}
+            regimeAnalysis={comboResults.regime_analysis || null}
           />
 
           {/* Top 10 pleine largeur */}

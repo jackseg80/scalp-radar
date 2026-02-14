@@ -68,7 +68,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (20 components: Scanner, Heatmap, RiskCalc, ExecutorPanel, etc.)
-├── tests/                        # 632 tests (pytest)
+├── tests/                        # 650 tests (pytest)
 ├── scripts/                      # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator
 └── docs/plans/                   # Sprint plans 1-15 archivés
 ```
@@ -150,7 +150,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15 + hotfixes) : 632 tests passants**
+**Sprints complétés (1-15b + hotfixes) : 650 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -183,6 +183,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix : Monte Carlo underpowered detection fix (envelope_dca Grade D→B)
 - Hotfix : P&L overflow GridStrategyRunner — margin accounting + realized_pnl tracking (628 tests)
 - Hotfix : Orphan cleanup + collision warning — positions orphelines au boot, détection collision paper (632 tests)
+- Sprint 15b : Analyse par régime de marché (Bull/Bear/Range/Crash) + fix exchange WFO depuis config principale (650 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 

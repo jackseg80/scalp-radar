@@ -53,6 +53,7 @@ def db_path():
             warnings TEXT,
             is_latest INTEGER DEFAULT 1,
             source TEXT DEFAULT 'local',
+            regime_analysis TEXT,
             UNIQUE (strategy_name, asset, timeframe, created_at)
         );
 

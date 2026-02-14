@@ -49,7 +49,7 @@ async def check_data(config_dir: str = "config") -> None:
     config = get_config(config_dir)
     grids = _load_param_grids(f"{config_dir}/param_grids.yaml")
     opt_config = grids.get("optimization", {})
-    main_exchange = opt_config.get("main_exchange", "binance")
+    main_exchange = config.exchange.name.lower()
     val_exchange = opt_config.get("validation_exchange", "bitget")
 
     db = Database()
@@ -153,8 +153,11 @@ def _save_wfo_intermediate(wfo: "WFOResult", output_dir: str = "data/optimizatio
                 "oos_net_return_pct": w.oos_net_return_pct,
                 "oos_profit_factor": w.oos_profit_factor,
                 "oos_trades": w.oos_trades,
+                "regime": wfo.window_regimes[i]["regime"] if i < len(wfo.window_regimes) else None,
+                "regime_return_pct": wfo.window_regimes[i]["return_pct"] if i < len(wfo.window_regimes) else None,
+                "regime_max_dd_pct": wfo.window_regimes[i]["max_dd_pct"] if i < len(wfo.window_regimes) else None,
             }
-            for w in wfo.windows
+            for i, w in enumerate(wfo.windows)
         ],
     }
     with open(filepath, "w", encoding="utf-8") as f:
@@ -182,6 +185,10 @@ async def run_optimization(
     logger.info("═" * 55)
     logger.info("  Optimisation {} × {}", strategy_name.upper(), symbol)
     logger.info("═" * 55)
+
+    # Exchange source depuis la config principale (infrastructure)
+    config = get_config(config_dir)
+    main_exchange = config.exchange.name.lower()
 
     # Phase 1 : WFO
     logger.info("")
@@ -218,7 +225,6 @@ async def run_optimization(
     # Pour la stabilité, utiliser la dernière fenêtre IS (pas tout le dataset)
     grids = _load_param_grids(f"{config_dir}/param_grids.yaml")
     opt_config = grids.get("optimization", {})
-    main_exchange = opt_config.get("main_exchange", "binance")
     is_window_days = opt_config.get("is_window_days", 120)
 
     close_db = False
@@ -355,8 +361,11 @@ async def run_optimization(
             "oos_net_return_pct": w.oos_net_return_pct,
             "oos_profit_factor": w.oos_profit_factor,
             "oos_trades": w.oos_trades,
+            "regime": wfo.window_regimes[i]["regime"] if i < len(wfo.window_regimes) else None,
+            "regime_return_pct": wfo.window_regimes[i]["return_pct"] if i < len(wfo.window_regimes) else None,
+            "regime_max_dd_pct": wfo.window_regimes[i]["max_dd_pct"] if i < len(wfo.window_regimes) else None,
         }
-        for w in wfo.windows
+        for i, w in enumerate(wfo.windows)
     ]
 
     # Sauvegarde JSON + DB
@@ -366,6 +375,7 @@ async def run_optimization(
         duration=None,  # TODO: tracker la durée si nécessaire
         timeframe=main_tf,
         combo_results=wfo.combo_results,  # Sprint 14b
+        regime_analysis=wfo.regime_analysis,  # Sprint 15b
     )
 
     if progress_callback:

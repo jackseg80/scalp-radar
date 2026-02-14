@@ -30,6 +30,7 @@ from loguru import logger
 from backend.backtesting.engine import BacktestConfig, BacktestResult, run_backtest_single
 from backend.backtesting.extra_data_builder import build_extra_data_map
 from backend.backtesting.metrics import calculate_metrics
+from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.models import Candle, TimeFrame
 from backend.core.position_manager import TradeResult
@@ -74,6 +75,8 @@ class WFOResult:
     all_oos_trades: list[TradeResult]
     n_distinct_combos: int
     combo_results: list[dict[str, Any]] = field(default_factory=list)
+    window_regimes: list[dict[str, Any]] = field(default_factory=list)
+    regime_analysis: dict[str, dict[str, Any]] | None = None
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -198,6 +201,80 @@ def _slice_candles(
 ) -> list[Candle]:
     """Extrait les candles dans [start, end)."""
     return [c for c in candles if start <= c.timestamp < end]
+
+
+def _classify_regime(candles: list[Candle]) -> dict[str, Any]:
+    """Classifie le régime de marché d'une période OOS.
+
+    Ordre d'évaluation : Crash (prioritaire) → Bull → Bear → Range.
+
+    Critères :
+    - Crash : max drawdown > 30% survenant en < 14 jours
+    - Bull : rendement fenêtre > +20%
+    - Bear : rendement fenêtre < -20%
+    - Range : ni bull ni bear (rendement entre -20% et +20%)
+    """
+    if len(candles) < 2:
+        return {"regime": "range", "return_pct": 0.0, "max_dd_pct": 0.0}
+
+    closes = [c.close for c in candles]
+    timestamps = [c.timestamp for c in candles]
+    return_pct = (closes[-1] - closes[0]) / closes[0] * 100
+
+    # Max drawdown global
+    peak = closes[0]
+    max_dd = 0.0
+    for close in closes:
+        if close > peak:
+            peak = close
+        dd = (close - peak) / peak * 100
+        if dd < max_dd:
+            max_dd = dd
+
+    # Fast crash detection : peak-to-trough > 30% en ≤ 14 jours
+    # Algorithme O(n) : sliding window maximum via deque
+    from collections import deque
+
+    is_crash = False
+    max_seconds = 14 * 86400
+    peak_deque: deque[int] = deque()
+
+    for i in range(len(closes)):
+        ts_i = timestamps[i].timestamp()
+
+        # Retirer les éléments hors fenêtre de 14 jours
+        while peak_deque and (ts_i - timestamps[peak_deque[0]].timestamp()) > max_seconds:
+            peak_deque.popleft()
+
+        # Retirer les éléments plus petits que le courant (ne seront jamais le max)
+        while peak_deque and closes[peak_deque[-1]] <= closes[i]:
+            peak_deque.pop()
+
+        peak_deque.append(i)
+
+        # Le max dans la fenêtre glissante est closes[peak_deque[0]]
+        local_peak = closes[peak_deque[0]]
+        if local_peak > 0:
+            dd_14d = (closes[i] - local_peak) / local_peak * 100
+            if dd_14d < -30:
+                is_crash = True
+                break
+
+    # Classification (crash prioritaire)
+    if is_crash:
+        regime = "crash"
+    elif return_pct > 20:
+        regime = "bull"
+    elif return_pct < -20:
+        regime = "bear"
+    else:
+        regime = "range"
+
+    return {
+        "regime": regime,
+        "return_pct": round(return_pct, 2),
+        "max_dd_pct": round(max_dd, 2),
+    }
 
 
 # ─── Worker pool avec initializer (candles chargées 1 fois par worker) ─────
@@ -338,7 +415,7 @@ class WalkForwardOptimizer:
         self,
         strategy_name: str,
         symbol: str,
-        exchange: str = "binance",
+        exchange: str | None = None,
         is_window_days: int = 120,
         oos_window_days: int = 30,
         step_days: int = 30,
@@ -354,6 +431,9 @@ class WalkForwardOptimizer:
             params_override: Sous-grille custom {param_name: [values]} fusionnée dans "default".
         """
         opt_config = self._grids.get("optimization", {})
+        if exchange is None:
+            cfg = get_config(self._config_dir)
+            exchange = cfg.exchange.name.lower()
         is_window_days = opt_config.get("is_window_days", is_window_days)
         oos_window_days = opt_config.get("oos_window_days", oos_window_days)
         step_days = opt_config.get("step_days", step_days)
@@ -500,6 +580,7 @@ class WalkForwardOptimizer:
         # Skip si stratégie sans fast engine (trop lent)
         collect_combo_results = strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short")
         combo_accumulator: dict[str, list[dict]] = {}
+        window_regimes: list[dict[str, Any]] = []
 
         for w_idx, (is_start, is_end, oos_start, oos_end) in enumerate(windows):
             logger.info(
@@ -579,6 +660,14 @@ class WalkForwardOptimizer:
                     logger.warning("Fenêtre {} : pas de candles OOS, skip", w_idx)
                     continue
 
+                # Classifier le régime de la fenêtre OOS (Sprint 15b)
+                oos_regime = _classify_regime(oos_candles_by_tf[main_tf])
+                window_regimes.append(oos_regime)
+                logger.info(
+                    "  Régime OOS : {} (return={:.1f}%, max_dd={:.1f}%)",
+                    oos_regime["regime"], oos_regime["return_pct"], oos_regime["max_dd_pct"],
+                )
+
                 # Build extra_data_map pour OOS window (commun)
                 oos_extra_data_map: dict[str, dict[str, Any]] | None = None
                 if needs_extra:
@@ -623,6 +712,7 @@ class WalkForwardOptimizer:
                             "oos_sharpe": oos_r[1] if oos_r else None,
                             "oos_return_pct": oos_r[2] if oos_r else None,
                             "oos_trades": oos_r[4] if oos_r else None,
+                            "window_idx": w_idx,
                         })
 
                 # --- OOS evaluation (best params uniquement) ---
@@ -740,6 +830,38 @@ class WalkForwardOptimizer:
 
             logger.info("Sprint 14b : {} combo results agrégés", len(combo_results))
 
+        # Agrégation regime_analysis pour le best combo (Sprint 15b)
+        regime_analysis: dict[str, dict[str, Any]] | None = None
+        if collect_combo_results and combo_accumulator and window_regimes:
+            recommended_key = json.dumps(recommended, sort_keys=True)
+            best_window_data = combo_accumulator.get(recommended_key, [])
+
+            if best_window_data:
+                regime_groups: dict[str, list[dict]] = {}
+                for wd in best_window_data:
+                    w_idx = wd.get("window_idx", -1)
+                    if 0 <= w_idx < len(window_regimes):
+                        regime = window_regimes[w_idx]["regime"]
+                        regime_groups.setdefault(regime, []).append(wd)
+
+                regime_analysis = {}
+                for regime, entries in regime_groups.items():
+                    oos_sharpes = [e["oos_sharpe"] for e in entries if e["oos_sharpe"] is not None]
+                    oos_returns = [e["oos_return_pct"] for e in entries if e["oos_return_pct"] is not None]
+                    n_positive = sum(1 for s in oos_sharpes if s > 0)
+
+                    regime_analysis[regime] = {
+                        "n_windows": len(entries),
+                        "avg_oos_sharpe": round(float(np.nanmean(oos_sharpes)), 4) if oos_sharpes else 0.0,
+                        "consistency": round(n_positive / len(oos_sharpes), 4) if oos_sharpes else 0.0,
+                        "avg_return_pct": round(float(np.mean(oos_returns)), 4) if oos_returns else 0.0,
+                    }
+
+                logger.info(
+                    "Sprint 15b : regime_analysis = {}",
+                    {r: f"n={d['n_windows']}, sharpe={d['avg_oos_sharpe']:.2f}" for r, d in regime_analysis.items()},
+                )
+
         return WFOResult(
             strategy_name=strategy_name,
             symbol=symbol,
@@ -752,6 +874,8 @@ class WalkForwardOptimizer:
             all_oos_trades=all_oos_trades,
             n_distinct_combos=n_distinct_combos,
             combo_results=combo_results,
+            window_regimes=window_regimes,
+            regime_analysis=regime_analysis,
         )
 
     def _build_windows(
