@@ -41,7 +41,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (613 passants) |
+| Testing            | pytest            | Critical components must have unit tests (632 passants) |
 
 ## Key Architecture Principles
 
@@ -68,8 +68,8 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (20 components: Scanner, Heatmap, RiskCalc, ExecutorPanel, etc.)
-├── tests/                        # 613 tests (pytest)
-├── scripts/                      # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check
+├── tests/                        # 632 tests (pytest)
+├── scripts/                      # fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator
 └── docs/plans/                   # Sprint plans 1-15 archivés
 ```
 
@@ -150,7 +150,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15) : 613 tests passants**
+**Sprints complétés (1-15 + hotfixes) : 632 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -181,6 +181,8 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 14b : Heatmap dense (wfo_combo_results), charts analytiques, tooltips (603 tests)
 - Sprint 15 : Stratégie Envelope DCA SHORT (miroir LONG, fast engine direction=-1) (613 tests)
 - Hotfix : Monte Carlo underpowered detection fix (envelope_dca Grade D→B)
+- Hotfix : P&L overflow GridStrategyRunner — margin accounting + realized_pnl tracking (628 tests)
+- Hotfix : Orphan cleanup + collision warning — positions orphelines au boot, détection collision paper (632 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 
@@ -205,6 +207,19 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Enveloppes asymétriques : `upper = 1/(1-lower) - 1` (aller-retour cohérent)
 - Leverage 6 depuis config (pas le défaut 15)
 - Exclusion mutuelle mono/grid par symbol (Bitget agrège par symbol+direction)
+
+**Grid Margin Accounting (Hotfix) :**
+- GridStrategyRunner déduit `margin = notional / leverage` à l'ouverture, restitue à la fermeture
+- `_realized_pnl` séparé de `_capital` — kill switch utilise uniquement le P&L réalisé
+- Entry fees inclus dans `net_pnl` à la fermeture (pas déduites à l'ouverture, sinon double-counting)
+- StateManager sauvegarde `realized_pnl` avec guard `isinstance(..., (int, float))` (MagicMock-safe)
+- `scripts/reset_simulator.py` pour purger un état corrompu (idempotent, `--executor` flag)
+
+**Orphan Cleanup & Collision (Hotfix) :**
+- Au boot, `_cleanup_orphan_runners()` détecte les runners dans saved_state non présents dans enabled_names
+- Paper : log WARNING + `OrphanClosure` dataclass avec fee estimé ; Live : log CRITICAL (pas d'action Bitget)
+- Collision paper : snapshot positions avant/après chaque `on_candle()`, log WARNING si même symbol
+- `_trades` (liste mémoire) vidée à chaque boot ; `_stats.total_trades` restauré (compteur cumulatif)
 
 **Executor Grid (Sprint 12) :**
 - Dispatch grid vs mono via `_is_grid_strategy()`

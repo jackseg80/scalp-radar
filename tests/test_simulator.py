@@ -418,6 +418,273 @@ class TestSimulator:
         sim = Simulator(data_engine=de, config=config)
         assert sim.get_all_status() == {}
 
+
+# ─── Tests Orphan Cleanup ──────────────────────────────────────────────────
+
+
+class TestOrphanCleanup:
+    @pytest.mark.asyncio
+    async def test_orphan_cleanup_on_disable(self):
+        """Runner désactivé avec position → orphan_closures enregistré."""
+        from unittest.mock import patch
+
+        config = MagicMock()
+        config.risk.position.default_leverage = 15
+        config.risk.fees.maker_percent = 0.02
+        config.risk.fees.taker_percent = 0.06
+        config.risk.slippage.default_estimate_percent = 0.05
+        config.risk.slippage.high_volatility_multiplier = 2.0
+        config.risk.position.max_risk_per_trade_percent = 2.0
+        config.secrets.live_trading = False
+
+        engine = MagicMock()
+        engine.on_candle = MagicMock()
+        engine.get_all_symbols.return_value = ["BTC/USDT"]
+
+        # Seul strat_a est enabled
+        strategy_a = MagicMock()
+        strategy_a.name = "strat_a"
+        strategy_a.min_candles = {"5m": 50}
+
+        saved_state = {
+            "runners": {
+                "strat_a": {
+                    "capital": 10000.0,
+                    "net_pnl": 0.0,
+                    "total_trades": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "kill_switch": False,
+                    "is_active": True,
+                    "position": None,
+                    "position_symbol": None,
+                },
+                "strat_b": {
+                    "capital": 9800.0,
+                    "net_pnl": -200.0,
+                    "total_trades": 1,
+                    "wins": 0,
+                    "losses": 1,
+                    "kill_switch": False,
+                    "is_active": True,
+                    "position": {
+                        "direction": "long",
+                        "entry_price": 100000.0,
+                        "quantity": 0.01,
+                        "entry_time": "2024-06-15T10:00:00+00:00",
+                        "tp_price": 101000.0,
+                        "sl_price": 99000.0,
+                        "entry_fee": 0.60,
+                    },
+                    "position_symbol": "BTC/USDT",
+                },
+            },
+        }
+
+        with patch(
+            "backend.backtesting.simulator.get_enabled_strategies",
+            return_value=[strategy_a],
+        ), patch(
+            "backend.backtesting.simulator.is_grid_strategy",
+            return_value=False,
+        ):
+            sim = Simulator(data_engine=engine, config=config)
+            await sim.start(saved_state=saved_state)
+
+        # Seul strat_a a un runner
+        assert len(sim._runners) == 1
+        assert sim._runners[0].name == "strat_a"
+
+        # Orphan closure enregistré pour strat_b
+        assert len(sim.orphan_closures) == 1
+        closure = sim.orphan_closures[0]
+        assert closure.strategy_name == "strat_b"
+        assert closure.symbol == "BTC/USDT"
+        assert closure.direction == "long"
+        assert closure.entry_price == 100000.0
+        assert closure.estimated_fee_cost > 0
+        assert closure.reason == "strategy_disabled"
+
+    @pytest.mark.asyncio
+    async def test_orphan_cleanup_no_positions(self):
+        """Runner désactivé sans position → pas d'orphan closure."""
+        from unittest.mock import patch
+
+        config = MagicMock()
+        config.risk.position.default_leverage = 15
+        config.risk.fees.maker_percent = 0.02
+        config.risk.fees.taker_percent = 0.06
+        config.risk.slippage.default_estimate_percent = 0.05
+        config.risk.slippage.high_volatility_multiplier = 2.0
+        config.risk.position.max_risk_per_trade_percent = 2.0
+        config.secrets.live_trading = False
+
+        engine = MagicMock()
+        engine.on_candle = MagicMock()
+        engine.get_all_symbols.return_value = ["BTC/USDT"]
+
+        strategy_a = MagicMock()
+        strategy_a.name = "strat_a"
+        strategy_a.min_candles = {"5m": 50}
+
+        saved_state = {
+            "runners": {
+                "strat_a": {
+                    "capital": 10000.0, "net_pnl": 0.0,
+                    "total_trades": 0, "wins": 0, "losses": 0,
+                    "kill_switch": False, "is_active": True,
+                    "position": None, "position_symbol": None,
+                },
+                "strat_b": {
+                    "capital": 10000.0, "net_pnl": 0.0,
+                    "total_trades": 0, "wins": 0, "losses": 0,
+                    "kill_switch": False, "is_active": True,
+                    "position": None, "position_symbol": None,
+                },
+            },
+        }
+
+        with patch(
+            "backend.backtesting.simulator.get_enabled_strategies",
+            return_value=[strategy_a],
+        ), patch(
+            "backend.backtesting.simulator.is_grid_strategy",
+            return_value=False,
+        ):
+            sim = Simulator(data_engine=engine, config=config)
+            await sim.start(saved_state=saved_state)
+
+        assert len(sim._runners) == 1
+        assert len(sim.orphan_closures) == 0
+
+
+# ─── Tests Collision Warning ───────────────────────────────────────────────
+
+
+class TestCollisionWarning:
+    @pytest.mark.asyncio
+    async def test_collision_warning_same_symbol(self):
+        """2 runners ouvrent sur le même symbol → warning enregistré."""
+        de = MagicMock()
+        de.on_candle = MagicMock()
+        de.get_funding_rate.return_value = None
+        de.get_open_interest.return_value = []
+
+        config = MagicMock()
+        sim = Simulator(data_engine=de, config=config)
+
+        ie = MagicMock(spec=IncrementalIndicatorEngine)
+        ie.get_indicators.return_value = {
+            "5m": {
+                "rsi": 30.0, "vwap": 99500.0,
+                "adx": 15.0, "di_plus": 10.0, "di_minus": 12.0,
+                "atr": 500.0, "atr_sma": 450.0, "close": 100000.0,
+            },
+        }
+        sim._indicator_engine = ie
+        sim._running = True
+
+        # Runner A a déjà une position LONG BTC
+        runner_a = _make_runner()
+        runner_a._strategy.name = "strat_a"
+        # name is a read-only property → set via _strategy.name
+        runner_a._position = OpenPosition(
+            direction=Direction.LONG, entry_price=100000.0,
+            quantity=0.01,
+            entry_time=datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc),
+            tp_price=101000.0, sl_price=99000.0, entry_fee=0.6,
+        )
+        runner_a._position_symbol = "BTC/USDT"
+        # Pas de nouveau signal → garde la position
+        runner_a._strategy.evaluate.return_value = None
+        runner_a._strategy.check_exit.return_value = None
+
+        # Runner B va ouvrir SHORT sur BTC/USDT
+        signal_b = StrategySignal(
+            direction=Direction.SHORT, entry_price=100000.0,
+            tp_price=99200.0, sl_price=100300.0,
+            score=0.8, strength="MODERATE",
+            market_regime=MarketRegime.RANGING,
+        )
+        runner_b = _make_runner()
+        runner_b._strategy.name = "strat_b"
+        # name is a read-only property → set via _strategy.name
+        runner_b._strategy.evaluate.return_value = signal_b
+
+        sim._runners = [runner_a, runner_b]
+
+        candle = _make_candle()
+        await sim._dispatch_candle("BTC/USDT", "5m", candle)
+
+        # Runner B a ouvert
+        assert runner_b._position is not None
+
+        # Collision détectée
+        assert len(sim.collision_warnings) == 1
+        w = sim.collision_warnings[0]
+        assert w["symbol"] == "BTC/USDT"
+        assert w["runner_opening"] == "strat_b"
+        assert w["runner_existing"] == "strat_a"
+
+    @pytest.mark.asyncio
+    async def test_no_collision_different_symbols(self):
+        """Runners sur des symbols différents → pas de warning."""
+        de = MagicMock()
+        de.on_candle = MagicMock()
+        de.get_funding_rate.return_value = None
+        de.get_open_interest.return_value = []
+
+        config = MagicMock()
+        sim = Simulator(data_engine=de, config=config)
+
+        ie = MagicMock(spec=IncrementalIndicatorEngine)
+        ie.get_indicators.return_value = {
+            "5m": {
+                "rsi": 30.0, "vwap": 99500.0,
+                "adx": 15.0, "di_plus": 10.0, "di_minus": 12.0,
+                "atr": 500.0, "atr_sma": 450.0, "close": 100000.0,
+            },
+        }
+        sim._indicator_engine = ie
+        sim._running = True
+
+        # Runner A a une position sur ETH
+        runner_a = _make_runner()
+        runner_a._strategy.name = "strat_a"
+        # name is a read-only property → set via _strategy.name
+        runner_a._position = OpenPosition(
+            direction=Direction.LONG, entry_price=3000.0,
+            quantity=0.1,
+            entry_time=datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc),
+            tp_price=3100.0, sl_price=2900.0, entry_fee=0.18,
+        )
+        runner_a._position_symbol = "ETH/USDT"
+        runner_a._strategy.evaluate.return_value = None
+        runner_a._strategy.check_exit.return_value = None
+
+        # Runner B ouvre sur BTC (pas de collision)
+        signal_b = StrategySignal(
+            direction=Direction.LONG, entry_price=100000.0,
+            tp_price=101000.0, sl_price=99500.0,
+            score=0.7, strength="MODERATE",
+            market_regime=MarketRegime.RANGING,
+        )
+        runner_b = _make_runner()
+        runner_b._strategy.name = "strat_b"
+        # name is a read-only property → set via _strategy.name
+        runner_b._strategy.evaluate.return_value = signal_b
+
+        sim._runners = [runner_a, runner_b]
+
+        candle = _make_candle()
+        await sim._dispatch_candle("BTC/USDT", "5m", candle)
+
+        # Runner B a ouvert sur BTC
+        assert runner_b._position is not None
+
+        # Pas de collision (symbols différents)
+        assert len(sim.collision_warnings) == 0
+
     def test_is_kill_switch_triggered_false(self):
         """Pas de kill switch par défaut."""
         de = MagicMock()

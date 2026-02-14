@@ -344,6 +344,84 @@ Système automatisé de trading crypto qui :
 - Enveloppes asymétriques critiques : aller-retour cohérent (entry_long → SMA → entry_short doit être symétrique en log-return)
 - Découverte dynamique backend → frontend évite les oublis futurs (nouvelle stratégie apparaît automatiquement)
 
+### Hotfix — P&L Overflow GridStrategyRunner ✅
+
+**Bug** : P&L simulateur paper trading affichait +12 quadrillions $, capital à 9.4 quintillions $.
+
+**Cause racine** : `GridStrategyRunner.on_candle()` ne déduisait jamais la marge du capital après ouverture de positions grid. Contrairement à `LiveStrategyRunner` qui fait `self._capital -= entry_fee`, le GridStrategyRunner gardait le capital intact → compounding exponentiel sur chaque cycle.
+
+**Fix (3 volets)** :
+
+1. **Margin accounting** (simulator.py — GridStrategyRunner) :
+   - **Open** : déduire `margin = notional / leverage` du capital disponible
+   - **Close** : restituer la marge au capital, puis appliquer le net_pnl
+   - **Anti-overflow** : si `capital < margin_used` → skip le niveau (log warning)
+   - Ajout `self._leverage` en `__init__()` depuis config
+
+2. **Realized P&L tracking** (simulator.py — GridStrategyRunner) :
+   - Ajout `self._realized_pnl` : ne suit que les trades clôturés
+   - `self._stats.net_pnl = self._realized_pnl` (pas `capital - initial_capital`)
+   - Corrige le kill switch qui comptait la marge verrouillée comme une "perte"
+   - Backward-compatible : `restore_state()` fallback sur `net_pnl` si `realized_pnl` absent
+
+3. **State persistence** (state_manager.py) :
+   - Sauvegarde `realized_pnl` avec guard `isinstance(getattr(...), (int, float))` (MagicMock-safe)
+   - Restauration backward-compatible
+
+**Script reset** : `scripts/reset_simulator.py` — supprime l'état corrompu (idempotent, `--executor` flag)
+
+**Tests** : 628 passants (+15 depuis Sprint 15)
+- `test_capital_decremented_on_open` : vérifie déduction marge à l'ouverture
+- `test_grid_capital_restored_on_close` : vérifie capital = initial + net_pnl après close
+- `test_grid_no_overflow_after_100_cycles` : 100 cycles near-breakeven → capital < 2× initial
+- `test_grid_zero_capital_skips_level` : capital=0 → aucune position ouverte
+- Tests state_manager + simulator existants adaptés (realized_pnl)
+
+**Résultat production** :
+- Capital : 20 175$ (initial 10 000$), +101.76% en 20 trades, 70% win rate
+- Kill switch : désactivé (utilise realized_pnl, pas capital)
+- État cohérent après restart
+
+**Leçons apprises** :
+- **Marge ≠ fee** : ne pas confondre la déduction de marge (réversible) et la déduction de frais (irréversible dans net_pnl)
+- **Double-counting fees** : `close_all_positions()` inclut déjà `entry_fee` dans `net_pnl` → ne pas les déduire aussi à l'ouverture
+- **Kill switch** : doit utiliser le P&L réalisé uniquement, pas `capital - initial_capital` (sinon marge verrouillée = "perte")
+- **MagicMock piège** : `hasattr(mock, "anything")` retourne toujours True → utiliser `isinstance(getattr(...), (int, float))`
+- **Tests compound** : utiliser des prix near-breakeven pour tester N cycles, sinon le compound légitime explose aussi
+
+### Hotfix — Orphan Cleanup + Collision Warning ✅
+
+**Problème 1** : Quand une stratégie est désactivée (`enabled: false`) et le serveur redémarré, ses positions ouvertes disparaissent silencieusement — aucun log, aucun cleanup. En live, les positions restent sur Bitget sans suivi.
+
+**Problème 2** : En paper trading, 2 runners peuvent ouvrir sur le même symbol sans avertissement, alors qu'en live l'Executor applique l'exclusion mutuelle.
+
+**Fix 1 — Cleanup positions orphelines au boot** :
+- `OrphanClosure` dataclass : stocke strategy_name, symbol, direction, entry_price, quantity, estimated_fee_cost
+- `_cleanup_orphan_runners()` : itère `saved_state["runners"]`, filtre ceux pas dans `enabled_names`
+  - Paper : log WARNING + crée `OrphanClosure` avec fee estimé
+  - Live : log CRITICAL "VÉRIFIER BITGET MANUELLEMENT" (pas d'action automatique sur l'exchange)
+  - Les orphelins disparaissent naturellement du JSON via periodic save (60s) — seuls les runners actifs sont sauvegardés
+- Appelé dans `start()` avant la restauration d'état des runners actifs
+- Property `orphan_closures` : liste des fermetures orphelines (logs suffisants, pas exposé au frontend)
+
+**Fix 2 — Warning collision paper trading** :
+- `_get_position_symbols()` : helper retournant les symbols avec positions ouvertes (gère Grid et Mono)
+- `_dispatch_candle()` modifié : snapshot positions avant la boucle, détection collision après chaque `on_candle()`
+- Si un runner ouvre une position sur un symbol déjà occupé par un autre runner → log WARNING
+- `get_all_status()` enrichi avec `collision_warnings` par runner
+- Property `collision_warnings` : liste des collisions détectées
+
+**Tests** : 632 passants (+4 depuis hotfix P&L)
+- `test_orphan_cleanup_on_disable` : stratégie désactivée avec position → orphan closure enregistrée
+- `test_orphan_cleanup_no_positions` : stratégie désactivée sans position → aucune closure
+- `test_collision_warning_same_symbol` : 2 runners sur BTC → collision détectée
+- `test_no_collision_different_symbols` : runner_a ETH, runner_b BTC → aucune collision
+
+**Leçons apprises** :
+- `_trades` (liste en mémoire) vs `_stats.total_trades` (compteur persisté) : les trades ne sont pas restaurés au boot, seuls les compteurs le sont
+- `LiveStrategyRunner.name` est une property read-only → setter via `runner._strategy.name`
+- `getattr(getattr(...), ...)` pour accès config MagicMock-safe (pas de `hasattr`)
+
 ---
 
 ## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19) ← ON EST ICI
@@ -514,26 +592,24 @@ Système automatisé de trading crypto qui :
 TERMINÉ                          EN COURS              À VENIR
 ═══════                          ════════              ═══════
 
-Phase 1: Infrastructure     ✅   Phase 4: Recherche    Phase 5: Scaling
-Phase 2: Validation         ✅   Sprint 13: DB+Dash    Sprint 16: Live
-Phase 3: Paper/Live ready   ✅   Sprint 14: Explorer   Sprint 17: SHORT
-                                  Sprint 15: DCA UI     Sprint 18: Multi-asset
-                                                        Sprint 19: Nouvelles strats
-
-                                                        Phase 6: Production
-                                                        Phase 7: Avancé
+Phase 1: Infrastructure     ✅   Phase 5: Scaling      Phase 6: Production
+Phase 2: Validation         ✅   Sprint 16: Live       Phase 7: Avancé
+Phase 3: Paper/Live ready   ✅   Sprint 17: Monitoring
+Phase 4: Recherche          ✅   Sprint 18: Multi-asset
+Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 ```
 
 ---
 
 ## ÉTAT ACTUEL (14 février 2026)
 
-- **613 tests**, 0 régression
-- **15 sprints** complétés (Phase 1-4 terminées)
+- **628 tests**, 0 régression
+- **15 sprints + 1 hotfix** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
 - **1 stratégie SHORT prête pour WFO** : envelope_dca_short (enabled: false, validation WFO en attente)
-- **Paper trading actif** : envelope_dca sur 5 assets
+- **Paper trading actif** : envelope_dca sur 5 assets (+101.76% en 20 trades, 70% win rate)
+- **Hotfix P&L overflow** : margin accounting + realized_pnl tracking dans GridStrategyRunner
 - **Executor Grid prêt** : LIVE_TRADING=false, à activer après validation paper
 - **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
@@ -645,7 +721,7 @@ docs/plans/          # 16 sprint plans (1-12 + hotfix)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 513 passants (28 fichiers), 0 régression
+- **Tests** : 628 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

@@ -81,6 +81,11 @@ class StateManager:
                 "position_symbol": runner._position_symbol,
             }
 
+            # P&L réalisé pour GridStrategyRunner (kill switch correct)
+            realized_pnl = getattr(runner, "_realized_pnl", None)
+            if isinstance(realized_pnl, (int, float)):
+                runner_state["realized_pnl"] = realized_pnl
+
             # Positions grid (GridStrategyRunner)
             if hasattr(runner, "_positions") and isinstance(runner._positions, dict):
                 all_grid_positions = []

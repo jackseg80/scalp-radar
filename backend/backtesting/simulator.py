@@ -57,6 +57,19 @@ def _safe_round(val: Any, decimals: int = 1) -> float | None:
 
 
 @dataclass
+class OrphanClosure:
+    """Position orpheline fermée au boot (stratégie désactivée)."""
+
+    strategy_name: str
+    symbol: str
+    direction: str
+    entry_price: float
+    quantity: float
+    estimated_fee_cost: float
+    reason: str  # "strategy_disabled"
+
+
+@dataclass
 class RunnerStats:
     """Stats d'un LiveStrategyRunner."""
 
@@ -420,6 +433,7 @@ class GridStrategyRunner:
 
         self._initial_capital = 10_000.0
         self._capital = self._initial_capital
+        self._realized_pnl = 0.0  # P&L réalisé (trades clôturés uniquement)
         self._positions: dict[str, list[GridPosition]] = {}  # Positions par symbol
         self._trades: list[tuple[str, TradeResult]] = []
         self._current_regime = MarketRegime.RANGING
@@ -436,6 +450,9 @@ class GridStrategyRunner:
         # Voir self._positions pour le vrai état grid.
         self._position = None
         self._position_symbol = None
+
+        # Leverage pour calcul marge (réservation capital)
+        self._leverage = getattr(strategy._config, "leverage", 15)
 
         # Buffer de closes pour calcul SMA interne
         self._strategy_tf = getattr(strategy._config, "timeframe", "1h")
@@ -562,6 +579,13 @@ class GridStrategyRunner:
                     exit_price = candle.close
 
             if exit_reason:
+                # Rendre la marge réservée pour toutes les positions
+                total_notional = sum(
+                    p.entry_price * p.quantity for p in positions
+                )
+                margin_to_return = total_notional / self._leverage
+                self._capital += margin_to_return
+
                 trade = self._gpm.close_all_positions(
                     positions, exit_price,
                     candle.timestamp, exit_reason,
@@ -593,9 +617,22 @@ class GridStrategyRunner:
                         self._strategy.max_positions,
                     )
                     if position:
+                        # Réserver la marge (les fees sont dans net_pnl à la fermeture)
+                        notional = position.entry_price * position.quantity
+                        margin_used = notional / self._leverage
+                        if self._capital < margin_used:
+                            logger.warning(
+                                "[{}] Capital insuffisant pour level {} "
+                                "({:.2f} requis, {:.2f} disponible)",
+                                self.name, level.index,
+                                margin_used, self._capital,
+                            )
+                            continue
+                        self._capital -= margin_used
                         self._positions.setdefault(symbol, []).append(position)
                         logger.info(
-                            "[{}] GRID {} level {} @ {:.2f} ({}) — {}/{} positions",
+                            "[{}] GRID {} level {} @ {:.2f} ({}) — {}/{} positions "
+                            "(marge={:.2f}, capital={:.2f})",
                             self.name,
                             level.direction.value,
                             level.index,
@@ -603,15 +640,18 @@ class GridStrategyRunner:
                             symbol,
                             len(self._positions[symbol]),
                             self._strategy.max_positions,
+                            margin_used,
+                            self._capital,
                         )
                         self._emit_open_event(symbol, level, position)
 
     def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
         """Enregistre un trade grid (fermeture de toutes les positions)."""
         self._capital += trade.net_pnl
+        self._realized_pnl += trade.net_pnl
         self._trades.append((symbol, trade))
         self._stats.total_trades += 1
-        self._stats.net_pnl = self._capital - self._initial_capital
+        self._stats.net_pnl = self._realized_pnl
         self._stats.capital = self._capital
 
         if trade.net_pnl > 0:
@@ -686,9 +726,11 @@ class GridStrategyRunner:
         """Restaure l'état du runner depuis un snapshot sauvegardé."""
         self._capital = state.get("capital", self._initial_capital)
         self._kill_switch_triggered = state.get("kill_switch", False)
+        # Restaurer le P&L réalisé (backward compat : fallback sur net_pnl)
+        self._realized_pnl = state.get("realized_pnl", state.get("net_pnl", 0.0))
 
         self._stats.capital = self._capital
-        self._stats.net_pnl = state.get("net_pnl", 0.0)
+        self._stats.net_pnl = self._realized_pnl
         self._stats.total_trades = state.get("total_trades", 0)
         self._stats.wins = state.get("wins", 0)
         self._stats.losses = state.get("losses", 0)
@@ -819,6 +861,8 @@ class Simulator:
         self._indicator_engine: IncrementalIndicatorEngine | None = None
         self._running = False
         self._trade_event_callback: Callable | None = None
+        self._orphan_closures: list[OrphanClosure] = []
+        self._collision_warnings: list[dict] = []
 
         # Sprint 6 : caches pour le dashboard
         self._conditions_cache: dict | None = None
@@ -829,6 +873,118 @@ class Simulator:
     def set_trade_event_callback(self, callback: Callable) -> None:
         """Enregistre le callback de l'Executor pour recevoir les TradeEvent."""
         self._trade_event_callback = callback
+
+    # ─── Orphan cleanup ─────────────────────────────────────────────────
+
+    def _cleanup_orphan_runners(
+        self,
+        saved_state: dict,
+        enabled_names: set[str],
+    ) -> None:
+        """Nettoie les runners orphelins (stratégie désactivée avec positions).
+
+        Pour chaque runner dans le saved_state absent de enabled_names :
+        - Paper : log WARNING + enregistre OrphanClosure (fee-only loss)
+        - Live  : log CRITICAL (position peut-être encore ouverte sur Bitget)
+        """
+        runners_state = saved_state.get("runners", {})
+        is_live = getattr(
+            getattr(self._config, "secrets", None), "live_trading", False,
+        )
+        taker_rate = self._config.risk.fees.taker_percent / 100
+
+        for runner_name, state in runners_state.items():
+            if runner_name in enabled_names:
+                continue
+
+            mono_pos = state.get("position")
+            grid_positions = state.get("grid_positions", [])
+
+            if mono_pos is None and not grid_positions:
+                logger.info(
+                    "Orphan runner '{}' désactivé sans positions — ignoré",
+                    runner_name,
+                )
+                continue
+
+            # ── Live : warning critique ──────────────────────────────
+            if is_live:
+                if mono_pos is not None:
+                    logger.critical(
+                        "ORPHAN LIVE : runner '{}' désactivé avec position {} "
+                        "@ {:.2f} sur {} — VÉRIFIER BITGET MANUELLEMENT",
+                        runner_name,
+                        mono_pos["direction"],
+                        mono_pos["entry_price"],
+                        state.get("position_symbol", "UNKNOWN"),
+                    )
+                for gp in grid_positions:
+                    logger.critical(
+                        "ORPHAN LIVE : runner '{}' désactivé avec grid level {} "
+                        "{} @ {:.2f} sur {} — VÉRIFIER BITGET MANUELLEMENT",
+                        runner_name,
+                        gp["level"],
+                        gp["direction"],
+                        gp["entry_price"],
+                        gp.get("symbol", "UNKNOWN"),
+                    )
+
+            # ── Paper : enregistrer les closures ─────────────────────
+            if mono_pos is not None:
+                qty = mono_pos["quantity"]
+                entry = mono_pos["entry_price"]
+                symbol = state.get("position_symbol", "UNKNOWN")
+                fee = mono_pos.get("entry_fee", 0.0) + qty * entry * taker_rate
+
+                self._orphan_closures.append(OrphanClosure(
+                    strategy_name=runner_name,
+                    symbol=symbol,
+                    direction=mono_pos["direction"],
+                    entry_price=entry,
+                    quantity=qty,
+                    estimated_fee_cost=fee,
+                    reason="strategy_disabled",
+                ))
+                logger.warning(
+                    "ORPHAN PAPER : runner '{}' désactivé — position {} {} "
+                    "@ {:.2f} sur {} fermée (fees≈{:.2f}$)",
+                    runner_name, mono_pos["direction"], symbol,
+                    entry, symbol, fee,
+                )
+
+            for gp in grid_positions:
+                qty = gp["quantity"]
+                entry = gp["entry_price"]
+                symbol = gp.get("symbol", "UNKNOWN")
+                fee = gp.get("entry_fee", 0.0) + qty * entry * taker_rate
+
+                self._orphan_closures.append(OrphanClosure(
+                    strategy_name=runner_name,
+                    symbol=symbol,
+                    direction=gp["direction"],
+                    entry_price=entry,
+                    quantity=qty,
+                    estimated_fee_cost=fee,
+                    reason="strategy_disabled",
+                ))
+                logger.warning(
+                    "ORPHAN PAPER : runner '{}' désactivé — grid level {} {} "
+                    "@ {:.2f} sur {} fermée (fees≈{:.2f}$)",
+                    runner_name, gp["level"], gp["direction"],
+                    entry, symbol, fee,
+                )
+
+    # ─── Position symbols helper ────────────────────────────────────────
+
+    def _get_position_symbols(
+        self, runner: LiveStrategyRunner | GridStrategyRunner,
+    ) -> set[str]:
+        """Retourne les symbols sur lesquels ce runner a des positions."""
+        if isinstance(runner, GridStrategyRunner):
+            return {s for s, p in runner._positions.items() if p}
+        if runner._position is not None and runner._position_symbol:
+            return {runner._position_symbol}
+        return set()
 
     async def start(self, saved_state: dict | None = None) -> None:
         """Démarre le simulateur : crée les runners et s'enregistre sur le DataEngine.
@@ -889,6 +1045,11 @@ class Simulator:
                 "grid" if is_grid_strategy(strategy.name) else "mono",
             )
 
+        # Cleanup orphans (stratégies désactivées avec positions)
+        if saved_state is not None:
+            enabled_names = {r.name for r in self._runners}
+            self._cleanup_orphan_runners(saved_state, enabled_names)
+
         # Restaurer l'état AVANT d'enregistrer le callback on_candle
         if saved_state is not None:
             runners_state = saved_state.get("runners", {})
@@ -927,6 +1088,11 @@ class Simulator:
         # Invalider le cache conditions à chaque bougie (indicateurs changent)
         self._conditions_cache = None
 
+        # Snapshot positions AVANT dispatch (détection collision)
+        positions_before: dict[str, set[str]] = {
+            r.name: self._get_position_symbols(r) for r in self._runners
+        }
+
         # Dispatcher à chaque runner
         for runner in self._runners:
             try:
@@ -948,6 +1114,28 @@ class Simulator:
                             "Simulator: erreur callback trade event: {}", e,
                         )
 
+            # Détection collision : runner vient d'ouvrir sur un symbol déjà pris
+            new_symbols = (
+                self._get_position_symbols(runner)
+                - positions_before.get(runner.name, set())
+            )
+            for new_sym in new_symbols:
+                for other in self._runners:
+                    if other.name == runner.name:
+                        continue
+                    if new_sym in self._get_position_symbols(other):
+                        self._collision_warnings.append({
+                            "timestamp": candle.timestamp.isoformat(),
+                            "symbol": new_sym,
+                            "runner_opening": runner.name,
+                            "runner_existing": other.name,
+                        })
+                        logger.warning(
+                            "COLLISION : '{}' ouvre sur {} alors que "
+                            "'{}' a déjà une position",
+                            runner.name, new_sym, other.name,
+                        )
+
     async def stop(self) -> None:
         """Arrête le simulateur."""
         self._running = False
@@ -955,7 +1143,15 @@ class Simulator:
 
     def get_all_status(self) -> dict[str, dict]:
         """Retourne le status de tous les runners."""
-        return {runner.name: runner.get_status() for runner in self._runners}
+        statuses = {runner.name: runner.get_status() for runner in self._runners}
+        # Ajouter les collision warnings par runner
+        for warning in self._collision_warnings:
+            name = warning["runner_opening"]
+            if name in statuses:
+                statuses[name].setdefault("collision_warnings", []).append(
+                    warning,
+                )
+        return statuses
 
     def get_all_trades(self) -> list[dict]:
         """Retourne tous les trades de tous les runners."""
@@ -1186,3 +1382,13 @@ class Simulator:
     @property
     def runners(self) -> list[LiveStrategyRunner | GridStrategyRunner]:
         return self._runners
+
+    @property
+    def orphan_closures(self) -> list[OrphanClosure]:
+        """Positions orphelines fermées au boot (stratégies désactivées)."""
+        return list(self._orphan_closures)
+
+    @property
+    def collision_warnings(self) -> list[dict]:
+        """Avertissements de collision inter-runners (même symbol)."""
+        return list(self._collision_warnings)

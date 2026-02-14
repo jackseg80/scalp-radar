@@ -330,9 +330,8 @@ class TestGridRunnerOnCandle:
         assert runner._stats.is_active is False
 
     @pytest.mark.asyncio
-    async def test_no_fee_deduction_on_open(self):
-        """L'ouverture d'une position ne déduit PAS les fees du capital
-        (les fees sont incluses dans le net_pnl à la fermeture)."""
+    async def test_capital_decremented_on_open(self):
+        """L'ouverture d'une position réserve la marge."""
         strategy = _make_mock_strategy()
         strategy.compute_grid.return_value = [
             GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
@@ -344,8 +343,113 @@ class TestGridRunnerOnCandle:
         candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
         await runner.on_candle("BTC/USDT", "1h", candle)
 
-        # Capital ne change PAS à l'ouverture
-        assert runner._capital == capital_before
+        # Capital doit DIMINUER après ouverture (marge réservée)
+        assert runner._capital < capital_before
+        positions = runner._positions.get("BTC/USDT", [])
+        assert len(positions) == 1
+        pos = positions[0]
+        notional = pos.entry_price * pos.quantity
+        margin = notional / 6  # leverage=6
+        expected = capital_before - margin
+        assert abs(runner._capital - expected) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_grid_capital_restored_on_close(self):
+        """Après fermeture, capital = initial + net_pnl (marge rendue)."""
+        strategy = _make_mock_strategy()
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+        ]
+        runner = _make_grid_runner(strategy=strategy)
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        initial_capital = runner._capital
+
+        # Ouvrir un niveau
+        candle1 = _make_candle(
+            close=96_000.0, low=94_500.0, high=97_000.0,
+            ts=datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle1)
+        assert len(runner._positions.get("BTC/USDT", [])) == 1
+        capital_after_open = runner._capital
+        assert capital_after_open < initial_capital
+
+        # Fermer via TP global
+        strategy.compute_grid.return_value = []
+        strategy.get_tp_price.return_value = 100_000.0
+        strategy.get_sl_price.return_value = 80_000.0
+
+        candle2 = _make_candle(
+            close=101_000.0, high=101_500.0, low=99_000.0,
+            ts=datetime(2024, 6, 15, 13, 0, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle2)
+
+        # Toutes les positions fermées
+        assert len(runner._positions.get("BTC/USDT", [])) == 0
+        assert runner._stats.total_trades == 1
+        # Capital = initial + net_pnl (marge entièrement rendue)
+        expected = initial_capital + runner._stats.net_pnl
+        assert abs(runner._capital - expected) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_grid_no_overflow_after_100_cycles(self):
+        """100 cycles open/close near-breakeven, capital reste raisonnable."""
+        strategy = _make_mock_strategy(max_positions=2)
+        runner = _make_grid_runner(strategy=strategy)
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        initial_capital = runner._capital
+
+        for cycle in range(100):
+            ts_open = datetime(2024, 6, 15, cycle % 24, 0, tzinfo=timezone.utc)
+            ts_close = datetime(2024, 6, 15, cycle % 24, 30, tzinfo=timezone.utc)
+
+            # Ouvrir 2 niveaux
+            strategy.compute_grid.return_value = [
+                GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+                GridLevel(index=1, entry_price=93_000.0, direction=Direction.LONG, size_fraction=0.5),
+            ]
+            strategy.get_tp_price.return_value = float("nan")
+            strategy.get_sl_price.return_value = float("nan")
+            strategy.should_close_all.return_value = None
+
+            candle_open = _make_candle(
+                close=94_000.0, low=92_500.0, high=96_000.0, ts=ts_open,
+            )
+            await runner.on_candle("BTC/USDT", "1h", candle_open)
+
+            # Fermer near-breakeven (exit ≈ avg_entry → fees seules)
+            strategy.should_close_all.return_value = "tp_global"
+            candle_close = _make_candle(
+                close=94_500.0, low=94_000.0, high=95_000.0, ts=ts_close,
+            )
+            await runner.on_candle("BTC/USDT", "1h", candle_close)
+
+        # Near-breakeven : capital ne doit pas exploser (< 2× initial)
+        assert runner._capital < initial_capital * 2
+        # Et ne doit pas être négatif
+        assert runner._capital > 0
+
+    @pytest.mark.asyncio
+    async def test_grid_zero_capital_skips_level(self):
+        """Avec capital=0, aucune position n'est ouverte."""
+        strategy = _make_mock_strategy(max_positions=4)
+        runner = _make_grid_runner(strategy=strategy)
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        runner._capital = 0.0
+
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.25),
+        ]
+        candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        # Pas de position ouverte (GPM rejette capital <= 0)
+        assert len(runner._positions.get("BTC/USDT", [])) == 0
+        assert runner._capital == 0.0
 
     @pytest.mark.asyncio
     async def test_pending_events_trade_event_format(self):
