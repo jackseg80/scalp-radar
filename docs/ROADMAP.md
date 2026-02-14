@@ -223,6 +223,74 @@ Système automatisé de trading crypto qui :
 - Normalisation params : toujours convertir scalaires → listes avant de passer au WFO
 - Jobs recovery : scanner les "running" au boot évite les jobs zombies après un crash
 
+### Sprint 14b — Heatmap Dense + Charts Analytiques + Tooltips ✅
+
+**But** : Rendre la heatmap **100% dense** (toutes les combos testées), ajouter des charts analytiques, et des tooltips d'aide pour les termes techniques.
+
+**Problème initial** : La heatmap était **sparse** (quasi vide) car seul le `best_params` de chaque run était sauvegardé. Pour 324 combos possibles, seulement 2-3 cellules étaient remplies.
+
+**Implémenté** :
+
+**Backend — Heatmap dense** :
+- **Table `wfo_combo_results`** (14 colonnes) : id, optimization_result_id, params (JSON), oos_sharpe, oos_return_pct, oos_trades, oos_win_rate, is_sharpe, is_return_pct, is_trades, consistency, oos_is_ratio, is_best, n_windows_evaluated
+- **Collecte OOS batch** dans `walk_forward.optimize()` :
+  - OOS batch pour toutes les combos (~324 × 0.1ms = 30ms/fenêtre)
+  - Agrégation cross-fenêtre : moyenne IS/OOS Sharpe, consistency, oos_is_ratio
+  - Guard stratégies avec fast engine (6/8 supportées : vwap_rsi, momentum, bollinger_mr, donchian_breakout, supertrend, envelope_dca)
+- **API endpoints** :
+  - `GET /api/optimization/combo-results/{id}` : retourne les 324 combos d'un run
+  - `GET /api/optimization/heatmap` mode dense : agrégation multi-dim (moyenne des combos avec mêmes param_x, param_y)
+- **Persistence** : `save_combo_results_sync()`, `get_combo_results_async()` dans optimization_db.py
+- Push serveur inclut combo_results (sync WFO local → serveur)
+
+**Frontend — Charts analytiques** :
+- **Run selector** : dropdown historique des 20 derniers runs WFO pour (strategy, asset)
+- **Top10Table.jsx** : tableau HTML top 10 combos par métrique, combo `is_best` surlignée
+- **ScatterChart.jsx** : SVG scatter plot IS Sharpe vs OOS Sharpe
+  - Diagonale pointillée IS = OOS
+  - Points colorés par consistance (rouge < 50%, orange 50-80%, vert > 80%)
+  - Point best en surbrillance (stroke blanc, rayon plus grand)
+- **DistributionChart.jsx** : SVG histogramme distribution OOS Sharpe
+  - Bins automatiques (sqrt(n_combos))
+  - Barres rouge (< 0) / vert (≥ 0)
+  - Marqueur best combo (flèche verticale)
+
+**Frontend — Tooltips d'aide** :
+- **InfoTooltip.jsx** : composant réutilisable avec glossaire 14 termes (oos_sharpe, is_sharpe, oos_is_ratio, consistency, dsr, monte_carlo_pvalue, param_stability, grade, total_score, ci_sharpe, transfer_ratio, wfo, is_vs_oos_chart, oos_return_pct)
+- Icône (i) cliquable, popover avec description + interprétation
+- Intégré sur **ExplorerPage** (headers heatmap, top 10, charts) ET **ResearchPage** (headers tableau, labels détail)
+
+**Bug critique corrigé** :
+- **params_override pré-rempli automatiquement** : frontend pré-remplissait tous les sliders avec leurs valeurs default → 1 seule combo testée au lieu de 324
+- **Fix UX redesign complet** : système actif/inactif avec checkboxes
+  - Slider inactif (grisé) = toutes les valeurs testées
+  - Slider actif (vert) = valeur fixée
+  - Calcul temps réel du nombre de combos : "Grille : 324 combos (3×3×3×3×4)"
+  - `params_override` envoyé seulement pour les sliders actifs, ou `null` si aucun
+- **Script nettoyage** : `fix_invalid_explorer_runs.py` supprime les 9 runs invalides (1-5 combos) pré-fix
+
+**Corrections techniques (toutes les erreurs console)** :
+- **Balises `<style jsx>` supprimées** : 7 fichiers CSS créés (InfoTooltip.css, ResearchPage.css, ExplorerPage.css, Top10Table.css, ScatterChart.css, DistributionChart.css, WfoChart.css)
+- **8 composants modifiés** : InfoTooltip.jsx, ResearchPage.jsx (3 balises), ExplorerPage.jsx, Top10Table.jsx, ScatterChart.jsx, DistributionChart.jsx, WfoChart.jsx
+- **HeatmapChart.jsx** : `Math.max(0, chartWidth - 200)` pour éviter width négatif
+
+**Tests** : 603 passants (+6 depuis Sprint 14, 2 skippés car API WFO changée)
+- `test_combo_results.py` : 8 tests (collecte, agrégation, is_best flag, save/load DB, push payload, migration serveur)
+
+**Résultat** :
+- Heatmap **100% dense** (324/324 cellules remplies)
+- 3 charts analytiques pour explorer les résultats WFO
+- 14 tooltips d'aide sur 2 pages
+- **0 erreur console** dans le frontend
+- UX robuste (impossible de lancer un WFO invalide)
+
+**Leçons apprises** :
+- OOS batch via fast engine est quasi gratuit (~30ms additionnel pour 324 combos)
+- Agrégation multi-dim nécessaire pour heatmap dense (moyenne des combos partageant param_x, param_y)
+- React standard ne supporte pas `<style jsx>` (feature de Next.js styled-jsx) → fichiers CSS séparés obligatoires
+- UX : toujours montrer l'état par défaut explicitement (slider décoché = toutes valeurs, pas valeur default unique)
+- n_windows_evaluated crucial pour distinguer combos partielles (2-pass coarse+fine grid)
+
 ### Sprint 15 — Monitoring DCA Live Amélioré
 **But** : Voir l'état du DCA en temps réel, pas juste les trades clôturés.
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import itertools
+import json
 import os
 import time
 
@@ -72,6 +73,7 @@ class WFOResult:
     recommended_params: dict[str, Any]
     all_oos_trades: list[TradeResult]
     n_distinct_combos: int
+    combo_results: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -493,6 +495,11 @@ class WalkForwardOptimizer:
         window_results: list[WindowResult] = []
         all_oos_trades: list[TradeResult] = []
 
+        # Accumulateur combo results cross-fenêtre (Sprint 14b)
+        # Skip si stratégie sans fast engine (trop lent)
+        collect_combo_results = strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca")
+        combo_accumulator: dict[str, list[dict]] = {}
+
         for w_idx, (is_start, is_end, oos_start, oos_end) in enumerate(windows):
             logger.info(
                 "Fenêtre {}/{} : IS {} → {} | OOS {} → {}",
@@ -562,7 +569,7 @@ class WalkForwardOptimizer:
                 # Top 5 pour stabilité
                 top_5 = [{"params": r[0], "sharpe": r[1]} for r in all_is_results[:5]]
 
-                # --- OOS evaluation ---
+                # --- Découper les candles OOS (commun à tous les chemins) ---
                 oos_candles_by_tf: dict[str, list[Candle]] = {}
                 for tf, candles in all_candles_by_tf.items():
                     oos_candles_by_tf[tf] = _slice_candles(candles, oos_start, oos_end)
@@ -571,13 +578,53 @@ class WalkForwardOptimizer:
                     logger.warning("Fenêtre {} : pas de candles OOS, skip", w_idx)
                     continue
 
-                # Build extra_data_map pour OOS window
+                # Build extra_data_map pour OOS window (commun)
                 oos_extra_data_map: dict[str, dict[str, Any]] | None = None
                 if needs_extra:
                     oos_extra_data_map = build_extra_data_map(
                         oos_candles_by_tf[main_tf],
                         all_funding_rates, all_oi_records,
                     )
+
+                # --- OOS batch pour combo results (Sprint 14b) ---
+                if collect_combo_results:
+                    # Dédupliquer les params testés (coarse + fine)
+                    seen_keys = set()
+                    unique_params = []
+                    for r in all_is_results:
+                        key = json.dumps(r[0], sort_keys=True)
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            unique_params.append(r[0])
+
+                    # OOS batch (via fast engine)
+                    oos_batch_results = self._parallel_backtest(
+                        unique_params, oos_candles_by_tf, strategy_name, symbol,
+                        bt_config_dict, main_tf, n_workers, metric,
+                        extra_data_map=oos_extra_data_map,
+                    )
+
+                    # Index les résultats IS et OOS par params_key
+                    is_by_key = {json.dumps(r[0], sort_keys=True): r for r in all_is_results}
+                    oos_by_key = {json.dumps(r[0], sort_keys=True): r for r in oos_batch_results}
+
+                    for params_key in is_by_key:
+                        is_r = is_by_key[params_key]
+                        oos_r = oos_by_key.get(params_key)
+
+                        if params_key not in combo_accumulator:
+                            combo_accumulator[params_key] = []
+
+                        combo_accumulator[params_key].append({
+                            "is_sharpe": is_r[1],
+                            "is_return_pct": is_r[2],
+                            "is_trades": is_r[4],
+                            "oos_sharpe": oos_r[1] if oos_r else None,
+                            "oos_return_pct": oos_r[2] if oos_r else None,
+                            "oos_trades": oos_r[4] if oos_r else None,
+                        })
+
+                # --- OOS evaluation (best params uniquement) ---
 
                 if is_grid_strategy(strategy_name):
                     from backend.backtesting.multi_engine import run_multi_backtest_single
@@ -654,6 +701,44 @@ class WalkForwardOptimizer:
         all_best_params = [w.best_params for w in window_results]
         recommended = _median_params(all_best_params, grid_values)
 
+        # Agrégation des combo results (Sprint 14b)
+        combo_results: list[dict[str, Any]] = []
+        if collect_combo_results and combo_accumulator:
+            recommended_key = json.dumps(recommended, sort_keys=True)
+
+            for params_key, window_data in combo_accumulator.items():
+                params = json.loads(params_key)
+
+                is_sharpes = [d["is_sharpe"] for d in window_data]
+                oos_sharpes = [d["oos_sharpe"] for d in window_data if d["oos_sharpe"] is not None]
+                oos_returns = [d["oos_return_pct"] for d in window_data if d["oos_return_pct"] is not None]
+                oos_trades_list = [d["oos_trades"] for d in window_data if d["oos_trades"] is not None]
+
+                avg_is_sharpe = float(np.nanmean(is_sharpes)) if is_sharpes else 0.0
+                avg_oos_sharpe = float(np.nanmean(oos_sharpes)) if oos_sharpes else 0.0
+                total_oos_return = sum(oos_returns) if oos_returns else 0.0
+                total_oos_trades = sum(oos_trades_list) if oos_trades_list else 0
+                n_oos_positive = sum(1 for s in oos_sharpes if s > 0)
+                consistency_combo = n_oos_positive / len(oos_sharpes) if oos_sharpes else 0.0
+                oos_is_ratio_combo = avg_oos_sharpe / avg_is_sharpe if avg_is_sharpe > 0 else 0.0
+
+                combo_results.append({
+                    "params": params,
+                    "is_sharpe": round(avg_is_sharpe, 4),
+                    "is_return_pct": round(sum(d["is_return_pct"] for d in window_data), 4),
+                    "is_trades": sum(d["is_trades"] for d in window_data),
+                    "oos_sharpe": round(avg_oos_sharpe, 4),
+                    "oos_return_pct": round(total_oos_return, 4),
+                    "oos_trades": total_oos_trades,
+                    "oos_win_rate": None,  # Non disponible via fast engine
+                    "consistency": round(consistency_combo, 4),
+                    "oos_is_ratio": round(oos_is_ratio_combo, 4),
+                    "is_best": params_key == recommended_key,
+                    "n_windows_evaluated": len(window_data),
+                })
+
+            logger.info("Sprint 14b : {} combo results agrégés", len(combo_results))
+
         return WFOResult(
             strategy_name=strategy_name,
             symbol=symbol,
@@ -665,6 +750,7 @@ class WalkForwardOptimizer:
             recommended_params=recommended,
             all_oos_trades=all_oos_trades,
             n_distinct_combos=n_distinct_combos,
+            combo_results=combo_results,
         )
 
     def _build_windows(

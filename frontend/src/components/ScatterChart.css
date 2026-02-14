@@ -1,0 +1,22 @@
+.scatter-chart {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.scatter-chart h4 {
+  margin: 0 0 12px 0;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.scatter-point {
+  cursor: pointer;
+  transition: r 0.2s;
+}
+
+.scatter-point:hover {
+  r: 7;
+}

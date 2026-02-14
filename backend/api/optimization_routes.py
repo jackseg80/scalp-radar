@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from backend.core.config import get_config
 from backend.optimization.optimization_db import (
+    get_combo_results_async,
     get_comparison_async,
     get_result_by_id_async,
     get_results_async,
@@ -326,20 +327,23 @@ async def get_optimization_heatmap(
     asset: str = Query(..., description="Asset (ex: BTC/USDT)"),
     param_x: str = Query(..., description="Paramètre axe X"),
     param_y: str = Query(..., description="Paramètre axe Y"),
-    metric: str = Query(default="total_score", description="Métrique couleur"),
+    metric: str = Query(default="oos_sharpe", description="Métrique couleur"),
+    result_id: int | None = Query(default=None, description="ID résultat WFO (Sprint 14b)"),
 ) -> dict:
     """Retourne une matrice 2D des résultats WFO pour deux paramètres.
+
+    Sprint 14b : Mode dense basé sur combo_results si disponible.
 
     Returns:
         {
             "x_param": "envelope_start",
             "y_param": "envelope_step",
-            "metric": "total_score",
+            "metric": "oos_sharpe",
             "x_values": [0.05, 0.07, 0.10],
             "y_values": [0.02, 0.03, 0.05],
             "cells": [
-                [{value: 45.2, grade: "C", result_id: 123}, {...}, ...],  # row y=0.02
-                [{value: 52.1, grade: "B", result_id: 124}, {...}, ...],  # row y=0.03
+                [{value: 1.23, result_id: 123}, {...}, ...],  # row y=0.02
+                [{value: 0.85, result_id: 123}, {...}, ...],  # row y=0.03
                 ...
             ]
         }
@@ -351,7 +355,87 @@ async def get_optimization_heatmap(
 
     db_path = _get_db_path()
 
-    # Charger tous les résultats pour (strategy, asset)
+    # Sprint 14b : Déterminer le result_id (fourni ou latest)
+    target_result_id = result_id
+    if target_result_id is None:
+        async with aiosqlite.connect(db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                """SELECT id FROM optimization_results
+                   WHERE strategy_name = ? AND asset = ? AND is_latest = 1
+                   LIMIT 1""",
+                (strategy, asset),
+            )
+            row = await cursor.fetchone()
+            if row:
+                target_result_id = row["id"]
+
+    # Tenter de charger les combo_results (mode dense)
+    combos = []
+    if target_result_id:
+        combos = await get_combo_results_async(db_path, target_result_id)
+
+    if combos:
+        # Mode dense : construire la heatmap depuis combo_results
+        # Accumuler toutes les valeurs par coordonnée (x, y)
+        accumulator: dict[tuple[float, float], list[float]] = {}  # (x, y) → [values]
+
+        for combo in combos:
+            params = combo["params"]
+            x_val = params.get(param_x)
+            y_val = params.get(param_y)
+
+            if x_val is None or y_val is None:
+                continue
+
+            # Extraire la métrique
+            metric_value = combo.get(metric)
+            if metric_value is None:
+                continue  # Skip les combos sans valeur pour cette métrique
+
+            coord = (float(x_val), float(y_val))
+
+            if coord not in accumulator:
+                accumulator[coord] = []
+            accumulator[coord].append(metric_value)
+
+        # Agréger (moyenne) par coordonnée
+        import numpy as np
+        points: dict[tuple[float, float], dict] = {}
+        for coord, values in accumulator.items():
+            avg_value = float(np.mean(values))
+            points[coord] = {
+                "value": round(avg_value, 4),
+                "result_id": target_result_id,
+                "n_combos": len(values),  # Nombre de combos agrégées
+            }
+
+        # Construire les axes triés
+        x_values = sorted(set(x for x, y in points.keys()))
+        y_values = sorted(set(y for x, y in points.keys()))
+
+        # Construire la matrice cells[y_idx][x_idx]
+        cells = []
+        for y_val in y_values:
+            row = []
+            for x_val in x_values:
+                coord = (x_val, y_val)
+                if coord in points:
+                    row.append(points[coord])
+                else:
+                    row.append({"value": None})
+            cells.append(row)
+
+        return {
+            "x_param": param_x,
+            "y_param": param_y,
+            "metric": metric,
+            "x_values": x_values,
+            "y_values": y_values,
+            "cells": cells,
+        }
+
+    # Fallback mode sparse : charger tous les résultats historiques pour (strategy, asset)
     async with aiosqlite.connect(db_path) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
@@ -377,7 +461,7 @@ async def get_optimization_heatmap(
     points: dict[tuple[float, float], dict] = {}  # (x, y) → {value, grade, result_id}
 
     for row in rows:
-        row_dict = dict(row)  # Convertir Row en dict pour .get()
+        row_dict = dict(row)
 
         try:
             params = json.loads(row_dict["best_params"])
@@ -427,6 +511,59 @@ async def get_optimization_heatmap(
         "y_values": y_values,
         "cells": cells,
     }
+
+
+# ─── Sprint 14b — Combo Results ──────────────────────────────────────────
+
+
+@router.get("/combo-results/{result_id}")
+async def get_combo_results(result_id: int) -> dict:
+    """Retourne tous les combo results pour un résultat WFO donné.
+
+    Returns:
+        {
+            "result_id": 123,
+            "combos": [
+                {
+                    "params": {"ma_period": 7, "num_levels": 3, ...},
+                    "oos_sharpe": 1.23,
+                    "is_sharpe": 1.45,
+                    "oos_return_pct": 12.5,
+                    "is_return_pct": 15.2,
+                    "oos_trades": 48,
+                    "is_trades": 120,
+                    "consistency": 0.83,
+                    "oos_is_ratio": 0.85,
+                    "is_best": true,
+                    "n_windows_evaluated": 12,
+                    "oos_win_rate": null
+                },
+                ...
+            ],
+            "message": "..." (si pas de données)
+        }
+
+    Errors:
+        404: result_id inexistant
+    """
+    db_path = _get_db_path()
+
+    combos = await get_combo_results_async(db_path, result_id)
+
+    if not combos:
+        # Vérifier si le result_id existe
+        result = await get_result_by_id_async(db_path, result_id)
+        if result is None:
+            raise HTTPException(404, f"Résultat {result_id} non trouvé")
+
+        # Existe mais pas de combos → ancien run ou stratégie sans fast engine
+        return {
+            "result_id": result_id,
+            "combos": [],
+            "message": "Données détaillées non disponibles pour ce run (lancez un nouveau WFO)",
+        }
+
+    return {"result_id": result_id, "combos": combos}
 
 
 # ─── GET /{result_id} (catch-all à la fin) ───────────────────────────────

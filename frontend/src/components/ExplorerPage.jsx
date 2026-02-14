@@ -5,6 +5,11 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import HeatmapChart from './HeatmapChart'
+import Top10Table from './Top10Table'
+import ScatterChart from './ScatterChart'
+import DistributionChart from './DistributionChart'
+import InfoTooltip from './InfoTooltip'
+import './ExplorerPage.css'
 
 const STATUS_COLORS = {
   pending: '#f59e0b',
@@ -19,13 +24,19 @@ export default function ExplorerPage({ wsData }) {
   const [asset, setAsset] = useState('')
   const [paramGrid, setParamGrid] = useState(null)
   const [paramsOverride, setParamsOverride] = useState({})
+  const [activeParams, setActiveParams] = useState(new Set()) // Sprint 14b fix UX : params actifs
   const [axisX, setAxisX] = useState('')
   const [axisY, setAxisY] = useState('')
-  const [metric, setMetric] = useState('total_score')
+  const [metric, setMetric] = useState('oos_sharpe')
   const [heatmapData, setHeatmapData] = useState(null)
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  // Sprint 14b : Run selector + combo results
+  const [availableRuns, setAvailableRuns] = useState([])
+  const [selectedRunId, setSelectedRunId] = useState(null)
+  const [comboResults, setComboResults] = useState(null)
 
   // Stratégies disponibles
   const strategies = [
@@ -42,12 +53,14 @@ export default function ExplorerPage({ wsData }) {
   // Assets disponibles
   const assets = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'LINK/USDT']
 
-  // Métriques disponibles
+  // Métriques disponibles (Sprint 14b : nouvelles métriques combo_results)
   const metrics = [
-    { value: 'total_score', label: 'Score Total' },
     { value: 'oos_sharpe', label: 'OOS Sharpe' },
+    { value: 'oos_return_pct', label: 'OOS Return %' },
     { value: 'consistency', label: 'Consistance' },
-    { value: 'dsr', label: 'DSR' },
+    { value: 'oos_is_ratio', label: 'Ratio OOS/IS' },
+    { value: 'is_sharpe', label: 'IS Sharpe' },
+    { value: 'total_score', label: 'Score Total (legacy)' },
   ]
 
   // Charger la grille de paramètres quand la stratégie change
@@ -67,12 +80,9 @@ export default function ExplorerPage({ wsData }) {
         const data = await resp.json()
         setParamGrid(data)
 
-        // Init params_override avec les valeurs par défaut
-        const defaults = {}
-        Object.entries(data.params).forEach(([key, config]) => {
-          defaults[key] = config.default
-        })
-        setParamsOverride(defaults)
+        // Ne PAS pré-remplir params_override — rester vide jusqu'à ce que l'utilisateur touche un slider
+        // (sinon ça écrase le grid entier avec 1 seule combo au lieu de 324)
+        // setParamsOverride({}) déjà fait ligne 68, on ne refait rien ici
 
         // Sélectionner les premiers params pour les axes (si disponibles)
         const paramNames = Object.keys(data.params)
@@ -88,7 +98,46 @@ export default function ExplorerPage({ wsData }) {
     fetchParamGrid()
   }, [strategy])
 
-  // Charger la heatmap quand strategy/asset/axisX/axisY/metric changent
+  // Sprint 14b : Charger les runs disponibles quand strategy/asset changent
+  useEffect(() => {
+    if (!strategy || !asset) {
+      setAvailableRuns([])
+      setSelectedRunId(null)
+      setComboResults(null)
+      return
+    }
+
+    const fetchAvailableRuns = async () => {
+      try {
+        const params = new URLSearchParams({
+          strategy,
+          asset,
+          latest_only: 'false',
+          limit: '20',
+        })
+        const resp = await fetch(`/api/optimization/results?${params}`)
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data = await resp.json()
+
+        setAvailableRuns(data.results || [])
+
+        // Auto-sélectionner le latest par défaut
+        const latest = (data.results || []).find((r) => r.is_latest === 1)
+        if (latest) {
+          setSelectedRunId(latest.id)
+        } else if (data.results && data.results.length > 0) {
+          setSelectedRunId(data.results[0].id)
+        }
+      } catch (err) {
+        console.error('Erreur fetch available runs:', err)
+        setAvailableRuns([])
+      }
+    }
+
+    fetchAvailableRuns()
+  }, [strategy, asset])
+
+  // Charger la heatmap quand strategy/asset/axisX/axisY/metric/selectedRunId changent
   useEffect(() => {
     if (!strategy || !asset || !axisX || !axisY) {
       setHeatmapData(null)
@@ -104,6 +153,12 @@ export default function ExplorerPage({ wsData }) {
           param_y: axisY,
           metric,
         })
+
+        // Sprint 14b : passer result_id si sélectionné
+        if (selectedRunId) {
+          params.append('result_id', selectedRunId)
+        }
+
         const resp = await fetch(`/api/optimization/heatmap?${params}`)
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const data = await resp.json()
@@ -115,7 +170,30 @@ export default function ExplorerPage({ wsData }) {
     }
 
     fetchHeatmap()
-  }, [strategy, asset, axisX, axisY, metric])
+  }, [strategy, asset, axisX, axisY, metric, selectedRunId])
+
+  // Sprint 14b : Charger les combo results quand selectedRunId change
+  useEffect(() => {
+    if (!selectedRunId) {
+      setComboResults(null)
+      return
+    }
+
+    const fetchComboResults = async () => {
+      try {
+        const resp = await fetch(`/api/optimization/combo-results/${selectedRunId}`)
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data = await resp.json()
+        console.log('🔍 DEBUG combo-results fetched:', { result_id: selectedRunId, data })
+        setComboResults(data)
+      } catch (err) {
+        console.error('Erreur fetch combo-results:', err)
+        setComboResults(null)
+      }
+    }
+
+    fetchComboResults()
+  }, [selectedRunId])
 
   // Charger les jobs au montage
   useEffect(() => {
@@ -178,13 +256,24 @@ export default function ExplorerPage({ wsData }) {
     setLoading(true)
     setError(null)
     try {
+      // Construire params_override : seulement les params actifs
+      const override = {}
+      activeParams.forEach((paramName) => {
+        if (paramsOverride[paramName] !== undefined) {
+          override[paramName] = paramsOverride[paramName]
+        }
+      })
+
+      // Si aucun param actif → envoyer null (grille complète)
+      const finalOverride = Object.keys(override).length > 0 ? override : null
+
       const resp = await fetch('/api/optimization/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           strategy_name: strategy,
           asset,
-          params_override: paramsOverride,
+          params_override: finalOverride,
         }),
       })
 
@@ -216,13 +305,52 @@ export default function ExplorerPage({ wsData }) {
   }
 
   const handleReset = () => {
-    if (!paramGrid) return
-    const defaults = {}
-    Object.entries(paramGrid.params).forEach(([key, config]) => {
-      defaults[key] = config.default
-    })
-    setParamsOverride(defaults)
+    // Vider params_override et désactiver tous les sliders → grille complète
+    setParamsOverride({})
+    setActiveParams(new Set())
   }
+
+  // Toggle activation d'un paramètre
+  const toggleParamActive = (paramName) => {
+    setActiveParams((prev) => {
+      const next = new Set(prev)
+      if (next.has(paramName)) {
+        // Désactiver : retirer du set ET de paramsOverride
+        next.delete(paramName)
+        setParamsOverride((prevOverride) => {
+          const { [paramName]: _, ...rest } = prevOverride
+          return rest
+        })
+      } else {
+        // Activer : ajouter au set ET fixer à la valeur default
+        next.add(paramName)
+        if (paramGrid) {
+          const defaultVal = paramGrid.params[paramName]?.default
+          if (defaultVal !== undefined) {
+            setParamsOverride((prevOverride) => ({
+              ...prevOverride,
+              [paramName]: defaultVal,
+            }))
+          }
+        }
+      }
+      return next
+    })
+  }
+
+  // Calculer le nombre de combos selon les params actifs
+  const comboCount = useMemo(() => {
+    if (!paramGrid) return 0
+    let count = 1
+    Object.entries(paramGrid.params).forEach(([pName, pConfig]) => {
+      if (activeParams.has(pName)) {
+        count *= 1 // Param fixé → 1 seule valeur
+      } else {
+        count *= pConfig.values.length // Toutes les valeurs
+      }
+    })
+    return count
+  }, [paramGrid, activeParams])
 
   // Nombre de jobs running/pending
   const activeJobsCount = useMemo(() => {
@@ -269,6 +397,33 @@ export default function ExplorerPage({ wsData }) {
             </select>
           </div>
 
+          {availableRuns.length > 0 && (
+            <div className="form-group">
+              <label>Run WFO (historique)</label>
+              <select
+                value={selectedRunId || ''}
+                onChange={(e) => setSelectedRunId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                className="select-input"
+              >
+                {availableRuns.map((run) => {
+                  const date = new Date(run.created_at).toLocaleDateString('fr-FR')
+                  const time = new Date(run.created_at).toLocaleTimeString('fr-FR', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                  const label = `${date} ${time} — Grade ${run.grade} (${run.total_score?.toFixed(0) || 0})${
+                    run.is_latest ? ' [latest]' : ''
+                  }`
+                  return (
+                    <option key={run.id} value={run.id}>
+                      {label}
+                    </option>
+                  )
+                })}
+              </select>
+            </div>
+          )}
+
           {paramGrid && (
             <>
               <div className="divider" />
@@ -276,12 +431,24 @@ export default function ExplorerPage({ wsData }) {
               <div className="params-list">
                 {Object.entries(paramGrid.params).map(([pName, pConfig]) => {
                   const { values, default: defaultVal } = pConfig
-                  const currentVal = paramsOverride[pName] ?? defaultVal
-                  const idx = values.indexOf(currentVal)
+                  const isActive = activeParams.has(pName)
+                  const currentVal = isActive ? (paramsOverride[pName] ?? defaultVal) : null
+                  const idx = isActive && currentVal !== null ? values.indexOf(currentVal) : 0
 
                   return (
-                    <div key={pName} className="param-item">
-                      <label>{pName}</label>
+                    <div key={pName} className={`param-item ${isActive ? 'active' : 'inactive'}`}>
+                      <div className="param-header">
+                        <input
+                          type="checkbox"
+                          checked={isActive}
+                          onChange={() => toggleParamActive(pName)}
+                          className="param-checkbox"
+                        />
+                        <label onClick={() => toggleParamActive(pName)} className="param-label">
+                          {pName}
+                          {isActive ? ` : ${currentVal}` : ` : toutes (${values.join(', ')})`}
+                        </label>
+                      </div>
                       <div className="param-controls">
                         <input
                           type="range"
@@ -290,6 +457,7 @@ export default function ExplorerPage({ wsData }) {
                           step={1}
                           value={idx >= 0 ? idx : 0}
                           onChange={(e) => {
+                            if (!isActive) return // Ne rien faire si inactif
                             const newIdx = parseInt(e.target.value, 10)
                             setParamsOverride((prev) => ({
                               ...prev,
@@ -297,12 +465,27 @@ export default function ExplorerPage({ wsData }) {
                             }))
                           }}
                           className="range-input"
+                          disabled={!isActive}
                         />
-                        <span className="param-value">{currentVal}</span>
                       </div>
                     </div>
                   )
                 })}
+              </div>
+
+              {/* Résumé du nombre de combos */}
+              <div className="combo-count-summary">
+                <strong>Grille :</strong> {comboCount} combo{comboCount > 1 ? 's' : ''}
+                {comboCount > 1 && paramGrid && (
+                  <span className="combo-breakdown">
+                    {' '}
+                    (
+                    {Object.entries(paramGrid.params)
+                      .map(([pName, pConfig]) => (activeParams.has(pName) ? '1' : pConfig.values.length))
+                      .join('×')}
+                    )
+                  </span>
+                )}
               </div>
 
               <div className="divider" />
@@ -364,7 +547,7 @@ export default function ExplorerPage({ wsData }) {
               {loading ? 'Lancement...' : 'Lancer WFO'}
             </button>
             <button onClick={handleReset} disabled={!paramGrid} className="btn btn-secondary">
-              Réinitialiser
+              Réinitialiser (grille complète)
             </button>
           </div>
           {activeJobsCount >= 5 && (
@@ -391,6 +574,7 @@ export default function ExplorerPage({ wsData }) {
                 </h3>
                 <p className="heatmap-subtitle">
                   Axe X: {axisX} | Axe Y: {axisY} | Métrique: {metric}
+                  <InfoTooltip term={metric} />
                 </p>
               </div>
               <HeatmapChart data={heatmapData} />
@@ -398,6 +582,28 @@ export default function ExplorerPage({ wsData }) {
           )}
         </div>
       </div>
+
+      {/* Sprint 14b : Section Analyse (charts analytiques) */}
+      {comboResults && comboResults.combos && comboResults.combos.length > 0 && (
+        <div className="analysis-section">
+          <h3>Analyse des combos ({comboResults.combos.length} testées)</h3>
+
+          {/* Top 10 pleine largeur */}
+          <div className="analysis-top10">
+            <Top10Table
+              combos={comboResults.combos}
+              paramNames={paramGrid ? Object.keys(paramGrid.params) : []}
+              metric={metric}
+            />
+          </div>
+
+          {/* Scatter + Distribution en grid 2 colonnes */}
+          <div className="analysis-charts">
+            <ScatterChart combos={comboResults.combos} />
+            <DistributionChart combos={comboResults.combos} />
+          </div>
+        </div>
+      )}
 
       {/* Jobs d'optimisation (bas, pleine largeur) */}
       <div className="jobs-section">
@@ -487,388 +693,6 @@ export default function ExplorerPage({ wsData }) {
           </table>
         </div>
       </div>
-
-      <style jsx>{`
-        .explorer-page {
-          width: 100%;
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-          padding: 16px;
-          overflow: hidden;
-        }
-
-        /* Layout principal : Config + Heatmap */
-        .explorer-main {
-          display: grid;
-          grid-template-columns: 320px 1fr;
-          gap: 16px;
-          flex: 1;
-          overflow: hidden;
-        }
-
-        /* Panel de configuration (gauche) */
-        .config-panel {
-          background: #1a1a1a;
-          border: 1px solid #333;
-          border-radius: 8px;
-          padding: 20px;
-          overflow-y: auto;
-          max-height: calc(100vh - 200px);
-        }
-
-        .config-panel h3 {
-          margin: 0 0 20px 0;
-          color: #fff;
-          font-size: 18px;
-          border-bottom: 1px solid #333;
-          padding-bottom: 10px;
-        }
-
-        .config-panel h4 {
-          margin: 16px 0 12px 0;
-          color: #ccc;
-          font-size: 14px;
-          font-weight: 600;
-        }
-
-        .divider {
-          height: 1px;
-          background: #333;
-          margin: 20px 0;
-        }
-
-        .form-group {
-          margin-bottom: 16px;
-        }
-
-        .form-group label {
-          display: block;
-          margin-bottom: 6px;
-          color: #aaa;
-          font-size: 13px;
-          font-weight: 500;
-        }
-
-        .select-input {
-          width: 100%;
-          padding: 8px 10px;
-          background: #0d1117;
-          border: 1px solid #444;
-          border-radius: 4px;
-          color: #ccc;
-          font-size: 14px;
-          cursor: pointer;
-          transition: border-color 0.2s;
-        }
-
-        .select-input:hover {
-          border-color: #666;
-        }
-
-        .select-input:focus {
-          border-color: #3b82f6;
-          outline: none;
-        }
-
-        .params-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-
-        .param-item {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-
-        .param-item label {
-          color: #aaa;
-          font-size: 12px;
-          font-weight: 500;
-        }
-
-        .param-controls {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-
-        .range-input {
-          flex: 1;
-          height: 6px;
-          background: #333;
-          border-radius: 3px;
-          outline: none;
-          cursor: pointer;
-        }
-
-        .range-input::-webkit-slider-thumb {
-          appearance: none;
-          width: 14px;
-          height: 14px;
-          background: #3b82f6;
-          border-radius: 50%;
-          cursor: pointer;
-        }
-
-        .param-value {
-          min-width: 50px;
-          text-align: right;
-          color: #fff;
-          font-size: 13px;
-          font-weight: 600;
-        }
-
-        .action-buttons {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-        }
-
-        .btn {
-          padding: 10px 16px;
-          border: none;
-          border-radius: 4px;
-          font-size: 14px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .btn:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-
-        .btn-primary {
-          background: #3b82f6;
-          color: white;
-        }
-
-        .btn-primary:hover:not(:disabled) {
-          background: #2563eb;
-        }
-
-        .btn-secondary {
-          background: #2a2a2a;
-          color: #ccc;
-          border: 1px solid #444;
-        }
-
-        .btn-secondary:hover:not(:disabled) {
-          background: #333;
-        }
-
-        .warning-text {
-          margin-top: 8px;
-          color: #f59e0b;
-          font-size: 12px;
-          text-align: center;
-        }
-
-        /* Zone centrale Heatmap */
-        .heatmap-container {
-          background: #1a1a1a;
-          border: 1px solid #333;
-          border-radius: 8px;
-          padding: 20px;
-          overflow: auto;
-          display: flex;
-          flex-direction: column;
-          min-height: 400px;
-        }
-
-        .heatmap-header {
-          margin-bottom: 20px;
-        }
-
-        .heatmap-header h3 {
-          margin: 0 0 8px 0;
-          color: #fff;
-          font-size: 18px;
-        }
-
-        .heatmap-subtitle {
-          margin: 0;
-          color: #888;
-          font-size: 13px;
-        }
-
-        .empty-state {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-          color: #888;
-          text-align: center;
-        }
-
-        .empty-state p {
-          margin: 8px 0;
-          font-size: 14px;
-        }
-
-        /* Jobs section (bas) */
-        .jobs-section {
-          background: #1a1a1a;
-          border: 1px solid #333;
-          border-radius: 8px;
-          padding: 16px;
-          min-height: 250px;
-          max-height: 50vh;
-          overflow: hidden;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .jobs-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 12px;
-        }
-
-        .jobs-header h3 {
-          margin: 0;
-          color: #fff;
-          font-size: 16px;
-        }
-
-        .btn-refresh {
-          padding: 6px 12px;
-          background: #2a2a2a;
-          border: 1px solid #444;
-          border-radius: 4px;
-          color: #ccc;
-          font-size: 13px;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .btn-refresh:hover {
-          background: #333;
-        }
-
-        .jobs-table-container {
-          flex: 1;
-          overflow-y: auto;
-        }
-
-        .jobs-table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 13px;
-        }
-
-        .jobs-table thead {
-          position: sticky;
-          top: 0;
-          background: #0d1117;
-          z-index: 1;
-        }
-
-        .jobs-table th {
-          text-align: left;
-          padding: 8px 12px;
-          color: #aaa;
-          font-weight: 600;
-          border-bottom: 1px solid #333;
-        }
-
-        .jobs-table td {
-          padding: 10px 12px;
-          color: #ccc;
-          border-bottom: 1px solid #222;
-        }
-
-        .jobs-table tbody tr:hover {
-          background: #1a1f2e;
-        }
-
-        .job-id {
-          font-family: monospace;
-          color: #888;
-          font-size: 11px;
-        }
-
-        .status-badge {
-          display: inline-block;
-          padding: 3px 8px;
-          border-radius: 3px;
-          font-size: 11px;
-          font-weight: 600;
-          color: white;
-          text-transform: uppercase;
-        }
-
-        .progress-cell {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .progress-bar {
-          width: 120px;
-          height: 8px;
-          background: #333;
-          border-radius: 4px;
-          overflow: hidden;
-        }
-
-        .progress-fill {
-          height: 100%;
-          background: #10b981;
-          transition: width 0.3s;
-        }
-
-        .progress-text {
-          font-size: 11px;
-          color: #aaa;
-        }
-
-        .progress-phase {
-          font-size: 10px;
-          color: #666;
-        }
-
-        .btn-cancel {
-          padding: 4px 10px;
-          background: #ef4444;
-          border: none;
-          border-radius: 3px;
-          color: white;
-          font-size: 11px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .btn-cancel:hover {
-          background: #dc2626;
-        }
-
-        .error-hint {
-          color: #ef4444;
-          font-size: 16px;
-          cursor: help;
-        }
-
-        /* Responsive : empiler config au-dessus de heatmap en dessous de 1024px */
-        @media (max-width: 1024px) {
-          .explorer-main {
-            grid-template-columns: 1fr;
-            grid-template-rows: auto 1fr;
-          }
-
-          .config-panel {
-            max-height: none;
-          }
-        }
-      `}</style>
     </div>
   )
 }

@@ -303,6 +303,35 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_jobs_created
                 ON optimization_jobs(created_at);
         """)
+        await self._create_sprint14b_tables()
+
+    async def _create_sprint14b_tables(self) -> None:
+        """Tables Sprint 14b : résultats détaillés de chaque combo WFO."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS wfo_combo_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                optimization_result_id INTEGER NOT NULL,
+                params TEXT NOT NULL,
+                oos_sharpe REAL,
+                oos_return_pct REAL,
+                oos_trades INTEGER,
+                oos_win_rate REAL,
+                is_sharpe REAL,
+                is_return_pct REAL,
+                is_trades INTEGER,
+                consistency REAL,
+                oos_is_ratio REAL,
+                is_best INTEGER DEFAULT 0,
+                n_windows_evaluated INTEGER,
+                FOREIGN KEY (optimization_result_id) REFERENCES optimization_results(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_combo_opt_id
+                ON wfo_combo_results(optimization_result_id);
+            CREATE INDEX IF NOT EXISTS idx_combo_best
+                ON wfo_combo_results(is_best) WHERE is_best = 1;
+        """)
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
 

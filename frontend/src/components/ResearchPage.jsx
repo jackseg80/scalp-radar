@@ -5,6 +5,8 @@
 
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import WfoChart from './WfoChart'
+import InfoTooltip from './InfoTooltip'
+import './ResearchPage.css'
 
 const GRADE_COLORS = {
   A: '#10b981',
@@ -202,18 +204,61 @@ export default function ResearchPage() {
         <section className="detail-section">
           <h3>Critères de notation</h3>
           <div className="scores-list">
-            <ScoreBar label="OOS/IS Ratio" value={detail.oos_is_ratio} max={1} />
-            <ScoreBar label="Monte Carlo p-value" value={detail.monte_carlo_summary?.p_value} max={1} invert />
-            <ScoreBar label="DSR" value={detail.dsr} max={1} />
-            <ScoreBar label="Stabilité Params" value={detail.param_stability} max={1} />
-            <ScoreBar label="Transfer Bitget" value={detail.validation_summary?.transfer_ratio} max={1} />
+            <ScoreBar
+              label={
+                <>
+                  OOS/IS Ratio <InfoTooltip term="oos_is_ratio" />
+                </>
+              }
+              value={detail.oos_is_ratio}
+              max={1}
+            />
+            <ScoreBar
+              label={
+                <>
+                  Monte Carlo p-value <InfoTooltip term="monte_carlo_pvalue" />
+                </>
+              }
+              value={detail.monte_carlo_summary?.p_value}
+              max={1}
+              invert
+            />
+            <ScoreBar
+              label={
+                <>
+                  DSR <InfoTooltip term="dsr" />
+                </>
+              }
+              value={detail.dsr}
+              max={1}
+            />
+            <ScoreBar
+              label={
+                <>
+                  Stabilité Params <InfoTooltip term="param_stability" />
+                </>
+              }
+              value={detail.param_stability}
+              max={1}
+            />
+            <ScoreBar
+              label={
+                <>
+                  Transfer Bitget <InfoTooltip term="transfer_ratio" />
+                </>
+              }
+              value={detail.validation_summary?.transfer_ratio}
+              max={1}
+            />
           </div>
         </section>
 
         {/* Equity Curve WFO */}
         {detail.wfo_windows && detail.wfo_windows.length > 0 && (
           <section className="detail-section">
-            <h3>Equity Curve IS vs OOS</h3>
+            <h3>
+              Equity Curve IS vs OOS <InfoTooltip term="is_vs_oos_chart" />
+            </h3>
             <WfoChart windows={detail.wfo_windows} />
           </section>
         )}
@@ -281,135 +326,6 @@ export default function ResearchPage() {
             </ul>
           </section>
         )}
-
-        <style jsx>{`
-          .btn-back {
-            padding: 8px 16px;
-            background: #2a2a2a;
-            border: 1px solid #444;
-            border-radius: 4px;
-            color: #ccc;
-            cursor: pointer;
-            font-size: 14px;
-            margin-bottom: 20px;
-            transition: all 0.2s;
-          }
-          .btn-back:hover {
-            background: #333;
-            border-color: #666;
-          }
-          .detail-header {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-          }
-          .detail-header h2 {
-            margin: 0 0 12px 0;
-            color: #fff;
-            font-size: 24px;
-          }
-          .detail-meta {
-            display: flex;
-            gap: 16px;
-            align-items: center;
-          }
-          .grade-badge {
-            padding: 4px 12px;
-            border-radius: 4px;
-            font-weight: 600;
-            font-size: 14px;
-          }
-          .grade-A { background: ${GRADE_COLORS.A}; color: white; }
-          .grade-B { background: ${GRADE_COLORS.B}; color: white; }
-          .grade-C { background: ${GRADE_COLORS.C}; color: white; }
-          .grade-D { background: ${GRADE_COLORS.D}; color: white; }
-          .grade-F { background: ${GRADE_COLORS.F}; color: white; }
-          .score {
-            color: #ccc;
-            font-size: 14px;
-          }
-          .date {
-            color: #888;
-            font-size: 13px;
-          }
-          .detail-section {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-          }
-          .detail-section h3 {
-            margin: 0 0 16px 0;
-            color: #fff;
-            font-size: 18px;
-            border-bottom: 1px solid #333;
-            padding-bottom: 8px;
-          }
-          .params-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 12px;
-          }
-          .param-item {
-            display: flex;
-            gap: 8px;
-            background: #0a0a0a;
-            padding: 8px 12px;
-            border-radius: 4px;
-          }
-          .param-key {
-            color: #888;
-            font-size: 13px;
-          }
-          .param-value {
-            color: #ccc;
-            font-size: 13px;
-            font-weight: 500;
-          }
-          .scores-list {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-          }
-          .validation-grid, .monte-carlo-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 12px;
-          }
-          .validation-item, .mc-item {
-            display: flex;
-            justify-content: space-between;
-            background: #0a0a0a;
-            padding: 10px 14px;
-            border-radius: 4px;
-          }
-          .validation-item .label, .mc-item .label {
-            color: #888;
-            font-size: 13px;
-          }
-          .validation-item .value, .mc-item .value {
-            color: #ccc;
-            font-size: 13px;
-            font-weight: 500;
-          }
-          .warnings-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-          }
-          .warning-item {
-            background: #2a1a1a;
-            border-left: 3px solid #ef4444;
-            padding: 10px 14px;
-            margin-bottom: 8px;
-            border-radius: 4px;
-            color: #ffb3b3;
-            font-size: 13px;
-          }
-        `}</style>
       </div>
     )
   }
@@ -474,22 +390,22 @@ export default function ResearchPage() {
                 Grade {sortBy === 'grade' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th onClick={() => handleSort('total_score')}>
-                Score {sortBy === 'total_score' && (sortDir === 'asc' ? '↑' : '↓')}
+                Score <InfoTooltip term="total_score" /> {sortBy === 'total_score' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th onClick={() => handleSort('oos_sharpe')}>
-                OOS Sharpe {sortBy === 'oos_sharpe' && (sortDir === 'asc' ? '↑' : '↓')}
+                OOS Sharpe <InfoTooltip term="oos_sharpe" /> {sortBy === 'oos_sharpe' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th onClick={() => handleSort('consistency')}>
-                Consistance {sortBy === 'consistency' && (sortDir === 'asc' ? '↑' : '↓')}
+                Consistance <InfoTooltip term="consistency" /> {sortBy === 'consistency' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th onClick={() => handleSort('oos_is_ratio')}>
-                OOS/IS {sortBy === 'oos_is_ratio' && (sortDir === 'asc' ? '↑' : '↓')}
+                OOS/IS <InfoTooltip term="oos_is_ratio" /> {sortBy === 'oos_is_ratio' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th onClick={() => handleSort('dsr')}>
-                DSR {sortBy === 'dsr' && (sortDir === 'asc' ? '↑' : '↓')}
+                DSR <InfoTooltip term="dsr" /> {sortBy === 'dsr' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th onClick={() => handleSort('param_stability')}>
-                Stabilité {sortBy === 'param_stability' && (sortDir === 'asc' ? '↑' : '↓')}
+                Stabilité <InfoTooltip term="param_stability" /> {sortBy === 'param_stability' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th onClick={() => handleSort('created_at')}>
                 Date {sortBy === 'created_at' && (sortDir === 'asc' ? '↑' : '↓')}
@@ -524,99 +440,6 @@ export default function ResearchPage() {
           </tbody>
         </table>
       </div>
-
-      <style jsx>{`
-        .research-page {
-          padding: 20px;
-          max-width: 1600px;
-          margin: 0 auto;
-        }
-        .research-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 20px;
-          flex-wrap: wrap;
-          gap: 16px;
-        }
-        .research-header h2 {
-          margin: 0;
-          color: #fff;
-          font-size: 24px;
-        }
-        .filters {
-          display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
-        }
-        .filter-select {
-          padding: 8px 12px;
-          background: #1a1a1a;
-          border: 1px solid #333;
-          border-radius: 4px;
-          color: #ccc;
-          font-size: 14px;
-          cursor: pointer;
-        }
-        .filter-select:hover {
-          border-color: #666;
-        }
-        .results-count {
-          color: #888;
-          font-size: 13px;
-          margin-bottom: 12px;
-        }
-        .table-container {
-          overflow-x: auto;
-          background: #1a1a1a;
-          border: 1px solid #333;
-          border-radius: 8px;
-        }
-        .results-table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 13px;
-        }
-        .results-table th {
-          background: #0a0a0a;
-          color: #ccc;
-          font-weight: 600;
-          text-align: left;
-          padding: 12px 16px;
-          border-bottom: 2px solid #333;
-          cursor: pointer;
-          user-select: none;
-          white-space: nowrap;
-        }
-        .results-table th:hover {
-          background: #1a1a1a;
-        }
-        .results-table td {
-          padding: 12px 16px;
-          border-bottom: 1px solid #222;
-          color: #ccc;
-          white-space: nowrap;
-        }
-        .clickable-row {
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-        .clickable-row:hover {
-          background: #252525;
-        }
-        .grade-badge {
-          padding: 3px 8px;
-          border-radius: 3px;
-          font-weight: 600;
-          font-size: 12px;
-          display: inline-block;
-        }
-        .grade-A { background: ${GRADE_COLORS.A}; color: white; }
-        .grade-B { background: ${GRADE_COLORS.B}; color: white; }
-        .grade-C { background: ${GRADE_COLORS.C}; color: white; }
-        .grade-D { background: ${GRADE_COLORS.D}; color: white; }
-        .grade-F { background: ${GRADE_COLORS.F}; color: white; }
-      `}</style>
     </div>
   )
 }
@@ -637,34 +460,6 @@ function ScoreBar({ label, value, max = 1, invert = false }) {
       <div className="score-bar__track">
         <div className="score-bar__fill" style={{ width: `${displayPct}%`, background: color }} />
       </div>
-
-      <style jsx>{`
-        .score-bar {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-        .score-bar__label {
-          display: flex;
-          justify-content: space-between;
-          font-size: 13px;
-          color: #ccc;
-        }
-        .score-bar__value {
-          font-weight: 600;
-        }
-        .score-bar__track {
-          height: 8px;
-          background: #0a0a0a;
-          border-radius: 4px;
-          overflow: hidden;
-        }
-        .score-bar__fill {
-          height: 100%;
-          transition: width 0.3s, background 0.3s;
-          border-radius: 4px;
-        }
-      `}</style>
     </div>
   )
 }

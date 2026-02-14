@@ -138,32 +138,19 @@ export default function HeatmapChart({ data }) {
                   )}
                 </rect>
 
-                {/* Texte valeur */}
+                {/* Texte valeur (Sprint 14b : mode dense, pas de grade) */}
                 {cell.value != null && (
-                  <>
-                    <text
-                      x={x + cellSize / 2}
-                      y={y + cellSize / 2 - 8}
-                      textAnchor="middle"
-                      fill="#fff"
-                      fontSize={cellSize > 80 ? '14' : '12'}
-                      fontWeight="bold"
-                    >
-                      {cell.value.toFixed(1)}
-                    </text>
-                    {cell.grade && (
-                      <text
-                        x={x + cellSize / 2}
-                        y={y + cellSize / 2 + 12}
-                        textAnchor="middle"
-                        fill="#fff"
-                        fontSize={cellSize > 80 ? '12' : '10'}
-                        fontWeight="600"
-                      >
-                        Grade {cell.grade}
-                      </text>
-                    )}
-                  </>
+                  <text
+                    x={x + cellSize / 2}
+                    y={y + cellSize / 2}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fill="#fff"
+                    fontSize={cellSize > 80 ? '14' : '12'}
+                    fontWeight="bold"
+                  >
+                    {cell.value.toFixed(1)}
+                  </text>
                 )}
               </g>
             )
@@ -254,7 +241,7 @@ export default function HeatmapChart({ data }) {
           <rect
             x={100}
             y={-12}
-            width={chartWidth - 200}
+            width={Math.max(0, chartWidth - 200)}
             height={20}
             fill="url(#heatmap-gradient)"
             stroke="#4b5563"

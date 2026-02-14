@@ -365,6 +365,7 @@ async def run_optimization(
         wfo_windows=windows_serialized,
         duration=None,  # TODO: tracker la durée si nécessaire
         timeframe=main_tf,
+        combo_results=wfo.combo_results,  # Sprint 14b
     )
 
     if progress_callback:

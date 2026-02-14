@@ -345,6 +345,7 @@ def save_report(
     timeframe: str | None = None,
     output_dir: str = "data/optimization",
     db_path: str | None = None,
+    combo_results: list[dict] | None = None,
 ) -> tuple[Path, int | None]:
     """Sauvegarde le rapport en JSON et en DB.
 
@@ -355,6 +356,7 @@ def save_report(
         timeframe: Timeframe de la stratégie (ex: "5m", "1h")
         output_dir: Répertoire JSON
         db_path: Chemin DB SQLite (None = depuis config)
+        combo_results: Combo results du WFO (Sprint 14b, optionnel)
 
     Returns:
         (filepath, result_id) : chemin JSON + ID DB (ou None si pas sauvé en DB)
@@ -391,10 +393,16 @@ def save_report(
 
         result_id = save_result_sync(db_path, report, wfo_windows, duration, timeframe)
 
+        # Sauver les combo results si présents (Sprint 14b)
+        if result_id and combo_results:
+            from backend.optimization.optimization_db import save_combo_results_sync
+            n_saved = save_combo_results_sync(db_path, result_id, combo_results)
+            logger.info("Combo results sauvés : {} combos pour result_id={}", n_saved, result_id)
+
     # 3. Push serveur (best-effort, ne crashe jamais)
     if timeframe is not None:
         from backend.optimization.optimization_db import push_to_server
-        push_to_server(report, wfo_windows, duration, timeframe)
+        push_to_server(report, wfo_windows, duration, timeframe, combo_results=combo_results)
 
     return filepath, result_id
 

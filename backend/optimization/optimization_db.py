@@ -214,6 +214,13 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
         )
 
         conn.commit()
+
+        # 3. Sauver les combo_results si présents (Sprint 14b)
+        combo_results = payload.get("combo_results")
+        if combo_results and new_id:
+            n_saved = save_combo_results_sync(db_path, new_id, combo_results)
+            logger.info("Combo results sauvés (POST) : {} combos pour result_id={}", n_saved, new_id)
+
         logger.info(
             "Résultat WFO reçu (POST) : {} × {} (grade {})",
             payload["strategy_name"], payload["asset"], payload["grade"],
@@ -229,10 +236,14 @@ def build_push_payload(
     duration: float | None,
     timeframe: str,
     source: str = "local",
+    combo_results: list[dict] | None = None,
 ) -> dict:
     """Construit le payload JSON pour POST vers le serveur.
 
     Réutilise _sanitize_dict/_sanitize_json_value pour nettoyer NaN/Infinity.
+
+    Args:
+        combo_results: Combo results du WFO (Sprint 14b, optionnel)
     """
     best_params_json = json.dumps(_sanitize_dict(report.recommended_params))
     wfo_windows_json = json.dumps(_sanitize_dict({"windows": wfo_windows})) if wfo_windows else None
@@ -256,7 +267,7 @@ def build_push_payload(
         "volume_warning_detail": report.validation.volume_warning_detail,
     })
 
-    return {
+    payload = {
         "strategy_name": report.strategy_name,
         "asset": report.symbol,
         "timeframe": timeframe,
@@ -280,6 +291,12 @@ def build_push_payload(
         "warnings": json.dumps(report.warnings),
         "source": source,
     }
+
+    # Ajouter combo_results si présent (Sprint 14b)
+    if combo_results:
+        payload["combo_results"] = combo_results
+
+    return payload
 
 
 def build_payload_from_db_row(row: dict) -> dict:
@@ -319,10 +336,14 @@ def push_to_server(
     wfo_windows: list[dict] | None,
     duration: float | None,
     timeframe: str,
+    combo_results: list[dict] | None = None,
 ) -> None:
     """Pousse un résultat WFO vers le serveur de production (best-effort).
 
     Ne crashe JAMAIS le run local. Log warning si erreur.
+
+    Args:
+        combo_results: Combo results du WFO (Sprint 14b, optionnel)
     """
     try:
         from backend.core.config import get_config
@@ -339,7 +360,7 @@ def push_to_server(
 
         import httpx
 
-        payload = build_push_payload(report, wfo_windows, duration, timeframe)
+        payload = build_push_payload(report, wfo_windows, duration, timeframe, combo_results=combo_results)
         url = f"{config.secrets.sync_server_url.rstrip('/')}/api/optimization/results"
 
         with httpx.Client(timeout=10.0) as client:
@@ -517,3 +538,80 @@ async def get_comparison_async(db_path: str) -> dict[str, Any]:
             "assets": sorted(assets),
             "matrix": matrix,
         }
+
+
+# ─── Combo Results (Sprint 14b) ────────────────────────────────────────────
+
+
+def save_combo_results_sync(db_path: str, result_id: int, combo_results: list[dict]) -> int:
+    """Insère les combo results en DB (sync). Retourne le nombre inséré.
+
+    Args:
+        db_path: Chemin vers la DB SQLite
+        result_id: ID du résultat WFO parent
+        combo_results: Liste des combos avec métriques agrégées
+
+    Returns:
+        Nombre de combos insérées
+    """
+    if not combo_results:
+        return 0
+
+    conn = sqlite3.connect(db_path)
+    try:
+        data = [
+            (
+                result_id,
+                json.dumps(cr["params"], sort_keys=True),
+                cr.get("oos_sharpe"),
+                cr.get("oos_return_pct"),
+                cr.get("oos_trades"),
+                cr.get("oos_win_rate"),
+                cr.get("is_sharpe"),
+                cr.get("is_return_pct"),
+                cr.get("is_trades"),
+                cr.get("consistency"),
+                cr.get("oos_is_ratio"),
+                1 if cr.get("is_best") else 0,
+                cr.get("n_windows_evaluated"),
+            )
+            for cr in combo_results
+        ]
+        conn.executemany(
+            """INSERT INTO wfo_combo_results
+               (optimization_result_id, params, oos_sharpe, oos_return_pct, oos_trades,
+                oos_win_rate, is_sharpe, is_return_pct, is_trades, consistency, oos_is_ratio, is_best, n_windows_evaluated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            data,
+        )
+        conn.commit()
+        return len(data)
+    finally:
+        conn.close()
+
+
+async def get_combo_results_async(db_path: str, result_id: int) -> list[dict]:
+    """Retourne tous les combo results pour un résultat WFO donné.
+
+    Args:
+        db_path: Chemin vers la DB SQLite
+        result_id: ID du résultat WFO
+
+    Returns:
+        Liste des combos triées par OOS Sharpe décroissant
+    """
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT params, oos_sharpe, oos_return_pct, oos_trades, oos_win_rate,
+                      is_sharpe, is_return_pct, is_trades, consistency, oos_is_ratio, is_best, n_windows_evaluated
+               FROM wfo_combo_results
+               WHERE optimization_result_id = ?
+               ORDER BY oos_sharpe DESC""",
+            (result_id,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {**dict(row), "params": json.loads(row["params"])}
+            for row in rows
+        ]
