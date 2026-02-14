@@ -66,16 +66,19 @@ def _save_trade_to_db_sync(
     """Sauvegarde synchrone d'un trade dans la DB avec retry sur lock.
 
     Backward compatible : log warning si table absente, ne crashe jamais.
-    Retry automatique sur 'database is locked' (race condition WFO concurrent).
+    WAL mode activé sur la connexion sync (évite les locks en lecture concurrente).
+    Retry court (3 × 50ms) pour ne pas bloquer le simulator.
     """
     import time
 
-    max_retries = 5
-    retry_delay = 0.1  # 100ms initial
+    max_retries = 3
+    retry_delay = 0.05  # 50ms initial, max total ~350ms
 
     for attempt in range(max_retries):
+        conn = None
         try:
-            conn = sqlite3.connect(db_path, timeout=5.0)  # 5s timeout
+            conn = sqlite3.connect(db_path, timeout=1.0)
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """INSERT INTO simulation_trades
                    (strategy_name, symbol, direction, entry_price, exit_price, quantity,
@@ -100,29 +103,32 @@ def _save_trade_to_db_sync(
                 ),
             )
             conn.commit()
-            conn.close()
             return  # Success
         except sqlite3.OperationalError as e:
             if "no such table" in str(e).lower():
                 logger.warning(
                     "Table simulation_trades absente (DB ancienne), trade non persisté"
                 )
-                return  # Don't retry for missing table
-            elif "database is locked" in str(e).lower():
+                return
+            elif "locked" in str(e).lower():
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
+                    retry_delay *= 2
                     continue
                 else:
-                    logger.error(
-                        f"Trade non sauvegardé après {max_retries} tentatives (DB locked): {strategy_name} {symbol} {trade.net_pnl:.2f}"
+                    logger.warning(
+                        "Trade non sauvegardé (DB locked): {} {} {:.2f}",
+                        strategy_name, symbol, trade.net_pnl,
                     )
             else:
-                logger.warning(f"Erreur sauvegarde trade en DB: {e}")
+                logger.warning("Erreur sauvegarde trade en DB: {}", e)
                 return
         except Exception as e:
-            logger.warning(f"Erreur inattendue sauvegarde trade: {e}")
+            logger.warning("Erreur inattendue sauvegarde trade: {}", e)
             return
+        finally:
+            if conn:
+                conn.close()
 
 
 @dataclass
