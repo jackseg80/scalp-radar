@@ -214,13 +214,29 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
             conn.commit()
             return "exists"
 
-        # 2. Inséré avec succès → mettre is_latest=0 sur les anciens
+        # 2. Inséré avec succès → conditionner is_latest
         new_id = cursor.lastrowid
-        conn.execute(
-            """UPDATE optimization_results SET is_latest=0
-               WHERE strategy_name=? AND asset=? AND timeframe=? AND is_latest=1 AND id!=?""",
-            (payload["strategy_name"], payload["asset"], payload["timeframe"], new_id),
-        )
+        n_combos = payload.get("n_distinct_combos") or 0
+
+        # Protection : un run avec très peu de combos (< 10) ne doit PAS
+        # voler le flag is_latest d'un run complet existant (push serveur
+        # avec grille restreinte → ne doit pas écraser un run local à 324 combos)
+        if n_combos >= 10:
+            conn.execute(
+                """UPDATE optimization_results SET is_latest=0
+                   WHERE strategy_name=? AND asset=? AND timeframe=? AND is_latest=1 AND id!=?""",
+                (payload["strategy_name"], payload["asset"], payload["timeframe"], new_id),
+            )
+        else:
+            # Garder is_latest=0 sur le nouveau run (ne pas écraser le bon)
+            conn.execute(
+                "UPDATE optimization_results SET is_latest=0 WHERE id=?",
+                (new_id,),
+            )
+            logger.warning(
+                "Run pushé avec peu de combos (n={}), is_latest non modifié : {} × {}",
+                n_combos, payload["strategy_name"], payload["asset"],
+            )
 
         conn.commit()
 
@@ -429,41 +445,44 @@ async def get_results_async(
     async with aiosqlite.connect(db_path) as conn:
         conn.row_factory = aiosqlite.Row
 
-        # Build query
+        # Build query (préfixé r. pour compatibilité LEFT JOIN)
         where_clauses = []
         params: list[Any] = []
 
         if latest_only:
-            where_clauses.append("is_latest = 1")
+            where_clauses.append("r.is_latest = 1")
         if strategy:
-            where_clauses.append("strategy_name = ?")
+            where_clauses.append("r.strategy_name = ?")
             params.append(strategy)
         if asset:
-            where_clauses.append("asset = ?")
+            where_clauses.append("r.asset = ?")
             params.append(asset)
         if min_grade:
             # Grades: A=85, B=70, C=55, D=40, F=0
             grade_thresholds = {"A": 85, "B": 70, "C": 55, "D": 40, "F": 0}
             threshold = grade_thresholds.get(min_grade, 0)
-            where_clauses.append("total_score >= ?")
+            where_clauses.append("r.total_score >= ?")
             params.append(threshold)
 
         where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
         # Count total
-        count_query = f"SELECT COUNT(*) as total FROM optimization_results WHERE {where_sql}"
+        count_query = f"SELECT COUNT(*) as total FROM optimization_results r WHERE {where_sql}"
         cursor = await conn.execute(count_query, params)
         row = await cursor.fetchone()
         total = row["total"]
 
-        # Fetch page
+        # Fetch page (avec combo_count = nb réel de combos en DB)
         query = f"""
-            SELECT id, strategy_name, asset, timeframe, created_at, grade, total_score,
-                   oos_sharpe, consistency, oos_is_ratio, dsr, param_stability,
-                   n_windows, is_latest
-            FROM optimization_results
+            SELECT r.id, r.strategy_name, r.asset, r.timeframe, r.created_at, r.grade, r.total_score,
+                   r.oos_sharpe, r.consistency, r.oos_is_ratio, r.dsr, r.param_stability,
+                   r.n_windows, r.is_latest, r.n_distinct_combos,
+                   COUNT(c.id) as combo_count
+            FROM optimization_results r
+            LEFT JOIN wfo_combo_results c ON c.optimization_result_id = r.id
             WHERE {where_sql}
-            ORDER BY total_score DESC, created_at DESC
+            GROUP BY r.id
+            ORDER BY r.total_score DESC, r.created_at DESC
             LIMIT ? OFFSET ?
         """
         cursor = await conn.execute(query, params + [limit, offset])

@@ -129,12 +129,21 @@ export default function ExplorerPage({ wsData }) {
 
         setAvailableRuns(data.results || [])
 
-        // Auto-sélectionner le latest par défaut
-        const latest = (data.results || []).find((r) => r.is_latest === 1)
-        if (latest) {
-          setSelectedRunId(latest.id)
-        } else if (data.results && data.results.length > 0) {
-          setSelectedRunId(data.results[0].id)
+        // Auto-sélectionner le meilleur run : préférer le run avec le plus de combos
+        // (un run à 1-5 combos = params verrouillés, pas de heatmap utile)
+        const runs = data.results || []
+        const MIN_COMBOS_FOR_HEATMAP = 10
+        const fullRuns = runs.filter((r) => (r.combo_count || 0) >= MIN_COMBOS_FOR_HEATMAP)
+
+        if (fullRuns.length > 0) {
+          // Parmi les runs complets, prendre le plus récent
+          const bestRun = fullRuns.reduce((a, b) =>
+            new Date(b.created_at) > new Date(a.created_at) ? b : a
+          )
+          setSelectedRunId(bestRun.id)
+        } else if (runs.length > 0) {
+          // Fallback : prendre le premier run (trié par score desc)
+          setSelectedRunId(runs[0].id)
         }
       } catch (err) {
         console.error('Erreur fetch available runs:', err)
@@ -424,7 +433,9 @@ export default function ExplorerPage({ wsData }) {
                     hour: '2-digit',
                     minute: '2-digit',
                   })
-                  const label = `${date} ${time} — Grade ${run.grade} (${run.total_score?.toFixed(0) || 0})${
+                  const combos = run.combo_count || 0
+                  const comboInfo = combos > 0 ? ` ${combos}c` : ''
+                  const label = `${date} ${time} — Grade ${run.grade} (${run.total_score?.toFixed(0) || 0})${comboInfo}${
                     run.is_latest ? ' [latest]' : ''
                   }`
                   return (

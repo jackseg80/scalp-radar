@@ -495,6 +495,31 @@ Système automatisé de trading crypto qui :
 
 **Tests** : 650 passants (+18 depuis hotfix orphan)
 
+### Hotfix — Explorer Heatmap 1 point (push serveur parasite) ✅
+
+**Problème** : La page Explorer n'affichait qu'un seul point au lieu de 324 sur la heatmap. Cause : le serveur prod (192.168.1.200) avait `SYNC_ENABLED=true` et poussait ses résultats WFO (grille restreinte, 2 combos) vers la machine locale via `POST /api/optimization/results`, volant le flag `is_latest=1` aux bons runs locaux (320 combos).
+
+**Investigation** :
+- 32+ runs parasites avec `n_distinct_combos: 2`, aucun dans `optimization_jobs` → pas du JobManager local
+- Pas de Task Scheduler Windows, pas de cron/systemd Linux, pas de cron Docker
+- Paires ~15s d'écart, toutes les ~30 min = push bidirectionnel accidentel (serveur → local)
+
+**Fix (3 couches de protection)** :
+1. **Backend `save_result_from_payload_sync`** : un run pushé avec < 10 combos ne vole plus `is_latest` d'un run complet existant (garde `is_latest=0` sur le nouveau)
+2. **Backend `get_results_async`** : LEFT JOIN sur `wfo_combo_results` pour retourner `combo_count` et `n_distinct_combos` par run
+3. **Frontend `ExplorerPage.jsx`** : auto-sélection du run le plus récent avec ≥ 10 combos (pas aveuglément `is_latest`), dropdown affiche le nombre de combos par run
+
+**Cleanup DB** : 36 runs parasites (1 combo) supprimés, `is_latest=1` rétabli sur le meilleur run (320 combos, Grade B)
+
+**Config serveur** : désactiver `SYNC_ENABLED=false` sur le serveur prod (le serveur n'a pas les données historiques complètes, ses WFO sont incomplets)
+
+**Tests** : 679 passants (0 régression)
+
+**Leçons apprises** :
+- Le sync WFO ne doit être qu'unidirectionnel (local → serveur), jamais l'inverse
+- `is_latest` est fragile — un push externe peut le voler silencieusement
+- Défense en profondeur : 3 couches (backend POST, backend API, frontend) pour que le même bug ne puisse plus casser la heatmap
+
 ---
 
 ## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19) ← ON EST ICI
@@ -689,6 +714,7 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 - **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques, **diagnostic automatique en langage clair (6 règles)**
 - **Sprint 15b** : Analyse par régime de marché (Bull/Bear/Range/Crash) par fenêtre OOS, agrégation par régime dans DiagnosticPanel, conclusion automatique
 - **Hotfix exchange** : WFO lit l'exchange depuis la config principale (`exchanges.yaml`) au lieu d'un hardcode "binance" dans `param_grids.yaml`
+- **Hotfix Explorer heatmap** : push serveur parasite (SYNC bidirectionnel accidentel) volait `is_latest` avec des runs à 2 combos → 3 couches de protection (POST endpoint, API results, frontend auto-sélection)
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---

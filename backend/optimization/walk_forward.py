@@ -202,43 +202,6 @@ def _slice_candles(
     return [c for c in candles if start <= c.timestamp < end]
 
 
-def _detect_best_exchange(db_path: str, symbol: str, timeframe: str) -> str:
-    """Détecte l'exchange avec le plus de candles pour un symbol/timeframe.
-
-    Utilise sqlite3 synchrone (cohérent avec le WFO qui tourne en thread).
-    """
-    import sqlite3
-
-    conn = sqlite3.connect(db_path, timeout=5)
-    try:
-        rows = conn.execute(
-            "SELECT exchange, COUNT(*) as n "
-            "FROM candles WHERE symbol = ? AND timeframe = ? "
-            "GROUP BY exchange ORDER BY n DESC",
-            (symbol, timeframe),
-        ).fetchall()
-    finally:
-        conn.close()
-
-    if not rows:
-        raise ValueError(
-            f"Aucune candle en DB pour {symbol} {timeframe} (aucun exchange)"
-        )
-
-    best_exchange, best_count = rows[0]
-    if len(rows) > 1:
-        others = ", ".join(f"{r[0]}={r[1]}" for r in rows[1:])
-        logger.info(
-            "Auto-détection exchange : {} ({} candles pour {} {}). Autres : {}",
-            best_exchange, best_count, symbol, timeframe, others,
-        )
-    else:
-        logger.info(
-            "Auto-détection exchange : {} ({} candles pour {} {})",
-            best_exchange, best_count, symbol, timeframe,
-        )
-    return best_exchange
-
 
 def _classify_regime(candles: list[Candle]) -> dict[str, Any]:
     """Classifie le régime de marché d'une période OOS.
@@ -495,11 +458,12 @@ class WalkForwardOptimizer:
         if hasattr(default_cfg, "trend_filter_timeframe"):
             tfs_needed.append(default_cfg.trend_filter_timeframe)
 
-        # Auto-détection exchange si non spécifié
+        # Exchange par défaut : binance (données profondes depuis 2020)
+        # Override possible via --exchange en CLI
         db = Database()
         await db.init()
         if exchange is None:
-            exchange = _detect_best_exchange(db.db_path, symbol, main_tf)
+            exchange = "binance"
 
         # Charger les candles depuis la DB
         logger.info(

@@ -49,7 +49,7 @@ async def check_data(config_dir: str = "config") -> None:
     config = get_config(config_dir)
     grids = _load_param_grids(f"{config_dir}/param_grids.yaml")
     opt_config = grids.get("optimization", {})
-    main_exchange = config.exchange.name.lower()
+    main_exchange = "binance"
     val_exchange = opt_config.get("validation_exchange", "bitget")
 
     db = Database()
@@ -239,9 +239,8 @@ async def run_optimization(
     if hasattr(default_cfg, "trend_filter_timeframe"):
         tfs.append(default_cfg.trend_filter_timeframe)
 
-    # Exchange pour la Phase 2 : CLI > auto-détection
-    from backend.optimization.walk_forward import _detect_best_exchange
-    main_exchange = exchange or _detect_best_exchange(db.db_path, symbol, main_tf)
+    # Exchange pour la Phase 2 : CLI > binance par défaut
+    main_exchange = exchange or "binance"
 
     # Charger seulement les IS_WINDOW_DAYS derniers jours pour la stabilité
     # (34k bougies au lieu de 207k → ~6x plus rapide)
@@ -463,7 +462,7 @@ async def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Appliquer les paramètres grade A/B")
     parser.add_argument("-v", "--verbose", action="store_true", help="Affichage détaillé")
     parser.add_argument("--config-dir", type=str, default="config", help="Répertoire de config")
-    parser.add_argument("--exchange", type=str, default=None, help="Exchange source des candles (défaut: config)")
+    parser.add_argument("--exchange", type=str, default=None, help="Exchange source des candles (défaut: binance)")
     args = parser.parse_args()
 
     setup_logging(level="INFO")

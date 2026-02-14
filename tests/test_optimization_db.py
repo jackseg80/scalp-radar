@@ -55,6 +55,23 @@ def temp_db(tmp_path):
             regime_analysis TEXT,
             UNIQUE(strategy_name, asset, timeframe, created_at)
         );
+        CREATE TABLE IF NOT EXISTS wfo_combo_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            optimization_result_id INTEGER NOT NULL,
+            params TEXT NOT NULL,
+            oos_sharpe REAL,
+            oos_return_pct REAL,
+            oos_trades INTEGER,
+            oos_win_rate REAL,
+            is_sharpe REAL,
+            is_return_pct REAL,
+            is_trades INTEGER,
+            consistency REAL,
+            oos_is_ratio REAL,
+            is_best INTEGER DEFAULT 0,
+            n_windows_evaluated INTEGER,
+            FOREIGN KEY (optimization_result_id) REFERENCES optimization_results(id)
+        );
     """)
     conn.close()
     return db_path
