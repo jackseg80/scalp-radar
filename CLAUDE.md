@@ -68,7 +68,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (28 components: Scanner, Heatmap, Explorer, Research, Diagnostic, etc.)
-├── tests/                        # 689 tests (pytest, 41 fichiers)
+├── tests/                        # 695 tests (pytest, 42 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
 └── docs/plans/                   # Sprint plans 1-15 archivés
 ```
@@ -150,7 +150,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15b + hotfixes) : 689 tests passants**
+**Sprints complétés (1-15b + hotfixes) : 695 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -187,6 +187,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix : Warm-up compound overflow — capital fixe 10k pendant warm-up, candles plafonnées à 200, reset auto (662 tests)
 - Nettoyage tests : registry centralisé (test_strategy_registry.py), fixture make_indicator_cache, fix schéma DB, suppression doublons (679 tests)
 - Hotfix : Kill switch grid/DCA désactivé (pertes temporaires normales) + Kill switch global Simulator (drawdown 30%/24h, grace period warm-up, alerte Telegram, persisté dans state) (689 tests)
+- Fix grading : best combo par score composite (consistance + volume), seuils OOS/IS rehaussés, extraction diagnosticUtils.js, ExportButton, TOP 5 CLI (695 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 

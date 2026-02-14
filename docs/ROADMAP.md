@@ -701,7 +701,7 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 
 ## ÉTAT ACTUEL (14 février 2026)
 
-- **689 tests**, 0 régression
+- **695 tests**, 0 régression
 - **15 sprints + 1 hotfix + Sprint 14c + Sprint 15b** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
@@ -717,7 +717,8 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 - **Hotfix Explorer heatmap** : push serveur parasite (SYNC bidirectionnel accidentel) volait `is_latest` avec des runs à 2 combos → 3 couches de protection (POST endpoint, API results, frontend auto-sélection)
 - **Backfill Binance** : `scripts/backfill_candles.py` — télécharge candles via API publique Binance (httpx, sans clé API), idempotent, reprise incrémentale, retry 3× backoff. WFO default exchange = "binance" (suppression `_detect_best_exchange`)
 - **Kill switch grid/DCA désactivé** : les pertes temporaires DCA sont normales, protection via SL individuel serveur (682 tests)
-- **Kill switch global Simulator** : drawdown 30% sur fenêtre glissante 24h, coupe tous les runners (y compris grid/DCA), alerte Telegram, persisté dans state, grace period 1h post-warmup (689 tests)
+- **Kill switch global Simulator** : drawdown 30% sur fenêtre glissante 24h, coupe tous les runners (y compris grid/DCA), alerte Telegram, persisté dans state, grace period 1h post-warmup
+- **Fix grading + diagnostic** : sélection best combo par score composite `sharpe × (0.4 + 0.6×consistency) × trade_factor` au lieu du median params, seuils OOS/IS rehaussés (0.3→0.5 pour rouge), regime_analysis sur combo représentatif, extraction diagnosticUtils.js, ExportButton diagnostic, TOP 5 combos dans CLI (695 tests)
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---

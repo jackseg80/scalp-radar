@@ -81,6 +81,17 @@ class WFOResult:
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 
+def combo_score(oos_sharpe: float, consistency: float, total_trades: int) -> float:
+    """Score composite pour sélectionner le meilleur combo WFO.
+
+    Favorise les combos à haute consistance ET volume de trades,
+    plutôt que le simple max(oos_sharpe).
+    """
+    sharpe = max(oos_sharpe, 0.0)
+    trade_factor = min(1.0, total_trades / 50)
+    return sharpe * (0.4 + 0.6 * consistency) * trade_factor
+
+
 def _load_param_grids(config_path: str = "config/param_grids.yaml") -> dict[str, Any]:
     """Charge les grilles de paramètres."""
     with open(config_path, encoding="utf-8") as f:
@@ -790,33 +801,32 @@ class WalkForwardOptimizer:
             else 0.0
         )
 
-        # Paramètres recommandés = médiane des best_params
+        # Paramètres recommandés — fallback = médiane des best_params
         all_best_params = [w.best_params for w in window_results]
         recommended = _median_params(all_best_params, grid_values)
 
         # Agrégation des combo results (Sprint 14b)
         combo_results: list[dict[str, Any]] = []
         if collect_combo_results and combo_accumulator:
-            recommended_key = json.dumps(recommended, sort_keys=True)
-
             for params_key, window_data in combo_accumulator.items():
                 params = json.loads(params_key)
 
                 is_sharpes = [d["is_sharpe"] for d in window_data]
-                oos_sharpes = [d["oos_sharpe"] for d in window_data if d["oos_sharpe"] is not None]
+                oos_sharpes_combo = [d["oos_sharpe"] for d in window_data if d["oos_sharpe"] is not None]
                 oos_returns = [d["oos_return_pct"] for d in window_data if d["oos_return_pct"] is not None]
                 oos_trades_list = [d["oos_trades"] for d in window_data if d["oos_trades"] is not None]
 
                 avg_is_sharpe = float(np.nanmean(is_sharpes)) if is_sharpes else 0.0
-                avg_oos_sharpe = float(np.nanmean(oos_sharpes)) if oos_sharpes else 0.0
+                avg_oos_sharpe = float(np.nanmean(oos_sharpes_combo)) if oos_sharpes_combo else 0.0
                 total_oos_return = sum(oos_returns) if oos_returns else 0.0
                 total_oos_trades = sum(oos_trades_list) if oos_trades_list else 0
-                n_oos_positive = sum(1 for s in oos_sharpes if s > 0)
-                consistency_combo = n_oos_positive / len(oos_sharpes) if oos_sharpes else 0.0
+                n_oos_positive = sum(1 for s in oos_sharpes_combo if s > 0)
+                consistency_combo = n_oos_positive / len(oos_sharpes_combo) if oos_sharpes_combo else 0.0
                 oos_is_ratio_combo = avg_oos_sharpe / avg_is_sharpe if avg_is_sharpe > 0 else 0.0
 
                 combo_results.append({
                     "params": params,
+                    "params_key": params_key,
                     "is_sharpe": round(avg_is_sharpe, 4),
                     "is_return_pct": round(sum(d["is_return_pct"] for d in window_data), 4),
                     "is_trades": sum(d["is_trades"] for d in window_data),
@@ -826,9 +836,27 @@ class WalkForwardOptimizer:
                     "oos_win_rate": None,  # Non disponible via fast engine
                     "consistency": round(consistency_combo, 4),
                     "oos_is_ratio": round(oos_is_ratio_combo, 4),
-                    "is_best": params_key == recommended_key,
+                    "is_best": False,  # sera mis à jour après scoring
                     "n_windows_evaluated": len(window_data),
                 })
+
+            # Sélection du best combo par score composite (consistance + volume)
+            if combo_results:
+                best_combo = max(
+                    combo_results,
+                    key=lambda c: combo_score(c["oos_sharpe"], c["consistency"], c["oos_trades"]),
+                )
+                best_combo["is_best"] = True
+                recommended = best_combo["params"]
+                logger.info(
+                    "Best combo par score composite : sharpe={}, consistency={}, trades={}, params={}",
+                    best_combo["oos_sharpe"], best_combo["consistency"],
+                    best_combo["oos_trades"], recommended,
+                )
+
+            # Retirer params_key des résultats (champ interne)
+            for cr in combo_results:
+                cr.pop("params_key", None)
 
             logger.info("Sprint 14b : {} combo results agrégés", len(combo_results))
 

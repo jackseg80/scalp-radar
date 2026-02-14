@@ -383,7 +383,7 @@ async def run_optimization(
         progress_callback(100.0, "Terminé")
 
     # Affichage console
-    _print_report(report)
+    _print_report(report, combo_results=wfo.combo_results)
 
     if close_db:
         await db.close()
@@ -391,7 +391,10 @@ async def run_optimization(
     return report, result_id
 
 
-def _print_report(report: FinalReport) -> None:
+def _print_report(
+    report: FinalReport,
+    combo_results: list[dict] | None = None,
+) -> None:
     """Affichage console du rapport."""
     print(f"\n  {'=' * 55}")
     print(f"  Optimisation {report.strategy_name.upper()} x {report.symbol}")
@@ -409,6 +412,24 @@ def _print_report(report: FinalReport) -> None:
     print(f"  {'-' * 40}")
     for k, v in sorted(report.recommended_params.items()):
         print(f"  {k:<25s}: {v}")
+
+    # TOP 5 COMBOS (score composite)
+    if combo_results:
+        from backend.optimization.walk_forward import combo_score
+        top5 = sorted(
+            combo_results,
+            key=lambda c: combo_score(c.get("oos_sharpe", 0), c.get("consistency", 0), c.get("oos_trades", 0)),
+            reverse=True,
+        )[:5]
+        print(f"\n  TOP 5 COMBOS (score composite)")
+        print(f"  {'-' * 40}")
+        for i, c in enumerate(top5, 1):
+            params = c.get("params", {})
+            param_str = " ".join(f"{k}={v}" for k, v in params.items())
+            consist_pct = round((c.get("consistency", 0)) * 100)
+            oos_is = c.get("oos_is_ratio", 0)
+            print(f"  #{i}: {param_str}")
+            print(f"      OOS Sharpe: {c.get('oos_sharpe', 0):.2f} | Consist: {consist_pct}% | Trades: {c.get('oos_trades', 0)} | OOS/IS: {oos_is:.2f}")
 
     print(f"\n  Detection d'overfitting")
     print(f"  {'-' * 40}")

@@ -10,6 +10,7 @@ import ScatterChart from './ScatterChart'
 import DistributionChart from './DistributionChart'
 import InfoTooltip from './InfoTooltip'
 import DiagnosticPanel from './DiagnosticPanel'
+import ExportButton from './ExportDiagnostic'
 import './ExplorerPage.css'
 
 const STATUS_COLORS = {
@@ -621,7 +622,18 @@ export default function ExplorerPage({ wsData }) {
       {/* Sprint 14b : Section Analyse (charts analytiques) */}
       {comboResults && comboResults.combos && comboResults.combos.length > 0 && (
         <div className="analysis-section">
-          <h3>Analyse des combos ({comboResults.combos.length} testées)</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>Analyse des combos ({comboResults.combos.length} testées)</h3>
+            {selectedRun && (
+              <ExportButton
+                strategy={strategy}
+                asset={asset}
+                selectedRun={selectedRun}
+                combos={comboResults.combos}
+                regimeAnalysis={comboResults.regime_analysis || null}
+              />
+            )}
+          </div>
 
           {/* Sprint 14c : Diagnostic — première chose visible */}
           <DiagnosticPanel
