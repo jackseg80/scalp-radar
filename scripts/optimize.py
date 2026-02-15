@@ -7,6 +7,8 @@ Lancement :
     uv run python -m scripts.optimize --all
     uv run python -m scripts.optimize --all --dry-run
     uv run python -m scripts.optimize --all --apply
+    uv run python -m scripts.optimize --apply --strategy envelope_dca
+    uv run python -m scripts.optimize --apply  (toutes les stratégies)
     uv run python -m scripts.optimize --strategy vwap_rsi --symbol BTC/USDT -v
 """
 
@@ -36,7 +38,6 @@ from backend.optimization import STRATEGY_REGISTRY
 from backend.optimization.overfitting import OverfitDetector
 from backend.optimization.report import (
     FinalReport,
-    apply_to_yaml,
     build_final_report,
     save_report,
     validate_on_bitget,
@@ -472,6 +473,159 @@ def _print_report(
     print()
 
 
+def apply_from_db(
+    strategy_names: list[str],
+    config_dir: str = "config",
+    db_path: str | None = None,
+) -> bool:
+    """Lit les résultats is_latest=1 en DB et écrit per_asset dans strategies.yaml.
+
+    - Grade A/B → best_params écrits dans per_asset
+    - Grade C/D/F → retirés de per_asset
+    - Champs non-optimisés préservés (enabled, leverage, weight, sides, timeframe)
+
+    Returns:
+        True si au moins un changement effectué.
+    """
+    import json
+    import shutil
+    import sqlite3
+
+    import yaml
+
+    # Résoudre db_path depuis config
+    if db_path is None:
+        cfg = get_config(config_dir)
+        db_url = cfg.secrets.database_url
+        if db_url.startswith("sqlite:///"):
+            db_path = db_url[10:]
+        else:
+            db_path = "data/scalp_radar.db"
+
+    # Lire les résultats is_latest=1 pour les stratégies demandées
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        placeholders = ",".join("?" for _ in strategy_names)
+        rows = conn.execute(
+            f"""SELECT strategy_name, asset, grade, total_score, best_params
+                FROM optimization_results
+                WHERE is_latest = 1 AND strategy_name IN ({placeholders})
+                ORDER BY strategy_name, asset""",
+            strategy_names,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Organiser par stratégie
+    by_strategy: dict[str, list[dict]] = {}
+    for row in rows:
+        entry = {
+            "asset": row["asset"],
+            "grade": row["grade"],
+            "total_score": row["total_score"],
+            "best_params": json.loads(row["best_params"]) if row["best_params"] else {},
+        }
+        by_strategy.setdefault(row["strategy_name"], []).append(entry)
+
+    # Charger strategies.yaml
+    yaml_path = Path(f"{config_dir}/strategies.yaml")
+    with open(yaml_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    # Backup horodaté
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = yaml_path.with_name(f"{yaml_path.stem}.yaml.bak.{ts}")
+    shutil.copy2(str(yaml_path), str(backup_path))
+
+    changed = False
+    print(f"\n{'=' * 55}")
+    print("  --apply : mise à jour per_asset depuis la DB")
+    print(f"{'=' * 55}")
+
+    for strat_name in strategy_names:
+        if strat_name not in data:
+            print(f"\n  {strat_name} : absent de strategies.yaml, skip")
+            continue
+
+        strat_data = data[strat_name]
+        old_per_asset: dict = strat_data.get("per_asset", {}) or {}
+        new_per_asset: dict = {}
+        results = by_strategy.get(strat_name, [])
+
+        added = []
+        updated = []
+        removed = []
+        unchanged = []
+
+        # Assets éligibles (Grade A/B) → écrire best_params
+        eligible_assets = set()
+        for r in results:
+            asset = r["asset"]
+            if r["grade"] in ("A", "B"):
+                eligible_assets.add(asset)
+                old_params = old_per_asset.get(asset, {})
+                new_params = r["best_params"]
+                new_per_asset[asset] = new_params
+
+                if asset not in old_per_asset:
+                    added.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
+                elif old_params != new_params:
+                    updated.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
+                else:
+                    unchanged.append(asset)
+            else:
+                # Grade C/D/F → ne pas inclure (retrait implicite)
+                if asset in old_per_asset:
+                    removed.append(f"{asset} (Grade {r['grade']})")
+
+        # Assets dans per_asset mais sans résultat DB → conserver (pas de données pour décider)
+        for asset, params in old_per_asset.items():
+            if asset not in eligible_assets and asset not in {r["asset"] for r in results}:
+                new_per_asset[asset] = params  # Conserver
+
+        strat_data["per_asset"] = new_per_asset if new_per_asset else {}
+        data[strat_name] = strat_data
+
+        # Affichage résumé
+        print(f"\n  {strat_name}")
+        print(f"  {'-' * 40}")
+        if not results:
+            print("    Aucun résultat is_latest=1 en DB")
+            continue
+
+        for r in results:
+            mark = "OK" if r["grade"] in ("A", "B") else "X"
+            print(f"    {r['asset']:<12s} Grade {r['grade']} ({r['total_score']}) {mark}")
+
+        if added:
+            changed = True
+            for a in added:
+                print(f"    + AJOUTÉ    : {a}")
+        if updated:
+            changed = True
+            for u in updated:
+                print(f"    ~ MIS À JOUR: {u}")
+        if removed:
+            changed = True
+            for r_item in removed:
+                print(f"    - RETIRÉ    : {r_item}")
+        if unchanged:
+            print(f"    = Inchangés : {', '.join(unchanged)}")
+
+    # Sauvegarder
+    if changed:
+        with open(yaml_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        print(f"\n  strategies.yaml mis à jour (backup: {backup_path.name})")
+    else:
+        print("\n  Aucun changement détecté — strategies.yaml inchangé")
+        backup_path.unlink()  # Supprimer le backup inutile
+
+    print()
+    return changed
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Optimisation des paramètres de stratégies")
     parser.add_argument("--strategy", type=str, help="Stratégie à optimiser (ex: vwap_rsi)")
@@ -480,7 +634,8 @@ async def main() -> None:
     parser.add_argument("--all", action="store_true", help="Optimiser toutes les stratégies optimisables")
     parser.add_argument("--check-data", action="store_true", help="Vérifier les données disponibles")
     parser.add_argument("--dry-run", action="store_true", help="Afficher le plan sans exécuter")
-    parser.add_argument("--apply", action="store_true", help="Appliquer les paramètres grade A/B")
+    parser.add_argument("--apply", action="store_true",
+                        help="Appliquer les paramètres grade A/B dans strategies.yaml (depuis la DB)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Affichage détaillé")
     parser.add_argument("--config-dir", type=str, default="config", help="Répertoire de config")
     parser.add_argument("--exchange", type=str, default=None, help="Exchange source des candles (défaut: binance)")
@@ -499,6 +654,14 @@ async def main() -> None:
         name for name in ["orderflow"]
         if name not in STRATEGY_REGISTRY
     ]
+
+    # --apply standalone (sans optimisation préalable)
+    if args.apply and not args.all and not args.symbol and not args.all_symbols:
+        if args.strategy:
+            apply_from_db([args.strategy], args.config_dir)
+        else:
+            apply_from_db(available_strategies, args.config_dir)
+        return
 
     # Déterminer quoi optimiser
     if args.all:
@@ -581,13 +744,13 @@ async def main() -> None:
         print(f"  {r.strategy_name:<12s} x {r.symbol:<12s} : Grade {r.grade} {elig}")
     print()
 
-    # Apply
+    # Apply (après optimisation : relire depuis la DB fraîche)
     if args.apply:
-        applied = apply_to_yaml(all_reports, f"{args.config_dir}/strategies.yaml")
-        if applied:
-            logger.info("Paramètres appliqués dans strategies.yaml")
+        run_strategies = list({r.strategy_name for r in all_reports})
+        if run_strategies:
+            apply_from_db(run_strategies, args.config_dir)
         else:
-            logger.warning("Aucun paramètre appliqué (pas de grade A/B)")
+            logger.warning("Aucun résultat à appliquer")
 
 
 if __name__ == "__main__":

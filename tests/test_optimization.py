@@ -36,6 +36,7 @@ from backend.optimization.report import (
     save_report,
     _bootstrap_sharpe_ci,
 )
+from scripts.optimize import apply_from_db
 from backend.optimization.walk_forward import (
     WFOResult,
     WindowResult,
@@ -665,3 +666,132 @@ class TestApplyYaml:
         )
         result = apply_to_yaml([report], str(yaml_path))
         assert result is False
+
+
+# ─── Tests apply_from_db ──────────────────────────────────────────────────
+
+
+class TestApplyFromDb:
+    def test_apply_writes_per_asset(self, tmp_path):
+        """2 assets Grade A + 1 Grade C → seuls les A/B sont écrits dans per_asset."""
+        import json
+        import sqlite3
+
+        # Créer la DB avec 3 résultats is_latest=1
+        db_path = str(tmp_path / "test.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE optimization_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                total_score REAL NOT NULL,
+                best_params TEXT NOT NULL,
+                is_latest INTEGER DEFAULT 1,
+                duration_seconds REAL,
+                oos_sharpe REAL,
+                consistency REAL,
+                oos_is_ratio REAL,
+                dsr REAL,
+                param_stability REAL,
+                monte_carlo_pvalue REAL,
+                mc_underpowered INTEGER DEFAULT 0,
+                n_windows INTEGER NOT NULL,
+                n_distinct_combos INTEGER,
+                wfo_windows TEXT,
+                monte_carlo_summary TEXT,
+                validation_summary TEXT,
+                warnings TEXT,
+                source TEXT DEFAULT 'local',
+                regime_analysis TEXT,
+                UNIQUE(strategy_name, asset, timeframe, created_at)
+            )
+        """)
+
+        # BTC → Grade A
+        conn.execute(
+            """INSERT INTO optimization_results
+               (strategy_name, asset, timeframe, created_at, grade, total_score,
+                best_params, is_latest, n_windows)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, 12)""",
+            ("envelope_dca", "BTC/USDT", "1h", "2026-02-15T10:00:00",
+             "A", 87, json.dumps({"ma_period": 7, "num_levels": 3, "envelope_start": 0.07,
+                                   "envelope_step": 0.03, "sl_percent": 25.0})),
+        )
+        # DOGE → Grade A
+        conn.execute(
+            """INSERT INTO optimization_results
+               (strategy_name, asset, timeframe, created_at, grade, total_score,
+                best_params, is_latest, n_windows)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, 12)""",
+            ("envelope_dca", "DOGE/USDT", "1h", "2026-02-15T11:00:00",
+             "A", 90, json.dumps({"ma_period": 5, "num_levels": 4, "envelope_start": 0.05,
+                                   "envelope_step": 0.05, "sl_percent": 20.0})),
+        )
+        # SOL → Grade C (ne doit PAS être dans per_asset)
+        conn.execute(
+            """INSERT INTO optimization_results
+               (strategy_name, asset, timeframe, created_at, grade, total_score,
+                best_params, is_latest, n_windows)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, 12)""",
+            ("envelope_dca", "SOL/USDT", "1h", "2026-02-15T12:00:00",
+             "C", 55, json.dumps({"ma_period": 10, "num_levels": 2, "envelope_start": 0.10,
+                                   "envelope_step": 0.02, "sl_percent": 30.0})),
+        )
+        conn.commit()
+        conn.close()
+
+        # Créer strategies.yaml avec per_asset existant (SOL doit être retiré)
+        yaml_path = tmp_path / "strategies.yaml"
+        yaml_path.write_text(yaml.dump({
+            "envelope_dca": {
+                "enabled": True,
+                "leverage": 6,
+                "timeframe": "1h",
+                "sides": ["long"],
+                "ma_period": 7,
+                "per_asset": {
+                    "SOL/USDT": {"ma_period": 7, "sl_percent": 30.0},
+                },
+            },
+        }))
+
+        # Exécuter apply_from_db
+        result = apply_from_db(
+            ["envelope_dca"],
+            config_dir=str(tmp_path),
+            db_path=db_path,
+        )
+
+        assert result is True
+
+        # Relire le YAML
+        with open(yaml_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        per_asset = data["envelope_dca"]["per_asset"]
+
+        # BTC et DOGE doivent être présents (Grade A)
+        assert "BTC/USDT" in per_asset
+        assert per_asset["BTC/USDT"]["ma_period"] == 7
+        assert per_asset["BTC/USDT"]["num_levels"] == 3
+        assert per_asset["BTC/USDT"]["sl_percent"] == 25.0
+
+        assert "DOGE/USDT" in per_asset
+        assert per_asset["DOGE/USDT"]["ma_period"] == 5
+        assert per_asset["DOGE/USDT"]["num_levels"] == 4
+
+        # SOL ne doit PAS être présent (Grade C → retiré)
+        assert "SOL/USDT" not in per_asset
+
+        # Les champs non-optimisés doivent être préservés
+        assert data["envelope_dca"]["enabled"] is True
+        assert data["envelope_dca"]["leverage"] == 6
+        assert data["envelope_dca"]["sides"] == ["long"]
+
+        # Vérifier qu'un backup a été créé
+        backups = list(tmp_path.glob("strategies.yaml.bak.*"))
+        assert len(backups) == 1

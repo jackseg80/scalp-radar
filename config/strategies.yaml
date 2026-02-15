@@ -96,18 +96,38 @@ supertrend:
   per_asset: {}
 
 envelope_dca:
-  enabled: true          # Paper trading Sprint 11 → live Sprint 12
+  enabled: true
   live_eligible: true
   timeframe: "1h"
-  ma_period: 7           # Optimisé WFO
-  num_levels: 2          # Optimisé WFO
-  envelope_start: 0.05   # Optimisé WFO
-  envelope_step: 0.02    # Optimisé WFO
-  sl_percent: 20.0       # Optimisé WFO
+  ma_period: 5           # Default = DOGE (meilleur asset)
+  num_levels: 4
+  envelope_start: 0.05
+  envelope_step: 0.05
+  sl_percent: 25.0
   sides: ["long"]
   leverage: 6
   weight: 0.20
-  per_asset: {}
+  per_asset:
+    DOGE/USDT:
+      ma_period: 5
+      num_levels: 4
+      envelope_step: 0.05
+      sl_percent: 25.0
+    SOL/USDT:
+      ma_period: 7
+      num_levels: 3
+      envelope_step: 0.02
+      sl_percent: 30.0
+    ETH/USDT:
+      ma_period: 5
+      num_levels: 2
+      envelope_step: 0.05
+      sl_percent: 20.0
+    LINK/USDT:
+      ma_period: 5
+      num_levels: 4
+      envelope_step: 0.03
+      sl_percent: 30.0
 
 envelope_dca_short:
   enabled: false          # Validation WFO d'abord
