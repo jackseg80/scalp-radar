@@ -159,6 +159,53 @@ def test_save_result_sync_updates_is_latest(temp_db):
     assert rows[1][1] == 1  # is_latest=1 pour le nouveau
 
 
+def test_save_result_sync_small_combos_no_steal_is_latest(temp_db):
+    """Un run avec < 10 combos ne doit PAS voler is_latest d'un run complet."""
+    validation = ValidationResult(
+        bitget_sharpe=1.0, bitget_net_return_pct=5.0, bitget_trades=20,
+        bitget_sharpe_ci_low=0.5, bitget_sharpe_ci_high=1.5,
+        binance_oos_avg_sharpe=1.0, transfer_ratio=0.70,
+        transfer_significant=False, volume_warning=False, volume_warning_detail="",
+    )
+
+    # Run complet (300+ combos)
+    report_full = FinalReport(
+        strategy_name="envelope_dca", symbol="BTC/USDT", timestamp=datetime(2026, 2, 15, 1, 0),
+        grade="C", total_score=60, wfo_avg_is_sharpe=3.6, wfo_avg_oos_sharpe=3.2,
+        wfo_consistency_rate=0.40, wfo_n_windows=30, recommended_params={"ma_period": 8},
+        mc_p_value=0.10, mc_significant=False, mc_underpowered=False, dsr=0.52,
+        dsr_max_expected_sharpe=3.0, stability=0.78, cliff_params=[], convergence=None,
+        divergent_params=[], validation=validation, oos_is_ratio=0.89, bitget_transfer=0.70,
+        live_eligible=False, warnings=[], n_distinct_combos=328,
+    )
+    save_result_sync(temp_db, report_full, wfo_windows=None, duration=600.0, timeframe="1h")
+
+    # Run Explorer (2 combos) — ne doit PAS voler is_latest
+    report_small = FinalReport(
+        strategy_name="envelope_dca", symbol="BTC/USDT", timestamp=datetime(2026, 2, 15, 2, 0),
+        grade="A", total_score=85, wfo_avg_is_sharpe=3.6, wfo_avg_oos_sharpe=3.19,
+        wfo_consistency_rate=0.37, wfo_n_windows=30, recommended_params={"ma_period": 7},
+        mc_p_value=0.02, mc_significant=True, mc_underpowered=False, dsr=1.0,
+        dsr_max_expected_sharpe=3.0, stability=0.83, cliff_params=[], convergence=None,
+        divergent_params=[], validation=validation, oos_is_ratio=0.75, bitget_transfer=0.70,
+        live_eligible=True, warnings=[], n_distinct_combos=2,
+    )
+    save_result_sync(temp_db, report_small, wfo_windows=None, duration=30.0, timeframe="1h")
+
+    # Vérifier : le run complet garde is_latest=1, le petit run a is_latest=0
+    conn = sqlite3.connect(temp_db)
+    cursor = conn.execute(
+        "SELECT grade, total_score, n_distinct_combos, is_latest "
+        "FROM optimization_results ORDER BY created_at"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    assert len(rows) == 2
+    assert rows[0] == ("C", 60, 328, 1)  # run complet garde is_latest=1
+    assert rows[1] == ("A", 85, 2, 0)    # petit run a is_latest=0
+
+
 @pytest.mark.asyncio
 async def test_get_results_async_all(temp_db):
     """Test get_results_async sans filtres."""

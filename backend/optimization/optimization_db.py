@@ -105,14 +105,26 @@ def save_result_sync(
         # Transaction is_latest
         conn.execute("BEGIN")
 
-        # 1. Mettre is_latest=0 sur l'ancien (s'il existe)
-        conn.execute(
-            """UPDATE optimization_results SET is_latest=0
-               WHERE strategy_name=? AND asset=? AND timeframe=? AND is_latest=1""",
-            (report.strategy_name, report.symbol, timeframe),
-        )
+        n_combos = report.n_distinct_combos or 0
 
-        # 2. Insérer le nouveau avec is_latest=1
+        # Protection : un run avec très peu de combos (< 10, ex: Explorer avec
+        # grille restreinte) ne doit PAS voler is_latest d'un run complet.
+        if n_combos >= 10:
+            # 1. Mettre is_latest=0 sur l'ancien (s'il existe)
+            conn.execute(
+                """UPDATE optimization_results SET is_latest=0
+                   WHERE strategy_name=? AND asset=? AND timeframe=? AND is_latest=1""",
+                (report.strategy_name, report.symbol, timeframe),
+            )
+            is_latest_val = 1
+        else:
+            is_latest_val = 0
+            logger.warning(
+                "Run local avec peu de combos (n={}), is_latest non modifié : {} × {}",
+                n_combos, report.strategy_name, report.symbol,
+            )
+
+        # 2. Insérer le nouveau
         cursor = conn.execute(
             """INSERT INTO optimization_results (
                 strategy_name, asset, timeframe, created_at, duration_seconds,
@@ -120,7 +132,7 @@ def save_result_sync(
                 param_stability, monte_carlo_pvalue, mc_underpowered, n_windows, n_distinct_combos,
                 best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings,
                 is_latest, source, regime_analysis
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 report.strategy_name,
                 report.symbol,
@@ -143,6 +155,7 @@ def save_result_sync(
                 mc_summary_json,
                 val_summary_json,
                 warnings_json,
+                is_latest_val,
                 source,
                 regime_analysis_json,
             ),
@@ -151,8 +164,9 @@ def save_result_sync(
 
         conn.commit()
         logger.info(
-            "Résultat WFO sauvé en DB : {} × {} (grade {}, score {}, id={})",
-            report.strategy_name, report.symbol, report.grade, report.total_score, result_id,
+            "Résultat WFO sauvé en DB : {} × {} (grade {}, score {}, id={}, is_latest={})",
+            report.strategy_name, report.symbol, report.grade, report.total_score,
+            result_id, is_latest_val,
         )
         return result_id
     finally:
