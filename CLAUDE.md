@@ -201,6 +201,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 19c : Régimes de marché grid_atr + fix warning trades insuffisants
 - Sprint 19d : Grading Bitget transfer 3 paliers + guard bitget_trades < 15 + fix or-on-float (772 tests)
 - Sprint 20a : Sizing equal allocation (`capital/nb_assets/levels`) + margin guard 70% (`max_margin_ratio`), Scanner grade fix (774 tests)
+- Hotfix 19e : Scanner Grid Fix — colonnes dynamiques (Score/Signaux masquées si aucune stratégie mono), colonne Dist.SMA, direction grid, tri par grade, GridDetail (niveaux vert/rouge, TP/SL, P&L) — frontend pur, zéro backend (774 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 

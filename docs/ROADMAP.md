@@ -699,6 +699,8 @@ Système automatisé de trading crypto qui :
 ### Sprint 20a — Sizing Equal Allocation + Margin Guard ✅
 **But** : Remplacer le sizing "equal risk" (`risk_budget / sl_pct`) par "equal allocation" (`capital / nb_assets / levels`) + margin guard global.
 
+**Hotfix 19e** : Scanner Grid Fix (frontend pur) — colonnes Score/Signaux masquées si aucune stratégie mono enabled, colonne Dist.SMA (distance prix/SMA = distance au TP), direction des positions grid (pas RSI fallback), tri secondaire par Grade (A→F), clic détail → `GridDetail` avec niveaux remplis (vert) / en attente (rouge transparent), TP/SL, P&L, marge, indicateurs. Zéro changement backend.
+
 **Problème résolu** : L'ancien sizing faisait dépendre la taille de position du SL — un SL serré (1%) donnait une marge énorme, un SL large (30%) une marge minuscule. Certains assets mobilisaient jusqu'à 4.9× le capital.
 
 **Implémenté** :
@@ -847,8 +849,8 @@ Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
 
 ## ÉTAT ACTUEL (15 février 2026)
 
-- **787 tests**, 0 régression
-- **Sprint 20c complété** (Phase 5 en cours) — Factorisation fast engine + auto-dispatch WFO
+- **774 tests**, 0 régression
+- **Sprint 20a + Hotfix 19e complétés** (Phase 5 en cours) — Sizing equal allocation + Scanner grid fix
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)

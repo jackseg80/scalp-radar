@@ -2,12 +2,13 @@
  * Scanner — Table principale du scanner avec lignes cliquables et détail extensible.
  * Props : wsData
  * Utilise useApi('/api/simulator/conditions', 10000) pour les données de conditions.
- * Affiche un tableau d'assets avec prix, variation, direction, sparkline, score, grade, signaux, grid.
+ * Colonnes dynamiques : Score/Signaux masqués si aucune stratégie mono, Dist.SMA affiché si grid actif.
  */
 import { useState, useMemo, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
 import SignalDots from './SignalDots'
 import SignalDetail from './SignalDetail'
+import GridDetail from './GridDetail'
 import Spark from './Spark'
 import Tooltip from './Tooltip'
 
@@ -31,15 +32,18 @@ function scoreColor(score) {
   return 'var(--red)'
 }
 
-function getDirection(indicators) {
+function getDirection(indicators, gridInfo) {
+  // Si grid actif avec positions ouvertes, montrer la direction des positions
+  if (gridInfo && gridInfo.levels_open > 0) {
+    return gridInfo.direction === 'long' ? 'LONG' : 'SHORT'
+  }
+  // Fallback mono : RSI/VWAP
   if (!indicators) return null
   const rsi = indicators.rsi_14
   const vwap = indicators.vwap_distance_pct
   if (rsi == null) return null
-  // RSI extrême donne une direction claire
   if (rsi < 30) return 'LONG'
   if (rsi > 70) return 'SHORT'
-  // VWAP distance comme confirmation secondaire
   if (vwap != null) {
     if (vwap < -0.3) return 'LONG'
     if (vwap > 0.3) return 'SHORT'
@@ -83,7 +87,21 @@ export default function Scanner({ wsData }) {
   // Lookup grid state depuis le WebSocket
   const gridLookup = wsData?.grid_state?.grid_positions || {}
 
-  // Trier : positions grid ouvertes en premier, puis par score décroissant
+  // Détecter quels types de stratégies sont actives
+  const hasGridStrategies = Object.keys(gridLookup).length > 0
+  const hasMonoStrategies = enrichedAssets.some(a => {
+    const strats = a.strategies || {}
+    return Object.values(strats).some(s => {
+      const conditions = s.conditions || []
+      return conditions.length > 0 && conditions.some(c => c.name && !c.name.startsWith('Level'))
+    })
+  })
+
+  // Nombre de colonnes dynamique pour colSpan du détail
+  // Base: Actif, Prix, Var, Dir, Trend, Grade, Grid = 7
+  const colCount = 7 + (hasMonoStrategies ? 2 : 0) + (hasGridStrategies ? 1 : 0)
+
+  // Trier : positions grid ouvertes en premier, puis par grade décroissant
   const sortedAssets = [...enrichedAssets].sort((a, b) => {
     const aHasGrid = gridLookup[a.symbol] ? 1 : 0
     const bHasGrid = gridLookup[b.symbol] ? 1 : 0
@@ -92,7 +110,10 @@ export default function Scanner({ wsData }) {
     if (aHasGrid && bHasGrid) {
       return (gridLookup[b.symbol]?.unrealized_pnl || 0) - (gridLookup[a.symbol]?.unrealized_pnl || 0)
     }
-    return getAssetScore(b) - getAssetScore(a)
+    // Non-grid : trier par grade
+    const aGrade = gradesLookup[a.symbol]?.grade || 'F'
+    const bGrade = gradesLookup[b.symbol]?.grade || 'F'
+    return (GRADE_ORDER[bGrade] || 0) - (GRADE_ORDER[aGrade] || 0)
   })
 
   const handleRowClick = (symbol) => {
@@ -122,11 +143,18 @@ export default function Scanner({ wsData }) {
               <th style={{ width: '14%' }}>Actif</th>
               <th style={{ width: '10%' }}>Prix</th>
               <th style={{ width: '8%' }}><Tooltip content="Variation de prix entre les 2 dernières bougies 1 min">Var.</Tooltip></th>
-              <th style={{ width: '7%' }}><Tooltip content="Direction suggérée par les indicateurs (RSI < 30 → LONG, RSI > 70 → SHORT)">Dir.</Tooltip></th>
+              <th style={{ width: '7%' }}><Tooltip content="Direction suggérée par les indicateurs ou positions grid ouvertes">Dir.</Tooltip></th>
               <th style={{ width: '12%' }}><Tooltip content="Sparkline des 60 derniers prix de clôture (1 min)">Trend</Tooltip></th>
-              <th style={{ width: '7%' }}><Tooltip content="Score = ratio de conditions remplies de la meilleure stratégie (100 = toutes remplies)">Score</Tooltip></th>
+              {hasMonoStrategies && (
+                <th style={{ width: '7%' }}><Tooltip content="Score = ratio de conditions remplies de la meilleure stratégie (100 = toutes remplies)">Score</Tooltip></th>
+              )}
               <th style={{ width: '7%' }}><Tooltip content="Grade WFO de la stratégie (A=excellent, F=mauvais)">Grade</Tooltip></th>
-              <th style={{ width: '28%' }}><Tooltip content="Pastilles par stratégie : V=VWAP+RSI, M=Momentum, F=Funding, L=Liquidation">Signaux</Tooltip></th>
+              {hasMonoStrategies && (
+                <th style={{ width: '20%' }}><Tooltip content="Pastilles par stratégie active">Signaux</Tooltip></th>
+              )}
+              {hasGridStrategies && (
+                <th style={{ width: '9%' }}><Tooltip content="Distance du prix à la SMA (négatif = sous la SMA)">Dist.SMA</Tooltip></th>
+              )}
               <th style={{ width: '7%' }}><Tooltip content="Niveaux grid DCA remplis / total. Coloré selon P&L non réalisé">Grid</Tooltip></th>
             </tr>
           </thead>
@@ -134,10 +162,10 @@ export default function Scanner({ wsData }) {
             {sortedAssets.map(asset => {
               const isSelected = selectedAsset === asset.symbol
               const score = getAssetScore(asset)
-              const direction = getDirection(asset.indicators)
+              const gridInfo = gridLookup[asset.symbol]
+              const direction = getDirection(asset.indicators, gridInfo)
               const changePct = asset.change_pct
               const gradeInfo = gradesLookup[asset.symbol]
-              const gridInfo = gridLookup[asset.symbol]
 
               return (
                 <Fragment key={asset.symbol}>
@@ -173,11 +201,13 @@ export default function Scanner({ wsData }) {
                     <td>
                       <Spark data={asset.sparkline} h={32} />
                     </td>
-                    <td>
-                      <span className="score-number" style={{ color: scoreColor(score) }}>
-                        {Math.round(score * 100)}
-                      </span>
-                    </td>
+                    {hasMonoStrategies && (
+                      <td>
+                        <span className="score-number" style={{ color: scoreColor(score) }}>
+                          {Math.round(score * 100)}
+                        </span>
+                      </td>
+                    )}
                     <td>
                       {gradeInfo ? (
                         <span className={`grade-badge grade-${gradeInfo.grade}`}>
@@ -187,9 +217,24 @@ export default function Scanner({ wsData }) {
                         <span className="dim text-xs">--</span>
                       )}
                     </td>
-                    <td>
-                      <SignalDots strategies={asset.strategies} />
-                    </td>
+                    {hasMonoStrategies && (
+                      <td>
+                        <SignalDots strategies={asset.strategies} />
+                      </td>
+                    )}
+                    {hasGridStrategies && (
+                      <td className="mono" style={{ textAlign: 'center' }}>
+                        {(() => {
+                          // TP = SMA pour les stratégies grid → dist_sma = (price - sma) / sma
+                          if (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0) {
+                            const dist = ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
+                            const color = dist >= 0 ? 'var(--accent)' : 'var(--red)'
+                            return <span style={{ color }}>{dist >= 0 ? '+' : ''}{dist.toFixed(1)}%</span>
+                          }
+                          return <span className="muted">--</span>
+                        })()}
+                      </td>
+                    )}
                     <td>
                       {gridInfo ? (
                         <span className={`grid-cell ${gridInfo.unrealized_pnl >= 0 ? 'grid-cell--profit' : 'grid-cell--loss'}`}>
@@ -202,8 +247,18 @@ export default function Scanner({ wsData }) {
                   </tr>
                   {isSelected && (
                     <tr>
-                      <td colSpan={9} style={{ padding: 0 }}>
-                        <SignalDetail asset={asset} />
+                      <td colSpan={colCount} style={{ padding: 0 }}>
+                        {gridInfo ? (
+                          <GridDetail
+                            symbol={asset.symbol}
+                            gridInfo={gridInfo}
+                            indicators={asset.indicators}
+                            regime={asset.regime}
+                            price={asset.price}
+                          />
+                        ) : (
+                          <SignalDetail asset={asset} />
+                        )}
                       </td>
                     </tr>
                   )}

@@ -709,6 +709,59 @@ tr:last-child td { border-bottom: none; }
 .grid-cell--loss { color: var(--red); }
 .grid-cell--empty { color: var(--text-dim); font-weight: 400; }
 
+/* ─── GRID DETAIL (Scanner expand) ─────────────────────────────────────── */
+.grid-detail-summary {
+  padding: 4px 0;
+}
+.grid-detail-ratio {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+}
+.grid-detail-levels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.grid-level {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.grid-level-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  min-width: 40px;
+}
+.grid-level-bar {
+  width: 60px;
+  height: 6px;
+  background: var(--bg-card);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.grid-level-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+.grid-level-fill--green {
+  background: var(--accent);
+}
+.grid-level-fill--red {
+  background: var(--red);
+  opacity: 0.3;
+}
+.grid-level--filled .grid-level-name {
+  color: var(--accent);
+}
+.grid-level--pending .grid-level-name {
+  color: var(--text-dim);
+}
+
 /* --- Grid summary (ActivePositions) --- */
 .grid-summary-banner {
   display: flex;
