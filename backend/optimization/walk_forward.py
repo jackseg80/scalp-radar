@@ -867,6 +867,12 @@ class WalkForwardOptimizer:
             for cr in combo_results:
                 cr.pop("params_key", None)
 
+            # Trier par combo_score décroissant → le #1 = best combo sélectionné
+            combo_results.sort(
+                key=lambda c: combo_score(c["oos_sharpe"], c["consistency"], c["oos_trades"]),
+                reverse=True,
+            )
+
             logger.info("Sprint 14b : {} combo results agrégés", len(combo_results))
 
         # Agrégation regime_analysis pour le best combo (Sprint 15b)

@@ -98,8 +98,17 @@ def compute_grade(
     bitget_transfer: float,
     mc_underpowered: bool = False,
     total_trades: int = 0,
+    consistency: float = 1.0,
 ) -> tuple[str, int]:
     """Calcule le grade A-F et le score numérique 0-100.
+
+    Barème (100 pts) :
+        OOS/IS ratio    20 pts
+        Monte Carlo     20 pts
+        DSR             15 pts
+        Consistance     20 pts
+        Stabilité       10 pts
+        Bitget transfer 15 pts
 
     Garde-fou trades : < 30 trades → plafond C, < 50 trades → plafond B.
 
@@ -109,45 +118,59 @@ def compute_grade(
     score = 0
     breakdown: dict[str, int] = {}
 
-    # OOS/IS ratio (max 25 points)
+    # OOS/IS ratio (max 20 points)
     if oos_is_ratio > 0.6:
-        breakdown["oos_is_ratio"] = 25
-    elif oos_is_ratio > 0.5:
         breakdown["oos_is_ratio"] = 20
+    elif oos_is_ratio > 0.5:
+        breakdown["oos_is_ratio"] = 16
     elif oos_is_ratio > 0.4:
-        breakdown["oos_is_ratio"] = 15
+        breakdown["oos_is_ratio"] = 12
     elif oos_is_ratio > 0.3:
-        breakdown["oos_is_ratio"] = 10
+        breakdown["oos_is_ratio"] = 8
     else:
         breakdown["oos_is_ratio"] = 0
 
-    # Monte Carlo (max 25 points)
+    # Monte Carlo (max 20 points)
     if mc_underpowered:
-        breakdown["monte_carlo"] = 12
+        breakdown["monte_carlo"] = 10
     elif mc_p_value < 0.05:
-        breakdown["monte_carlo"] = 25
+        breakdown["monte_carlo"] = 20
     elif mc_p_value < 0.10:
-        breakdown["monte_carlo"] = 15
+        breakdown["monte_carlo"] = 12
     else:
         breakdown["monte_carlo"] = 0
 
-    # DSR (max 20 points)
+    # DSR (max 15 points)
     if dsr > 0.95:
-        breakdown["dsr"] = 20
-    elif dsr > 0.90:
         breakdown["dsr"] = 15
+    elif dsr > 0.90:
+        breakdown["dsr"] = 12
     elif dsr > 0.80:
-        breakdown["dsr"] = 10
+        breakdown["dsr"] = 8
     else:
         breakdown["dsr"] = 0
 
-    # Stability (max 15 points)
+    # Consistance OOS (max 20 points)
+    if consistency >= 0.90:
+        breakdown["consistency"] = 20
+    elif consistency >= 0.80:
+        breakdown["consistency"] = 16
+    elif consistency >= 0.70:
+        breakdown["consistency"] = 12
+    elif consistency >= 0.60:
+        breakdown["consistency"] = 8
+    elif consistency >= 0.50:
+        breakdown["consistency"] = 4
+    else:
+        breakdown["consistency"] = 0
+
+    # Stability (max 10 points)
     if stability > 0.80:
-        breakdown["stability"] = 15
-    elif stability > 0.60:
         breakdown["stability"] = 10
+    elif stability > 0.60:
+        breakdown["stability"] = 7
     elif stability > 0.40:
-        breakdown["stability"] = 5
+        breakdown["stability"] = 4
     else:
         breakdown["stability"] = 0
 
@@ -187,14 +210,15 @@ def compute_grade(
                 grade = max_grade
 
     logger.info(
-        "compute_grade: {} ({}/100, trades={}{}) — oos_is_ratio={:.2f}→{}/25, "
-        "mc_p={:.3f}(underpow={})→{}/25, dsr={:.2f}→{}/20, "
-        "stability={:.2f}→{}/15, bitget={:.2f}→{}/15",
+        "compute_grade: {} ({}/100, trades={}{}) — oos_is={:.2f}→{}/20, "
+        "mc_p={:.3f}(underpow={})→{}/20, dsr={:.2f}→{}/15, "
+        "consistency={:.2f}→{}/20, stability={:.2f}→{}/10, bitget={:.2f}→{}/15",
         grade, score, total_trades,
         f" cap {grade_before_cap}→{grade}" if grade != grade_before_cap else "",
         oos_is_ratio, breakdown["oos_is_ratio"],
         mc_p_value, mc_underpowered, breakdown["monte_carlo"],
         dsr, breakdown["dsr"],
+        consistency, breakdown["consistency"],
         stability, breakdown["stability"],
         bitget_transfer, breakdown["bitget_transfer"],
     )
@@ -632,6 +656,7 @@ def build_final_report(
         bitget_transfer=validation.transfer_ratio,
         mc_underpowered=overfit.monte_carlo.underpowered,
         total_trades=best_combo_trades,
+        consistency=wfo.consistency_rate,
     )
 
     warnings: list[str] = []

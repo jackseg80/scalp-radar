@@ -385,6 +385,7 @@ class TestGrading:
         grade, score = compute_grade(
             oos_is_ratio=0.1, mc_p_value=0.5, dsr=0.3,
             stability=0.2, bitget_transfer=0.1,
+            consistency=0.0,
         )
         assert grade == "F"
         assert score == 0
@@ -404,20 +405,20 @@ class TestGrading:
         assert grade in ("B", "C")
 
     def test_grade_mc_underpowered(self):
-        """mc_underpowered=True → 12/25 pts MC (neutre), pas de pénalité."""
+        """mc_underpowered=True → 10/20 pts MC (neutre), pas de pénalité."""
         # Même params que test_grade_a, mais avec underpowered au lieu de mc_p < 0.05
         grade_underpowered, score_underpowered = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             mc_underpowered=True,
         )
-        # Sans underpowered, mc_p=0.50 donnerait 0/25 pts → grade plus bas
+        # Sans underpowered, mc_p=0.50 donnerait 0/20 pts → grade plus bas
         grade_penalized, score_penalized = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             mc_underpowered=False,
         )
-        # underpowered donne 12 pts de plus que pénalisé (0 → 12)
+        # underpowered donne 10 pts de plus que pénalisé (0 → 10)
         assert grade_underpowered < grade_penalized  # "A" < "B" alphabétiquement = meilleur grade
         # Vérifier que underpowered ne bloque pas un bon grade
         assert grade_underpowered in ("A", "B")

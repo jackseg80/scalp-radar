@@ -195,3 +195,65 @@ def test_regime_analysis_uses_best_scored_combo():
         oos_sharpes = [e["oos_sharpe"] for e in entries if e["oos_sharpe"] is not None]
         assert len(oos_sharpes) > 0, f"Régime {regime} n'a pas de données OOS"
         assert all(s > 0 for s in oos_sharpes), f"Régime {regime} a des Sharpe <= 0"
+
+
+# ─── Test 5 : Consistance impacte le grade ──────────────────────────────
+
+
+def test_consistency_impacts_grade():
+    """ETH à 68% consistance ne peut pas obtenir 100/100.
+
+    Avec consistance=0.68 → 8/20 pts consistance (tranche ≥60%, au lieu de 20/20).
+    Score = 20+20+15+8+10+15 = 88, pas 100.
+    """
+    from backend.optimization.report import compute_grade
+
+    # Cas parfait SAUF consistance = 68%
+    grade, score = compute_grade(
+        oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
+        stability=0.85, bitget_transfer=0.60,
+        consistency=0.68,
+    )
+    assert score < 100, f"Score {score} devrait être < 100 avec consistency=68%"
+    # 68% → ≥60% bracket → 8/20 pts, score = 20+20+15+8+10+15 = 88
+    assert score == 88
+    assert grade == "A"  # 88 ≥ 85
+
+
+def test_top5_sorted_by_combo_score():
+    """Le premier du Top 5 (combo_results) correspond au best combo sélectionné.
+
+    Simule des combo_results non triés et vérifie que le tri par combo_score
+    place le best combo en #1.
+    """
+    combo_results = [
+        # Combo A : haut Sharpe, faible consistance, peu de trades
+        {"params": {"a": 1}, "oos_sharpe": 9.0, "consistency": 0.40, "oos_trades": 25, "is_best": False},
+        # Combo B : best combo — haute consistance + volume
+        {"params": {"a": 2}, "oos_sharpe": 5.5, "consistency": 0.95, "oos_trades": 300, "is_best": True},
+        # Combo C : Sharpe élevé, consistance moyenne, trades moyens
+        {"params": {"a": 3}, "oos_sharpe": 7.0, "consistency": 0.70, "oos_trades": 80, "is_best": False},
+    ]
+
+    # Vérifier les scores attendus
+    # B: 5.5 * (0.4 + 0.6*0.95) * min(1, 300/100) = 5.5 * 0.97 * 1.0 = 5.335
+    # C: 7.0 * (0.4 + 0.6*0.70) * min(1, 80/100) = 7.0 * 0.82 * 0.80 = 4.592
+    # A: 9.0 * (0.4 + 0.6*0.40) * min(1, 25/100) = 9.0 * 0.64 * 0.25 = 1.44
+    score_b = combo_score(5.5, 0.95, 300)
+    score_c = combo_score(7.0, 0.70, 80)
+    score_a = combo_score(9.0, 0.40, 25)
+    assert score_b > score_c > score_a
+
+    # Tri par combo_score (même logique que walk_forward.py)
+    sorted_results = sorted(
+        combo_results,
+        key=lambda c: combo_score(c["oos_sharpe"], c["consistency"], c["oos_trades"]),
+        reverse=True,
+    )
+
+    # Le #1 doit être le combo marqué is_best (Combo B)
+    assert sorted_results[0]["is_best"] is True, (
+        f"Le #1 du top 5 devrait être le best combo, "
+        f"mais c'est {sorted_results[0]['params']}"
+    )
+    assert sorted_results[0]["params"] == {"a": 2}
