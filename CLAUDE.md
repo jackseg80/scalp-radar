@@ -64,14 +64,14 @@ scalp-radar/
 │   ├── core/                     # models, config, database, indicators, position_manager, grid_position_manager, state_manager, data_engine
 │   ├── strategies/               # base, base_grid, factory + 10 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr)
 │   ├── optimization/             # walk_forward, overfitting, report, indicator_cache, fast_backtest, fast_multi_backtest
-│   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder
+│   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder, portfolio_engine
 │   ├── execution/                # executor, risk_manager, adaptive_selector
 │   ├── api/                      # server, health, simulator_routes, conditions_routes, arena_routes, executor_routes, websocket_routes
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (28 components: Scanner, Heatmap, Explorer, Research, Diagnostic, etc.)
-├── tests/                        # 774 tests (pytest, 43 fichiers)
-├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
+├── tests/                        # 806 tests (pytest, 44 fichiers)
+├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
 └── docs/plans/                   # Sprint plans 1-19 archivés
 ```
 
@@ -153,7 +153,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a) : 774 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b) : 806 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -202,6 +202,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 19d : Grading Bitget transfer 3 paliers + guard bitget_trades < 15 + fix or-on-float (772 tests)
 - Sprint 20a : Sizing equal allocation (`capital/nb_assets/levels`) + margin guard 70% (`max_margin_ratio`), Scanner grade fix (774 tests)
 - Hotfix 19e : Scanner Grid Fix — colonnes dynamiques (Score/Signaux masquées si aucune stratégie mono), colonne Dist.SMA, direction grid, tri par grade, GridDetail (niveaux vert/rouge, TP/SL, P&L) — frontend pur, zéro backend (774 tests)
+- Sprint 20b : Portfolio Backtest Multi-Asset — N runners capital partagé, 21 assets × 90j, snapshots equity/margin/positions, drawdown peak-to-trough, kill switch fenêtre glissante, force-close séparé, rapport CLI + JSON (806 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 

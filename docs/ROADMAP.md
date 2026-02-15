@@ -762,6 +762,34 @@ Système automatisé de trading crypto qui :
 
 **Hors scope** : `_INDICATOR_PARAMS` (walk_forward.py L394) reste un dict hardcodé — fallback `_run_sequential` rarement utilisé.
 
+### Sprint 20b — Portfolio Backtest Multi-Asset ✅
+
+**But** : Backtest portfolio qui simule le capital partagé entre les 21 assets, réutilisant `GridStrategyRunner` (même code que la prod).
+
+**Questions répondues** :
+
+1. Max drawdown historique sur le portfolio (capital partagé)
+2. Corrélation des fills — combien de grilles se remplissent simultanément
+3. Margin peak — marge max mobilisée simultanément (% du capital)
+4. Kill switch frequency — combien de fois le kill switch aurait déclenché
+5. Sizing optimal — combien d'assets max par niveau de capital
+
+**Implémenté** :
+
+- `PortfolioBacktester` : N runners (1/asset) avec params WFO per_asset, capital split `initial_capital / N`, `_nb_assets=1` par runner
+- Warm-up manuel (50 candles) avec désactivation explicite `_is_warming_up = False` (candles historiques ont age > 2h, détection auto ne fire jamais)
+- `IncrementalIndicatorEngine` partagé, `data_engine=None` (safe, jamais utilisé dans `on_candle()`)
+- P&L séparé : `realized_pnl` (TP/SL naturels) vs `force_closed_pnl` (fin de données)
+- Kill switch détection (fenêtre glissante 24h, seuil 30% paramétrable)
+- Rapport CLI avec sections Risk, Marge, Kill Switch, Per-Asset breakdown
+- Script `scripts/portfolio_backtest.py` avec `--days`, `--capital`, `--assets`, `--json`, `--output`
+
+**Résultat (90j, 21 assets, 10k$)** : +14.5% return, -28.7% max drawdown, 73.7% WR, 1690 trades, peak margin 25%, 0 kill switch, 64 positions simultanées max.
+
+**Tests** : 19 nouveaux → 806 passants (774 + 19 portfolio + 13 sprint 20c)
+
+**Limitation connue** : ATR period fixe à 14 dans `IncrementalIndicatorEngine` (le `atr_period` per_asset du WFO n'est pas utilisé dans le path live). Matche le comportement prod.
+
 ### Sprint 20 — Gestion du Capital Avancée
 **But** : Optimiser l'allocation de capital entre stratégies et assets.
 
@@ -849,13 +877,13 @@ Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
 
 ## ÉTAT ACTUEL (15 février 2026)
 
-- **774 tests**, 0 régression
-- **Sprint 20a + Hotfix 19e complétés** (Phase 5 en cours) — Sizing equal allocation + Scanner grid fix
+- **806 tests**, 0 régression
+- **Sprint 20b complété** (Phase 6 en cours) — Portfolio Backtest Multi-Asset
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
-- **Sizing** : equal allocation (`capital/nb_assets/levels`) + margin guard 70% (`max_margin_ratio` dans risk.yaml) — marge réduite de 4.9× à 0.38× du capital
-- **Prochaine étape** : Sprint 20b (backtest portfolio multi-stratégie)
+- **Portfolio backtest** : +14.5% return, -28.7% max DD, 73.7% WR, 0 kill switch sur 90j avec 10k$/21 assets
+- **Prochaine étape** : Sprint 20 (gestion du capital avancée) ou Sprint 8 (backtest dashboard)
 
 ---
 
