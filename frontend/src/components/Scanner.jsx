@@ -67,16 +67,13 @@ export default function Scanner({ wsData }) {
     }
   })
 
-  // Lookup grades : pour chaque asset, meilleur grade (priorité envelope_dca)
+  // Lookup grades : pour chaque asset, meilleur grade toutes stratégies confondues
   const gradesLookup = useMemo(() => {
     const lookup = {}
     if (!gradesData?.results) return lookup
     for (const r of gradesData.results) {
       const existing = lookup[r.asset]
-      if (!existing ||
-          r.strategy_name === 'envelope_dca' ||
-          (existing.strategy !== 'envelope_dca' &&
-           (GRADE_ORDER[r.grade] || 0) > (GRADE_ORDER[existing.grade] || 0))) {
+      if (!existing || (GRADE_ORDER[r.grade] || 0) > (GRADE_ORDER[existing.grade] || 0)) {
         lookup[r.asset] = { grade: r.grade, strategy: r.strategy_name, score: r.total_score }
       }
     }

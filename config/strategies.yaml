@@ -86,7 +86,7 @@ supertrend:
   weight: 0.15
   per_asset: {}
 envelope_dca:
-  enabled: true
+  enabled: false
   live_eligible: true
   timeframe: 1h
   ma_period: 5
@@ -240,7 +240,7 @@ envelope_dca_short:
   weight: 0.2
   per_asset: {}
 grid_atr:
-  enabled: false
+  enabled: true
   live_eligible: false
   timeframe: 1h
   ma_period: 14
@@ -250,10 +250,157 @@ grid_atr:
   num_levels: 3
   sl_percent: 20.0
   sides:
-    - long
+  - long
   leverage: 6
-  weight: 0.20
-  per_asset: {}
+  weight: 0.2
+  per_asset:
+    ADA/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
+      num_levels: 2
+      sl_percent: 15.0
+    APE/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 10
+      num_levels: 4
+      sl_percent: 25.0
+    AR/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 15.0
+    AVAX/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 15.0
+    BTC/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 20
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 15.0
+    CRV/USDT:
+      atr_multiplier_start: 1.0
+      atr_multiplier_step: 1.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 30.0
+    DOGE/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 4
+      sl_percent: 20.0
+    DYDX/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 15.0
+    ENJ/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 20.0
+    ETH/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 30.0
+    FET/USDT:
+      atr_multiplier_start: 1.0
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 30.0
+    GALA/USDT:
+      atr_multiplier_start: 2.5
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 15.0
+    ICP/USDT:
+      atr_multiplier_start: 1.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 30.0
+    IMX/USDT:
+      atr_multiplier_start: 1.0
+      atr_multiplier_step: 1.5
+      atr_period: 10
+      ma_period: 14
+      num_levels: 3
+      sl_percent: 30.0
+    LINK/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 25.0
+    NEAR/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 30.0
+    SAND/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 20.0
+    SOL/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 2
+      sl_percent: 15.0
+    SUSHI/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 20
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 15.0
+    UNI/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 25.0
+    XTZ/USDT:
+      atr_multiplier_start: 1.0
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 30.0
 custom_strategies:
   swing_baseline:
     enabled: false
