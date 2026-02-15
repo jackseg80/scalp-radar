@@ -44,8 +44,8 @@ export default function ExplorerPage({ wsData }) {
   // Stratégies disponibles (chargées dynamiquement depuis le backend)
   const [strategies, setStrategies] = useState([])
 
-  // Assets disponibles
-  const assets = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'LINK/USDT']
+  // Assets disponibles (chargés dynamiquement depuis les résultats d'optimisation)
+  const [assets, setAssets] = useState([])
 
   // Métriques disponibles (Sprint 14b : nouvelles métriques combo_results)
   const metrics = [
@@ -72,6 +72,26 @@ export default function ExplorerPage({ wsData }) {
     }
     fetchStrategies()
   }, [])
+
+  // Charger les assets dynamiquement depuis les résultats d'optimisation
+  useEffect(() => {
+    const fetchAssets = async () => {
+      try {
+        const resp = await fetch('/api/optimization/results?limit=1000')
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data = await resp.json()
+        const uniqueAssets = [...new Set((data.results || []).map(r => r.asset))].sort()
+        setAssets(uniqueAssets)
+        // Reset sélection si l'asset actuel n'est plus dans la liste
+        if (asset && uniqueAssets.length > 0 && !uniqueAssets.includes(asset)) {
+          setAsset('')
+        }
+      } catch (err) {
+        console.error('Erreur fetch assets:', err)
+      }
+    }
+    fetchAssets()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Charger la grille de paramètres quand la stratégie change
   useEffect(() => {
