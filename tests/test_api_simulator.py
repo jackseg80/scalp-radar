@@ -177,3 +177,94 @@ async def test_signals_recent(mock_app):
     assert resp.status_code == 200
     data = resp.json()
     assert "signals" in data
+
+
+# ─── Tests GET /api/simulator/grid-state ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_grid_state_no_simulator(mock_app):
+    """GET /api/simulator/grid-state sans simulator → JSON vide."""
+    mock_app.state.simulator = None
+    transport = ASGITransport(app=mock_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/simulator/grid-state")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["grid_positions"] == {}
+    assert data["summary"]["total_positions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grid_state_empty(mock_app):
+    """GET /api/simulator/grid-state sans grilles actives → grids vide."""
+    mock_app.state.simulator.get_grid_state.return_value = {
+        "grid_positions": {},
+        "summary": {
+            "total_positions": 0,
+            "total_assets": 0,
+            "total_margin_used": 0,
+            "total_unrealized_pnl": 0,
+            "capital_available": 10000,
+        },
+    }
+    transport = ASGITransport(app=mock_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/simulator/grid-state")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["grid_positions"] == {}
+    assert data["summary"]["total_assets"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grid_state_with_data(mock_app):
+    """GET /api/simulator/grid-state avec une grille active → JSON complet."""
+    mock_app.state.simulator.get_grid_state.return_value = {
+        "grid_positions": {
+            "BTC/USDT": {
+                "symbol": "BTC/USDT",
+                "strategy": "envelope_dca",
+                "direction": "LONG",
+                "levels_open": 2,
+                "levels_max": 4,
+                "avg_entry": 95000.0,
+                "current_price": 96000.0,
+                "unrealized_pnl": 20.0,
+                "unrealized_pnl_pct": 6.32,
+                "tp_price": 97000.0,
+                "sl_price": 92000.0,
+                "tp_distance_pct": 1.04,
+                "sl_distance_pct": -4.17,
+                "margin_used": 316.67,
+                "leverage": 6,
+                "positions": [
+                    {"level": 0, "entry_price": 96000.0, "quantity": 0.01,
+                     "entry_time": "2024-01-15T12:00:00+00:00", "direction": "LONG"},
+                    {"level": 1, "entry_price": 94000.0, "quantity": 0.01,
+                     "entry_time": "2024-01-15T13:00:00+00:00", "direction": "LONG"},
+                ],
+            },
+        },
+        "summary": {
+            "total_positions": 2,
+            "total_assets": 1,
+            "total_margin_used": 316.67,
+            "total_unrealized_pnl": 20.0,
+            "capital_available": 9683.33,
+        },
+    }
+    transport = ASGITransport(app=mock_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/simulator/grid-state")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "BTC/USDT" in data["grid_positions"]
+    grid = data["grid_positions"]["BTC/USDT"]
+    assert grid["levels_open"] == 2
+    assert grid["levels_max"] == 4
+    assert grid["unrealized_pnl"] == 20.0
+    assert grid["tp_distance_pct"] == 1.04
+    assert len(grid["positions"]) == 2
+    assert data["summary"]["total_positions"] == 2
+    assert data["summary"]["total_assets"] == 1

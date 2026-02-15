@@ -8,6 +8,7 @@ Sprint 11 : GridStrategyRunner pour les stratégies grid/DCA (envelope_dca).
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections import deque
 from dataclasses import dataclass
@@ -554,6 +555,7 @@ class GridStrategyRunner:
 
         # Warm-up : capital fixe pendant le replay des candles historiques
         self._is_warming_up = True
+        self._pending_restore: dict | None = None  # État à appliquer après warm-up
 
     def _get_sl_percent(self, symbol: str) -> float:
         """Résout le sl_percent pour un symbol (avec override per_asset)."""
@@ -608,28 +610,63 @@ class GridStrategyRunner:
         )
 
     def _end_warmup(self) -> None:
-        """Termine le warm-up : reset capital, stats, positions. Trades restent en historique."""
+        """Termine le warm-up : restaure l'état sauvegardé ou reset à initial_capital."""
         warmup_trade_count = len(self._trades)
 
         # Fermer toutes les positions warm-up (pas de record trade)
         self._positions.clear()
 
-        # Reset capital à 10k (le warm-up ne doit pas affecter le live)
-        self._capital = self._initial_capital
-        self._realized_pnl = 0.0
-
-        # Reset stats (seul le live compte)
-        self._stats = RunnerStats(
-            capital=self._capital,
-            initial_capital=self._initial_capital,
-        )
+        # Si un état était en attente de restauration (restart avec state)
+        pending = getattr(self, "_pending_restore", None)
+        if pending is not None:
+            self._apply_restored_state(pending)
+            self._pending_restore = None
+            logger.info(
+                "[{}] Warm-up terminé : {} trades historiques, état restauré (capital={:.2f}$)",
+                self.name, warmup_trade_count, self._capital,
+            )
+        else:
+            # Pas d'état à restaurer → reset propre à initial_capital
+            self._capital = self._initial_capital
+            self._realized_pnl = 0.0
+            self._stats = RunnerStats(
+                capital=self._capital,
+                initial_capital=self._initial_capital,
+            )
+            logger.info(
+                "[{}] Warm-up terminé : {} trades historiques, capital reset à {:.0f}$",
+                self.name, warmup_trade_count, self._capital,
+            )
 
         self._is_warming_up = False
         self._warmup_ended_at = datetime.now(tz=timezone.utc)
-        logger.info(
-            "[{}] Warm-up terminé : {} trades historiques, capital reset à {:.0f}$",
-            self.name, warmup_trade_count, self._capital,
-        )
+
+    def _apply_restored_state(self, state: dict) -> None:
+        """Applique un état sauvegardé (appelé après le warm-up)."""
+        self._capital = state.get("capital", self._initial_capital)
+        self._kill_switch_triggered = False
+        self._realized_pnl = state.get("realized_pnl", state.get("net_pnl", 0.0))
+
+        self._stats.capital = self._capital
+        self._stats.net_pnl = self._realized_pnl
+        self._stats.total_trades = state.get("total_trades", 0)
+        self._stats.wins = state.get("wins", 0)
+        self._stats.losses = state.get("losses", 0)
+        self._stats.is_active = state.get("is_active", True)
+
+        # Restaurer les positions grid ouvertes
+        grid_positions = state.get("grid_positions", [])
+        for gp in grid_positions:
+            symbol = gp.get("symbol", "UNKNOWN")
+            pos = GridPosition(
+                level=gp["level"],
+                direction=Direction(gp["direction"]),
+                entry_price=gp["entry_price"],
+                quantity=gp["quantity"],
+                entry_time=datetime.fromisoformat(gp["entry_time"]),
+                entry_fee=gp["entry_fee"],
+            )
+            self._positions.setdefault(symbol, []).append(pos)
 
     async def on_candle(
         self, symbol: str, timeframe: str, candle: Candle
@@ -893,46 +930,22 @@ class GridStrategyRunner:
         ))
 
     def restore_state(self, state: dict) -> None:
-        """Restaure l'état du runner depuis un snapshot sauvegardé."""
-        # Si on restaure un état, le warm-up n'a pas lieu (on reprend le live)
-        self._is_warming_up = False
+        """Restaure l'état du runner depuis un snapshot sauvegardé.
 
-        self._capital = state.get("capital", self._initial_capital)
-        # Grid/DCA : kill switch désactivé (pertes temporaires normales)
-        self._kill_switch_triggered = False
-        # Restaurer le P&L réalisé (backward compat : fallback sur net_pnl)
-        self._realized_pnl = state.get("realized_pnl", state.get("net_pnl", 0.0))
+        Le warm-up reste actif : watch_ohlcv() renvoie un batch historique
+        au démarrage qui doit être traité avec initial_capital (pas le capital
+        restauré). _end_warmup() appliquera l'état sauvegardé.
+        """
+        # Garder le warm-up actif pour que les candles historiques initiales
+        # utilisent initial_capital. L'état sera appliqué à _end_warmup().
+        self._pending_restore = state
+        self._is_warming_up = True
 
-        self._stats.capital = self._capital
-        self._stats.net_pnl = self._realized_pnl
-        self._stats.total_trades = state.get("total_trades", 0)
-        self._stats.wins = state.get("wins", 0)
-        self._stats.losses = state.get("losses", 0)
-        self._stats.is_active = state.get("is_active", True)
-
-        # Restaurer les positions grid ouvertes (groupées par symbol)
-        grid_positions = state.get("grid_positions", [])
-        self._positions = {}
-        for gp in grid_positions:
-            symbol = gp.get("symbol", "UNKNOWN")
-            pos = GridPosition(
-                level=gp["level"],
-                direction=Direction(gp["direction"]),
-                entry_price=gp["entry_price"],
-                quantity=gp["quantity"],
-                entry_time=datetime.fromisoformat(gp["entry_time"]),
-                entry_fee=gp["entry_fee"],
-            )
-            self._positions.setdefault(symbol, []).append(pos)
-
-        total_positions = sum(len(p) for p in self._positions.values())
         logger.info(
-            "[{}] État restauré : capital={:.2f}, trades={}, positions_grid={}, kill_switch={}",
+            "[{}] État sauvegardé pour restauration post-warmup : capital={:.2f}, trades={}",
             self.name,
-            self._capital,
-            self._stats.total_trades,
-            total_positions,
-            self._kill_switch_triggered,
+            state.get("capital", self._initial_capital),
+            state.get("total_trades", 0),
         )
 
     def build_context(self, symbol: str) -> StrategyContext | None:
@@ -1503,6 +1516,116 @@ class Simulator:
                     "entry_time": pos.entry_time.isoformat(),
                 })
         return positions
+
+    def get_grid_state(self) -> dict:
+        """État détaillé des grilles DCA actives avec P&L non réalisé."""
+        grids: list[dict] = []
+
+        for runner in self._runners:
+            if not hasattr(runner, "_gpm"):
+                continue  # Pas un GridStrategyRunner
+
+            for symbol, positions in runner._positions.items():
+                if not positions:
+                    continue
+
+                # Prix courant depuis DataEngine — fallback 1m → 5m → 1h
+                current_price = self._get_current_price(symbol)
+                if current_price is None or current_price <= 0:
+                    continue
+
+                # GridState agrégé via GPM
+                grid_state = runner._gpm.compute_grid_state(positions, current_price)
+
+                # Indicateurs pour TP/SL dynamique
+                ctx = runner.build_context(symbol)
+                main_tf = getattr(runner._strategy._config, "timeframe", "1h")
+                main_ind = (
+                    ctx.indicators.get(main_tf, {})
+                    if ctx and ctx.indicators
+                    else {}
+                )
+
+                tp_price = runner._strategy.get_tp_price(grid_state, main_ind)
+                sl_price = runner._strategy.get_sl_price(grid_state, main_ind)
+
+                leverage = runner._leverage
+                margin_used = (
+                    grid_state.total_notional / leverage if leverage > 0 else 0.0
+                )
+                unrealized_pnl_pct = (
+                    grid_state.unrealized_pnl / margin_used * 100
+                    if margin_used > 0
+                    else 0.0
+                )
+
+                tp_valid = not math.isnan(tp_price) if tp_price is not None else False
+                sl_valid = not math.isnan(sl_price) if sl_price is not None else False
+
+                grids.append({
+                    "symbol": symbol,
+                    "strategy": runner.name,
+                    "direction": positions[0].direction.value,
+                    "levels_open": len(positions),
+                    "levels_max": runner._strategy.max_positions,
+                    "avg_entry": round(grid_state.avg_entry_price, 6),
+                    "current_price": current_price,
+                    "unrealized_pnl": round(grid_state.unrealized_pnl, 2),
+                    "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
+                    "tp_price": round(tp_price, 6) if tp_valid else None,
+                    "sl_price": round(sl_price, 6) if sl_valid else None,
+                    "tp_distance_pct": (
+                        round((tp_price - current_price) / current_price * 100, 2)
+                        if tp_valid
+                        else None
+                    ),
+                    "sl_distance_pct": (
+                        round((sl_price - current_price) / current_price * 100, 2)
+                        if sl_valid
+                        else None
+                    ),
+                    "margin_used": round(margin_used, 2),
+                    "leverage": leverage,
+                    "positions": [
+                        {
+                            "level": p.level,
+                            "entry_price": p.entry_price,
+                            "quantity": p.quantity,
+                            "entry_time": p.entry_time.isoformat(),
+                            "direction": p.direction.value,
+                        }
+                        for p in positions
+                    ],
+                })
+
+        total_margin = sum(g["margin_used"] for g in grids)
+        total_upnl = sum(g["unrealized_pnl"] for g in grids)
+
+        # Capital disponible : somme du capital des runners grid
+        capital_available = 0.0
+        for runner in self._runners:
+            if hasattr(runner, "_gpm"):
+                capital_available += runner._capital
+
+        return {
+            "grid_positions": {g["symbol"]: g for g in grids},
+            "summary": {
+                "total_positions": sum(g["levels_open"] for g in grids),
+                "total_assets": len(grids),
+                "total_margin_used": round(total_margin, 2),
+                "total_unrealized_pnl": round(total_upnl, 2),
+                "capital_available": round(capital_available, 2),
+            },
+        }
+
+    def _get_current_price(self, symbol: str) -> float | None:
+        """Prix courant depuis DataEngine avec fallback multi-timeframe."""
+        data = self._data_engine.get_data(symbol)
+        for tf in ("1m", "5m", "1h"):
+            candles = data.candles.get(tf, [])
+            if candles and candles[-1].close > 0:
+                return candles[-1].close
+        return None
 
     def is_kill_switch_triggered(self) -> bool:
         """Vérifie si le kill switch global ou un runner a déclenché le kill switch."""

@@ -150,7 +150,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes) : 714 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17) : 727 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -192,6 +192,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 15c : MC observed_sharpe IS→OOS fix, combo_score seuil 100 trades, garde-fou <30 trades → max C, grille étendue 0.05-0.15, DB purgée (698 tests)
 - Sprint 15d : Consistance dans le grade (20 pts/100), Top 5 trié par combo_score, fetch 18 nouvelles paires Binance, WFO 23 assets (21 Grade A/B), `--apply` auto per_asset, auto-add assets.yaml via ccxt, bouton "Appliquer A/B" frontend (714 tests)
 - Hotfix sizing : capital configurable (`risk.yaml initial_capital`), position sizing proportionnel (`capital / nb_assets / levels`), equal risk per trade (`margin = risk_budget / sl_pct`, cap 25%) (714 tests)
+- Sprint 16+17 : Dashboard Scanner (colonnes Grade + Grid), ActivePositions GridSummary, endpoint `GET /api/simulator/grid-state`, WS push grid_state 3s, DataEngine batching anti-rate-limit (30006), fix warm-up compound post-restore (727 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 

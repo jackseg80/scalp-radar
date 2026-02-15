@@ -160,8 +160,12 @@ class DataEngine:
 
     # ─── LIFECYCLE ──────────────────────────────────────────────────────────
 
+    # Batching pour éviter le rate limit Bitget (code 30006) lors des souscriptions
+    _SUBSCRIBE_BATCH_SIZE = 10  # symbols par batch
+    _SUBSCRIBE_BATCH_DELAY = 0.5  # secondes entre les batchs
+
     async def start(self) -> None:
-        """Démarre les connexions WebSocket."""
+        """Démarre les connexions WebSocket avec staggering anti-rate-limit."""
         logger.info("DataEngine: démarrage...")
 
         self._exchange = ccxtpro.bitget({
@@ -171,13 +175,24 @@ class DataEngine:
 
         self._running = True
 
-        # Lancer une tâche de watch par symbol
-        for asset in self.config.assets:
+        # Lancer les tâches par batch pour éviter le rate limit Bitget
+        assets = self.config.assets
+        for i, asset in enumerate(assets):
             task = asyncio.create_task(
                 self._watch_symbol(asset.symbol, asset.timeframes),
                 name=f"watch_{asset.symbol}",
             )
             self._tasks.append(task)
+
+            # Pause entre les batchs de souscriptions
+            if (i + 1) % self._SUBSCRIBE_BATCH_SIZE == 0 and i + 1 < len(assets):
+                logger.info(
+                    "DataEngine: batch {}/{} souscrit, pause {}s...",
+                    i + 1,
+                    len(assets),
+                    self._SUBSCRIBE_BATCH_DELAY,
+                )
+                await asyncio.sleep(self._SUBSCRIBE_BATCH_DELAY)
 
         # Tâches de polling pour funding rate et OI
         self._tasks.append(
@@ -263,11 +278,17 @@ class DataEngine:
                 delay = reconnect_delay * min(2 ** (attempt - 1), 60)
                 await asyncio.sleep(delay)
 
+    # Rate limit retry config
+    _RATE_LIMIT_DELAY = 2.0  # secondes d'attente sur rate limit
+    _RATE_LIMIT_MAX_RETRIES = 3
+    _RATE_LIMIT_CODES = {"30006", "429"}  # Bitget rate limit codes
+
     async def _subscribe_klines(
         self, symbol: str, timeframes: list[str]
     ) -> None:
-        """S'abonne aux klines via ccxt watch_ohlcv."""
+        """S'abonne aux klines via ccxt watch_ohlcv avec gestion rate limit."""
         assert self._exchange is not None
+        consecutive_errors = 0
 
         while self._running:
             for tf in timeframes:
@@ -275,17 +296,53 @@ class DataEngine:
                     return
                 try:
                     ohlcv_list = await self._exchange.watch_ohlcv(symbol, tf)
+                    consecutive_errors = 0  # Reset on success
                     for ohlcv in ohlcv_list:
                         await self._on_candle_received(symbol, tf, ohlcv)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.warning(
-                        "DataEngine: erreur kline {}/{}: {}",
-                        symbol,
-                        tf,
-                        e,
+                    err_str = str(e)
+                    is_rate_limit = any(
+                        code in err_str for code in self._RATE_LIMIT_CODES
                     )
+
+                    if is_rate_limit:
+                        consecutive_errors += 1
+                        if consecutive_errors <= self._RATE_LIMIT_MAX_RETRIES:
+                            delay = self._RATE_LIMIT_DELAY * consecutive_errors
+                            logger.info(
+                                "DataEngine: rate limit {}/{}, retry dans {:.0f}s ({}/{})",
+                                symbol,
+                                tf,
+                                delay,
+                                consecutive_errors,
+                                self._RATE_LIMIT_MAX_RETRIES,
+                            )
+                            await asyncio.sleep(delay)
+                        else:
+                            # Trop de retries → remonter l'exception pour le backoff de _watch_symbol
+                            logger.warning(
+                                "DataEngine: rate limit persistant {}/{}, passage au backoff global",
+                                symbol,
+                                tf,
+                            )
+                            raise
+                    else:
+                        # Log throttle : ne pas spammer pour les erreurs répétitives
+                        consecutive_errors += 1
+                        if consecutive_errors <= 3:
+                            logger.warning(
+                                "DataEngine: erreur kline {}/{}: {}",
+                                symbol,
+                                tf,
+                                e,
+                            )
+                        elif consecutive_errors == 4:
+                            logger.warning(
+                                "DataEngine: erreurs répétées {}, suppression logs...",
+                                symbol,
+                            )
 
     async def _on_candle_received(
         self,

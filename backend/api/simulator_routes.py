@@ -66,6 +66,24 @@ async def simulator_trades(
     return {"trades": all_trades[:limit]}
 
 
+@router.get("/grid-state")
+async def simulator_grid_state(request: Request) -> dict:
+    """État détaillé des grilles DCA actives avec P&L non réalisé."""
+    simulator = getattr(request.app.state, "simulator", None)
+    if simulator is None:
+        return {
+            "grid_positions": {},
+            "summary": {
+                "total_positions": 0,
+                "total_assets": 0,
+                "total_margin_used": 0,
+                "total_unrealized_pnl": 0,
+                "capital_available": 0,
+            },
+        }
+    return simulator.get_grid_state()
+
+
 @router.get("/performance")
 async def simulator_performance(request: Request) -> dict:
     """Métriques de performance par stratégie."""

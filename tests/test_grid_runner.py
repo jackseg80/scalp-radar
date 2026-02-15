@@ -483,7 +483,7 @@ class TestGridRunnerOnCandle:
 
 class TestGridRunnerState:
     def test_restore_state_basic(self):
-        """restore_state restaure capital, stats, kill_switch."""
+        """restore_state + _end_warmup restaure capital, stats, kill_switch."""
         runner = _make_grid_runner()
         state = {
             "capital": 9_500.0,
@@ -496,6 +496,13 @@ class TestGridRunnerState:
         }
         runner.restore_state(state)
 
+        # Pendant le warm-up, capital reste à initial_capital
+        assert runner._capital == 10_000.0
+        assert runner._is_warming_up is True
+
+        # Appliquer l'état après warm-up
+        runner._end_warmup()
+
         assert runner._capital == 9_500.0
         assert runner._stats.net_pnl == -500.0
         assert runner._stats.total_trades == 3
@@ -503,7 +510,7 @@ class TestGridRunnerState:
         assert runner._stats.losses == 2
 
     def test_restore_state_with_grid_positions(self):
-        """restore_state restaure les positions grid ouvertes."""
+        """restore_state + _end_warmup restaure les positions grid ouvertes."""
         runner = _make_grid_runner()
         state = {
             "capital": 9_800.0,
@@ -536,6 +543,13 @@ class TestGridRunnerState:
         }
         runner.restore_state(state)
 
+        # Pendant le warm-up, positions pas encore restaurées
+        assert runner._positions == {} or len(runner._positions.get("BTC/USDT", [])) == 0
+        assert runner._pending_restore is not None
+
+        # Appliquer l'état après warm-up
+        runner._end_warmup()
+
         positions = runner._positions.get("BTC/USDT", [])
         assert len(positions) == 2
         assert positions[0].level == 0
@@ -545,7 +559,7 @@ class TestGridRunnerState:
         assert "BTC/USDT" in runner._positions
 
     def test_restore_state_no_grid_positions_backward_compat(self):
-        """Sans grid_positions dans le state → positions vide."""
+        """Sans grid_positions dans le state → positions vide après warmup."""
         runner = _make_grid_runner()
         state = {
             "capital": 10_000.0,
@@ -557,8 +571,13 @@ class TestGridRunnerState:
             "is_active": True,
         }
         runner.restore_state(state)
+
+        # Appliquer après warm-up
+        runner._end_warmup()
+
         assert len(runner._positions) == 0
         assert runner._positions == {}
+        assert runner._capital == 10_000.0
 
     def test_get_status_format(self):
         """get_status retourne les champs grid spécifiques."""
@@ -942,8 +961,8 @@ class TestGridRunnerWarmup:
         assert len(runner._pending_events) == 0
 
     @pytest.mark.asyncio
-    async def test_restore_state_disables_warmup(self):
-        """Restaurer un état sauvegardé désactive le warm-up."""
+    async def test_restore_state_keeps_warmup(self):
+        """Restaurer un état sauvegardé garde le warm-up actif (anti-compound)."""
         runner = _make_grid_runner()
         runner._is_warming_up = True
 
@@ -956,13 +975,96 @@ class TestGridRunnerWarmup:
             "losses": 2,
         })
 
+        # Warm-up reste actif pour protéger contre le compound historique
+        assert runner._is_warming_up is True
+        # Capital PAS encore restauré (sera appliqué après _end_warmup)
+        assert runner._capital == 10_000.0  # initial_capital
+        assert runner._pending_restore is not None
+        assert runner._pending_restore["capital"] == 12_000.0
+
+    @pytest.mark.asyncio
+    async def test_restore_state_applied_after_warmup(self):
+        """L'état restauré est appliqué quand le warm-up se termine."""
+        runner = _make_grid_runner()
+        runner._is_warming_up = True
+
+        state = {
+            "capital": 28_918.0,
+            "kill_switch": False,
+            "realized_pnl": 18_918.0,
+            "total_trades": 42,
+            "wins": 30,
+            "losses": 12,
+            "is_active": True,
+            "grid_positions": [
+                {
+                    "symbol": "BTC/USDT",
+                    "level": 0,
+                    "direction": "LONG",
+                    "entry_price": 95_000.0,
+                    "quantity": 0.01,
+                    "entry_time": "2024-01-15T12:00:00+00:00",
+                    "entry_fee": 0.57,
+                },
+            ],
+        }
+        runner.restore_state(state)
+
+        # Avant _end_warmup : capital = initial
+        assert runner._capital == 10_000.0
+
+        # Simuler la fin du warm-up
+        runner._end_warmup()
+
+        # Après _end_warmup : état restauré appliqué
         assert runner._is_warming_up is False
-        assert runner._capital == 12_000.0
+        assert runner._capital == 28_918.0
+        assert runner._realized_pnl == 18_918.0
+        assert runner._stats.total_trades == 42
+        assert runner._stats.wins == 30
+        # Positions restaurées
+        assert "BTC/USDT" in runner._positions
+        assert len(runner._positions["BTC/USDT"]) == 1
+        assert runner._positions["BTC/USDT"][0].entry_price == 95_000.0
+
+    @pytest.mark.asyncio
+    async def test_warmup_ignores_restored_capital(self):
+        """Pendant le warm-up post-restore, le sizing utilise initial_capital."""
+        strategy = _make_mock_strategy()
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+        ]
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = True
+
+        # Restaurer un état avec capital élevé
+        runner.restore_state({
+            "capital": 50_000.0,
+            "realized_pnl": 40_000.0,
+            "total_trades": 100,
+            "wins": 70,
+            "losses": 30,
+        })
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        # Candle ancienne (warm-up) qui touche le niveau
+        candle = _make_candle(
+            close=96_000.0, low=94_500.0, high=97_000.0,
+            ts=datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        # Position ouverte avec initial_capital (10k), PAS 50k
+        positions = runner._positions.get("BTC/USDT", [])
+        assert len(positions) == 1
+        # Le sizing doit être basé sur 10k / nb_assets, pas 50k
+        assert runner._capital == 10_000.0  # Capital pas modifié pendant warmup
 
     @pytest.mark.asyncio
     async def test_restore_state_ignores_kill_switch(self):
         """Même si le state sauvegardé a kill_switch=True, le grid l'ignore."""
         runner = _make_grid_runner()
+        runner._is_warming_up = True
 
         runner.restore_state({
             "capital": 8_000.0,
@@ -972,6 +1074,9 @@ class TestGridRunnerWarmup:
             "wins": 0,
             "losses": 3,
         })
+
+        # Simuler la fin du warm-up pour appliquer l'état
+        runner._end_warmup()
 
         assert runner._kill_switch_triggered is False
         assert runner._capital == 8_000.0

@@ -598,55 +598,36 @@ Système automatisé de trading crypto qui :
 
 ## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19) ← ON EST ICI
 
-### Sprint 16 — WFO envelope_dca_short + Passage Live
-**But** : Valider SHORT via WFO, puis passer envelope_dca LONG en live si paper trading OK.
-
-**Phase A — WFO SHORT (prioritaire)** :
-- [ ] Lancer WFO envelope_dca_short sur BTC/ETH/SOL (via Explorateur dashboard)
-- [ ] Analyser les résultats (grade, OOS Sharpe, consistency, heatmap)
-- [ ] Comparer LONG vs SHORT dans ResearchPage
-- [ ] Décision : enabled: true si Grade >= C
-
-**Phase B — Passage Live LONG (si paper trading validé)** :
-**Prérequis** : Paper trading envelope_dca cohérent (1-2 semaines observation).
-
-**Checklist** :
-- [ ] Paper trading cohérent (trades sur candles 1h fraîches, pas juste replay)
-- [ ] Pas de bugs critiques (SL placés, TP détectés, P&L cohérent)
-- [ ] Capital suffisant sur Bitget (minimum ~100-200 USDT pour des trades significatifs)
-- [ ] Monitoring étroit les premiers jours (alertes Telegram actives)
-
-**Actions** :
-- Ajouter du capital sur Bitget (minimum ~100-200 USDT pour des trades significatés)
-- `LIVE_TRADING=true` dans .env
-- `live_eligible: true` dans strategies.yaml (déjà fait pour LONG)
-- Redéployer avec deploy.sh (sans --clean pour garder le state paper)
-- Observer les premiers trades en live
-- Vérifier : ordres passés, SL placés, TP détectés, P&L cohérent
-
-**Scope** : ~1-2 sessions (WFO SHORT + surveillance live LONG si validé).
-
-### Sprint 17 — Monitoring DCA Live Amélioré
-**But** : Voir l'état du DCA en temps réel, pas juste les trades clôturés.
-
-**Frontend — Onglet "DCA" ou amélioration Scanner** :
-- Niveaux d'enveloppe actuels vs prix (déjà visible partiellement dans le Scanner)
-- Positions grid ouvertes avec P&L non réalisé (par niveau + global)
-- Historique des cycles complets (multi-niveaux → fermeture)
-- Graphique prix + enveloppes + points d'entrée/sortie (SVG ou canvas)
-- Temps moyen d'un cycle, fréquence par asset
-- Alertes visuelles : prix proche d'un niveau, SL proche
+### Sprint 16+17 — Dashboard Scanner amélioré + Monitoring DCA Live ✅
+**But** : Ajouter la visibilité grid DCA au Scanner et ActivePositions, sans casser l'architecture multi-stratégie.
 
 **Backend** :
-- Endpoint GET /api/simulator/grid-state?symbol= (niveaux, enveloppes, positions ouvertes)
-- WebSocket push : prix + enveloppes + positions en temps réel
 
-**Scope** : ~1 session.
+- [x] `Simulator.get_grid_state()` — état détaillé des grilles DCA actives avec P&L non réalisé
+- [x] `Simulator._get_current_price(symbol)` — fallback 1m → 5m → 1h si buffer vide
+- [x] Endpoint `GET /api/simulator/grid-state` — JSON complet grilles + summary
+- [x] WebSocket push `grid_state` via `/ws/live` (toutes les 3s)
+- [x] DataEngine batching anti-rate-limit : souscriptions par lots de 10 + 0.5s entre batchs
+- [x] Rate limit retry dans `_subscribe_klines()` : codes 30006/429, backoff 2s×n, max 3 retries
+- [x] Log throttle erreurs répétitives (3 warnings max par symbol)
+- [x] Fix warm-up compound sur état restauré : `restore_state()` garde warm-up actif, état appliqué à `_end_warmup()`
 
-**Dépendances** :
-- GridStrategyRunner expose grid_levels calculés
-- API endpoint grid-state
-- Frontend GridMonitor.jsx ou amélioration Scanner.jsx
+**Frontend** :
+
+- [x] Scanner : colonnes Grade (badge A-F coloré) + Grid (niveaux open/max) ajoutées, Score + Signaux conservées
+- [x] Scanner : tri positions-first (grids avec P&L desc), puis par score
+- [x] ActivePositions : `GridSummary` avec bandeau agrégé (N grids sur M assets, marge, P&L)
+- [x] ActivePositions : ligne par asset cliquable → détail dépliable (niveaux individuels)
+- [x] ActivePositions : fallback "En attente de données prix..." si `grid_state` absent
+- [x] CSS : classes `.grade-badge`, `.grid-cell`, `.grid-summary-banner`
+
+**Tests** : 727 tests (+13)
+
+- 3 tests endpoint `grid-state` (no simulator, empty, with data)
+- 8 tests logique métier `get_grid_state` (empty, positions, P&L long/short, multi-asset, fallback prix, TP/SL NaN)
+- 4 tests warm-up : `restore_state_keeps_warmup`, `restore_state_applied_after_warmup`, `warmup_ignores_restored_capital`, `restore_state_ignores_kill_switch`
+
+**Résultat** : Dashboard montre en temps réel les grilles DCA avec niveaux, P&L non réalisé, TP/SL distances, et grades WFO. Warm-up post-restore protégé contre le compound overflow.
 
 ### Sprint 18 — Multi-asset Live
 **But** : Déployer envelope_dca sur ETH, SOL (et potentiellement DOGE, LINK si grades OK après reoptimisation).
@@ -765,42 +746,22 @@ TERMINÉ                          EN COURS              À VENIR
 ═══════                          ════════              ═══════
 
 Phase 1: Infrastructure     ✅   Phase 5: Scaling      Phase 6: Production
-Phase 2: Validation         ✅   Sprint 16: Live       Phase 7: Avancé
-Phase 3: Paper/Live ready   ✅   Sprint 17: Monitoring
-Phase 4: Recherche          ✅   Sprint 18: Multi-asset
-Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
+Phase 2: Validation         ✅   Sprint 16+17: ✅      Phase 7: Avancé
+Phase 3: Paper/Live ready   ✅   Sprint 18: Multi-asset
+Phase 4: Recherche          ✅   Sprint 19: Nouvelles strats
 ```
 
 ---
 
 ## ÉTAT ACTUEL (15 février 2026)
 
-- **714 tests**, 0 régression
-- **15 sprints + hotfixes + Sprint 14c + 15b/15c/15d** complétés (Phase 1-4 terminées)
-- **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
+- **727 tests**, 0 régression
+- **Sprint 16+17 complété** (Phase 5 démarrée) — Dashboard Scanner + Monitoring DCA Live
+- **9 stratégies** : 4 scalp 5m + 3 swing 1h + 2 grid/DCA 1h
 - **21 assets évalués par WFO** : 3 Grade A (ETH, DOGE, SOL) + 18 Grade B + 2 Grade D exclus (BTC, BNB)
-- **1 stratégie SHORT prête pour WFO** : envelope_dca_short (enabled: false, validation WFO en attente)
 - **Paper trading actif** : envelope_dca sur 21 assets (prod déployée)
-- **Hotfix P&L overflow** : margin accounting + realized_pnl tracking dans GridStrategyRunner
-- **Hotfix warm-up overflow** : capital fixe pendant warm-up (pas de compound sur candles historiques), warm-up plafonné à 200 candles, reset auto capital/stats en fin de warm-up
-- **Nettoyage tests** : registry centralisé dans test_strategy_registry.py (41 tests paramétrés), fixture make_indicator_cache dans conftest.py, fix schéma DB test fixture, suppression ~28 doublons (662→679 tests)
-- **Executor Grid prêt** : LIVE_TRADING=false, à activer après validation paper
-- **Explorateur WFO** : lance des optimisations depuis le dashboard, heatmap 2D 100% dense (324 combos), charts analytiques, **diagnostic automatique en langage clair (6 règles)**
-- **Sprint 15b** : Analyse par régime de marché (Bull/Bear/Range/Crash) par fenêtre OOS, agrégation par régime dans DiagnosticPanel, conclusion automatique
-- **Hotfix exchange** : WFO lit l'exchange depuis la config principale (`exchanges.yaml`) au lieu d'un hardcode "binance" dans `param_grids.yaml`
-- **Hotfix Explorer heatmap** : push serveur parasite (SYNC bidirectionnel accidentel) volait `is_latest` avec des runs à 2 combos → 3 couches de protection (POST endpoint, API results, frontend auto-sélection)
-- **Backfill Binance** : `scripts/backfill_candles.py` — télécharge candles via API publique Binance (httpx, sans clé API), idempotent, reprise incrémentale, retry 3× backoff. WFO default exchange = "binance" (suppression `_detect_best_exchange`)
-- **Kill switch grid/DCA désactivé** : les pertes temporaires DCA sont normales, protection via SL individuel serveur (682 tests)
-- **Kill switch global Simulator** : drawdown 30% sur fenêtre glissante 24h, coupe tous les runners (y compris grid/DCA), alerte Telegram, persisté dans state, grace period 1h post-warmup
-- **Fix grading + diagnostic** : sélection best combo par score composite `sharpe × (0.4 + 0.6×consistency) × trade_factor` au lieu du median params, seuils OOS/IS rehaussés (0.3→0.5 pour rouge), regime_analysis sur combo représentatif, extraction diagnosticUtils.js, ExportButton diagnostic, TOP 5 combos dans CLI (695 tests)
-- **Fix grading pipeline** : métriques WFO (oos_is_ratio, consistency, avg_oos) reflètent le best combo, MC + DSR reçoivent OOS Sharpe (pas IS), debug breakdown compute_grade, seuil trades 50→100 (698 tests)
-- **Consistance dans le grade** : 20 pts sur 100 pour la consistance WFO, Top 5 trié par combo_score (705 tests)
-- **Bouton Apply + auto-add assets** : `POST /api/optimization/apply` applique les params Grade A/B dans strategies.yaml depuis le dashboard, auto-ajoute les assets manquants dans assets.yaml via ccxt Bitget (707 tests)
-- **fetch_history --symbols** : flag `--symbols ADA/USDT,AVAX/USDT` pour bypasser assets.yaml
-- **Capital configurable** : `initial_capital` dans risk.yaml (default 10k), lu par LiveStrategyRunner et GridStrategyRunner (714 tests)
-- **Position sizing proportionnel** : `capital / nb_assets / levels` empêche le dépassement de marge avec 21+ assets simultanés. `nb_assets` = len(per_asset) ou len(config.assets)
-- **Equal risk per trade** : marge ajustée au SL de chaque asset (`margin = risk_budget / sl_pct`), garde-fou 25% du capital max par asset. Perte max identique (~119$/position pour 10k/21 assets/4 niveaux) quel que soit le SL
-- **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
+- **Sprint 16+17** : Scanner avec colonnes Grade (A-F) + Grid (niveaux/max), ActivePositions avec GridSummary (P&L non réalisé, marge, TP/SL distances), endpoint `GET /api/simulator/grid-state`, WS push 3s, DataEngine batching anti-rate-limit, fix warm-up compound post-restore
+- **Prochaine étape** : Sprint 18 (Multi-asset Live) ou WFO envelope_dca_short
 
 ---
 

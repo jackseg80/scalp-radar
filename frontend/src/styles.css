@@ -684,3 +684,37 @@ tr:last-child td { border-bottom: none; }
   text-align: center;
   font-size: 12px;
 }
+
+/* --- Grade badges (Scanner + Research) --- */
+.grade-badge { padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 11px; display: inline-block; }
+.grade-A { background: #22c55e; color: white; }
+.grade-B { background: #3b82f6; color: white; }
+.grade-C { background: #eab308; color: white; }
+.grade-D { background: #ef4444; color: white; }
+.grade-F { background: #6b7280; color: white; }
+
+/* --- Grid cell (Scanner) --- */
+.grid-cell { font-weight: 600; font-size: 13px; font-family: var(--font-mono); }
+.grid-cell--profit { color: var(--accent); }
+.grid-cell--loss { color: var(--red); }
+.grid-cell--empty { color: var(--text-dim); font-weight: 400; }
+
+/* --- Grid summary (ActivePositions) --- */
+.grid-summary-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.grid-detail-row {
+  padding-left: 24px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.grid-detail-row .active-position-item {
+  font-size: 11px;
+  padding: 2px 0;
+}
