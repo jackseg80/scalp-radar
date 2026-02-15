@@ -43,7 +43,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (770 passants) |
+| Testing            | pytest            | Critical components must have unit tests (774 passants) |
 
 ## Key Architecture Principles
 
@@ -70,7 +70,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (28 components: Scanner, Heatmap, Explorer, Research, Diagnostic, etc.)
-├── tests/                        # 772 tests (pytest, 43 fichiers)
+├── tests/                        # 774 tests (pytest, 43 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
 └── docs/plans/                   # Sprint plans 1-19 archivés
 ```
@@ -92,9 +92,9 @@ scalp-radar/
 
 ### 1h Grid/DCA (3)
 
-1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: true`, paper trading actif)
+1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: false`, remplacé par grid_atr)
 2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
-3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: false`, WFO en attente)
+3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: true`, paper trading actif sur 21 assets — 14 Grade A, 7 Grade B)
 
 ## Multi-Strategy Arena
 
@@ -147,13 +147,13 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 - `assets.yaml` — 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
 - `strategies.yaml` — 10 stratégies + custom + per_asset overrides
-- `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross
+- `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
 - `param_grids.yaml` — Espaces de recherche WFO + per-strategy config (is_days, oos_days, step_days)
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19) : 772 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a) : 774 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -197,6 +197,10 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix sizing : capital configurable (`risk.yaml initial_capital`), position sizing proportionnel (`capital / nb_assets / levels`), equal risk per trade (`margin = risk_budget / sl_pct`, cap 25%) (714 tests)
 - Sprint 16+17 : Dashboard Scanner (colonnes Grade + Grid), ActivePositions GridSummary, endpoint `GET /api/simulator/grid-state`, WS push grid_state 3s, DataEngine batching anti-rate-limit (30006), fix warm-up compound post-restore (727 tests)
 - Sprint 19 : Stratégie Grid ATR (10e stratégie, enveloppes ATR adaptatives, fast engine, 3240 combos WFO, 37 tests) (772 tests)
+- Sprint 19b : wfo_combo_results grid_atr (collecte dense 3240 combos, heatmap + scatter + distribution)
+- Sprint 19c : Régimes de marché grid_atr + fix warning trades insuffisants
+- Sprint 19d : Grading Bitget transfer 3 paliers + guard bitget_trades < 15 + fix or-on-float (772 tests)
+- Sprint 20a : Sizing equal allocation (`capital/nb_assets/levels`) + margin guard 70% (`max_margin_ratio`), Scanner grade fix (774 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 
@@ -213,9 +217,9 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Bollinger TP dynamique (SMA crossing dans `check_exit()`, pas prix fixe)
 - SuperTrend pré-calculé (boucle itérative, ~5ms/48k pts)
 
-**Grid/DCA (Sprint 10-12) :**
+**Grid/DCA (Sprint 10-12, 20a) :**
 - BaseGridStrategy hérite BaseStrategy (compatibilité Arena/Simulator/Dashboard)
-- Equal risk sizing : `margin = risk_budget / sl_pct`, cap 25% du capital par asset, `risk_budget = capital / nb_assets / levels`
+- Equal allocation sizing : `margin = capital / nb_assets / levels`, cap 25% du capital par asset, margin guard 70% (`max_margin_ratio` dans risk.yaml)
 - TP/SL global (pas par position), SMA dynamic TP
 - Un seul côté actif (positions LONG → pas niveaux SHORT simultanés)
 - Enveloppes asymétriques : `upper = 1/(1-lower) - 1` (aller-retour cohérent)

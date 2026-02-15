@@ -601,9 +601,11 @@ Système automatisé de trading crypto qui :
 | Sprint | Contenu | Status |
 |--------|---------|--------|
 | 16+17 | Dashboard Scanner + Monitoring DCA Live | ✅ |
-| 18 | Multi-asset Live (envelope_dca ETH, SOL, DOGE, LINK) | Planifié |
+| 18 | ~~Multi-asset Live envelope_dca~~ — Superseded par grid_atr | ⏭️ Superseded |
 | 19 | Stratégie Grid ATR (10e stratégie, fast engine, 3240 combos WFO) | ✅ |
-| 20 | Nouvelles stratégies Grid + factorisation fast engine | Planifié |
+| 20a | Sizing equal allocation + margin guard 70% | ✅ |
+| 20b | Backtest portfolio (multi-stratégie, corrélations) | Planifié |
+| 20c | Factorisation fast engine (`_simulate_grid_common`) | Planifié |
 
 ### Sprint 16+17 — Dashboard Scanner amélioré + Monitoring DCA Live ✅
 **But** : Ajouter la visibilité grid DCA au Scanner et ActivePositions, sans casser l'architecture multi-stratégie.
@@ -676,7 +678,23 @@ Système automatisé de trading crypto qui :
 - `build_cache` `atr_by_period` n'est peuplé que pour les stratégies qui le demandent → ajouter `"grid_atr"` à la condition
 - Données sinusoïdales (`100 + 8*sin(2π*i/48)`) génèrent un ATR réaliste pour les tests de parité
 
-**Dette technique** : factoriser `_simulate_grid_common()` (Sprint 20) — `_simulate_envelope_dca` et `_simulate_grid_atr` partagent ~80% du code
+**Dette technique** : factoriser `_simulate_grid_common()` (Sprint 20c) — `_simulate_envelope_dca` et `_simulate_grid_atr` partagent ~80% du code
+
+**WFO grid_atr 21 assets — Résultats** :
+
+| Asset | Grade | Score | Sharpe | Consist. |
+| ----- | ----- | ----- | ------ | -------- |
+| 14 assets | A | 85-100 | 4.5-12+ | 75-100% |
+| 7 assets | B | 71-84 | 3.5-8 | 60-80% |
+
+- **0 Grade D/F** — grid_atr a un edge structurel supérieur à envelope_dca
+- grid_atr remplace envelope_dca comme stratégie principale (paper trading 21 assets)
+
+**Hotfixes Sprint 19b/19c/19d** :
+
+- **Sprint 19b** : `wfo_combo_results` pour grid_atr — collecte dense (3240 combos), heatmap + scatter + distribution fonctionnels
+- **Sprint 19c** : régimes de marché grid_atr + fix warning trades insuffisants
+- **Sprint 19d** : grading Bitget transfer 3 paliers (`>0.50 + significant` → 15 pts, `>0.50` → 10 pts, `>0.30` → 5 pts) + guard `bitget_trades < 15` → cap 8 pts + fix or-on-float
 
 ### Sprint 20a — Sizing Equal Allocation + Margin Guard ✅
 **But** : Remplacer le sizing "equal risk" (`risk_budget / sl_pct`) par "equal allocation" (`capital / nb_assets / levels`) + margin guard global.
@@ -689,28 +707,17 @@ Système automatisé de trading crypto qui :
 - Margin guard global : `max_margin_ratio: 0.70` dans `risk.yaml` — impossible de dépasser 70% du capital en marge simultanée
 - Champ `max_margin_ratio` dans `RiskConfig` (Pydantic, validé 0.1-1.0, default 0.70)
 - Guard MagicMock-safe (`isinstance` check) pour les tests avec MagicMock config
+- Scanner grade fix : prioriser le meilleur grade, pas envelope_dca hardcodé
+
+**Résultat** : Marge totale réduite de 4.9× à 0.38× du capital. Plus aucun dépassement possible grâce au guard 70%.
 
 **Tests** : 4 mis à jour + 2 nouveaux (margin guard blocks, total margin ≤ 70%) → 774 tests
 
 **Non touché** : fast engine WFO (déjà equal allocation), executor (reçoit quantity du Simulator), GridPositionManager, grades existants
 
-### Sprint 18 — Multi-asset Live
-**But** : Déployer envelope_dca sur ETH, SOL (et potentiellement DOGE, LINK si grades OK après reoptimisation).
+### Sprint 18 — ~~Multi-asset Live~~ Superseded ⏭️
 
-**Prérequis** : Paper trading validé sur BTC, capital suffisant pour 2-3 assets.
-
-**Actions** :
-- Reoptimiser par asset si nécessaire (params différents par crypto)
-- Config per_asset dans strategies.yaml (déjà prévu)
-- Capital allocation : répartition fixe ou proportionnelle au grade
-- Gestion des corrélations (pas tout LONG en même temps sur BTC+ETH)
-- Activer les assets un par un (observer 1-2 jours entre chaque)
-
-**Scope** : ~1 session (config) + surveillance échelonnée.
-
-**Questions** :
-- Capital allocation : fixe (ex: 100$ par asset) ou proportionnelle au grade (ex: Grade B = 200$, Grade C = 100$) ?
-- Corrélation groups : max_concurrent_same_direction = 2 sur crypto_major (BTC/ETH/SOL) ?
+**Superseded** — grid_atr a remplacé envelope_dca comme stratégie principale. Le déploiement multi-asset se fait directement via grid_atr (21 assets en paper trading dès Sprint 19).
 
 ### Sprint 20 — Nouvelles Stratégies Grid
 **But** : Développer d'autres stratégies qui utilisent le moteur multi-position.
@@ -813,9 +820,10 @@ TERMINÉ                          EN COURS              À VENIR
 
 Phase 1: Infrastructure     ✅   Phase 5: Scaling      Phase 6: Production
 Phase 2: Validation         ✅   Sprint 16+17: ✅      Phase 7: Avancé
-Phase 3: Paper/Live ready   ✅   Sprint 18: Multi-asset
-Phase 4: Recherche          ✅   Sprint 19: Grid ATR ✅
-                                 Sprint 20a: Sizing ✅
+Phase 3: Paper/Live ready   ✅   Sprint 19: Grid ATR ✅
+Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
+                                 Sprint 20b: Portfolio
+                                 Sprint 20c: Factorisation
 ```
 
 ---
@@ -825,11 +833,10 @@ Phase 4: Recherche          ✅   Sprint 19: Grid ATR ✅
 - **774 tests**, 0 régression
 - **Sprint 20a complété** (Phase 5 en cours) — Sizing equal allocation + margin guard
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
-- **21 assets évalués par WFO** : 3 Grade A (ETH, DOGE, SOL) + 18 Grade B + 2 Grade D exclus (BTC, BNB)
-- **Paper trading actif** : envelope_dca sur 21 assets (prod déployée)
-- **Sizing** : equal allocation (`capital/nb_assets/levels`) + margin guard 70% — plus de dépassement de capital
-- **Grid ATR** : pipeline WFO complet prêt (3240 combos), fast engine vérifié, `enabled: false` (attente WFO)
-- **Prochaine étape** : WFO grid_atr sur les 21 assets, Sprint 18 (Multi-asset Live), ou Sprint 20 (nouvelles strats + factorisation)
+- **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
+- **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
+- **Sizing** : equal allocation (`capital/nb_assets/levels`) + margin guard 70% (`max_margin_ratio` dans risk.yaml) — marge réduite de 4.9× à 0.38× du capital
+- **Prochaine étape** : Sprint 20c (factorisation fast engine) puis Sprint 20b (backtest portfolio)
 
 ---
 
