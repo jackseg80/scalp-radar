@@ -18,6 +18,8 @@ and presents results via a real-time dashboard.
   - **IMPORTANT pour Claude Code** : Mettre à jour ce fichier après chaque plan de sprint complété
   - Ajouter les résultats, leçons apprises, bugs corrigés dans la section du sprint concerné
   - Mettre à jour "ÉTAT ACTUEL" avec le nouveau nombre de tests et la prochaine étape
+  - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI, requêtes DB, déploiement, méthodologie
+  - **IMPORTANT pour Claude Code** : Consulter ce fichier avant de proposer des commandes
 
 ## Developer Profile
 
