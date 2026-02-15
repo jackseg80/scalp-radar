@@ -204,6 +204,10 @@ export function analyzeRegimes(regimeAnalysis) {
   const regimes = Object.keys(regimeAnalysis)
   if (regimes.length === 0) return null
 
+  const ALL_REGIMES = ['crash', 'bull', 'range', 'bear']
+  const nTested = regimes.length
+  const missing = ALL_REGIMES.filter((r) => !regimes.includes(r))
+
   // Identifier les régimes faibles (Sharpe < 0 ou consistance < 0.3)
   const weakRegimes = regimes.filter((r) => {
     const d = regimeAnalysis[r]
@@ -216,23 +220,54 @@ export function analyzeRegimes(regimeAnalysis) {
     return d.avg_oos_sharpe > 0.5 && d.consistency > 0.5
   })
 
-  if (weakRegimes.length === 0 && strongRegimes.length === regimes.length) {
-    return {
-      level: 'green',
-      title: 'Robuste tous régimes',
-      text: `Performante dans tous les régimes de marché testés (${regimes.join(', ')}).`,
-    }
-  }
-
-  if (weakRegimes.length > 0) {
-    const weakNames = weakRegimes.join(', ')
-    if (weakRegimes.includes('crash')) {
+  // Régimes avec Sharpe négatif — prioritaire
+  const negSharpe = regimes.filter((r) => regimeAnalysis[r].avg_oos_sharpe < 0)
+  if (negSharpe.length > 0) {
+    const names = negSharpe.join(', ')
+    if (negSharpe.includes('crash')) {
       return {
         level: 'red',
         title: 'Vulnérable aux crashs',
-        text: `La stratégie sous-performe en régime ${weakNames}. Risque élevé en conditions extrêmes.`,
+        text: `La stratégie sous-performe en régime ${names}. Risque élevé en conditions extrêmes.`,
       }
     }
+    return {
+      level: 'red',
+      title: `Faible en ${names}`,
+      text: `Sharpe négatif en régime ${names}. La stratégie sous-performe dans ${negSharpe.length === 1 ? 'ce régime' : 'ces régimes'}.`,
+    }
+  }
+
+  // 4/4 régimes testés + tous forts
+  if (nTested === 4 && weakRegimes.length === 0 && strongRegimes.length === regimes.length) {
+    return {
+      level: 'green',
+      title: 'Robuste tous régimes',
+      text: `Performante dans les 4 régimes de marché testés (${regimes.join(', ')}).`,
+    }
+  }
+
+  // 3/4 régimes testés + tous positifs
+  if (nTested === 3 && weakRegimes.length === 0) {
+    return {
+      level: 'green',
+      title: 'Robuste (3/4 régimes)',
+      text: `Performante dans les 3 régimes testés. ${missing.join(', ')} non couvert dans les données.`,
+    }
+  }
+
+  // Couverture partielle (1/4 ou 2/4)
+  if (nTested <= 2 && weakRegimes.length === 0) {
+    return {
+      level: 'orange',
+      title: 'Couverture partielle',
+      text: `Testé sur ${nTested}/4 régimes seulement (${missing.join(', ')} non couverts). Résultats non validés en conditions de ${missing.join(', ')}.`,
+    }
+  }
+
+  // Faibles (consistance < 0.3 mais Sharpe >= 0)
+  if (weakRegimes.length > 0) {
+    const weakNames = weakRegimes.join(', ')
     return {
       level: 'orange',
       title: 'Dépendante du régime',

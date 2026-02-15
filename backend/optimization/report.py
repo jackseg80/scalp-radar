@@ -630,6 +630,7 @@ def build_final_report(
     wfo: WFOResult,
     overfit: OverfitReport,
     validation: ValidationResult,
+    regime_analysis: dict | None = None,
 ) -> FinalReport:
     """Construit le rapport final à partir des résultats WFO, overfitting, validation."""
     convergence_score = (
@@ -687,6 +688,52 @@ def build_final_report(
         warnings.append(
             f"DSR faible ({overfit.dsr.dsr:.2f}) — risque de data mining"
         )
+
+    # --- Diagnostic régimes incomplets ---
+    ALL_REGIMES = {"crash", "bull", "range", "bear"}
+    if regime_analysis:
+        tested = set(regime_analysis.keys())
+        missing = ALL_REGIMES - tested
+        n_tested = len(tested)
+        weak = [
+            r for r, d in regime_analysis.items()
+            if d.get("avg_oos_sharpe", 0) < 0
+        ]
+
+        if weak:
+            warnings.append(
+                f"Faible en {', '.join(weak)} — Sharpe négatif dans "
+                f"{'ce régime' if len(weak) == 1 else 'ces régimes'}"
+            )
+        if n_tested == 4 and not weak:
+            pass  # Robuste tous régimes — pas de warning
+        elif n_tested == 3 and not weak:
+            missing_names = ", ".join(sorted(missing))
+            warnings.append(
+                f"Couverture régimes 3/4 — {missing_names} non couvert dans les données"
+            )
+        elif n_tested <= 2:
+            missing_names = ", ".join(sorted(missing))
+            warnings.append(
+                f"Couverture partielle — testé sur {n_tested}/4 régimes seulement "
+                f"({missing_names} non couverts)"
+            )
+
+    # --- Diagnostic trades par fenêtre OOS ---
+    n_windows = len(wfo.windows)
+    if n_windows > 0:
+        total_oos_trades = sum(w.oos_trades for w in wfo.windows)
+        avg_trades = total_oos_trades / n_windows
+        if avg_trades < 5:
+            warnings.append(
+                f"Volume faible — moyenne de {avg_trades:.1f} trades/fenêtre OOS. "
+                f"Significativité statistique limitée"
+            )
+        elif avg_trades < 10:
+            warnings.append(
+                f"Volume modéré — moyenne de {avg_trades:.1f} trades/fenêtre OOS. "
+                f"Résultats à confirmer avec plus de données"
+            )
 
     return FinalReport(
         strategy_name=wfo.strategy_name,

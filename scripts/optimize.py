@@ -344,7 +344,7 @@ async def run_optimization(
         progress_callback(95.0, "Validation Bitget terminée")
 
     # Build report
-    report = build_final_report(wfo, overfit, validation)
+    report = build_final_report(wfo, overfit, validation, regime_analysis=wfo.regime_analysis)
 
     # Sérialiser les windows pour la DB
     windows_serialized = [
