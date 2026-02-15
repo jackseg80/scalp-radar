@@ -41,7 +41,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (689 passants) |
+| Testing            | pytest            | Critical components must have unit tests (707 passants) |
 
 ## Key Architecture Principles
 
@@ -68,9 +68,9 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (28 components: Scanner, Heatmap, Explorer, Research, Diagnostic, etc.)
-├── tests/                        # 698 tests (pytest, 42 fichiers)
+├── tests/                        # 707 tests (pytest, 42 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
-└── docs/plans/                   # Sprint plans 1-15 archivés
+└── docs/plans/                   # Sprint plans 1-15d archivés
 ```
 
 ## Trading Strategies (9 implémentées)
@@ -142,7 +142,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## Config Files (5 YAML)
 
-- `assets.yaml` — 5 assets (BTC, ETH, SOL, DOGE, LINK), timeframes [1m, 5m, 15m, 1h], groupes corrélation
+- `assets.yaml` — 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
 - `strategies.yaml` — 9 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
@@ -150,7 +150,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15b + hotfixes) : 698 tests passants**
+**Sprints complétés (1-15d + hotfixes) : 707 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -189,6 +189,8 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix : Kill switch grid/DCA désactivé (pertes temporaires normales) + Kill switch global Simulator (drawdown 30%/24h, grace period warm-up, alerte Telegram, persisté dans state) (689 tests)
 - Fix grading : best combo par score composite (consistance + volume), seuils OOS/IS rehaussés, extraction diagnosticUtils.js, ExportButton, TOP 5 CLI (695 tests)
 - Fix grading : métriques WFO reflètent le best combo (pas les médianes fenêtre), MC + DSR reçoivent OOS Sharpe (pas IS), debug breakdown compute_grade, seuil trades 50→100 (698 tests)
+- Sprint 15c : MC observed_sharpe IS→OOS fix, combo_score seuil 100 trades, garde-fou <30 trades → max C, grille étendue 0.05-0.15, DB purgée (698 tests)
+- Sprint 15d : Consistance dans le grade (20 pts/100), Top 5 trié par combo_score, fetch 18 nouvelles paires Binance, WFO 23 assets (21 Grade A/B), `--apply` auto per_asset, auto-add assets.yaml via ccxt, bouton "Appliquer A/B" frontend (707 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 
@@ -255,7 +257,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Heatmap responsive : ResizeObserver + cellSize 60-300px + flexbox centering
 - 6 endpoints API : run, jobs (liste), jobs/{id}, cancel, param-grid, heatmap
 
-**Sync WFO (NEW) :**
+**Grading 6 critères (Sprint 15c/15d) :**
+- 6 critères : OOS/IS ratio (20 pts), Monte Carlo (20 pts), Consistance (20 pts), DSR (15 pts), Stabilité (10 pts), Bitget transfer (15 pts)
+- combo_score : `sharpe × (0.4 + 0.6×consistency) × min(1, trades/100)` — sélection best combo WFO
+- Garde-fous : < 30 trades → grade max C, < 50 trades → grade max B
+- Bouton "Appliquer A/B" frontend : `POST /api/optimization/apply` → per_asset strategies.yaml + auto-add assets.yaml via ccxt
+- `fetch_history.py --symbols` : bypass assets.yaml pour télécharger des paires spécifiques
+
+**Sync WFO :**
 
 - Push automatique après chaque run local : `save_report()` → `push_to_server()` (best-effort)
 - Transaction sûre : INSERT OR IGNORE d'abord, UPDATE is_latest seulement si inséré
@@ -297,4 +306,4 @@ Windows (VSCode)                    Linux Server (192.168.1.200)
 - Bitget API docs: <https://www.bitget.com/api-doc/>
 - ccxt Bitget: <https://docs.ccxt.com/#/exchanges/bitget>
 - Frontend prototype: `docs/prototypes/Scalp radar v2.jsx` (référence design)
-- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-15 archivés)
+- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-15d archivés)

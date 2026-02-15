@@ -121,6 +121,9 @@ Système automatisé de trading crypto qui :
 | 14b    | Heatmap dense + Charts analytiques + Tooltips           | ✅           |
 | 14c    | DiagnosticPanel (Analyse intelligente WFO)              | ✅           |
 | 15     | Stratégie Envelope DCA SHORT (miroir LONG)              | ✅           |
+| 15b    | Analyse par régime de marché (Bull/Bear/Range/Crash)    | ✅           |
+| 15c    | Fix grading MC IS→OOS, combo_score 100 trades, purge DB | ✅           |
+| 15d    | Consistance grade, 18 paires, Apply A/B, 21 assets      | ✅           |
 
 ### Sprint 13 — Résultats WFO en DB + Dashboard Visualisation ✅
 
@@ -520,6 +523,77 @@ Système automatisé de trading crypto qui :
 - `is_latest` est fragile — un push externe peut le voler silencieusement
 - Défense en profondeur : 3 couches (backend POST, backend API, frontend) pour que le même bug ne puisse plus casser la heatmap
 
+### Sprint 15c — Fix Grading MC + combo_score ✅
+
+**But** : Corriger les bugs critiques dans le pipeline de grading qui faussaient les grades.
+
+**Corrections** :
+
+1. **MC observed_sharpe IS→OOS** : le Monte Carlo comparait les shuffles OOS au Sharpe IS au lieu du Sharpe OOS → DOGE passé de Grade C à A
+2. **combo_score seuil 50→100 trades** : `min(1, trades/100)` pour pénaliser les combos à faible volume (ETH sélectionne 111 trades au lieu de 39)
+3. **Garde-fou < 30 trades → Grade max C** : empêche les faux positifs (BTC avec 6 trades ne peut plus être Grade A)
+4. **Grille étendue 0.05-0.15** : confirmé que 0.05 est l'optimum, pas un artefact de borne
+5. **DB purgée** : résultats recalculés avec le bon grading
+
+**Tests** : 698 passants (0 régression)
+
+### Sprint 15d — Consistance + Diversification 21 Assets ✅
+
+**But** : Intégrer la consistance dans le grade, diversifier sur 18 nouvelles paires, automatiser le déploiement.
+
+**Implémenté** :
+
+**Grading — Consistance (20 pts/100)** :
+
+- 6 critères au lieu de 5 : OOS/IS (20), MC (20), Consistance (20), DSR (15), Stabilité (10), Bitget transfer (15)
+- ETH passe de 100/100 à 88/100 (68% consistance)
+- Top 5 trié par combo_score (le #1 = le best combo sélectionné)
+
+**Diversification — 18 nouvelles paires** :
+
+- `fetch_history.py --symbols` : flag pour bypasser assets.yaml
+- 717k candles Binance téléchargées (ADA, APE, AR, AVAX, BNB, CRV, DYDX, ENJ, FET, GALA, ICP, IMX, NEAR, SAND, SUSHI, THETA, UNI, XTZ)
+- WFO sur 23 assets : 3 Grade A (ETH, DOGE, SOL) + 18 Grade B + 2 Grade D (BTC, BNB)
+- THETA Grade B mais WebSocket Bitget refuse l'abonnement → commenté dans assets.yaml
+
+**Automatisation Apply** :
+
+- `optimize.py --apply` : écrit les per_asset dans strategies.yaml depuis la DB
+- `apply_from_db()` : auto-ajoute les assets manquants dans assets.yaml avec specs Bitget via ccxt
+- Bouton "Appliquer A/B" frontend : `POST /api/optimization/apply` → un clic = per_asset + assets.yaml mis à jour
+
+**Déploiement prod** : 21 assets en paper trading live, pas de kill switch
+
+**Tests** : 707 passants (+9 depuis Sprint 15c)
+
+**Résultats finaux — 23 assets évalués** :
+
+| Asset | Grade | Score | Sharpe | Consist. |
+| ----- | ----- | ----- | ------ | -------- |
+| ETH   | A     | 88    | 5.43   | 68%      |
+| DOGE  | A     | 85    | 6.90   | 97%      |
+| SOL   | A     | 85    | 9.02   | 92%      |
+| LINK  | B     | 81    | 5.61   | 80%      |
+| UNI   | B     | 81    | 8.06   | 80%      |
+| APE   | B     | 81    | 5.24   | 85%      |
+| SAND  | B     | 81    | 6.19   | 88%      |
+| AR    | B     | 81    | 7.52   | 85%      |
+| NEAR  | B     | 81    | 6.99   | 89%      |
+| DYDX  | B     | 81    | 8.25   | 80%      |
+| CRV   | B     | 81    | 6.90   | 88%      |
+| IMX   | B     | 81    | 6.23   | 86%      |
+| FET   | B     | 81    | 6.29   | 87%      |
+| AVAX  | B     | 78    | 8.50   | 82%      |
+| SUSHI | B     | 78    | 5.19   | 81%      |
+| GALA  | B     | 77    | 7.52   | 78%      |
+| ENJ   | B     | 74    | 11.43  | 75%      |
+| ADA   | B     | 73    | 9.46   | 69%      |
+| THETA | B     | 73    | 6.43   | 62%      |
+| ICP   | B     | 71    | 9.25   | 82%      |
+| XTZ   | B     | 71    | 4.98   | 73%      |
+| BNB   | D     | 50    | 3.47   | 46%      |
+| BTC   | D     | 47    | 3.20   | 40%      |
+
 ---
 
 ## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19) ← ON EST ICI
@@ -702,11 +776,11 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 ## ÉTAT ACTUEL (15 février 2026)
 
 - **707 tests**, 0 régression
-- **15 sprints + 1 hotfix + Sprint 14c + Sprint 15b** complétés (Phase 1-4 terminées)
+- **15 sprints + hotfixes + Sprint 14c + 15b/15c/15d** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
-- **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
+- **21 assets évalués par WFO** : 3 Grade A (ETH, DOGE, SOL) + 18 Grade B + 2 Grade D exclus (BTC, BNB)
 - **1 stratégie SHORT prête pour WFO** : envelope_dca_short (enabled: false, validation WFO en attente)
-- **Paper trading actif** : envelope_dca sur 5 assets (+101.76% en 20 trades, 70% win rate)
+- **Paper trading actif** : envelope_dca sur 21 assets (prod déployée)
 - **Hotfix P&L overflow** : margin accounting + realized_pnl tracking dans GridStrategyRunner
 - **Hotfix warm-up overflow** : capital fixe pendant warm-up (pas de compound sur candles historiques), warm-up plafonné à 200 candles, reset auto capital/stats en fin de warm-up
 - **Nettoyage tests** : registry centralisé dans test_strategy_registry.py (41 tests paramétrés), fixture make_indicator_cache dans conftest.py, fix schéma DB test fixture, suppression ~28 doublons (662→679 tests)
@@ -761,7 +835,7 @@ Chaque import dans un worker coûte ~200MB. Utiliser `math.erf` à la place pour
 config/
   strategies.yaml     # Params par stratégie (envelope_dca enabled, les 7 autres disabled)
   param_grids.yaml    # Grilles de recherche WFO (324 combos envelope_dca)
-  assets.yaml         # 5 assets (BTC, ETH, SOL, DOGE, LINK)
+  assets.yaml         # 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins)
   risk.yaml           # Kill switch, leverage, fees, adaptive selector
   exchanges.yaml      # Bitget WebSocket, rate limits, API config
 
@@ -789,39 +863,48 @@ scripts/
   migrate_optimization.py # Import résultats JSON → DB (Sprint 13)
 
 data/                 # SQLite DB + reports JSON (gitignored)
-docs/plans/          # 16 sprint plans (1-12 + hotfix)
+docs/plans/          # 26 sprint plans (1-15d + hotfixes)
 ```
 
 ---
 
 ## MÉTRIQUES CLÉ (WFO Grading)
 
-**5 critères pondérés (score 0-100 → Grade A-F)** :
+**6 critères pondérés (score 0-100 → Grade A-F)** :
 
-1. **OOS Sharpe Ratio** (25 pts) : performance ajustée au risque OOS
-   - < 0 → 0 pts
-   - 0-2 → linéaire 0-15 pts
-   - 2-5 → linéaire 15-25 pts
-   - > 5 → 25 pts
-
-2. **Consistance** (25 pts) : % fenêtres OOS positives
-   - < 50% → 0 pts
-   - 50-100% → linéaire 0-25 pts
-
-3. **OOS/IS Ratio** (20 pts) : robustesse (pas d'overfitting)
-   - < 0.3 → 0 pts
-   - 0.3-1.0 → linéaire 0-20 pts
+1. **OOS/IS Ratio** (20 pts) : robustesse (pas d'overfitting)
+   - < 0.5 → 0 pts (rouge)
+   - 0.5-1.0 → linéaire 0-20 pts
    - > 1.0 → 20 pts
+
+2. **Monte Carlo** (20 pts) : significativité statistique (p-value)
+   - p > 0.10 → 0 pts
+   - p 0.05-0.10 → 10 pts
+   - p < 0.05 → 20 pts
+   - Underpowered (< 30 trades) → 12 pts (bonus partiel)
+
+3. **Consistance** (20 pts) : % fenêtres OOS positives
+   - < 50% → 0 pts
+   - 50-100% → linéaire 0-20 pts
 
 4. **DSR (Deflated Sharpe Ratio)** (15 pts) : correction multiple testing bias
    - < 0.5 → 0 pts
    - 0.5-1.0 → linéaire 0-15 pts
    - > 1.0 → 15 pts
 
-5. **Stabilité** (15 pts) : variance des perturbations ±10/20%
-   - variance < 0.1 → 15 pts
-   - 0.1-1.0 → linéaire 15-5 pts
+5. **Stabilité** (10 pts) : variance des perturbations ±10/20%
+   - variance < 0.1 → 10 pts
+   - 0.1-1.0 → linéaire 10-3 pts
    - > 1.0 → 0 pts
+
+6. **Bitget Transfer** (15 pts) : ratio performance Binance OOS → Bitget validation
+   - < 0.3 → 0 pts
+   - 0.3-1.0 → linéaire 0-15 pts
+   - > 1.0 → 15 pts
+
+**Sélection best combo** : `combo_score = sharpe × (0.4 + 0.6×consistency) × min(1, trades/100)`
+
+**Garde-fous** : < 30 trades → grade max C, < 50 trades → grade max B
 
 **Grades** :
 - A : 90-100 (excellent, prêt pour le live)
@@ -836,7 +919,7 @@ docs/plans/          # 16 sprint plans (1-12 + hotfix)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 689 passants, 0 régression
+- **Tests** : 707 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
