@@ -169,7 +169,7 @@ class LiveStrategyRunner:
         self._data_engine = data_engine
         self._db_path = db_path
 
-        self._initial_capital = 10_000.0
+        self._initial_capital = config.risk.initial_capital
         self._capital = self._initial_capital
         self._position: OpenPosition | None = None
         self._position_symbol: str | None = None
@@ -517,7 +517,7 @@ class GridStrategyRunner:
         self._data_engine = data_engine
         self._db_path = db_path
 
-        self._initial_capital = 10_000.0
+        self._initial_capital = config.risk.initial_capital
         self._capital = self._initial_capital
         self._realized_pnl = 0.0  # P&L réalisé (trades clôturés uniquement)
         self._positions: dict[str, list[GridPosition]] = {}  # Positions par symbol
@@ -545,8 +545,26 @@ class GridStrategyRunner:
         self._ma_period = getattr(strategy._config, "ma_period", 7)
         self._close_buffer: dict[str, deque] = {}
 
+        # Nombre d'assets pour diviser le capital proportionnellement
+        per_asset = getattr(strategy._config, "per_asset", {})
+        nb_from_per_asset = len(per_asset) if isinstance(per_asset, dict) else 0
+        self._nb_assets = nb_from_per_asset if nb_from_per_asset > 0 else len(config.assets)
+        if self._nb_assets < 1:
+            self._nb_assets = 1
+
         # Warm-up : capital fixe pendant le replay des candles historiques
         self._is_warming_up = True
+
+    def _get_sl_percent(self, symbol: str) -> float:
+        """Résout le sl_percent pour un symbol (avec override per_asset)."""
+        config = self._strategy._config
+        default_sl = getattr(config, "sl_percent", 25.0)
+        per_asset = getattr(config, "per_asset", {})
+        if isinstance(per_asset, dict):
+            overrides = per_asset.get(symbol, {})
+            if isinstance(overrides, dict) and "sl_percent" in overrides:
+                return float(overrides["sl_percent"])
+        return float(default_sl) if isinstance(default_sl, (int, float)) else 25.0
 
     @property
     def name(self) -> str:
@@ -665,7 +683,8 @@ class GridStrategyRunner:
         )
 
         # Capital utilisé pour le sizing : fixe pendant warm-up, réel en live
-        sizing_capital = self._initial_capital if self._is_warming_up else self._capital
+        raw_capital = self._initial_capital if self._is_warming_up else self._capital
+        sizing_capital = raw_capital / self._nb_assets
 
         # Construire le contexte
         ctx = StrategyContext(
@@ -741,7 +760,22 @@ class GridStrategyRunner:
 
                 if touched:
                     # Warm-up : sizing fixe à initial_capital ; Live : capital réel
-                    pos_capital = self._initial_capital if self._is_warming_up else self._capital
+                    # Division par nb_assets pour que 21 assets simultanés ne dépassent pas le capital
+                    pos_raw = self._initial_capital if self._is_warming_up else self._capital
+                    pos_per_asset = pos_raw / self._nb_assets
+
+                    # Equal risk sizing : ajuster la marge au SL de l'asset
+                    # risk_budget = perte max par position en $
+                    num_levels = self._strategy.max_positions
+                    sl_pct = self._get_sl_percent(symbol) / 100
+                    risk_budget = pos_per_asset / num_levels
+                    margin = risk_budget / sl_pct
+                    # Garde-fou : un seul asset ne prend jamais > 25% du capital total
+                    margin = min(margin, self._capital * 0.25)
+                    # Reconvertir en pos_capital pour open_grid_position
+                    # (qui fait notional = capital / levels * leverage)
+                    pos_capital = margin * num_levels
+
                     position = self._gpm.open_grid_position(
                         level, candle.timestamp,
                         pos_capital,
@@ -1625,7 +1659,7 @@ class Simulator:
                     all_trades.append(trade)
             all_trades.sort(key=lambda t: t.exit_time)
 
-            capital = 10_000.0  # Capital initial par convention
+            capital = self._config.risk.initial_capital
             equity = []
             for trade in all_trades:
                 capital += trade.net_pnl
@@ -1643,9 +1677,10 @@ class Simulator:
             equity = [p for p in equity if p["timestamp"] > since]
 
         # Capital courant (somme de tous les runners)
-        current_capital = sum(r._capital for r in self._runners) if self._runners else 10_000.0
-        # Si un seul runner, capital initial = 10k. Si multiple, somme.
-        initial_capital = sum(r._initial_capital for r in self._runners) if self._runners else 10_000.0
+        default_capital = self._config.risk.initial_capital
+        current_capital = sum(r._capital for r in self._runners) if self._runners else default_capital
+        # Si un seul runner, capital initial = config. Si multiple, somme.
+        initial_capital = sum(r._initial_capital for r in self._runners) if self._runners else default_capital
 
         return {
             "equity": equity,

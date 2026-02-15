@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, Query
 
+from backend.core.config import get_config
+
 router = APIRouter(tags=["conditions"])
 
 
@@ -43,7 +45,8 @@ async def get_equity_curve(
     """
     simulator = getattr(request.app.state, "simulator", None)
     if simulator is None:
-        return {"equity": [], "current_capital": 10000.0, "initial_capital": 10000.0}
+        default_capital = get_config().risk.initial_capital
+        return {"equity": [], "current_capital": default_capital, "initial_capital": default_capital}
 
     result = simulator.get_equity_curve(since=since)
 

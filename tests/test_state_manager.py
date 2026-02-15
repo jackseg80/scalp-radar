@@ -269,6 +269,7 @@ class TestRestoreState:
         strategy.min_candles = {"5m": 300}
 
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.kill_switch.max_session_loss_percent = 5.0
         config.risk.kill_switch.max_daily_loss_percent = 10.0
 
@@ -312,6 +313,7 @@ class TestRestoreState:
         strategy.name = "vwap_rsi"
         strategy.min_candles = {"5m": 300}
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.kill_switch.max_session_loss_percent = 5.0
 
         runner = LiveStrategyRunner(
@@ -356,6 +358,7 @@ class TestRestoreState:
         strategy.name = "momentum"
         strategy.min_candles = {"5m": 300}
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.kill_switch.max_session_loss_percent = 5.0
 
         runner = LiveStrategyRunner(

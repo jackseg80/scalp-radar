@@ -775,7 +775,7 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 
 ## ÉTAT ACTUEL (15 février 2026)
 
-- **707 tests**, 0 régression
+- **714 tests**, 0 régression
 - **15 sprints + hotfixes + Sprint 14c + 15b/15c/15d** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **21 assets évalués par WFO** : 3 Grade A (ETH, DOGE, SOL) + 18 Grade B + 2 Grade D exclus (BTC, BNB)
@@ -797,6 +797,9 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 - **Consistance dans le grade** : 20 pts sur 100 pour la consistance WFO, Top 5 trié par combo_score (705 tests)
 - **Bouton Apply + auto-add assets** : `POST /api/optimization/apply` applique les params Grade A/B dans strategies.yaml depuis le dashboard, auto-ajoute les assets manquants dans assets.yaml via ccxt Bitget (707 tests)
 - **fetch_history --symbols** : flag `--symbols ADA/USDT,AVAX/USDT` pour bypasser assets.yaml
+- **Capital configurable** : `initial_capital` dans risk.yaml (default 10k), lu par LiveStrategyRunner et GridStrategyRunner (714 tests)
+- **Position sizing proportionnel** : `capital / nb_assets / levels` empêche le dépassement de marge avec 21+ assets simultanés. `nb_assets` = len(per_asset) ou len(config.assets)
+- **Equal risk per trade** : marge ajustée au SL de chaque asset (`margin = risk_budget / sl_pct`), garde-fou 25% du capital max par asset. Perte max identique (~119$/position pour 10k/21 assets/4 niveaux) quel que soit le SL
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---

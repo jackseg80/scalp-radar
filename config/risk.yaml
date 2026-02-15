@@ -1,3 +1,5 @@
+initial_capital: 10000.0
+
 kill_switch:
   max_session_loss_percent: 5.0
   max_daily_loss_percent: 10.0

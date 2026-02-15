@@ -76,6 +76,7 @@ def _make_runner(
 
     if config is None:
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.kill_switch.max_session_loss_percent = 5.0
         config.risk.kill_switch.max_daily_loss_percent = 10.0
         config.risk.position.max_risk_per_trade_percent = 2.0
@@ -279,6 +280,7 @@ class TestKillSwitch:
     async def test_kill_switch_triggers_on_session_loss(self):
         """Kill switch si perte session >= max_session_loss_percent."""
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.kill_switch.max_session_loss_percent = 5.0
         config.risk.kill_switch.max_daily_loss_percent = 10.0
         config.risk.position.max_risk_per_trade_percent = 2.0
@@ -442,6 +444,7 @@ class TestOrphanCleanup:
         from unittest.mock import patch
 
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.position.default_leverage = 15
         config.risk.fees.maker_percent = 0.02
         config.risk.fees.taker_percent = 0.06
@@ -524,6 +527,7 @@ class TestOrphanCleanup:
         from unittest.mock import patch
 
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.position.default_leverage = 15
         config.risk.fees.maker_percent = 0.02
         config.risk.fees.taker_percent = 0.06

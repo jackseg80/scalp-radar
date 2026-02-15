@@ -87,6 +87,7 @@ def _make_mock_strategy(
 
 def _make_mock_config() -> MagicMock:
     config = MagicMock()
+    config.risk.initial_capital = 10_000.0
     config.risk.kill_switch.max_session_loss_percent = 5.0
     config.risk.kill_switch.max_daily_loss_percent = 10.0
     config.risk.position.max_risk_per_trade_percent = 2.0
@@ -430,8 +431,9 @@ class TestGridRunnerOnCandle:
             )
             await runner.on_candle("BTC/USDT", "1h", candle_close)
 
-        # Near-breakeven : capital ne doit pas exploser (< 2× initial)
-        assert runner._capital < initial_capital * 2
+        # Near-breakeven : capital ne doit pas exploser (< 3× initial)
+        # Le compound normal sur 100 cycles profitables peut atteindre ~2.25x
+        assert runner._capital < initial_capital * 3
         # Et ne doit pas être négatif
         assert runner._capital > 0
 
@@ -643,6 +645,7 @@ class TestSimulatorGridIntegration:
     async def test_simulator_creates_grid_runner_for_envelope_dca(self):
         """Le Simulator crée un GridStrategyRunner pour envelope_dca."""
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.position.default_leverage = 15
         config.risk.fees.maker_percent = 0.02
         config.risk.fees.taker_percent = 0.06
@@ -671,6 +674,7 @@ class TestSimulatorGridIntegration:
         from backend.backtesting.simulator import LiveStrategyRunner
 
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.position.default_leverage = 15
         config.risk.fees.maker_percent = 0.02
         config.risk.fees.taker_percent = 0.06
@@ -698,6 +702,7 @@ class TestSimulatorGridIntegration:
     async def test_get_all_status_includes_grid_runner(self):
         """get_all_status inclut le runner grid."""
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.position.default_leverage = 15
         config.risk.fees.maker_percent = 0.02
         config.risk.fees.taker_percent = 0.06
@@ -724,6 +729,7 @@ class TestSimulatorGridIntegration:
     async def test_get_open_positions_returns_grid_positions(self):
         """get_open_positions retourne les positions grid."""
         config = MagicMock()
+        config.risk.initial_capital = 10_000.0
         config.risk.position.default_leverage = 15
         config.risk.fees.maker_percent = 0.02
         config.risk.fees.taker_percent = 0.06
@@ -1064,3 +1070,175 @@ class TestDatabaseGetRecentCandles:
         assert result[0].close == candles[10].close
 
         await db.close()
+
+
+# ─── Tests nb_assets proportionnel ───────────────────────────────────────────
+
+
+class TestNbAssetsProportional:
+    def test_nb_assets_from_per_asset(self):
+        """_nb_assets utilise len(per_asset) quand non vide."""
+        strategy = _make_mock_strategy()
+        # Simuler 21 assets dans per_asset
+        strategy._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(21)}
+
+        runner = _make_grid_runner(strategy=strategy)
+        assert runner._nb_assets == 21
+
+    def test_nb_assets_fallback_config_assets(self):
+        """_nb_assets fallback sur len(config.assets) si per_asset vide."""
+        strategy = _make_mock_strategy()
+        strategy._config.per_asset = {}
+
+        config = _make_mock_config()
+        config.assets = [MagicMock() for _ in range(15)]
+
+        runner = _make_grid_runner(strategy=strategy, config=config)
+        assert runner._nb_assets == 15
+
+    def test_nb_assets_minimum_one(self):
+        """_nb_assets ne descend jamais en dessous de 1."""
+        strategy = _make_mock_strategy()
+        strategy._config.per_asset = {}
+
+        config = _make_mock_config()
+        config.assets = []
+
+        runner = _make_grid_runner(strategy=strategy, config=config)
+        assert runner._nb_assets == 1
+
+    @pytest.mark.asyncio
+    async def test_margin_scales_with_nb_assets(self):
+        """Avec 21 assets, la marge est ajustée par equal risk sizing."""
+        strategy = _make_mock_strategy(max_positions=4)
+        strategy._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(21)}
+        strategy._config.sl_percent = 25.0
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+        ]
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = False
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        capital_before = runner._capital  # 10_000
+        candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        positions = runner._positions.get("BTC/USDT", [])
+        assert len(positions) == 1
+
+        # Equal risk sizing : risk_budget = capital/21/4 ≈ 119.05$
+        # margin = risk_budget / sl_pct = 119.05 / 0.25 = 476.19$
+        pos = positions[0]
+        notional = pos.entry_price * pos.quantity
+        margin = notional / 6  # leverage=6
+        risk_budget = capital_before / 21 / 4
+        expected_margin = risk_budget / 0.25
+        assert abs(margin - expected_margin) < 1.0
+
+    @pytest.mark.asyncio
+    async def test_margin_with_small_capital(self):
+        """Avec 100$ et 21 assets, ça ne crashe pas et la marge est proportionnelle."""
+        strategy = _make_mock_strategy(max_positions=4)
+        strategy._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(21)}
+        strategy._config.sl_percent = 25.0
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+        ]
+
+        config = _make_mock_config()
+        config.risk.initial_capital = 100.0
+
+        runner = _make_grid_runner(strategy=strategy, config=config)
+        runner._is_warming_up = False
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        capital_before = runner._capital  # 100$
+        candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        positions = runner._positions.get("BTC/USDT", [])
+        assert len(positions) == 1
+
+        # risk_budget = 100/21/4 ≈ 1.19$, margin = 1.19/0.25 ≈ 4.76$
+        pos = positions[0]
+        notional = pos.entry_price * pos.quantity
+        margin = notional / 6
+        risk_budget = capital_before / 21 / 4
+        expected_margin = risk_budget / 0.25
+        assert abs(margin - expected_margin) < 0.1
+        assert runner._capital > 0  # Pas de capital négatif
+
+    @pytest.mark.asyncio
+    async def test_equal_risk_sizing(self):
+        """ETH (sl=20%) a une marge plus grande que SOL (sl=30%), perte max identique."""
+        # ETH avec sl_percent=20
+        strategy_eth = _make_mock_strategy(max_positions=4)
+        strategy_eth._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
+        strategy_eth._config.sl_percent = 20.0
+        strategy_eth.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=3_000.0, direction=Direction.LONG, size_fraction=0.25),
+        ]
+        runner_eth = _make_grid_runner(strategy=strategy_eth)
+        runner_eth._is_warming_up = False
+        _fill_buffer(runner_eth, symbol="ETH/USDT", n=10, base_close=3_500.0)
+
+        candle_eth = _make_candle(close=3_100.0, low=2_900.0, high=3_200.0)
+        await runner_eth.on_candle("ETH/USDT", "1h", candle_eth)
+
+        # SOL avec sl_percent=30
+        strategy_sol = _make_mock_strategy(max_positions=4)
+        strategy_sol._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
+        strategy_sol._config.sl_percent = 30.0
+        strategy_sol.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=140.0, direction=Direction.LONG, size_fraction=0.25),
+        ]
+        runner_sol = _make_grid_runner(strategy=strategy_sol)
+        runner_sol._is_warming_up = False
+        _fill_buffer(runner_sol, symbol="SOL/USDT", n=10, base_close=150.0)
+
+        candle_sol = _make_candle(close=145.0, low=135.0, high=155.0)
+        await runner_sol.on_candle("SOL/USDT", "1h", candle_sol)
+
+        # Récupérer les marges
+        pos_eth = runner_eth._positions["ETH/USDT"][0]
+        margin_eth = pos_eth.entry_price * pos_eth.quantity / 6
+        pos_sol = runner_sol._positions["SOL/USDT"][0]
+        margin_sol = pos_sol.entry_price * pos_sol.quantity / 6
+
+        # ETH (sl=20%) doit avoir une marge PLUS GRANDE que SOL (sl=30%)
+        assert margin_eth > margin_sol
+
+        # Perte max (risk_budget) identique : capital / 21 / 4 ≈ 119.05$
+        loss_eth = margin_eth * 0.20  # perte si SL touché
+        loss_sol = margin_sol * 0.30
+        assert abs(loss_eth - loss_sol) < 1.0  # même risk_budget
+
+    @pytest.mark.asyncio
+    async def test_margin_cap_25pct(self):
+        """La marge par position est plafonnée à 25% du capital total."""
+        # Scénario : 1 seul asset, SL très petit → margin non-cappée serait énorme
+        strategy = _make_mock_strategy(max_positions=1)
+        strategy._config.per_asset = {"BTC/USDT": {}}  # 1 asset
+        strategy._config.sl_percent = 1.0  # SL très petit (1%)
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=1.0),
+        ]
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = False
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        capital = runner._capital  # 10_000
+        candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        positions = runner._positions.get("BTC/USDT", [])
+        assert len(positions) == 1
+
+        pos = positions[0]
+        notional = pos.entry_price * pos.quantity
+        margin = notional / 6
+
+        # Sans cap : risk_budget = 10000/1/1 = 10000, margin = 10000/0.01 = 1M$
+        # Avec cap 25% : margin = 10000 * 0.25 = 2500$
+        assert abs(margin - capital * 0.25) < 1.0
