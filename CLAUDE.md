@@ -41,7 +41,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (707 passants) |
+| Testing            | pytest            | Critical components must have unit tests (770 passants) |
 
 ## Key Architecture Principles
 
@@ -60,7 +60,7 @@ scalp-radar/
 ├── config/                       # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/                     # models, config, database, indicators, position_manager, grid_position_manager, state_manager, data_engine
-│   ├── strategies/               # base, base_grid, factory + 9 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short)
+│   ├── strategies/               # base, base_grid, factory + 10 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr)
 │   ├── optimization/             # walk_forward, overfitting, report, indicator_cache, fast_backtest, fast_multi_backtest
 │   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder
 │   ├── execution/                # executor, risk_manager, adaptive_selector
@@ -68,12 +68,12 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (28 components: Scanner, Heatmap, Explorer, Research, Diagnostic, etc.)
-├── tests/                        # 714 tests (pytest, 42 fichiers)
+├── tests/                        # 770 tests (pytest, 43 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
-└── docs/plans/                   # Sprint plans 1-15d archivés
+└── docs/plans/                   # Sprint plans 1-19 archivés
 ```
 
-## Trading Strategies (9 implémentées)
+## Trading Strategies (10 implémentées)
 
 ### 5m Scalp (4)
 
@@ -88,10 +88,11 @@ scalp-radar/
 2. **Donchian Breakout** — TP/SL ATR multiples
 3. **SuperTrend** — Trend-following ATR-based
 
-### 1h Grid/DCA (2)
+### 1h Grid/DCA (3)
 
 1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: true`, paper trading actif)
 2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
+3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: false`, WFO en attente)
 
 ## Multi-Strategy Arena
 
@@ -143,14 +144,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 ## Config Files (5 YAML)
 
 - `assets.yaml` — 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
-- `strategies.yaml` — 9 stratégies + custom + per_asset overrides
+- `strategies.yaml` — 10 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
 - `param_grids.yaml` — Espaces de recherche WFO + per-strategy config (is_days, oos_days, step_days)
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17) : 727 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19) : 770 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -193,6 +194,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 15d : Consistance dans le grade (20 pts/100), Top 5 trié par combo_score, fetch 18 nouvelles paires Binance, WFO 23 assets (21 Grade A/B), `--apply` auto per_asset, auto-add assets.yaml via ccxt, bouton "Appliquer A/B" frontend (714 tests)
 - Hotfix sizing : capital configurable (`risk.yaml initial_capital`), position sizing proportionnel (`capital / nb_assets / levels`), equal risk per trade (`margin = risk_budget / sl_pct`, cap 25%) (714 tests)
 - Sprint 16+17 : Dashboard Scanner (colonnes Grade + Grid), ActivePositions GridSummary, endpoint `GET /api/simulator/grid-state`, WS push grid_state 3s, DataEngine batching anti-rate-limit (30006), fix warm-up compound post-restore (727 tests)
+- Sprint 19 : Stratégie Grid ATR (10e stratégie, enveloppes ATR adaptatives, fast engine, 3240 combos WFO, 37 tests) (770 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 
@@ -308,4 +310,4 @@ Windows (VSCode)                    Linux Server (192.168.1.200)
 - Bitget API docs: <https://www.bitget.com/api-doc/>
 - ccxt Bitget: <https://docs.ccxt.com/#/exchanges/bitget>
 - Frontend prototype: `docs/prototypes/Scalp radar v2.jsx` (référence design)
-- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-15d archivés)
+- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-19 archivés)

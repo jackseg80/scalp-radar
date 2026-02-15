@@ -36,6 +36,10 @@ def run_multi_backtest_from_cache(
         trade_pnls, trade_returns, final_capital = _simulate_envelope_dca(
             cache, params, bt_config, direction=-1,
         )
+    elif strategy_name == "grid_atr":
+        trade_pnls, trade_returns, final_capital = _simulate_grid_atr(
+            cache, params, bt_config, direction=1,
+        )
     else:
         raise ValueError(f"Stratégie grid inconnue pour fast engine: {strategy_name}")
 
@@ -174,6 +178,158 @@ def _simulate_envelope_dca(
                 else:
                     # SHORT : entrée au-dessus de la SMA
                     entry_price = sma_arr[i] * (1 + envelope_offsets[lvl])
+
+                if math.isnan(entry_price) or entry_price <= 0:
+                    continue
+
+                if direction == 1:
+                    triggered = cache.lows[i] <= entry_price
+                else:
+                    triggered = cache.highs[i] >= entry_price
+
+                if triggered:
+                    # Allocation fixe par niveau
+                    notional = capital * (1.0 / num_levels) * leverage
+                    qty = notional / entry_price
+                    if qty <= 0:
+                        continue
+                    entry_fee = qty * entry_price * taker_fee
+                    positions.append((lvl, entry_price, qty, entry_fee))
+
+    # Force close fin de données
+    if positions:
+        exit_price = float(cache.closes[n - 1])
+        pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
+        trade_pnls.append(pnl)
+        if capital > 0:
+            trade_returns.append(pnl / capital)
+        capital += pnl
+
+    return trade_pnls, trade_returns, capital
+
+
+def _simulate_grid_atr(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+    direction: int = 1,
+) -> tuple[list[float], list[float], float]:
+    """Simulation multi-position Grid ATR (LONG ou SHORT).
+
+    SMA + ATR depuis le cache, enveloppes = SMA ± ATR × multiplier.
+    Allocation fixe par niveau : notional = capital/levels × leverage.
+
+    direction: 1 = LONG (enveloppes basses), -1 = SHORT (enveloppes hautes).
+    """
+    capital = bt_config.initial_capital
+    leverage = bt_config.leverage
+    taker_fee = bt_config.taker_fee
+    maker_fee = bt_config.maker_fee
+    slippage_pct = bt_config.slippage_pct
+
+    num_levels = params["num_levels"]
+    sl_pct = params["sl_percent"] / 100
+
+    sma_arr = cache.bb_sma[params["ma_period"]]
+    atr_arr = cache.atr_by_period[params["atr_period"]]
+    n = cache.n_candles
+
+    # Pré-calculer les multipliers par niveau (constantes)
+    multipliers = [
+        params["atr_multiplier_start"] + lvl * params["atr_multiplier_step"]
+        for lvl in range(num_levels)
+    ]
+
+    trade_pnls: list[float] = []
+    trade_returns: list[float] = []
+
+    # Positions : list of (level_idx, entry_price, quantity, entry_fee)
+    positions: list[tuple[int, float, float, float]] = []
+
+    for i in range(n):
+        if math.isnan(sma_arr[i]) or math.isnan(atr_arr[i]) or atr_arr[i] <= 0:
+            continue
+
+        sma_val = sma_arr[i]
+        atr_val = atr_arr[i]
+
+        # 1. Check TP/SL global si positions ouvertes
+        if positions:
+            total_qty = sum(p[2] for p in positions)
+            avg_entry = sum(p[1] * p[2] for p in positions) / total_qty
+
+            is_green = cache.closes[i] > cache.opens[i]
+
+            tp_price = sma_val  # Dynamique (retour vers la SMA)
+
+            if direction == 1:
+                # LONG : SL en dessous, TP au-dessus
+                sl_price = avg_entry * (1 - sl_pct)
+                sl_hit = cache.lows[i] <= sl_price
+                tp_hit = cache.highs[i] >= tp_price
+            else:
+                # SHORT : SL au-dessus, TP en dessous
+                sl_price = avg_entry * (1 + sl_pct)
+                sl_hit = cache.highs[i] >= sl_price
+                tp_hit = cache.lows[i] <= tp_price
+
+            exit_reason = None
+            exit_price = 0.0
+
+            if tp_hit and sl_hit:
+                # Heuristique OHLC
+                if direction == 1:
+                    if is_green:
+                        exit_reason = "tp_global"
+                        exit_price = tp_price
+                    else:
+                        exit_reason = "sl_global"
+                        exit_price = sl_price
+                else:
+                    if cache.closes[i] < cache.opens[i]:
+                        exit_reason = "tp_global"
+                        exit_price = tp_price
+                    else:
+                        exit_reason = "sl_global"
+                        exit_price = sl_price
+            elif sl_hit:
+                exit_reason = "sl_global"
+                exit_price = sl_price
+            elif tp_hit:
+                exit_reason = "tp_global"
+                exit_price = tp_price
+
+            if exit_reason is not None:
+                pnl = _calc_grid_pnl(
+                    positions, exit_price,
+                    maker_fee if exit_reason == "tp_global" else taker_fee,
+                    slippage_pct if exit_reason != "tp_global" else 0.0,
+                    direction,
+                )
+                trade_pnls.append(pnl)
+                if capital > 0:
+                    trade_returns.append(pnl / capital)
+                capital += pnl
+                positions = []
+                continue
+
+        # 2. Ouvrir de nouvelles positions si niveaux touchés
+        if capital <= 0:
+            continue
+
+        if len(positions) < num_levels:
+            filled = {p[0] for p in positions}
+            for lvl in range(num_levels):
+                if lvl in filled:
+                    continue
+                if len(positions) >= num_levels:
+                    break
+
+                mult = multipliers[lvl]
+                if direction == 1:
+                    entry_price = sma_val - atr_val * mult
+                else:
+                    entry_price = sma_val + atr_val * mult
 
                 if math.isnan(entry_price) or entry_price <= 0:
                     continue

@@ -239,6 +239,21 @@ envelope_dca_short:
   leverage: 6
   weight: 0.2
   per_asset: {}
+grid_atr:
+  enabled: false
+  live_eligible: false
+  timeframe: 1h
+  ma_period: 14
+  atr_period: 14
+  atr_multiplier_start: 2.0
+  atr_multiplier_step: 1.0
+  num_levels: 3
+  sl_percent: 20.0
+  sides:
+    - long
+  leverage: 6
+  weight: 0.20
+  per_asset: {}
 custom_strategies:
   swing_baseline:
     enabled: false

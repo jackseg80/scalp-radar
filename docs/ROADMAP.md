@@ -596,7 +596,14 @@ Système automatisé de trading crypto qui :
 
 ---
 
-## PHASE 5 — SCALING STRATÉGIES (Sprints 16-19) ← ON EST ICI
+## PHASE 5 — SCALING STRATÉGIES (Sprints 16-20) ← ON EST ICI
+
+| Sprint | Contenu | Status |
+|--------|---------|--------|
+| 16+17 | Dashboard Scanner + Monitoring DCA Live | ✅ |
+| 18 | Multi-asset Live (envelope_dca ETH, SOL, DOGE, LINK) | Planifié |
+| 19 | Stratégie Grid ATR (10e stratégie, fast engine, 3240 combos WFO) | ✅ |
+| 20 | Nouvelles stratégies Grid + factorisation fast engine | Planifié |
 
 ### Sprint 16+17 — Dashboard Scanner amélioré + Monitoring DCA Live ✅
 **But** : Ajouter la visibilité grid DCA au Scanner et ActivePositions, sans casser l'architecture multi-stratégie.
@@ -629,6 +636,48 @@ Système automatisé de trading crypto qui :
 
 **Résultat** : Dashboard montre en temps réel les grilles DCA avec niveaux, P&L non réalisé, TP/SL distances, et grades WFO. Warm-up post-restore protégé contre le compound overflow.
 
+### Sprint 19 — Stratégie Grid ATR ✅
+**But** : 10e stratégie grid/DCA adaptative — enveloppes basées sur l'ATR (volatilité) au lieu de pourcentages fixes.
+
+**Implémenté** :
+
+**Backend — Stratégie** :
+- **GridATRStrategy** (BaseGridStrategy) : `compute_grid()` calcule `entry_price = SMA ± ATR × (start + i × step)`
+- **GridATRConfig** : ma_period, atr_period, atr_multiplier_start, atr_multiplier_step, num_levels, sl_percent, sides, leverage
+- Symétrie naturelle SHORT : `entry_price = SMA + ATR × multiplier` (pas de conversion asymétrique)
+- Guards : ATR <= 0, entry_price > 0, NaN checks
+- `should_close_all()` : TP=SMA dynamique, SL=% prix moyen (même pattern que envelope_dca)
+
+**Backend — Fast Engine** :
+- `_simulate_grid_atr()` dans `fast_multi_backtest.py` (~150 lignes)
+- Réutilise `_calc_grid_pnl()` existant (pas de duplication)
+- Guard `capital <= 0` ajouté (safety check absent dans envelope_dca)
+- `build_cache()` : peupler `bb_sma` (SMA) + `atr_by_period` (ATR multi-period)
+- `_INDICATOR_PARAMS["grid_atr"] = ["ma_period", "atr_period"]` (groupement WFO)
+- Ajouté dans la liste `_run_fast` (tuple hardcodé walk_forward.py)
+
+**Backend — Registry** :
+- STRATEGY_REGISTRY + GRID_STRATEGIES + factory.py
+- strategies.yaml : `grid_atr: enabled: false`
+- param_grids.yaml : grille 3240 combos (4×3×5×3×3×4), WFO 180/60/60 jours
+
+**Tests** : 770 passants (+43 depuis Sprint 16+17)
+- `test_grid_atr.py` : 37 tests (signaux, TP/SL, fast engine, parité, registry, executor helpers)
+- `test_strategy_registry.py` : +6 tests (grid_atr dans ALL_STRATEGIES, GRID_STRATEGY_NAMES, INDICATOR_PARAMS)
+
+**Résultat** :
+- 10 stratégies totales (4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h)
+- Pipeline WFO complet prêt pour optimisation grid_atr
+- Fast engine vérifié en parité avec MultiPositionEngine (données sinusoïdales)
+
+**Leçons apprises** :
+- `_calc_grid_pnl` est déjà générique (prend `direction`) → pas besoin de `_calc_grid_pnl_atr`
+- `_run_fast` dans walk_forward.py utilise un tuple hardcodé — facile à oublier
+- `build_cache` `atr_by_period` n'est peuplé que pour les stratégies qui le demandent → ajouter `"grid_atr"` à la condition
+- Données sinusoïdales (`100 + 8*sin(2π*i/48)`) génèrent un ATR réaliste pour les tests de parité
+
+**Dette technique** : factoriser `_simulate_grid_common()` (Sprint 20) — `_simulate_envelope_dca` et `_simulate_grid_atr` partagent ~80% du code
+
 ### Sprint 18 — Multi-asset Live
 **But** : Déployer envelope_dca sur ETH, SOL (et potentiellement DOGE, LINK si grades OK après reoptimisation).
 
@@ -647,11 +696,10 @@ Système automatisé de trading crypto qui :
 - Capital allocation : fixe (ex: 100$ par asset) ou proportionnelle au grade (ex: Grade B = 200$, Grade C = 100$) ?
 - Corrélation groups : max_concurrent_same_direction = 2 sur crypto_major (BTC/ETH/SOL) ?
 
-### Sprint 19 — Nouvelles Stratégies Grid
+### Sprint 20 — Nouvelles Stratégies Grid
 **But** : Développer d'autres stratégies qui utilisent le moteur multi-position.
 
 **Candidates** :
-- **Grid ATR** : enveloppes basées sur la volatilité (ATR) au lieu de % fixe
 - **Grid RSI** : DCA déclenché par RSI extrême + niveaux %
 - **Grid Funding** : DCA quand le funding rate est fortement négatif (coûte de shorter)
 - **Grid Multi-timeframe** : signaux sur 4h, exécution sur 1h
@@ -665,6 +713,8 @@ Système automatisé de trading crypto qui :
 6. Live si paper trading cohérent
 
 **Scope** : ~1-2 sessions par stratégie.
+
+**Dette technique** : factoriser `_simulate_grid_common()` dans fast_multi_backtest.py (enveloppe_dca + grid_atr partagent ~80% du code).
 
 ---
 
@@ -748,20 +798,21 @@ TERMINÉ                          EN COURS              À VENIR
 Phase 1: Infrastructure     ✅   Phase 5: Scaling      Phase 6: Production
 Phase 2: Validation         ✅   Sprint 16+17: ✅      Phase 7: Avancé
 Phase 3: Paper/Live ready   ✅   Sprint 18: Multi-asset
-Phase 4: Recherche          ✅   Sprint 19: Nouvelles strats
+Phase 4: Recherche          ✅   Sprint 19: Grid ATR ✅
+                                 Sprint 20: Nouvelles strats
 ```
 
 ---
 
 ## ÉTAT ACTUEL (15 février 2026)
 
-- **727 tests**, 0 régression
-- **Sprint 16+17 complété** (Phase 5 démarrée) — Dashboard Scanner + Monitoring DCA Live
-- **9 stratégies** : 4 scalp 5m + 3 swing 1h + 2 grid/DCA 1h
+- **770 tests**, 0 régression
+- **Sprint 19 complété** (Phase 5 en cours) — Stratégie Grid ATR
+- **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO** : 3 Grade A (ETH, DOGE, SOL) + 18 Grade B + 2 Grade D exclus (BTC, BNB)
 - **Paper trading actif** : envelope_dca sur 21 assets (prod déployée)
-- **Sprint 16+17** : Scanner avec colonnes Grade (A-F) + Grid (niveaux/max), ActivePositions avec GridSummary (P&L non réalisé, marge, TP/SL distances), endpoint `GET /api/simulator/grid-state`, WS push 3s, DataEngine batching anti-rate-limit, fix warm-up compound post-restore
-- **Prochaine étape** : Sprint 18 (Multi-asset Live) ou WFO envelope_dca_short
+- **Grid ATR** : pipeline WFO complet prêt (3240 combos), fast engine vérifié, `enabled: false` (attente WFO)
+- **Prochaine étape** : WFO grid_atr sur les 21 assets, Sprint 18 (Multi-asset Live), ou Sprint 20 (nouvelles strats + factorisation)
 
 ---
 
@@ -805,7 +856,7 @@ config/
 
 backend/
   core/               # Config, DataEngine, Database, StateManager, PositionManager, GridPositionManager
-  strategies/         # BaseStrategy, BaseGridStrategy, envelope_dca, 7 autres stratégies Grade F
+  strategies/         # BaseStrategy, BaseGridStrategy, envelope_dca, envelope_dca_short, grid_atr, 7 stratégies mono Grade F
   backtesting/        # BacktestEngine, MultiPositionEngine, Simulator, GridStrategyRunner, Arena
   optimization/       # WFO, Monte Carlo, DSR, grading, fast engine (mono + multi), indicator cache
   execution/          # Executor (mono + grid), RiskManager, AdaptiveSelector
@@ -827,7 +878,7 @@ scripts/
   migrate_optimization.py # Import résultats JSON → DB (Sprint 13)
 
 data/                 # SQLite DB + reports JSON (gitignored)
-docs/plans/          # 26 sprint plans (1-15d + hotfixes)
+docs/plans/          # 27 sprint plans (1-19 + hotfixes)
 ```
 
 ---
@@ -883,7 +934,7 @@ docs/plans/          # 26 sprint plans (1-15d + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 707 passants, 0 régression
+- **Tests** : 770 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

@@ -188,6 +188,17 @@ def build_cache(
         for period in ma_periods:
             bb_sma_dict[period] = sma(closes, period)
 
+    # Grid ATR : SMA + ATR multi-period (enveloppes = SMA ± ATR × multiplier)
+    if strategy_name == "grid_atr":
+        ma_periods_atr: set[int] = set()
+        if "ma_period" in param_grid_values:
+            ma_periods_atr.update(param_grid_values["ma_period"])
+        if not ma_periods_atr:
+            ma_periods_atr.add(14)
+        for period in ma_periods_atr:
+            if period not in bb_sma_dict:
+                bb_sma_dict[period] = sma(closes, period)
+
     if strategy_name == "bollinger_mr":
         bb_periods: set[int] = set()
         bb_stds: set[float] = set()
@@ -207,16 +218,17 @@ def build_cache(
                 bb_upper_dict[(period, std_dev)] = upper
                 bb_lower_dict[(period, std_dev)] = lower
 
-    # --- ATR multi-period (pour donchian/supertrend) ---
+    # --- ATR multi-period (pour donchian/supertrend/grid_atr) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name in ("donchian_breakout", "supertrend"):
+    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr"):
         atr_periods: set[int] = set()
         if "atr_period" in param_grid_values:
             atr_periods.update(param_grid_values["atr_period"])
         if not atr_periods:
             atr_periods.add(14)
         for p in atr_periods:
-            atr_by_period_dict[p] = atr(highs, lows, closes, p)
+            if p not in atr_by_period_dict:
+                atr_by_period_dict[p] = atr(highs, lows, closes, p)
 
     # --- SuperTrend ---
     st_direction_dict: dict[tuple[int, float], np.ndarray] = {}

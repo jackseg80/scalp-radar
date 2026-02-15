@@ -31,6 +31,7 @@ ALL_STRATEGIES = [
     "supertrend",
     "envelope_dca",
     "envelope_dca_short",
+    "grid_atr",
 ]
 
 
@@ -64,7 +65,7 @@ def test_create_strategy_unknown_raises():
 
 # ─── Stratégies grid ────────────────────────────────────────────────────
 
-GRID_STRATEGY_NAMES = ["envelope_dca", "envelope_dca_short"]
+GRID_STRATEGY_NAMES = ["envelope_dca", "envelope_dca_short", "grid_atr"]
 NON_GRID_STRATEGY_NAMES = [s for s in ALL_STRATEGIES if s not in GRID_STRATEGY_NAMES]
 
 
@@ -91,6 +92,7 @@ def test_is_grid_strategy_false(name):
 INDICATOR_PARAMS_EXPECTED = {
     "envelope_dca": ["ma_period"],
     "envelope_dca_short": ["ma_period"],
+    "grid_atr": ["ma_period", "atr_period"],
 }
 
 
@@ -178,4 +180,20 @@ def test_create_envelope_dca_short_with_params():
     strategy = create_strategy_with_params("envelope_dca_short", params)
     assert isinstance(strategy, EnvelopeDCAShortStrategy)
     assert strategy.name == "envelope_dca_short"
+    assert strategy.max_positions == 4
+
+
+def test_create_grid_atr_with_params():
+    """create_strategy_with_params crée un GridATRStrategy."""
+    from backend.strategies.grid_atr import GridATRStrategy
+
+    params = {
+        "ma_period": 10, "atr_period": 20,
+        "atr_multiplier_start": 1.5, "atr_multiplier_step": 0.5,
+        "num_levels": 4, "sl_percent": 25.0,
+        "sides": ["long"], "leverage": 6,
+    }
+    strategy = create_strategy_with_params("grid_atr", params)
+    assert isinstance(strategy, GridATRStrategy)
+    assert strategy.name == "grid_atr"
     assert strategy.max_positions == 4

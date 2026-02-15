@@ -401,6 +401,7 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "supertrend": ["atr_period", "atr_multiplier"],
     "envelope_dca": ["ma_period"],
     "envelope_dca_short": ["ma_period"],
+    "grid_atr": ["ma_period", "atr_period"],
 }
 
 
@@ -968,7 +969,7 @@ class WalkForwardOptimizer:
         3. Séquentiel (si pool crashe)
         """
         # 1. Tenter le fast engine (stratégies supportées uniquement)
-        if strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short"):
+        if strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short", "grid_atr"):
             try:
                 results = self._run_fast(
                     grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
