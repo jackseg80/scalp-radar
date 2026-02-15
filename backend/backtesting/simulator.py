@@ -801,17 +801,29 @@ class GridStrategyRunner:
                     pos_raw = self._initial_capital if self._is_warming_up else self._capital
                     pos_per_asset = pos_raw / self._nb_assets
 
-                    # Equal risk sizing : ajuster la marge au SL de l'asset
-                    # risk_budget = perte max par position en $
+                    # Equal allocation sizing (Sprint 20a)
+                    # Marge fixe par niveau = capital / nb_assets / num_levels
+                    # Le SL contrôle le risque en $, PAS la taille de position
                     num_levels = self._strategy.max_positions
-                    sl_pct = self._get_sl_percent(symbol) / 100
-                    risk_budget = pos_per_asset / num_levels
-                    margin = risk_budget / sl_pct
-                    # Garde-fou : un seul asset ne prend jamais > 25% du capital total
-                    margin = min(margin, self._capital * 0.25)
-                    # Reconvertir en pos_capital pour open_grid_position
-                    # (qui fait notional = capital / levels * leverage)
-                    pos_capital = margin * num_levels
+                    margin_per_level = pos_per_asset / num_levels
+
+                    # Cap de sécurité : jamais plus de 25% du capital sur un seul asset
+                    max_margin_per_asset = pos_raw * 0.25
+                    margin_per_level = min(margin_per_level, max_margin_per_asset / num_levels)
+
+                    # Margin guard (Sprint 20a) — skip si marge totale dépasse le seuil
+                    max_margin_ratio = getattr(self._config.risk, "max_margin_ratio", 0.70)
+                    if not isinstance(max_margin_ratio, (int, float)):
+                        max_margin_ratio = 0.70
+                    total_margin_used = sum(
+                        p.entry_price * p.quantity / self._leverage
+                        for positions_list in self._positions.values()
+                        for p in positions_list
+                    )
+                    if total_margin_used + margin_per_level > pos_raw * max_margin_ratio:
+                        continue  # Skip ce niveau, pas assez de marge
+
+                    pos_capital = margin_per_level * num_levels
 
                     position = self._gpm.open_grid_position(
                         level, candle.timestamp,

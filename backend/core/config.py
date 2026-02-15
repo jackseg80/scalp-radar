@@ -334,6 +334,7 @@ class AdaptiveSelectorConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     initial_capital: float = Field(default=10_000.0, gt=0)
+    max_margin_ratio: float = Field(default=0.70, ge=0.1, le=1.0)
     kill_switch: KillSwitchConfig = Field(default_factory=KillSwitchConfig)
     position: PositionConfig = Field(default_factory=PositionConfig)
     fees: FeesConfig = Field(default_factory=FeesConfig)

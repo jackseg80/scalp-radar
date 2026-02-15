@@ -88,6 +88,7 @@ def _make_mock_strategy(
 def _make_mock_config() -> MagicMock:
     config = MagicMock()
     config.risk.initial_capital = 10_000.0
+    config.risk.max_margin_ratio = 0.70
     config.risk.kill_switch.max_session_loss_percent = 5.0
     config.risk.kill_switch.max_daily_loss_percent = 10.0
     config.risk.position.max_risk_per_trade_percent = 2.0
@@ -1214,7 +1215,7 @@ class TestNbAssetsProportional:
 
     @pytest.mark.asyncio
     async def test_margin_scales_with_nb_assets(self):
-        """Avec 21 assets, la marge est ajustée par equal risk sizing."""
+        """Avec 21 assets, la marge est = capital/nb_assets/num_levels (equal alloc)."""
         strategy = _make_mock_strategy(max_positions=4)
         strategy._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(21)}
         strategy._config.sl_percent = 25.0
@@ -1232,13 +1233,11 @@ class TestNbAssetsProportional:
         positions = runner._positions.get("BTC/USDT", [])
         assert len(positions) == 1
 
-        # Equal risk sizing : risk_budget = capital/21/4 ≈ 119.05$
-        # margin = risk_budget / sl_pct = 119.05 / 0.25 = 476.19$
+        # Equal allocation : margin = capital / 21 / 4 ≈ 119.05$
         pos = positions[0]
         notional = pos.entry_price * pos.quantity
         margin = notional / 6  # leverage=6
-        risk_budget = capital_before / 21 / 4
-        expected_margin = risk_budget / 0.25
+        expected_margin = capital_before / 21 / 4
         assert abs(margin - expected_margin) < 1.0
 
     @pytest.mark.asyncio
@@ -1265,18 +1264,17 @@ class TestNbAssetsProportional:
         positions = runner._positions.get("BTC/USDT", [])
         assert len(positions) == 1
 
-        # risk_budget = 100/21/4 ≈ 1.19$, margin = 1.19/0.25 ≈ 4.76$
+        # Equal allocation : margin = 100/21/4 ≈ 1.19$
         pos = positions[0]
         notional = pos.entry_price * pos.quantity
         margin = notional / 6
-        risk_budget = capital_before / 21 / 4
-        expected_margin = risk_budget / 0.25
+        expected_margin = capital_before / 21 / 4
         assert abs(margin - expected_margin) < 0.1
         assert runner._capital > 0  # Pas de capital négatif
 
     @pytest.mark.asyncio
-    async def test_equal_risk_sizing(self):
-        """ETH (sl=20%) a une marge plus grande que SOL (sl=30%), perte max identique."""
+    async def test_equal_allocation_sizing(self):
+        """ETH et SOL ont la MÊME marge (equal alloc), le SL contrôle seulement le risque."""
         # ETH avec sl_percent=20
         strategy_eth = _make_mock_strategy(max_positions=4)
         strategy_eth._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
@@ -1311,21 +1309,18 @@ class TestNbAssetsProportional:
         pos_sol = runner_sol._positions["SOL/USDT"][0]
         margin_sol = pos_sol.entry_price * pos_sol.quantity / 6
 
-        # ETH (sl=20%) doit avoir une marge PLUS GRANDE que SOL (sl=30%)
-        assert margin_eth > margin_sol
-
-        # Perte max (risk_budget) identique : capital / 21 / 4 ≈ 119.05$
-        loss_eth = margin_eth * 0.20  # perte si SL touché
-        loss_sol = margin_sol * 0.30
-        assert abs(loss_eth - loss_sol) < 1.0  # même risk_budget
+        # Equal allocation : les deux marges sont identiques = capital/21/4
+        expected_margin = 10_000 / 21 / 4
+        assert abs(margin_eth - expected_margin) < 1.0
+        assert abs(margin_sol - expected_margin) < 1.0
 
     @pytest.mark.asyncio
     async def test_margin_cap_25pct(self):
-        """La marge par position est plafonnée à 25% du capital total."""
-        # Scénario : 1 seul asset, SL très petit → margin non-cappée serait énorme
+        """La marge par asset est plafonnée à 25% du capital total."""
+        # Scénario : 1 seul asset, 1 level → alloc = capital entier, cap 25%
         strategy = _make_mock_strategy(max_positions=1)
         strategy._config.per_asset = {"BTC/USDT": {}}  # 1 asset
-        strategy._config.sl_percent = 1.0  # SL très petit (1%)
+        strategy._config.sl_percent = 1.0
         strategy.compute_grid.return_value = [
             GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=1.0),
         ]
@@ -1344,6 +1339,84 @@ class TestNbAssetsProportional:
         notional = pos.entry_price * pos.quantity
         margin = notional / 6
 
-        # Sans cap : risk_budget = 10000/1/1 = 10000, margin = 10000/0.01 = 1M$
-        # Avec cap 25% : margin = 10000 * 0.25 = 2500$
+        # Sans cap : margin_per_level = 10000/1/1 = 10000
+        # Avec cap 25% : max_margin_per_asset = 10000*0.25 = 2500
         assert abs(margin - capital * 0.25) < 1.0
+
+    @pytest.mark.asyncio
+    async def test_margin_guard_blocks_when_full(self):
+        """La margin guard empêche d'ouvrir quand la marge totale dépasse 70%."""
+        strategy = _make_mock_strategy(max_positions=4)
+        strategy._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
+        strategy._config.sl_percent = 25.0
+        strategy.compute_grid.return_value = [
+            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
+        ]
+
+        config = _make_mock_config()
+        config.risk.max_margin_ratio = 0.70
+
+        runner = _make_grid_runner(strategy=strategy, config=config)
+        runner._is_warming_up = False
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        # Pré-remplir 60 positions pour dépasser 70% du capital
+        # margin_per_level = 10000/21/4 ≈ 119.05. 60 × 119.05 = 7143 > 7000 (70%)
+        margin_per_level = runner._capital / 21 / 4
+        for i in range(60):
+            sym = f"FAKE{i}/USDT"
+            runner._positions[sym] = [
+                GridPosition(
+                    level=0, direction=Direction.LONG,
+                    entry_price=95_000.0,
+                    quantity=margin_per_level * 6 / 95_000.0,
+                    entry_time=datetime(2024, 6, 15, tzinfo=timezone.utc),
+                    entry_fee=0.0,
+                )
+            ]
+
+        total = sum(
+            p.entry_price * p.quantity / 6
+            for plist in runner._positions.values()
+            for p in plist
+        )
+        assert total > runner._capital * 0.70  # Bien au-dessus du seuil
+
+        candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
+        await runner.on_candle("BTC/USDT", "1h", candle)
+
+        # La position BTC ne doit PAS être ouverte (margin guard)
+        btc_positions = runner._positions.get("BTC/USDT", [])
+        assert len(btc_positions) == 0
+
+    @pytest.mark.asyncio
+    async def test_total_margin_not_exceed_capital(self):
+        """21 assets × 4 niveaux : la marge totale ne dépasse jamais 70% du capital."""
+        strategy = _make_mock_strategy(max_positions=4)
+        strategy._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
+        strategy._config.sl_percent = 25.0
+
+        config = _make_mock_config()
+        config.risk.max_margin_ratio = 0.70
+
+        runner = _make_grid_runner(strategy=strategy, config=config)
+        runner._is_warming_up = False
+
+        # Ouvrir sur 21 assets en séquence, chacun avec 4 niveaux
+        for i in range(21):
+            sym = f"A{i}/USDT"
+            _fill_buffer(runner, symbol=sym, n=10, base_close=100.0)
+            strategy.compute_grid.return_value = [
+                GridLevel(index=j, entry_price=95.0 - j, direction=Direction.LONG, size_fraction=0.25)
+                for j in range(4)
+            ]
+            candle = _make_candle(close=96.0, low=90.0, high=97.0)
+            await runner.on_candle(sym, "1h", candle)
+
+        total_margin = sum(
+            p.entry_price * p.quantity / 6
+            for plist in runner._positions.values()
+            for p in plist
+        )
+        # La marge totale ne doit jamais dépasser 70% + tolérance
+        assert total_margin <= runner._initial_capital * 0.70 + 1.0

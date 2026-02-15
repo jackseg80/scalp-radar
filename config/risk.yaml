@@ -1,4 +1,5 @@
 initial_capital: 10000.0
+max_margin_ratio: 0.70  # Max 70% du capital en marge simultanée
 
 kill_switch:
   max_session_loss_percent: 5.0
