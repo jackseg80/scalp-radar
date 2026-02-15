@@ -77,7 +77,7 @@ export default function ExplorerPage({ wsData }) {
   useEffect(() => {
     const fetchAssets = async () => {
       try {
-        const resp = await fetch('/api/optimization/results?limit=1000')
+        const resp = await fetch('/api/optimization/results?limit=500&latest_only=false')
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const data = await resp.json()
         const uniqueAssets = [...new Set((data.results || []).map(r => r.asset))].sort()
