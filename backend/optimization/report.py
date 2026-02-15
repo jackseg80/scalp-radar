@@ -97,8 +97,11 @@ def compute_grade(
     stability: float,
     bitget_transfer: float,
     mc_underpowered: bool = False,
+    total_trades: int = 0,
 ) -> tuple[str, int]:
     """Calcule le grade A-F et le score numérique 0-100.
+
+    Garde-fou trades : < 30 trades → plafond C, < 50 trades → plafond B.
 
     Returns:
         (grade, score) — ex: ("B", 72)
@@ -170,11 +173,25 @@ def compute_grade(
     else:
         grade = "F"
 
+    # Garde-fou trades minimum — plafonnement du grade
+    grade_before_cap = grade
+    _GRADE_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "F": 4}
+    if total_trades > 0:
+        if total_trades < 30:
+            max_grade = "C"
+            if _GRADE_ORDER[grade] < _GRADE_ORDER[max_grade]:
+                grade = max_grade
+        elif total_trades < 50:
+            max_grade = "B"
+            if _GRADE_ORDER[grade] < _GRADE_ORDER[max_grade]:
+                grade = max_grade
+
     logger.info(
-        "compute_grade: {} ({}/100) — oos_is_ratio={:.2f}→{}/25, "
+        "compute_grade: {} ({}/100, trades={}{}) — oos_is_ratio={:.2f}→{}/25, "
         "mc_p={:.3f}(underpow={})→{}/25, dsr={:.2f}→{}/20, "
         "stability={:.2f}→{}/15, bitget={:.2f}→{}/15",
-        grade, score,
+        grade, score, total_trades,
+        f" cap {grade_before_cap}→{grade}" if grade != grade_before_cap else "",
         oos_is_ratio, breakdown["oos_is_ratio"],
         mc_p_value, mc_underpowered, breakdown["monte_carlo"],
         dsr, breakdown["dsr"],
@@ -598,6 +615,15 @@ def build_final_report(
         overfit.convergence.divergent_params if overfit.convergence else []
     )
 
+    # Nombre de trades OOS du best combo (ou fallback all_oos_trades)
+    best_combo_trades = 0
+    for c in wfo.combo_results:
+        if c.get("is_best"):
+            best_combo_trades = c.get("oos_trades", 0) or 0
+            break
+    if best_combo_trades == 0:
+        best_combo_trades = len(wfo.all_oos_trades)
+
     grade, total_score = compute_grade(
         oos_is_ratio=wfo.oos_is_ratio,
         mc_p_value=overfit.monte_carlo.p_value,
@@ -605,9 +631,18 @@ def build_final_report(
         stability=overfit.stability.overall_stability,
         bitget_transfer=validation.transfer_ratio,
         mc_underpowered=overfit.monte_carlo.underpowered,
+        total_trades=best_combo_trades,
     )
 
     warnings: list[str] = []
+    if best_combo_trades < 30:
+        warnings.append(
+            f"Seulement {best_combo_trades} trades OOS — grade plafonné à C"
+        )
+    elif best_combo_trades < 50:
+        warnings.append(
+            f"Seulement {best_combo_trades} trades OOS — grade plafonné à B"
+        )
     if overfit.monte_carlo.underpowered:
         n_trades = len(wfo.all_oos_trades)
         warnings.append(

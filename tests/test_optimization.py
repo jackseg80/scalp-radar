@@ -421,6 +421,36 @@ class TestGrading:
         # Vérifier que underpowered ne bloque pas un bon grade
         assert grade_underpowered in ("A", "B")
 
+    def test_grade_capped_at_c_under_30_trades(self):
+        """6 trades OOS, score 100 → Grade C (pas A)."""
+        grade, score = compute_grade(
+            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
+            stability=0.85, bitget_transfer=0.60,
+            total_trades=6,
+        )
+        assert score == 100  # Score brut inchangé
+        assert grade == "C"  # Plafonné à C
+
+    def test_grade_capped_at_b_under_50_trades(self):
+        """40 trades OOS, score 100 → Grade B (pas A)."""
+        grade, score = compute_grade(
+            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
+            stability=0.85, bitget_transfer=0.60,
+            total_trades=40,
+        )
+        assert score == 100
+        assert grade == "B"  # Plafonné à B
+
+    def test_grade_not_capped_above_50_trades(self):
+        """100 trades OOS, score 100 → Grade A (pas de plafond)."""
+        grade, score = compute_grade(
+            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
+            stability=0.85, bitget_transfer=0.60,
+            total_trades=100,
+        )
+        assert score == 100
+        assert grade == "A"
+
 
 # ─── Tests Bootstrap CI ──────────────────────────────────────────────────
 
