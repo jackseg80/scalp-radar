@@ -70,7 +70,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (28 components: Scanner, Heatmap, Explorer, Research, Diagnostic, etc.)
-├── tests/                        # 770 tests (pytest, 43 fichiers)
+├── tests/                        # 772 tests (pytest, 43 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
 └── docs/plans/                   # Sprint plans 1-19 archivés
 ```
@@ -153,7 +153,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19) : 770 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19) : 772 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -196,7 +196,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 15d : Consistance dans le grade (20 pts/100), Top 5 trié par combo_score, fetch 18 nouvelles paires Binance, WFO 23 assets (21 Grade A/B), `--apply` auto per_asset, auto-add assets.yaml via ccxt, bouton "Appliquer A/B" frontend (714 tests)
 - Hotfix sizing : capital configurable (`risk.yaml initial_capital`), position sizing proportionnel (`capital / nb_assets / levels`), equal risk per trade (`margin = risk_budget / sl_pct`, cap 25%) (714 tests)
 - Sprint 16+17 : Dashboard Scanner (colonnes Grade + Grid), ActivePositions GridSummary, endpoint `GET /api/simulator/grid-state`, WS push grid_state 3s, DataEngine batching anti-rate-limit (30006), fix warm-up compound post-restore (727 tests)
-- Sprint 19 : Stratégie Grid ATR (10e stratégie, enveloppes ATR adaptatives, fast engine, 3240 combos WFO, 37 tests) (770 tests)
+- Sprint 19 : Stratégie Grid ATR (10e stratégie, enveloppes ATR adaptatives, fast engine, 3240 combos WFO, 37 tests) (772 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 
@@ -267,6 +267,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - 6 critères : OOS/IS ratio (20 pts), Monte Carlo (20 pts), Consistance (20 pts), DSR (15 pts), Stabilité (10 pts), Bitget transfer (15 pts)
 - combo_score : `sharpe × (0.4 + 0.6×consistency) × min(1, trades/100)` — sélection best combo WFO
 - Garde-fous : < 30 trades → grade max C, < 50 trades → grade max B
+- Bitget transfer 3 paliers : `>0.50 + significant` → 15 pts, `>0.50` seul → 10 pts, `>0.30` → 5 pts ; guard `bitget_trades < 15` → cap 8 pts
 - Bouton "Appliquer A/B" frontend : `POST /api/optimization/apply` → per_asset strategies.yaml + auto-add assets.yaml via ccxt
 - `fetch_history.py --symbols` : bypass assets.yaml pour télécharger des paires spécifiques
 

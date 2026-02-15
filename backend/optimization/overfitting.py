@@ -162,7 +162,7 @@ class OverfitDetector:
         """
         if len(trades) < 5:
             return MonteCarloResult(
-                p_value=1.0, real_sharpe=observed_sharpe or 0.0,
+                p_value=1.0, real_sharpe=observed_sharpe if observed_sharpe is not None else 0.0,
                 distribution=[], significant=False,
                 underpowered=True,
             )

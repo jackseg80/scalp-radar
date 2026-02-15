@@ -99,6 +99,8 @@ def compute_grade(
     mc_underpowered: bool = False,
     total_trades: int = 0,
     consistency: float = 1.0,
+    transfer_significant: bool = True,
+    bitget_trades: int = 0,
 ) -> tuple[str, int]:
     """Calcule le grade A-F et le score numérique 0-100.
 
@@ -175,12 +177,18 @@ def compute_grade(
         breakdown["stability"] = 0
 
     # Bitget transfer (max 15 points)
-    if bitget_transfer > 0.50:
+    if bitget_transfer > 0.50 and transfer_significant:
         breakdown["bitget_transfer"] = 15
+    elif bitget_transfer > 0.50:  # ratio bon mais CI inclut zéro
+        breakdown["bitget_transfer"] = 10
     elif bitget_transfer > 0.30:
-        breakdown["bitget_transfer"] = 8
+        breakdown["bitget_transfer"] = 5
     else:
         breakdown["bitget_transfer"] = 0
+
+    # Guard : peu de trades Bitget → cap le score transfer
+    if 0 < bitget_trades < 15:
+        breakdown["bitget_transfer"] = min(breakdown["bitget_transfer"], 8)
 
     score = sum(breakdown.values())
 
@@ -644,7 +652,7 @@ def build_final_report(
     best_combo_trades = 0
     for c in wfo.combo_results:
         if c.get("is_best"):
-            best_combo_trades = c.get("oos_trades", 0) or 0
+            best_combo_trades = c.get("oos_trades") or 0
             break
     if best_combo_trades == 0:
         best_combo_trades = len(wfo.all_oos_trades)
@@ -658,6 +666,8 @@ def build_final_report(
         mc_underpowered=overfit.monte_carlo.underpowered,
         total_trades=best_combo_trades,
         consistency=wfo.consistency_rate,
+        transfer_significant=validation.transfer_significant,
+        bitget_trades=validation.bitget_trades,
     )
 
     warnings: list[str] = []

@@ -806,7 +806,7 @@ Phase 4: Recherche          ✅   Sprint 19: Grid ATR ✅
 
 ## ÉTAT ACTUEL (15 février 2026)
 
-- **770 tests**, 0 régression
+- **772 tests**, 0 régression
 - **Sprint 19 complété** (Phase 5 en cours) — Stratégie Grid ATR
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO** : 3 Grade A (ETH, DOGE, SOL) + 18 Grade B + 2 Grade D exclus (BTC, BNB)

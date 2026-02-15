@@ -453,6 +453,27 @@ class TestGrading:
         assert score == 100
         assert grade == "A"
 
+    def test_grade_transfer_not_significant(self):
+        """transfer_significant=False → 10/15 au lieu de 15/15, score 95, grade A."""
+        grade, score = compute_grade(
+            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
+            stability=0.85, bitget_transfer=0.60,
+            transfer_significant=False,
+        )
+        assert score == 95  # 10/15 au lieu de 15/15
+        assert grade == "A"
+
+    def test_grade_few_bitget_trades(self):
+        """bitget_transfer=0.90, bitget_trades=7 → capped à 8/15."""
+        grade, score = compute_grade(
+            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
+            stability=0.85, bitget_transfer=0.90,
+            bitget_trades=7,
+        )
+        # 20 + 20 + 15 + 20 + 10 + 8 (capped de 15 à 8) = 93
+        assert score == 93
+        assert grade == "A"
+
 
 # ─── Tests Bootstrap CI ──────────────────────────────────────────────────
 
