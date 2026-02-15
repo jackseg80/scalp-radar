@@ -38,10 +38,21 @@ async def get_equity_curve(
 ) -> dict:
     """Courbe d'equity calculée depuis les trades.
 
+    Priorité : mémoire (temps réel). Fallback : DB (robuste aux restarts).
     ?since= pour ne retourner que les nouveaux points (polling incrémental).
     """
     simulator = getattr(request.app.state, "simulator", None)
     if simulator is None:
         return {"equity": [], "current_capital": 10000.0, "initial_capital": 10000.0}
 
-    return simulator.get_equity_curve(since=since)
+    result = simulator.get_equity_curve(since=since)
+
+    # Fallback DB si la mémoire est vide (après restart)
+    if not result.get("equity"):
+        db = getattr(request.app.state, "db", None)
+        if db is not None:
+            equity = await db.get_equity_curve_from_trades(since=since)
+            if equity:
+                result["equity"] = equity
+
+    return result

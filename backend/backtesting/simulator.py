@@ -1591,20 +1591,22 @@ class Simulator:
         return result
 
     def get_signal_matrix(self) -> dict:
-        """Matrice simplifiée pour la Heatmap : dernier score par (strategy, asset)."""
-        symbols = self._data_engine.get_all_symbols()
+        """Matrice conditions met/total pour la Heatmap : ratio par (strategy, asset)."""
+        conditions_data = self.get_conditions()
+        assets = conditions_data.get("assets", {})
         matrix: dict[str, dict[str, float | None]] = {}
 
-        for symbol in symbols:
+        for symbol, asset_data in assets.items():
             matrix[symbol] = {}
-            for runner in self._runners:
-                # Chercher le dernier trade de ce runner pour ce symbol
-                last_score = None
-                for _sym, trade in runner.get_trades():
-                    if hasattr(trade, "entry_price"):
-                        # TradeResult n'a pas de score — on utilise les conditions
-                        break
-                matrix[symbol][runner.name] = last_score
+            strategies = asset_data.get("strategies", {})
+            for strat_name, strat_data in strategies.items():
+                conditions = strat_data.get("conditions", [])
+                if conditions:
+                    met = sum(1 for c in conditions if c.get("met"))
+                    total = len(conditions)
+                    matrix[symbol][strat_name] = met / total if total > 0 else 0.0
+                else:
+                    matrix[symbol][strat_name] = None
 
         return {"matrix": matrix}
 

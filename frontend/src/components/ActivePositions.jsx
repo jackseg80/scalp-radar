@@ -32,9 +32,16 @@ export default function ActivePositions({ wsData }) {
   )
 }
 
+function formatPnl(value) {
+  if (value == null) return null
+  const abs = Math.abs(value)
+  if (abs >= 10000) return `${(value / 1000).toFixed(1)}K$`
+  return `${value.toFixed(2)}$`
+}
+
 function PositionRow({ pos, source, currentPrice }) {
   const isLong = pos.direction === 'LONG'
-  const emoji = isLong ? '\u{1F7E2}' : '\u{1F534}'
+  const isGrid = pos.type === 'grid'
 
   // P&L non réalisé
   let unrealizedPnl = null
@@ -47,16 +54,21 @@ function PositionRow({ pos, source, currentPrice }) {
 
   return (
     <div className="active-position-item">
-      <span>{emoji}</span>
+      <span>{isLong ? '\u{1F7E2}' : '\u{1F534}'}</span>
       <span className={`badge ${isLong ? 'badge-long' : 'badge-short'}`}>
         {pos.direction}
       </span>
       <span style={{ fontWeight: 600 }}>{pos.symbol || '--'}</span>
       <span className="text-xs muted">{pos.strategy_name || pos.strategy || ''}</span>
+      {isGrid && pos.level != null && (
+        <span className="badge" style={{ fontSize: 9, background: 'var(--surface)', color: 'var(--text-dim)' }}>
+          Niv.{pos.level}
+        </span>
+      )}
       <span className="mono text-xs">@ {Number(pos.entry_price).toFixed(2)}</span>
       {unrealizedPnl != null && (
         <span className={`mono text-xs ${unrealizedPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
-          {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(2)}$
+          {unrealizedPnl >= 0 ? '+' : ''}{formatPnl(unrealizedPnl)}
         </span>
       )}
       <span className={`badge ${source === 'LIVE' ? 'badge-active' : 'badge-simulation'}`} style={{ fontSize: 9, marginLeft: 'auto' }}>

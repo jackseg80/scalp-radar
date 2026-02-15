@@ -759,6 +759,42 @@ class Database:
             for row in rows
         ]
 
+    async def get_equity_curve_from_trades(self, since: str | None = None) -> list[dict]:
+        """Calcule l'equity curve depuis les trades en DB (robuste aux restarts).
+
+        Retourne une liste de points {timestamp, capital, trade_pnl}.
+        """
+        assert self._conn is not None
+        query = "SELECT net_pnl, exit_time FROM simulation_trades"
+        params: list[object] = []
+        if since:
+            query += " WHERE exit_time > ?"
+            params.append(since)
+        query += " ORDER BY exit_time ASC"
+
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+
+        capital = 10_000.0
+        # Si on filtre par since, on doit d'abord calculer le capital de base
+        if since and rows:
+            base_cursor = await self._conn.execute(
+                "SELECT COALESCE(SUM(net_pnl), 0) FROM simulation_trades WHERE exit_time <= ?",
+                [since],
+            )
+            base_row = await base_cursor.fetchone()
+            capital += base_row[0]
+
+        equity = []
+        for row in rows:
+            capital += row["net_pnl"]
+            equity.append({
+                "timestamp": row["exit_time"],
+                "capital": round(capital, 2),
+                "trade_pnl": round(row["net_pnl"], 2),
+            })
+        return equity
+
     async def clear_simulation_trades(self) -> int:
         """Vide la table simulation_trades. Retourne le nombre de lignes supprimées."""
         assert self._conn is not None
