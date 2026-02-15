@@ -65,6 +65,7 @@ body {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sidebar {
@@ -249,6 +250,15 @@ tr:last-child td { border-bottom: none; }
 }
 
 /* ─── SCANNER ──────────────────────────────────────────────────────────── */
+.scanner-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.scanner-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .scanner-row {
   cursor: pointer;
   transition: background 0.1s;

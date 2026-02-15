@@ -451,34 +451,34 @@ export default function ResearchPage() {
         <table className="results-table">
           <thead>
             <tr>
-              <th onClick={() => handleSort('strategy_name')}>
+              <th style={{ width: '14%' }} onClick={() => handleSort('strategy_name')}>
                 Stratégie {sortBy === 'strategy_name' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('asset')}>
+              <th style={{ width: '12%' }} onClick={() => handleSort('asset')}>
                 Asset {sortBy === 'asset' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('grade')}>
+              <th style={{ width: '7%' }} onClick={() => handleSort('grade')}>
                 Grade {sortBy === 'grade' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('total_score')}>
+              <th style={{ width: '8%' }} onClick={() => handleSort('total_score')}>
                 Score <InfoTooltip term="total_score" /> {sortBy === 'total_score' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('oos_sharpe')}>
-                OOS Sharpe <InfoTooltip term="oos_sharpe" /> {sortBy === 'oos_sharpe' && (sortDir === 'asc' ? '↑' : '↓')}
+              <th style={{ width: '11%' }} onClick={() => handleSort('oos_sharpe')}>
+                Sharpe <InfoTooltip term="oos_sharpe" /> {sortBy === 'oos_sharpe' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('consistency')}>
-                Consistance <InfoTooltip term="consistency" /> {sortBy === 'consistency' && (sortDir === 'asc' ? '↑' : '↓')}
+              <th style={{ width: '11%' }} onClick={() => handleSort('consistency')}>
+                Consist. <InfoTooltip term="consistency" /> {sortBy === 'consistency' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('oos_is_ratio')}>
+              <th style={{ width: '9%' }} onClick={() => handleSort('oos_is_ratio')}>
                 OOS/IS <InfoTooltip term="oos_is_ratio" /> {sortBy === 'oos_is_ratio' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('dsr')}>
+              <th style={{ width: '7%' }} onClick={() => handleSort('dsr')}>
                 DSR <InfoTooltip term="dsr" /> {sortBy === 'dsr' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('param_stability')}>
-                Stabilité <InfoTooltip term="param_stability" /> {sortBy === 'param_stability' && (sortDir === 'asc' ? '↑' : '↓')}
+              <th style={{ width: '10%' }} onClick={() => handleSort('param_stability')}>
+                Stab. <InfoTooltip term="param_stability" /> {sortBy === 'param_stability' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th onClick={() => handleSort('created_at')}>
+              <th style={{ width: '11%' }} onClick={() => handleSort('created_at')}>
                 Date {sortBy === 'created_at' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
             </tr>

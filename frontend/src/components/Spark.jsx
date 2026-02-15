@@ -5,14 +5,15 @@
  */
 import { useMemo } from 'react'
 
-export default function Spark({ data = [], w = 110, h = 32, stroke = 1.5 }) {
+export default function Spark({ data = [], w, h = 32, stroke = 1.5 }) {
   const id = useMemo(() => `sg${Math.random().toString(36).slice(2, 8)}`, [])
+  const vw = w || 110
 
   if (!data || data.length < 3) {
     return (
-      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <svg width={w || '100%'} height={h} viewBox={`0 0 ${vw} ${h}`} preserveAspectRatio="none">
         <line
-          x1={0} y1={h / 2} x2={w} y2={h / 2}
+          x1={0} y1={h / 2} x2={vw} y2={h / 2}
           stroke="var(--border)" strokeWidth={1.5}
         />
       </svg>
@@ -25,7 +26,7 @@ export default function Spark({ data = [], w = 110, h = 32, stroke = 1.5 }) {
   const padding = 2
 
   const points = data.map((val, i) => {
-    const x = (i / (data.length - 1)) * w
+    const x = (i / (data.length - 1)) * vw
     const y = padding + ((max - val) / range) * (h - padding * 2)
     return `${x.toFixed(1)},${y.toFixed(1)}`
   }).join(' ')
@@ -39,7 +40,7 @@ export default function Spark({ data = [], w = 110, h = 32, stroke = 1.5 }) {
   const lastY = parseFloat(lastPt[1])
 
   return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block', overflow: 'visible' }}>
+    <svg width={w || '100%'} height={h} viewBox={`0 0 ${vw} ${h}`} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
       <defs>
         <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.18" />
@@ -48,7 +49,7 @@ export default function Spark({ data = [], w = 110, h = 32, stroke = 1.5 }) {
       </defs>
       <polygon
         fill={`url(#${id})`}
-        points={`0,${h} ${points} ${w},${h}`}
+        points={`0,${h} ${points} ${vw},${h}`}
       />
       <polyline
         points={points}
