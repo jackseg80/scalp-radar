@@ -592,7 +592,7 @@ class WalkForwardOptimizer:
 
         # Accumulateur combo results cross-fenêtre (Sprint 14b)
         # Skip si stratégie sans fast engine (trop lent)
-        collect_combo_results = strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short")
+        collect_combo_results = strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short", "grid_atr")
         combo_accumulator: dict[str, list[dict]] = {}
         window_regimes: list[dict[str, Any]] = []
 
