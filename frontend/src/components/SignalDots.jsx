@@ -3,6 +3,7 @@
  * Props : strategies (objet { stratName: { conditions } })
  * Taille 22x22, initiale visible, couleur par ratio conditions met/total.
  */
+import { memo } from 'react'
 import Tooltip from './Tooltip'
 
 const STRATEGY_ICONS = {
@@ -38,7 +39,7 @@ function buildTooltip(name, conditions) {
   )
 }
 
-export default function SignalDots({ strategies = {} }) {
+const SignalDots = memo(function SignalDots({ strategies = {} }) {
   const entries = Object.entries(strategies)
 
   if (entries.length === 0) {
@@ -73,4 +74,6 @@ export default function SignalDots({ strategies = {} }) {
       })}
     </div>
   )
-}
+})
+
+export default SignalDots

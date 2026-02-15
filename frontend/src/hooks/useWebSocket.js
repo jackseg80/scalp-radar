@@ -52,7 +52,14 @@ export function useWebSocket(url) {
     return () => {
       unmounted = true
       if (timeoutId) clearTimeout(timeoutId)
-      if (wsRef.current) wsRef.current.close()
+      if (wsRef.current) {
+        // Nullify handlers to avoid StrictMode double-mount warnings
+        wsRef.current.onopen = null
+        wsRef.current.onmessage = null
+        wsRef.current.onclose = null
+        wsRef.current.onerror = null
+        wsRef.current.close()
+      }
     }
   }, [url])
 

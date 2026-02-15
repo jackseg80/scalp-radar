@@ -3,9 +3,9 @@
  * Props : data (array de nombres), w (largeur, default 110), h (hauteur, default 32)
  * Vert si dernier > premier, rouge sinon.
  */
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 
-export default function Spark({ data = [], w, h = 32, stroke = 1.5 }) {
+const Spark = memo(function Spark({ data = [], w, h = 32, stroke = 1.5 }) {
   const id = useMemo(() => `sg${Math.random().toString(36).slice(2, 8)}`, [])
   const vw = w || 110
 
@@ -64,4 +64,6 @@ export default function Spark({ data = [], w, h = 32, stroke = 1.5 }) {
       </circle>
     </svg>
   )
-}
+})
+
+export default Spark
