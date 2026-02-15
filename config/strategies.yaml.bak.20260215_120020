@@ -1,0 +1,152 @@
+# Stratégies de scalping
+vwap_rsi:
+  enabled: false       # Grade F — désactivé Sprint 11
+  live_eligible: true  # Peut être répliquée en live par l'executor
+  timeframe: "5m"
+  trend_filter_timeframe: "15m"
+  rsi_period: 14
+  rsi_long_threshold: 30
+  rsi_short_threshold: 70
+  volume_spike_multiplier: 2.0
+  vwap_deviation_entry: 0.3
+  trend_adx_threshold: 25.0  # ADX 15m > seuil = tendance, pas de trade (mean reversion = range only)
+  tp_percent: 0.8
+  sl_percent: 0.3
+  weight: 0.25
+  per_asset: {}  # Overrides par asset (ex: SOL/USDT: {sl_percent: 0.5})
+
+liquidation:
+  enabled: false        # Grade F — désactivé Sprint 11
+  live_eligible: false  # Données OI approximatives, paper trading only
+  timeframe: "5m"
+  oi_change_threshold: 5.0
+  leverage_estimate: 15
+  zone_buffer_percent: 1.5
+  tp_percent: 0.8
+  sl_percent: 0.4
+  weight: 0.20
+  per_asset: {}  # Overrides par asset (ex: BTC/USDT: {oi_change_threshold: 3.0})
+
+orderflow:
+  enabled: false
+  timeframe: "1m"
+  imbalance_threshold: 2.0
+  large_order_multiplier: 5.0
+  absorption_threshold: 0.7
+  # Filtre de confirmation, pas de TP/SL propre
+  confirmation_only: true
+  weight: 0.20
+
+momentum:
+  enabled: false       # Grade F — désactivé Sprint 11
+  live_eligible: true  # Peut être répliquée en live par l'executor
+  timeframe: "5m"
+  trend_filter_timeframe: "15m"
+  breakout_lookback: 20
+  volume_confirmation_multiplier: 2.0
+  atr_multiplier_tp: 2.0
+  atr_multiplier_sl: 1.0
+  tp_percent: 0.6
+  sl_percent: 0.3
+  weight: 0.20
+  per_asset: {}  # Overrides par asset (ex: SOL/USDT: {sl_percent: 0.5})
+
+funding:
+  enabled: false        # Grade F — désactivé Sprint 11
+  live_eligible: false  # Données funding approximatives, paper trading only
+  timeframe: "15m"
+  extreme_positive_threshold: 0.03
+  extreme_negative_threshold: -0.03
+  entry_delay_minutes: 5
+  tp_percent: 0.4
+  sl_percent: 0.2
+  weight: 0.15
+  per_asset: {}  # Overrides par asset (ex: BTC/USDT: {extreme_positive_threshold: 0.05})
+
+bollinger_mr:
+  enabled: false       # Grade F — désactivé Sprint 11
+  live_eligible: false
+  timeframe: "1h"
+  bb_period: 20
+  bb_std: 2.0
+  sl_percent: 5.0
+  weight: 0.15
+  per_asset: {}
+
+donchian_breakout:
+  enabled: false       # Grade F — désactivé Sprint 11
+  live_eligible: false
+  timeframe: "1h"
+  entry_lookback: 20
+  atr_period: 14
+  atr_tp_multiple: 3.0
+  atr_sl_multiple: 1.5
+  weight: 0.15
+  per_asset: {}
+
+supertrend:
+  enabled: false       # Grade F — désactivé Sprint 11
+  live_eligible: false
+  timeframe: "1h"
+  atr_period: 10
+  atr_multiplier: 3.0
+  tp_percent: 4.0
+  sl_percent: 2.0
+  weight: 0.15
+  per_asset: {}
+
+envelope_dca:
+  enabled: true
+  live_eligible: true
+  timeframe: "1h"
+  ma_period: 5           # Default = DOGE (meilleur asset)
+  num_levels: 4
+  envelope_start: 0.05
+  envelope_step: 0.05
+  sl_percent: 25.0
+  sides: ["long"]
+  leverage: 6
+  weight: 0.20
+  per_asset:
+    DOGE/USDT:
+      ma_period: 5
+      num_levels: 4
+      envelope_step: 0.05
+      sl_percent: 25.0
+    SOL/USDT:
+      ma_period: 7
+      num_levels: 3
+      envelope_step: 0.02
+      sl_percent: 30.0
+    ETH/USDT:
+      ma_period: 5
+      num_levels: 2
+      envelope_step: 0.05
+      sl_percent: 20.0
+    LINK/USDT:
+      ma_period: 5
+      num_levels: 4
+      envelope_step: 0.03
+      sl_percent: 30.0
+
+envelope_dca_short:
+  enabled: false          # Validation WFO d'abord
+  live_eligible: false
+  timeframe: "1h"
+  ma_period: 7
+  num_levels: 2
+  envelope_start: 0.05
+  envelope_step: 0.02
+  sl_percent: 20.0
+  sides: ["short"]
+  leverage: 6
+  weight: 0.20
+  per_asset: {}
+
+# Stratégies custom (swing existantes, baseline pour l'Arena)
+custom_strategies:
+  swing_baseline:
+    enabled: false
+    timeframe: "1h"
+    description: "Stratégies swing existantes importées comme baseline Arena"
+    # Paramètres à définir en Sprint 2 lors du branchement
