@@ -473,11 +473,42 @@ def _print_report(
     print()
 
 
+def _fetch_market_specs(symbols: list[str]) -> dict[str, dict]:
+    """Fetch tick_size, min_order_size, max_leverage depuis ccxt Bitget (sync).
+
+    Un seul load_markets() pour tous les symbols.
+    Retourne {} si ccxt échoue (réseau down, etc.).
+    """
+    try:
+        import ccxt as _ccxt
+
+        exchange = _ccxt.bitget({"options": {"defaultType": "swap"}})
+        exchange.load_markets()
+    except Exception as e:
+        logger.warning("ccxt load_markets() échoué — skip auto-add assets.yaml : {}", e)
+        return {}
+
+    result: dict[str, dict] = {}
+    for symbol in symbols:
+        key = f"{symbol}:USDT"
+        if key not in exchange.markets:
+            logger.warning("{} non trouvé sur Bitget (clé {})", symbol, key)
+            continue
+        m = exchange.markets[key]
+        max_lev = int(m.get("limits", {}).get("leverage", {}).get("max", 20))
+        result[symbol] = {
+            "tick_size": m["precision"]["price"],
+            "min_order_size": m["limits"]["amount"]["min"],
+            "max_leverage": min(max_lev, 20),
+        }
+    return result
+
+
 def apply_from_db(
     strategy_names: list[str],
     config_dir: str = "config",
     db_path: str | None = None,
-) -> bool:
+) -> dict:
     """Lit les résultats is_latest=1 en DB et écrit per_asset dans strategies.yaml.
 
     - Grade A/B → best_params écrits dans per_asset
@@ -485,7 +516,7 @@ def apply_from_db(
     - Champs non-optimisés préservés (enabled, leverage, weight, sides, timeframe)
 
     Returns:
-        True si au moins un changement effectué.
+        dict avec clés: changed, applied, removed, excluded, grades, backup
     """
     import json
     import shutil
@@ -539,6 +570,11 @@ def apply_from_db(
     shutil.copy2(str(yaml_path), str(backup_path))
 
     changed = False
+    all_applied: list[str] = []
+    all_removed: list[str] = []
+    all_excluded: list[str] = []
+    all_grades: dict[str, str] = {}
+
     print(f"\n{'=' * 55}")
     print("  --apply : mise à jour per_asset depuis la DB")
     print(f"{'=' * 55}")
@@ -562,6 +598,7 @@ def apply_from_db(
         eligible_assets = set()
         for r in results:
             asset = r["asset"]
+            all_grades[asset] = r["grade"]
             if r["grade"] in ("A", "B"):
                 eligible_assets.add(asset)
                 old_params = old_per_asset.get(asset, {})
@@ -570,14 +607,19 @@ def apply_from_db(
 
                 if asset not in old_per_asset:
                     added.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
+                    all_applied.append(asset)
                 elif old_params != new_params:
                     updated.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
+                    all_applied.append(asset)
                 else:
                     unchanged.append(asset)
             else:
                 # Grade C/D/F → ne pas inclure (retrait implicite)
                 if asset in old_per_asset:
                     removed.append(f"{asset} (Grade {r['grade']})")
+                    all_removed.append(asset)
+                else:
+                    all_excluded.append(asset)
 
         # Assets dans per_asset mais sans résultat DB → conserver (pas de données pour décider)
         for asset, params in old_per_asset.items():
@@ -613,17 +655,64 @@ def apply_from_db(
         if unchanged:
             print(f"    = Inchangés : {', '.join(unchanged)}")
 
-    # Sauvegarder
+    # Auto-add assets manquants dans assets.yaml
+    assets_yaml_path = Path(f"{config_dir}/assets.yaml")
+    assets_added: list[str] = []
+
+    if all_applied and assets_yaml_path.exists():
+        with open(assets_yaml_path, encoding="utf-8") as f:
+            assets_data = yaml.safe_load(f) or {}
+        existing_symbols = {a["symbol"] for a in assets_data.get("assets", [])}
+
+        missing = [s for s in all_applied if s not in existing_symbols]
+        if missing:
+            specs = _fetch_market_specs(missing)
+            for symbol in missing:
+                if symbol not in specs:
+                    continue
+                sp = specs[symbol]
+                new_entry = {
+                    "symbol": symbol,
+                    "exchange": "bitget",
+                    "type": "futures",
+                    "timeframes": ["1h"],
+                    "max_leverage": sp["max_leverage"],
+                    "min_order_size": sp["min_order_size"],
+                    "tick_size": sp["tick_size"],
+                    "correlation_group": "altcoins",
+                }
+                assets_data.setdefault("assets", []).append(new_entry)
+                assets_added.append(symbol)
+                print(f"    + AUTO-AJOUTÉ dans assets.yaml : {symbol}"
+                      f" (tick={sp['tick_size']}, min_order={sp['min_order_size']}, lev={sp['max_leverage']})")
+
+            if assets_added:
+                assets_bak = assets_yaml_path.with_name(f"assets.yaml.bak.{ts}")
+                shutil.copy2(str(assets_yaml_path), str(assets_bak))
+                with open(assets_yaml_path, "w", encoding="utf-8") as f:
+                    yaml.dump(assets_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    # Sauvegarder strategies.yaml
+    backup_name: str | None = None
     if changed:
         with open(yaml_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        print(f"\n  strategies.yaml mis à jour (backup: {backup_path.name})")
+        backup_name = backup_path.name
+        print(f"\n  strategies.yaml mis à jour (backup: {backup_name})")
     else:
         print("\n  Aucun changement détecté — strategies.yaml inchangé")
         backup_path.unlink()  # Supprimer le backup inutile
 
     print()
-    return changed
+    return {
+        "changed": changed,
+        "applied": all_applied,
+        "removed": all_removed,
+        "excluded": all_excluded,
+        "grades": all_grades,
+        "backup": backup_name,
+        "assets_added": assets_added,
+    }
 
 
 async def main() -> None:

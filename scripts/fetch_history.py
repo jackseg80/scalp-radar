@@ -7,6 +7,7 @@ Lancement :
     uv run python -m scripts.fetch_history
     uv run python -m scripts.fetch_history --symbol BTC/USDT --timeframe 5m --days 7
     uv run python -m scripts.fetch_history --exchange binance --days 730
+    uv run python -m scripts.fetch_history --exchange binance --days 1800 --symbols ADA/USDT,AVAX/USDT --timeframe 1h
 """
 
 from __future__ import annotations
@@ -146,8 +147,10 @@ async def fetch_symbol_timeframe(
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch historical klines")
-    parser.add_argument("--symbol", type=str, help="Symbol spécifique (ex: BTC/USDT)")
-    parser.add_argument("--timeframe", type=str, help="Timeframe spécifique (ex: 5m)")
+    parser.add_argument("--symbol", type=str, help="Filtre un symbol de config/assets.yaml (ex: BTC/USDT)")
+    parser.add_argument("--symbols", type=str,
+                        help="Liste de symbols séparés par des virgules, bypass assets.yaml (ex: ADA/USDT,AVAX/USDT)")
+    parser.add_argument("--timeframe", type=str, help="Timeframe spécifique (ex: 5m, 1h)")
     parser.add_argument("--days", type=int, default=180, help="Nombre de jours (défaut: 180)")
     parser.add_argument("--exchange", type=str, default="bitget", choices=["bitget", "binance"],
                         help="Exchange source (défaut: bitget)")
@@ -167,13 +170,26 @@ async def main() -> None:
 
     # Déterminer les paires à télécharger
     pairs: list[tuple[str, str]] = []
-    for asset in config.assets:
-        if args.symbol and asset.symbol != args.symbol:
-            continue
-        for tf in asset.timeframes:
-            if args.timeframe and tf != args.timeframe:
+
+    if args.symbols:
+        # --symbols : bypass config.assets, construction directe
+        symbols_list = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        if args.timeframe:
+            timeframes = [args.timeframe]
+        else:
+            timeframes = ["1m", "5m", "15m", "1h"]
+        for sym in symbols_list:
+            for tf in timeframes:
+                pairs.append((sym, tf))
+    else:
+        # Mode normal : depuis config.assets avec filtre --symbol optionnel
+        for asset in config.assets:
+            if args.symbol and asset.symbol != args.symbol:
                 continue
-            pairs.append((asset.symbol, tf))
+            for tf in asset.timeframes:
+                if args.timeframe and tf != args.timeframe:
+                    continue
+                pairs.append((asset.symbol, tf))
 
     logger.info(
         "Téléchargement {} : {} paire(s) sur {} jours ({} → {})",

@@ -120,6 +120,37 @@ export default function ResearchPage() {
     return [...new Set(results.results.map(r => r.asset))].sort()
   }, [results])
 
+  // Apply params
+  const [applyResult, setApplyResult] = useState(null)
+  const [applying, setApplying] = useState(false)
+
+  const handleApply = async () => {
+    const stratLabel = filters.strategy || 'toutes les stratégies'
+    const ok = window.confirm(
+      `Appliquer les params Grade A/B de "${stratLabel}" dans strategies.yaml ?`
+    )
+    if (!ok) return
+
+    setApplying(true)
+    setApplyResult(null)
+    try {
+      const qs = filters.strategy ? `?strategy_name=${encodeURIComponent(filters.strategy)}` : ''
+      const resp = await fetch(`/api/optimization/apply${qs}`, { method: 'POST' })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        throw new Error(err.detail || `HTTP ${resp.status}`)
+      }
+      const json = await resp.json()
+      setApplyResult(json)
+      // Auto-dismiss après 15s
+      setTimeout(() => setApplyResult(null), 15000)
+    } catch (err) {
+      alert(`Erreur apply: ${err.message}`)
+    } finally {
+      setApplying(false)
+    }
+  }
+
   // Toggle tri
   const handleSort = (column) => {
     if (sortBy === column) {
@@ -369,8 +400,48 @@ export default function ResearchPage() {
             <option value="B">B et plus</option>
             <option value="A">A uniquement</option>
           </select>
+
+          <button
+            className="btn-apply"
+            onClick={handleApply}
+            disabled={applying}
+            title="Appliquer les params Grade A/B dans strategies.yaml"
+          >
+            {applying ? 'Application...' : 'Appliquer A/B'}
+          </button>
         </div>
       </div>
+
+      {applyResult && (
+        <div
+          className={`apply-result ${applyResult.changed ? 'apply-changed' : 'apply-noop'}`}
+          onClick={() => setApplyResult(null)}
+        >
+          {applyResult.changed ? (
+            <>
+              <strong>strategies.yaml mis à jour</strong>
+              {applyResult.applied.length > 0 && (
+                <span className="apply-applied">
+                  {' '}Appliqués : {applyResult.applied.join(', ')}
+                </span>
+              )}
+              {applyResult.removed.length > 0 && (
+                <span className="apply-removed">
+                  {' '}Retirés : {applyResult.removed.join(', ')}
+                </span>
+              )}
+              {applyResult.assets_added?.length > 0 && (
+                <span className="apply-assets-added">
+                  {' '}Ajoutés dans assets.yaml : {applyResult.assets_added.join(', ')}
+                </span>
+              )}
+              <span className="apply-dismiss"> (cliquer pour fermer)</span>
+            </>
+          ) : (
+            <span>Aucun changement — strategies.yaml inchangé</span>
+          )}
+        </div>
+      )}
 
       <div className="results-count">
         {filteredResults.length} résultat(s) sur {results?.total || 0} total

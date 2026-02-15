@@ -536,6 +536,45 @@ async def get_optimization_heatmap(
     }
 
 
+# ─── Apply best params to strategies.yaml ─────────────────────────────────
+
+
+@router.post("/apply")
+async def apply_optimization_params(
+    strategy_name: str | None = Query(default=None, description="Stratégie (ou toutes si omis)"),
+) -> dict:
+    """Applique les paramètres Grade A/B dans config/strategies.yaml.
+
+    Lit les résultats is_latest=1 en DB, écrit per_asset pour les Grade A/B,
+    retire les Grade C/D/F.
+
+    Returns:
+        {
+            changed: bool,
+            applied: ["BTC/USDT", ...],
+            removed: ["SOL/USDT", ...],
+            excluded: ["ETH/USDT", ...],
+            grades: {"BTC/USDT": "A", ...},
+            backup: "strategies.yaml.bak.20260215_143022" | null
+        }
+    """
+    from backend.optimization import STRATEGY_REGISTRY
+    from scripts.optimize import apply_from_db
+
+    if strategy_name:
+        if strategy_name not in STRATEGY_REGISTRY:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Stratégie '{strategy_name}' inconnue",
+            )
+        strategy_names = [strategy_name]
+    else:
+        strategy_names = list(STRATEGY_REGISTRY.keys())
+
+    result = apply_from_db(strategy_names)
+    return result
+
+
 # ─── Sprint 14b — Combo Results ──────────────────────────────────────────
 
 

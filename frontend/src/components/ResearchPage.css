@@ -294,3 +294,63 @@
   transition: width 0.3s, background 0.3s;
   border-radius: 4px;
 }
+
+/* Apply button */
+.btn-apply {
+  padding: 8px 16px;
+  background: #10b981;
+  border: none;
+  border-radius: 4px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-apply:hover {
+  background: #059669;
+}
+
+.btn-apply:disabled {
+  background: #444;
+  cursor: not-allowed;
+}
+
+/* Apply result banner */
+.apply-result {
+  padding: 10px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+
+.apply-changed {
+  background: #0a2a1a;
+  border: 1px solid #10b981;
+  color: #a7f3d0;
+}
+
+.apply-noop {
+  background: #1a1a2a;
+  border: 1px solid #3b82f6;
+  color: #93c5fd;
+}
+
+.apply-applied {
+  color: #34d399;
+}
+
+.apply-removed {
+  color: #f87171;
+}
+
+.apply-assets-added {
+  color: #60a5fa;
+}
+
+.apply-dismiss {
+  color: #666;
+  font-size: 12px;
+}

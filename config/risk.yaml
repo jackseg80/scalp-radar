@@ -6,7 +6,7 @@ kill_switch:
 
 position:
   max_risk_per_trade_percent: 2.0
-  max_concurrent_positions: 3
+  max_concurrent_positions: 15
   default_leverage: 15
   max_leverage: 30
 

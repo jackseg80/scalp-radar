@@ -767,7 +767,15 @@ class TestApplyFromDb:
             db_path=db_path,
         )
 
-        assert result is True
+        assert isinstance(result, dict)
+        assert result["changed"] is True
+        assert "BTC/USDT" in result["applied"]
+        assert "DOGE/USDT" in result["applied"]
+        assert "SOL/USDT" in result["removed"]
+        assert result["grades"]["BTC/USDT"] == "A"
+        assert result["grades"]["DOGE/USDT"] == "A"
+        assert result["grades"]["SOL/USDT"] == "C"
+        assert result["backup"] is not None
 
         # Relire le YAML
         with open(yaml_path, encoding="utf-8") as f:
@@ -796,3 +804,181 @@ class TestApplyFromDb:
         # Vérifier qu'un backup a été créé
         backups = list(tmp_path.glob("strategies.yaml.bak.*"))
         assert len(backups) == 1
+
+    def test_apply_no_change_returns_dict(self, tmp_path):
+        """Aucun résultat en DB → changed=False, aucun backup conservé."""
+        import sqlite3
+
+        db_path = str(tmp_path / "test.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE optimization_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                total_score REAL NOT NULL,
+                best_params TEXT NOT NULL,
+                is_latest INTEGER DEFAULT 1,
+                duration_seconds REAL,
+                oos_sharpe REAL,
+                consistency REAL,
+                oos_is_ratio REAL,
+                dsr REAL,
+                param_stability REAL,
+                monte_carlo_pvalue REAL,
+                mc_underpowered INTEGER DEFAULT 0,
+                n_windows INTEGER NOT NULL,
+                n_distinct_combos INTEGER,
+                wfo_windows TEXT,
+                monte_carlo_summary TEXT,
+                validation_summary TEXT,
+                warnings TEXT,
+                source TEXT DEFAULT 'local',
+                regime_analysis TEXT,
+                UNIQUE(strategy_name, asset, timeframe, created_at)
+            )
+        """)
+        conn.close()
+
+        yaml_path = tmp_path / "strategies.yaml"
+        yaml_path.write_text(yaml.dump({
+            "envelope_dca": {
+                "enabled": True,
+                "leverage": 6,
+                "per_asset": {},
+            },
+        }))
+
+        result = apply_from_db(
+            ["envelope_dca"],
+            config_dir=str(tmp_path),
+            db_path=db_path,
+        )
+
+        assert isinstance(result, dict)
+        assert result["changed"] is False
+        assert result["applied"] == []
+        assert result["removed"] == []
+        assert result["grades"] == {}
+        assert result["assets_added"] == []
+        # Backup supprimé quand aucun changement
+        backups = list(tmp_path.glob("strategies.yaml.bak.*"))
+        assert len(backups) == 0
+
+    @patch("scripts.optimize._fetch_market_specs")
+    def test_apply_auto_adds_assets(self, mock_specs, tmp_path):
+        """Asset Grade A absent de assets.yaml → auto-ajouté avec specs ccxt."""
+        import json
+        import sqlite3
+
+        # DB avec 1 résultat Grade A pour NEWCOIN/USDT
+        db_path = str(tmp_path / "test.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE optimization_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                total_score REAL NOT NULL,
+                best_params TEXT NOT NULL,
+                is_latest INTEGER DEFAULT 1,
+                duration_seconds REAL,
+                oos_sharpe REAL,
+                consistency REAL,
+                oos_is_ratio REAL,
+                dsr REAL,
+                param_stability REAL,
+                monte_carlo_pvalue REAL,
+                mc_underpowered INTEGER DEFAULT 0,
+                n_windows INTEGER NOT NULL,
+                n_distinct_combos INTEGER,
+                wfo_windows TEXT,
+                monte_carlo_summary TEXT,
+                validation_summary TEXT,
+                warnings TEXT,
+                source TEXT DEFAULT 'local',
+                regime_analysis TEXT,
+                UNIQUE(strategy_name, asset, timeframe, created_at)
+            )
+        """)
+        conn.execute(
+            """INSERT INTO optimization_results
+               (strategy_name, asset, timeframe, created_at, grade, total_score,
+                best_params, is_latest, n_windows)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, 12)""",
+            ("envelope_dca", "NEWCOIN/USDT", "1h", "2026-02-15T10:00:00",
+             "A", 88, json.dumps({"ma_period": 7, "num_levels": 3})),
+        )
+        conn.commit()
+        conn.close()
+
+        # assets.yaml avec uniquement BTC
+        assets_path = tmp_path / "assets.yaml"
+        assets_path.write_text(yaml.dump({
+            "assets": [
+                {
+                    "symbol": "BTC/USDT",
+                    "exchange": "bitget",
+                    "type": "futures",
+                    "timeframes": ["1m", "5m", "15m", "1h"],
+                    "max_leverage": 20,
+                    "min_order_size": 0.001,
+                    "tick_size": 0.1,
+                    "correlation_group": "crypto_major",
+                },
+            ],
+        }))
+
+        # strategies.yaml
+        yaml_path = tmp_path / "strategies.yaml"
+        yaml_path.write_text(yaml.dump({
+            "envelope_dca": {
+                "enabled": True,
+                "leverage": 6,
+                "per_asset": {},
+            },
+        }))
+
+        # Mock _fetch_market_specs
+        mock_specs.return_value = {
+            "NEWCOIN/USDT": {
+                "tick_size": 0.0001,
+                "min_order_size": 1.0,
+                "max_leverage": 20,
+            },
+        }
+
+        result = apply_from_db(
+            ["envelope_dca"],
+            config_dir=str(tmp_path),
+            db_path=db_path,
+        )
+
+        # Vérifier le dict retourné
+        assert result["changed"] is True
+        assert "NEWCOIN/USDT" in result["applied"]
+        assert result["assets_added"] == ["NEWCOIN/USDT"]
+
+        # Vérifier que assets.yaml contient le nouvel asset
+        with open(assets_path, encoding="utf-8") as f:
+            assets_data = yaml.safe_load(f)
+        symbols = [a["symbol"] for a in assets_data["assets"]]
+        assert "BTC/USDT" in symbols  # Existant préservé
+        assert "NEWCOIN/USDT" in symbols  # Nouveau ajouté
+
+        new_asset = next(a for a in assets_data["assets"] if a["symbol"] == "NEWCOIN/USDT")
+        assert new_asset["tick_size"] == 0.0001
+        assert new_asset["min_order_size"] == 1.0
+        assert new_asset["max_leverage"] == 20
+        assert new_asset["timeframes"] == ["1h"]
+        assert new_asset["correlation_group"] == "altcoins"
+
+        # Backup assets.yaml créé
+        assets_backups = list(tmp_path.glob("assets.yaml.bak.*"))
+        assert len(assets_backups) == 1

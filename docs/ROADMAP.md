@@ -699,9 +699,9 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 
 ---
 
-## ÉTAT ACTUEL (14 février 2026)
+## ÉTAT ACTUEL (15 février 2026)
 
-- **698 tests**, 0 régression
+- **707 tests**, 0 régression
 - **15 sprints + 1 hotfix + Sprint 14c + Sprint 15b** complétés (Phase 1-4 terminées)
 - **9 stratégies** : 4 scalp 5m (vwap_rsi, momentum, funding, liquidation) + 3 swing 1h (bollinger_mr, donchian_breakout, supertrend) + 2 grid/DCA 1h (envelope_dca LONG, envelope_dca_short SHORT)
 - **1 stratégie validée LONG** : envelope_dca Grade B (BTC), enabled en paper trading
@@ -720,6 +720,9 @@ Hotfix: P&L overflow        ✅   Sprint 19: Nouvelles strats
 - **Kill switch global Simulator** : drawdown 30% sur fenêtre glissante 24h, coupe tous les runners (y compris grid/DCA), alerte Telegram, persisté dans state, grace period 1h post-warmup
 - **Fix grading + diagnostic** : sélection best combo par score composite `sharpe × (0.4 + 0.6×consistency) × trade_factor` au lieu du median params, seuils OOS/IS rehaussés (0.3→0.5 pour rouge), regime_analysis sur combo représentatif, extraction diagnosticUtils.js, ExportButton diagnostic, TOP 5 combos dans CLI (695 tests)
 - **Fix grading pipeline** : métriques WFO (oos_is_ratio, consistency, avg_oos) reflètent le best combo, MC + DSR reçoivent OOS Sharpe (pas IS), debug breakdown compute_grade, seuil trades 50→100 (698 tests)
+- **Consistance dans le grade** : 20 pts sur 100 pour la consistance WFO, Top 5 trié par combo_score (705 tests)
+- **Bouton Apply + auto-add assets** : `POST /api/optimization/apply` applique les params Grade A/B dans strategies.yaml depuis le dashboard, auto-ajoute les assets manquants dans assets.yaml via ccxt Bitget (707 tests)
+- **fetch_history --symbols** : flag `--symbols ADA/USDT,AVAX/USDT` pour bypasser assets.yaml
 - **Prochaine étape** : Sprint 16 (WFO envelope_dca_short + passage Live si validé)
 
 ---

@@ -44,10 +44,163 @@ assets:
     tick_size: 0.001
     correlation_group: altcoins
 
+  - symbol: "ADA/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  - symbol: "APE/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 25
+    min_order_size: 0.1
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  - symbol: "AR/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 0.1
+    tick_size: 0.001
+    correlation_group: altcoins
+
+  - symbol: "AVAX/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 0.1
+    tick_size: 0.001
+    correlation_group: altcoins
+
+  - symbol: "CRV/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  - symbol: "DYDX/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  - symbol: "ENJ/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 3.0
+    tick_size: 1e-05
+    correlation_group: altcoins
+
+  - symbol: "FET/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  - symbol: "GALA/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 1e-06
+    correlation_group: altcoins
+
+  - symbol: "ICP/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 0.01
+    tick_size: 0.001
+    correlation_group: altcoins
+
+  - symbol: "IMX/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 0.1
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  - symbol: "NEAR/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  - symbol: "SAND/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 1e-05
+    correlation_group: altcoins
+
+  - symbol: "SUSHI/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.0001
+    correlation_group: altcoins
+
+  # - symbol: "THETA/USDT"
+  #   exchange: bitget
+  #   type: futures
+  #   timeframes: ["1h"]
+  #   max_leverage: 20
+  #   min_order_size: 1.0
+  #   tick_size: 0.0001
+  #   correlation_group: altcoins
+
+  - symbol: "UNI/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.001
+    correlation_group: altcoins
+
+  - symbol: "XTZ/USDT"
+    exchange: bitget
+    type: futures
+    timeframes: ["1h"]
+    max_leverage: 20
+    min_order_size: 1.0
+    tick_size: 0.0001
+    correlation_group: altcoins
+
 correlation_groups:
   crypto_major:
     max_concurrent_same_direction: 2
     max_exposure_percent: 60
   altcoins:
-    max_concurrent_same_direction: 2
-    max_exposure_percent: 40
+    max_concurrent_same_direction: 10
+    max_exposure_percent: 80
