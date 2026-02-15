@@ -678,7 +678,7 @@ Système automatisé de trading crypto qui :
 - `build_cache` `atr_by_period` n'est peuplé que pour les stratégies qui le demandent → ajouter `"grid_atr"` à la condition
 - Données sinusoïdales (`100 + 8*sin(2π*i/48)`) génèrent un ATR réaliste pour les tests de parité
 
-**Dette technique** : factoriser `_simulate_grid_common()` (Sprint 20c) — `_simulate_envelope_dca` et `_simulate_grid_atr` partagent ~80% du code
+**Dette technique résolue** : Sprint 20c a factorisé `_simulate_grid_common()` — voir ci-dessous
 
 **WFO grid_atr 21 assets — Résultats** :
 
@@ -737,11 +737,28 @@ Système automatisé de trading crypto qui :
 
 **Scope** : ~1-2 sessions par stratégie.
 
-**Dette technique** : factoriser `_simulate_grid_common()` dans fast_multi_backtest.py (enveloppe_dca + grid_atr partagent ~80% du code).
+**Dette technique résolue** : Sprint 20c a factorisé `_simulate_grid_common()` — ajouter une nouvelle stratégie grid = 3-5 lignes dans `_build_entry_prices()`.
 
 ---
 
 ## PHASE 6 — ROBUSTESSE & PRODUCTION (Sprints 20-22)
+
+### Sprint 20c — Factorisation Fast Engine + Auto-dispatch WFO ✅
+
+**But** : Factoriser `_simulate_envelope_dca()` et `_simulate_grid_atr()` (80% de code dupliqué) en une architecture extensible.
+
+**Implémenté** :
+- `_build_entry_prices(strategy_name, cache, params, num_levels, direction) -> np.ndarray` — factory retournant un 2D array `(n_candles, num_levels)` de prix d'entrée. Chaque nouvelle stratégie grid = ajouter un elif de 3-5 lignes
+- `_simulate_grid_common()` — boucle chaude unifiée (TP/SL, allocation, force close)
+- Wrappers backward-compat (`_simulate_envelope_dca`, `_simulate_grid_atr`) — API inchangée
+- `FAST_ENGINE_STRATEGIES` dans `__init__.py` — dérivée automatiquement du registre (`STRATEGY_REGISTRY - STRATEGIES_NEED_EXTRA_DATA`)
+- walk_forward.py : 2 tuples hardcodés remplacés par `FAST_ENGINE_STRATEGIES`
+
+**Résultat** : -132 lignes dans `fast_multi_backtest.py` (425→293). Parité bit-à-bit vérifiée sur les 3 variantes (envelope_dca LONG/SHORT + grid_atr). 13 tests de parité + factory + constantes.
+
+**Tests** : 787 passants (774 existants + 13 nouveaux)
+
+**Hors scope** : `_INDICATOR_PARAMS` (walk_forward.py L394) reste un dict hardcodé — fallback `_run_sequential` rarement utilisé.
 
 ### Sprint 20 — Gestion du Capital Avancée
 **But** : Optimiser l'allocation de capital entre stratégies et assets.
@@ -822,21 +839,21 @@ Phase 1: Infrastructure     ✅   Phase 5: Scaling      Phase 6: Production
 Phase 2: Validation         ✅   Sprint 16+17: ✅      Phase 7: Avancé
 Phase 3: Paper/Live ready   ✅   Sprint 19: Grid ATR ✅
 Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
+                                 Sprint 20c: Facto   ✅
                                  Sprint 20b: Portfolio
-                                 Sprint 20c: Factorisation
 ```
 
 ---
 
 ## ÉTAT ACTUEL (15 février 2026)
 
-- **774 tests**, 0 régression
-- **Sprint 20a complété** (Phase 5 en cours) — Sizing equal allocation + margin guard
+- **787 tests**, 0 régression
+- **Sprint 20c complété** (Phase 5 en cours) — Factorisation fast engine + auto-dispatch WFO
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
 - **Sizing** : equal allocation (`capital/nb_assets/levels`) + margin guard 70% (`max_margin_ratio` dans risk.yaml) — marge réduite de 4.9× à 0.38× du capital
-- **Prochaine étape** : Sprint 20c (factorisation fast engine) puis Sprint 20b (backtest portfolio)
+- **Prochaine étape** : Sprint 20b (backtest portfolio multi-stratégie)
 
 ---
 

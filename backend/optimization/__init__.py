@@ -53,6 +53,9 @@ STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation"}
 # Stratégies grid/DCA (utilisent MultiPositionEngine au lieu de BacktestEngine)
 GRID_STRATEGIES: set[str] = {"envelope_dca", "envelope_dca_short", "grid_atr"}
 
+# Stratégies avec fast engine (WFO accéléré) = toutes sauf celles nécessitant extra_data
+FAST_ENGINE_STRATEGIES: set[str] = set(STRATEGY_REGISTRY.keys()) - STRATEGIES_NEED_EXTRA_DATA
+
 
 def is_grid_strategy(name: str) -> bool:
     """Retourne True si la stratégie utilise le moteur multi-position."""

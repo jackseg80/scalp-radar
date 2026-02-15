@@ -592,7 +592,8 @@ class WalkForwardOptimizer:
 
         # Accumulateur combo results cross-fenêtre (Sprint 14b)
         # Skip si stratégie sans fast engine (trop lent)
-        collect_combo_results = strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short", "grid_atr")
+        from backend.optimization import FAST_ENGINE_STRATEGIES
+        collect_combo_results = strategy_name in FAST_ENGINE_STRATEGIES
         combo_accumulator: dict[str, list[dict]] = {}
         window_regimes: list[dict[str, Any]] = []
 
@@ -969,7 +970,8 @@ class WalkForwardOptimizer:
         3. Séquentiel (si pool crashe)
         """
         # 1. Tenter le fast engine (stratégies supportées uniquement)
-        if strategy_name in ("vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout", "supertrend", "envelope_dca", "envelope_dca_short", "grid_atr"):
+        from backend.optimization import FAST_ENGINE_STRATEGIES
+        if strategy_name in FAST_ENGINE_STRATEGIES:
             try:
                 results = self._run_fast(
                     grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
