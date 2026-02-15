@@ -90,6 +90,21 @@ class GridPositionManager:
 
         direction = positions[0].direction
         total_qty = sum(p.quantity for p in positions)
+        if total_qty <= 0:
+            return TradeResult(
+                direction=direction,
+                entry_price=0.0,
+                exit_price=exit_price,
+                quantity=0.0,
+                entry_time=exit_time,
+                exit_time=exit_time,
+                gross_pnl=0.0,
+                fee_cost=0.0,
+                slippage_cost=0.0,
+                net_pnl=0.0,
+                exit_reason=exit_reason,
+                market_regime=regime,
+            )
         avg_entry = (
             sum(p.entry_price * p.quantity for p in positions) / total_qty
         )

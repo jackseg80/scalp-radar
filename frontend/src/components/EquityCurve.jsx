@@ -12,7 +12,7 @@ export default function EquityCurve() {
   const { data, loading } = useApi('/api/simulator/equity', 30000)
 
   const points = data?.equity || []
-  const initialCapital = data?.initial_capital || 10000
+  const initialCapital = data?.initial_capital ?? 10000
 
   if (loading && points.length === 0) {
     return (

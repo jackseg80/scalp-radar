@@ -969,7 +969,7 @@ class GridStrategyRunner:
             "max_positions": self._strategy.max_positions,
             "avg_entry_price": (
                 sum(p.entry_price * p.quantity for p in all_positions)
-                / sum(p.quantity for p in all_positions)
+                / (sum(p.quantity for p in all_positions) or 1.0)
                 if all_positions else 0.0
             ),
         }

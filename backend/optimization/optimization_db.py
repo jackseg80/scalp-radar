@@ -96,7 +96,10 @@ def save_result_sync(
         }
         val_summary_json = json.dumps(val_summary)
 
-        warnings_json = json.dumps(report.warnings)
+        warnings_json = json.dumps(
+            [_sanitize_dict(w) if isinstance(w, dict) else w for w in report.warnings]
+            if isinstance(report.warnings, list) else report.warnings
+        )
         regime_analysis_json = json.dumps(_sanitize_dict(regime_analysis)) if regime_analysis else None
 
         # Transaction is_latest
@@ -605,15 +608,15 @@ def save_combo_results_sync(db_path: str, result_id: int, combo_results: list[di
             (
                 result_id,
                 json.dumps(cr["params"], sort_keys=True),
-                cr.get("oos_sharpe"),
-                cr.get("oos_return_pct"),
+                _sanitize_json_value(cr.get("oos_sharpe")),
+                _sanitize_json_value(cr.get("oos_return_pct")),
                 cr.get("oos_trades"),
-                cr.get("oos_win_rate"),
-                cr.get("is_sharpe"),
-                cr.get("is_return_pct"),
+                _sanitize_json_value(cr.get("oos_win_rate")),
+                _sanitize_json_value(cr.get("is_sharpe")),
+                _sanitize_json_value(cr.get("is_return_pct")),
                 cr.get("is_trades"),
-                cr.get("consistency"),
-                cr.get("oos_is_ratio"),
+                _sanitize_json_value(cr.get("consistency")),
+                _sanitize_json_value(cr.get("oos_is_ratio")),
                 1 if cr.get("is_best") else 0,
                 cr.get("n_windows_evaluated"),
             )

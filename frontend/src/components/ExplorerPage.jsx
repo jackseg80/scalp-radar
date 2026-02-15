@@ -206,7 +206,6 @@ export default function ExplorerPage({ wsData }) {
         const resp = await fetch(`/api/optimization/combo-results/${selectedRunId}`)
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const data = await resp.json()
-        console.log('🔍 DEBUG combo-results fetched:', { result_id: selectedRunId, data })
         setComboResults(data)
       } catch (err) {
         console.error('Erreur fetch combo-results:', err)

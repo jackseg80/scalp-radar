@@ -186,10 +186,10 @@ class EnvelopeDCAConfig(BaseModel):
     enabled: bool = True
     live_eligible: bool = False
     timeframe: str = "1h"
-    ma_period: int = Field(default=7, ge=2, le=50)
-    num_levels: int = Field(default=3, ge=1, le=6)
-    envelope_start: float = Field(default=0.07, gt=0)
-    envelope_step: float = Field(default=0.03, gt=0)
+    ma_period: int = Field(default=5, ge=2, le=50)
+    num_levels: int = Field(default=4, ge=1, le=6)
+    envelope_start: float = Field(default=0.05, gt=0)
+    envelope_step: float = Field(default=0.05, gt=0)
     sl_percent: float = Field(default=25.0, gt=0)
     sides: list[str] = Field(default=["long"])
     leverage: int = Field(default=6, ge=1, le=20)
@@ -208,10 +208,10 @@ class EnvelopeDCAShortConfig(BaseModel):
     live_eligible: bool = False
     timeframe: str = "1h"
     ma_period: int = Field(default=7, ge=2, le=50)
-    num_levels: int = Field(default=3, ge=1, le=6)
-    envelope_start: float = Field(default=0.07, gt=0)
-    envelope_step: float = Field(default=0.03, gt=0)
-    sl_percent: float = Field(default=25.0, gt=0)
+    num_levels: int = Field(default=2, ge=1, le=6)
+    envelope_start: float = Field(default=0.05, gt=0)
+    envelope_step: float = Field(default=0.02, gt=0)
+    sl_percent: float = Field(default=20.0, gt=0)
     sides: list[str] = Field(default=["short"])
     leverage: int = Field(default=6, ge=1, le=20)
     weight: float = Field(default=0.20, ge=0, le=1)

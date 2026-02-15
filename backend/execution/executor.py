@@ -779,8 +779,8 @@ class Executor:
                 await self._exchange.cancel_order(
                     state.sl_order_id, futures_sym, params=self._sandbox_params,
                 )
-            except Exception:
-                pass  # Le SL a peut-être déjà été exécuté
+            except Exception as e:
+                logger.debug("Executor: annulation SL grid échouée (probablement déjà exécuté): {}", e)
 
         # 2. Market close (sauf si SL déjà exécuté sur exchange)
         if event.exit_reason != "sl_global":
@@ -793,7 +793,9 @@ class Executor:
                     close_order.get("average") or event.exit_price or 0,
                 )
             except Exception as e:
-                logger.error("Executor: échec close grid: {}", e)
+                logger.error("Executor: échec close grid {}: {}", futures_sym, e)
+                self._risk_manager.unregister_position(futures_sym)
+                del self._grid_states[futures_sym]
                 return
         else:
             exit_price = event.exit_price or state.sl_price
