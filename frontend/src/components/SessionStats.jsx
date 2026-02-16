@@ -30,7 +30,7 @@ export default function SessionStats({ wsData }) {
     totalMarginUsed += s.margin_used || 0
     totalOpenPositions += s.open_positions || 0
     totalAssetsWithPositions += s.assets_with_positions || 0
-    initialCapital += s.capital ? (s.capital - (s.net_pnl || 0)) : 0
+    initialCapital += s.initial_capital || 0
     runnerCount++
   })
 

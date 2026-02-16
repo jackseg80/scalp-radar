@@ -489,6 +489,7 @@ class LiveStrategyRunner:
             "unrealized_pnl": round(unrealized_pnl, 2),
             "margin_used": round(margin_used, 2),
             "equity": round(equity, 2),
+            "initial_capital": self._initial_capital,
             "assets_with_positions": assets_with_positions,
         }
 
@@ -1112,6 +1113,7 @@ class GridStrategyRunner:
             "unrealized_pnl": round(unrealized_pnl, 2),
             "margin_used": round(margin_used, 2),
             "equity": round(equity, 2),
+            "initial_capital": self._initial_capital,
             "assets_with_positions": assets_with_positions,
         }
 
@@ -1908,11 +1910,10 @@ class Simulator:
         # Si un seul runner, capital initial = config. Si multiple, somme.
         initial_capital = sum(r._initial_capital for r in self._runners) if self._runners else default_capital
 
-        # Equity courante = capital + unrealized P&L
-        total_unrealized = sum(
-            r.get_status().get("unrealized_pnl", 0.0) for r in self._runners
+        # Equity courante depuis get_status() (inclut capital + margin + unrealized)
+        current_equity = sum(
+            r.get_status().get("equity", r._capital) for r in self._runners
         )
-        current_equity = current_capital + total_unrealized
 
         # Ajouter un point "now" avec l'equity courante (inclut non réalisé)
         now_iso = datetime.now(tz=timezone.utc).isoformat()
