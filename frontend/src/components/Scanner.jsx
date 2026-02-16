@@ -11,6 +11,8 @@ import SignalDetail from './SignalDetail'
 import GridDetail from './GridDetail'
 import Spark from './Spark'
 import Tooltip from './Tooltip'
+import ActivePositions from './ActivePositions'
+import CollapsibleCard from './CollapsibleCard'
 
 function getAssetScore(asset) {
   const strats = asset.strategies || {}
@@ -120,9 +122,30 @@ export default function Scanner({ wsData }) {
     setSelectedAsset(prev => prev === symbol ? null : symbol)
   }
 
+  // Résumé pour ActivePositions
+  const simPositions = wsData?.simulator_positions || []
+  const execPositions = wsData?.executor?.positions || (wsData?.executor?.position ? [wsData.executor.position] : [])
+  const gridState = wsData?.grid_state || null
+  const hasGrids = gridState?.summary?.total_positions > 0
+  const monoSimPositions = simPositions.filter(p => p.type !== 'grid')
+  const hasActivePositions = monoSimPositions.length > 0 || execPositions.length > 0 || hasGrids
+  const positionsSummary = hasActivePositions
+    ? `${simPositions.length + execPositions.length} position${simPositions.length + execPositions.length > 1 ? 's' : ''}`
+    : null
+
   return (
-    <div className="card">
-      <h2>Scanner</h2>
+    <>
+      <CollapsibleCard
+        title="Positions actives"
+        summary={positionsSummary}
+        defaultOpen={true}
+        storageKey="active-positions"
+      >
+        <ActivePositions wsData={wsData} />
+      </CollapsibleCard>
+
+      <div className="card">
+        <h2>Scanner</h2>
 
       {loading && assets.length === 0 && (
         <div className="empty-state">
@@ -268,6 +291,7 @@ export default function Scanner({ wsData }) {
           </tbody>
         </table>
       )}
-    </div>
+      </div>
+    </>
   )
 }

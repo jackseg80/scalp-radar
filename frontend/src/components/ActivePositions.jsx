@@ -29,8 +29,6 @@ export default function ActivePositions({ wsData }) {
 
   return (
     <div className="active-positions-banner">
-      <h3>Positions actives</h3>
-
       {!hasPositions && (
         <div className="text-xs muted" style={{ padding: '2px 0' }}>
           {killSwitch

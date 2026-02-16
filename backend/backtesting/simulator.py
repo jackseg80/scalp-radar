@@ -1795,61 +1795,101 @@ class Simulator:
                             (last_candle.close - prev_close) / prev_close * 100, 2
                         )
 
-            # Indicateurs et conditions par runner/stratégie
+            # Calculer les indicateurs de base pour tous les symbols (même sans runner)
+            # Utiliser le timeframe 5m par défaut (commun aux stratégies scalp)
+            if self._indicator_engine and data.candles.get("5m"):
+                indicators_data = self._indicator_engine.get_indicators(symbol)
+                if indicators_data and indicators_data.get("5m"):
+                    ind_5m = indicators_data["5m"]
+                    close = ind_5m.get("close")
+                    vwap = ind_5m.get("vwap")
+                    atr = ind_5m.get("atr")
+
+                    asset_data["indicators"] = {
+                        "rsi_14": _safe_round(ind_5m.get("rsi"), 1),
+                        "vwap_distance_pct": None,
+                        "adx": _safe_round(ind_5m.get("adx"), 1),
+                        "atr_pct": None,
+                    }
+
+                    # VWAP distance
+                    if close and vwap and vwap > 0:
+                        asset_data["indicators"]["vwap_distance_pct"] = round(
+                            (close - vwap) / vwap * 100, 2
+                        )
+
+                    # ATR %
+                    if close and atr and close > 0:
+                        asset_data["indicators"]["atr_pct"] = round(
+                            atr / close * 100, 2
+                        )
+
+                    # Régime de marché par défaut
+                    if data.candles.get("5m") and len(data.candles["5m"]) >= 50:
+                        close_arr = np.array([c.close for c in data.candles["5m"][-50:]])
+                        asset_data["regime"] = detect_market_regime(close_arr).value
+
+            # Conditions par runner/stratégie (enrichissement si runner actif)
             for runner in self._runners:
                 ctx = runner.build_context(symbol)
                 if ctx is None:
                     continue
 
-                # Régime (du runner, mis à jour à chaque candle)
-                if asset_data["regime"] is None:
-                    asset_data["regime"] = runner.current_regime.value
+                # Régime (du runner, mis à jour à chaque candle) — priorité au runner actif
+                asset_data["regime"] = runner.current_regime.value
 
-                # Indicateurs bruts depuis le context
-                main_tf = list(runner.strategy.min_candles.keys())[0]
-                main_ind = ctx.indicators.get(main_tf, {})
-                if main_ind and not asset_data["indicators"]:
-                    asset_data["indicators"] = {
-                        "rsi_14": _safe_round(main_ind.get("rsi"), 1),
-                        "vwap_distance_pct": None,
-                        "adx": _safe_round(main_ind.get("adx"), 1),
-                        "atr_pct": None,
-                    }
-                    # VWAP distance
-                    close = main_ind.get("close")
-                    vwap = main_ind.get("vwap")
-                    if close and vwap and vwap > 0:
-                        asset_data["indicators"]["vwap_distance_pct"] = round(
-                            (close - vwap) / vwap * 100, 2
-                        )
-                    # ATR %
-                    atr_val = main_ind.get("atr")
-                    if close and atr_val and close > 0:
-                        asset_data["indicators"]["atr_pct"] = round(
-                            atr_val / close * 100, 2
-                        )
+                # Indicateurs : si déjà calculés globalement, les enrichir avec les données du runner si différent TF
+                # Sinon, calculer depuis le context du runner
+                if not asset_data["indicators"]:
+                    main_tf = list(runner.strategy.min_candles.keys())[0]
+                    main_ind = ctx.indicators.get(main_tf, {})
+                    if main_ind:
+                        close = main_ind.get("close")
+                        vwap = main_ind.get("vwap")
+                        atr_val = main_ind.get("atr")
 
-                # Conditions de la stratégie
-                try:
-                    conditions = runner.strategy.get_current_conditions(ctx)
-                except Exception:
-                    conditions = []
-
-                # Dernier signal (trade le plus récent de ce runner pour ce symbol)
-                last_signal = None
-                for trade_dict in self.get_all_trades():
-                    if trade_dict["strategy"] == runner.name:
-                        last_signal = {
-                            "score": trade_dict.get("score"),
-                            "direction": trade_dict["direction"],
-                            "timestamp": trade_dict["entry_time"],
+                        asset_data["indicators"] = {
+                            "rsi_14": _safe_round(main_ind.get("rsi"), 1),
+                            "vwap_distance_pct": None,
+                            "adx": _safe_round(main_ind.get("adx"), 1),
+                            "atr_pct": None,
                         }
-                        break
 
-                asset_data["strategies"][runner.name] = {
-                    "last_signal": last_signal,
-                    "conditions": conditions,
-                }
+                        # VWAP distance
+                        if close and vwap and vwap > 0:
+                            asset_data["indicators"]["vwap_distance_pct"] = round(
+                                (close - vwap) / vwap * 100, 2
+                            )
+
+                        # ATR %
+                        if close and atr_val and close > 0:
+                            asset_data["indicators"]["atr_pct"] = round(
+                                atr_val / close * 100, 2
+                            )
+
+                # Conditions de la stratégie (uniquement pour les stratégies mono, pas grid)
+                # Les stratégies grid ont leur propre section dans grid_state
+                if not isinstance(runner, GridStrategyRunner):
+                    try:
+                        conditions = runner.strategy.get_current_conditions(ctx)
+                    except Exception:
+                        conditions = []
+
+                    # Dernier signal (trade le plus récent de ce runner pour ce symbol)
+                    last_signal = None
+                    for trade_dict in self.get_all_trades():
+                        if trade_dict["strategy"] == runner.name:
+                            last_signal = {
+                                "score": trade_dict.get("score"),
+                                "direction": trade_dict["direction"],
+                                "timestamp": trade_dict["entry_time"],
+                            }
+                            break
+
+                    asset_data["strategies"][runner.name] = {
+                        "last_signal": last_signal,
+                        "conditions": conditions,
+                    }
 
                 # Position ouverte sur cet asset (vérifier le symbol)
                 if runner._position is not None and runner._position_symbol == symbol:

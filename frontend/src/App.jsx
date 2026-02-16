@@ -6,7 +6,6 @@ import RiskCalc from './components/RiskCalc'
 import ResearchPage from './components/ResearchPage'
 import ExplorerPage from './components/ExplorerPage'
 import PortfolioPage from './components/PortfolioPage'
-import ActivePositions from './components/ActivePositions'
 import CollapsibleCard from './components/CollapsibleCard'
 import ExecutorPanel from './components/ExecutorPanel'
 import SessionStats from './components/SessionStats'
@@ -111,7 +110,6 @@ export default function App() {
         style={{ gridTemplateColumns: `1fr auto ${sidebarWidth}px` }}
       >
         <div className="content">
-          <ActivePositions wsData={wsData} />
           {activeTab === 'scanner' && <Scanner wsData={wsData} />}
           {activeTab === 'heatmap' && <Heatmap />}
           {activeTab === 'risk' && <RiskCalc />}
