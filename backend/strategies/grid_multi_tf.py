@@ -226,6 +226,30 @@ class GridMultiTFStrategy(BaseGridStrategy):
             return grid_state.avg_entry_price * (1 - sl_pct)
         return grid_state.avg_entry_price * (1 + sl_pct)
 
+    def compute_live_indicators(
+        self, candles: list[Candle],
+    ) -> dict[str, dict[str, Any]]:
+        """Calcule le Supertrend 4h depuis le buffer de candles 1h (mode live/portfolio).
+
+        Retourne {"4h": {"st_direction": 1.0/-1.0/NaN}} pour la candle courante.
+        Nécessite au moins st_atr_period × 4 + 8 candles pour avoir un résultat.
+        """
+        min_candles = self._config.st_atr_period * 4 + 8
+        if len(candles) < min_candles:
+            return {}
+
+        highs = np.array([c.high for c in candles], dtype=float)
+        lows = np.array([c.low for c in candles], dtype=float)
+        closes = np.array([c.close for c in candles], dtype=float)
+
+        st_dir_1h = _compute_st_4h_mapped_to_1h(
+            candles, highs, lows, closes,
+            self._config.st_atr_period, self._config.st_atr_multiplier,
+        )
+
+        last_dir = float(st_dir_1h[-1])
+        return {"4h": {"st_direction": last_dir}}
+
     def get_params(self) -> dict[str, Any]:
         return {
             "st_atr_period": self._config.st_atr_period,

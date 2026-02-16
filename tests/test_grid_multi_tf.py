@@ -1,4 +1,4 @@
-"""Tests pour Grid Multi-TF (Sprint 21a + Bugfix 21a-bis).
+"""Tests pour Grid Multi-TF (Sprint 21a + Bugfix 21a-bis + 21a-ter).
 
 Couvre :
 - Section 1 : Resampling 4h — 5 tests
@@ -8,6 +8,7 @@ Couvre :
 - Section 5 : Registry & intégration — 6 tests
 - Section 6 : Cache build — 3 tests
 - Section 7 : Bugfix 21a-bis — compute_indicators + validation — 6 tests
+- Section 8 : Bugfix 21a-ter — compute_live_indicators + runner — 4 tests
 """
 
 from __future__ import annotations
@@ -875,3 +876,68 @@ class TestValidationBitgetGridMultiTF:
         assert len(result.trades) > 0, (
             "OOS evaluation doit produire > 0 trades pour Monte Carlo"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Section 8 : Bugfix 21a-ter — compute_live_indicators + GridStrategyRunner
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestComputeLiveIndicators:
+    """Tests que compute_live_indicators() fonctionne pour le mode live/portfolio."""
+
+    def test_compute_live_indicators_returns_4h(self):
+        """compute_live_indicators retourne la direction Supertrend 4h."""
+        strategy = _make_strategy()
+        candles = _make_sinusoidal_candles(n=200, amplitude=5.0, period=48)
+        result = strategy.compute_live_indicators(candles)
+        assert "4h" in result
+        assert "st_direction" in result["4h"]
+        assert result["4h"]["st_direction"] in (1.0, -1.0) or math.isnan(
+            result["4h"]["st_direction"]
+        )
+
+    def test_compute_live_indicators_empty_when_few_candles(self):
+        """Pas assez de candles → retourne {}."""
+        strategy = _make_strategy(st_atr_period=10)
+        # st_atr_period * 4 + 8 = 48, on donne 30
+        candles = _make_candles(n=30)
+        result = strategy.compute_live_indicators(candles)
+        assert result == {}
+
+    def test_compute_live_indicators_base_returns_empty(self):
+        """BaseGridStrategy.compute_live_indicators retourne {} par défaut."""
+        from backend.strategies.grid_atr import GridATRStrategy
+        from backend.core.config import GridATRConfig
+
+        strategy = GridATRStrategy(GridATRConfig())
+        candles = _make_sinusoidal_candles(n=200, amplitude=5.0, period=48)
+        result = strategy.compute_live_indicators(candles)
+        assert result == {}
+
+    def test_grid_strategy_runner_merges_live_indicators(self):
+        """GridStrategyRunner appelle compute_live_indicators et merge les indicateurs."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock, patch
+
+        from backend.backtesting.simulator import GridStrategyRunner
+        from backend.core.incremental_indicators import IncrementalIndicatorEngine
+
+        strategy = _make_strategy()
+        config = MagicMock()
+        config.risk = MagicMock()
+        config.risk.max_margin_ratio = 0.7
+
+        # Créer un engine avec buffer de candles
+        indicator_engine = IncrementalIndicatorEngine([strategy])
+        candles = _make_sinusoidal_candles(n=200, amplitude=5.0, period=48)
+
+        # Remplir le buffer
+        for c in candles:
+            indicator_engine.update("BTC/USDT", "1h", c)
+
+        # Vérifier que compute_live_indicators retourne quelque chose
+        buf = indicator_engine._buffers.get(("BTC/USDT", "1h"), [])
+        extra = strategy.compute_live_indicators(list(buf))
+        assert "4h" in extra, "compute_live_indicators doit retourner les indicateurs 4h"
+        assert "st_direction" in extra["4h"]

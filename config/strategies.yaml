@@ -417,8 +417,197 @@ grid_multi_tf:
   - long
   - short
   leverage: 6
-  weight: 0.20
-  per_asset: {}
+  weight: 0.2
+  per_asset:
+    ADA/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 20.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    APE/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 25.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 14
+    AR/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 20.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 14
+    AVAX/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 20.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 10
+    CRV/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 25.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    DOGE/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 15.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 10
+    DYDX/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 25.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    ENJ/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 15.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 14
+    ETH/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 25.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 14
+    FET/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 15.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 10
+    GALA/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 15.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 14
+    ICP/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 15.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    IMX/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 15.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 10
+    LINK/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 25.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    NEAR/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 20.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    SAND/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 20.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    SOL/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 25.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 10
+    SUSHI/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 20.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    THETA/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 25.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    UNI/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 20.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 14
+    XTZ/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 20.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 14
 custom_strategies:
   swing_baseline:
     enabled: false

@@ -884,11 +884,13 @@ Système automatisé de trading crypto qui :
 
 **Bugfix 21a-bis** : Validation Bitget et Monte Carlo retournaient 0 trades car `compute_indicators()` ne calculait pas le Supertrend 4h et `MultiPositionEngine` ne passait que le TF principal dans `ctx_indicators`. Corrigé.
 
-**Résultat** : 898 tests (40 nouveaux pour grid_multi_tf), 0 régression. Parité fast engine vs MultiPositionEngine validée.
+**Bugfix 21a-ter** : Portfolio backtest 0 trades car `GridStrategyRunner.on_candle()` n'appelle pas `compute_indicators()` (il utilise `IncrementalIndicatorEngine`). Fix : `compute_live_indicators()` dans `BaseGridStrategy` (default `{}`), override dans `GridMultiTFStrategy` pour calculer le Supertrend 4h depuis le buffer de candles accumulé. Guard `isinstance(buffers, dict)` pour compatibilité MagicMock.
+
+**Résultat** : 902 tests (44 nouveaux pour grid_multi_tf), 0 régression. Parité fast engine vs MultiPositionEngine validée.
 
 ### Sprint 21b — Grid Multi-TF Live (Planifié)
 
-**But** : Support live pour grid_multi_tf (Simulator, GridStrategyRunner, TimeFrame.H4, DataEngine).
+**But** : Support live pour grid_multi_tf (Simulator, GridStrategyRunner, TimeFrame.H4, DataEngine). Note : le support portfolio backtest et simulator fonctionne déjà grâce au bugfix 21a-ter.
 
 ### Sprint 22 — Live Trading Progressif
 
@@ -984,7 +986,7 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (16 février 2026)
 
-- **898 tests**, 0 régression
+- **902 tests**, 0 régression
 - **Phases 1-5 terminées** — 12 sprints/hotfixes rien que pour la Phase 5 (16+17, 19-19e, 20a-20f)
 - **Phase 6 en cours** — Sprint 21a terminé (Grid Multi-TF backtest + WFO)
 - **11 stratégies** : 4 scalp 5m + 3 swing 1h + 4 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf)

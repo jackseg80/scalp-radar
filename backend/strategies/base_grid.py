@@ -129,6 +129,20 @@ class BaseGridStrategy(BaseStrategy):
     def max_positions(self) -> int:
         """Nombre maximum de positions simultanées (= nombre de niveaux)."""
 
+    def compute_live_indicators(
+        self, candles: list[Candle],
+    ) -> dict[str, dict[str, Any]]:
+        """Calcule des indicateurs supplémentaires pour le mode live/portfolio.
+
+        Appelé par GridStrategyRunner.on_candle() avec le buffer de candles
+        accumulé par IncrementalIndicatorEngine. Le résultat est mergé dans
+        ctx.indicators avant compute_grid() et should_close_all().
+
+        Par défaut retourne {} (pas d'indicateurs extra).
+        Override dans les stratégies multi-TF (ex: grid_multi_tf pour le 4h Supertrend).
+        """
+        return {}
+
     def get_params(self) -> dict[str, Any]:
         """Retourne les paramètres pour le reporting."""
         return {}

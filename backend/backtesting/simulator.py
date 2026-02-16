@@ -748,6 +748,15 @@ class GridStrategyRunner:
             "close": candle.close,
         })
 
+        # Indicateurs supplémentaires (ex: Supertrend 4h pour grid_multi_tf)
+        buffers = getattr(self._indicator_engine, "_buffers", None)
+        if isinstance(buffers, dict):
+            candle_buf = buffers.get((symbol, self._strategy_tf), [])
+            if candle_buf:
+                extra = self._strategy.compute_live_indicators(list(candle_buf))
+                for tf_key, tf_data in extra.items():
+                    indicators.setdefault(tf_key, {}).update(tf_data)
+
         # Détecter le régime (si ADX/ATR disponibles)
         main_ind = indicators.get(self._strategy_tf, {})
         self._current_regime = detect_market_regime(

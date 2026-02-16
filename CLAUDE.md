@@ -154,7 +154,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a) : 898 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a) : 902 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -210,6 +210,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 20f : Panneau Simulator P&L réalisé + non réalisé + equity — `get_status()` enrichi (unrealized_pnl, margin_used, equity), equity curve avec point "now", SessionStats refonte complète, EquityCurve affiche equity (852 tests)
 - Sprint 21a : Stratégie Grid Multi-TF (11e stratégie, Supertrend 4h + Grid ATR 1h, resampling anti-lookahead, fast engine directions dynamiques, 384 combos WFO, 40 tests) (898 tests)
 - Bugfix 21a-bis : Validation Bitget + Monte Carlo 0 trades — compute_indicators() retourne 4h Supertrend, MultiPositionEngine passe tous les TFs (898 tests)
+- Bugfix 21a-ter : Portfolio backtest 0 trades — compute_live_indicators() dans BaseGridStrategy pour mode live/portfolio, GridStrategyRunner merge les indicateurs 4h depuis le buffer IncrementalIndicatorEngine (902 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 
