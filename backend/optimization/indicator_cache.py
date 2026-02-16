@@ -12,7 +12,7 @@ Usage dans le WFO :
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -94,6 +94,10 @@ class IndicatorCache:
     # Grid Funding : funding rates alignés sur candles 1h (forward-fill, raw decimal)
     funding_rates_1h: np.ndarray | None = None    # shape (n,), raw decimal (/100 depuis DB)
     candle_timestamps: np.ndarray | None = None   # epoch ms, shape (n,)
+
+    # Grid Trend : EMA et ADX multi-period
+    ema_by_period: dict[int, np.ndarray] = field(default_factory=dict)   # {period: ema_array}
+    adx_by_period: dict[int, np.ndarray] = field(default_factory=dict)   # {period: adx_array}
 
 
 def _load_funding_rates_aligned(
@@ -275,7 +279,7 @@ def build_cache(
 
     # --- ATR multi-period (pour donchian/supertrend/grid_atr/grid_multi_tf) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf"):
+    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend"):
         atr_periods: set[int] = set()
         if "atr_period" in param_grid_values:
             atr_periods.update(param_grid_values["atr_period"])
@@ -348,6 +352,22 @@ def build_cache(
                             st_dir_1h[i] = st_dir[idx_4h]
                     st_dir_4h_dict[(st_period, st_mult)] = st_dir_1h
 
+    # --- Grid Trend : EMA + ADX multi-period ---
+    ema_by_period_dict: dict[int, np.ndarray] = {}
+    adx_by_period_dict: dict[int, np.ndarray] = {}
+    if strategy_name == "grid_trend":
+        from backend.core.indicators import ema as compute_ema
+        for p in set(
+            param_grid_values.get("ema_fast", []) + param_grid_values.get("ema_slow", [])
+        ):
+            if p not in ema_by_period_dict:
+                ema_by_period_dict[p] = compute_ema(closes, p)
+
+        for p in param_grid_values.get("adx_period", [14]):
+            if p not in adx_by_period_dict:
+                adx_p, _, _ = adx(highs, lows, closes, p)
+                adx_by_period_dict[p] = adx_p
+
     return IndicatorCache(
         n_candles=n,
         opens=opens,
@@ -379,6 +399,8 @@ def build_cache(
         supertrend_dir_4h=st_dir_4h_dict,
         funding_rates_1h=funding_1h,
         candle_timestamps=candle_ts,
+        ema_by_period=ema_by_period_dict,
+        adx_by_period=adx_by_period_dict,
     )
 
 

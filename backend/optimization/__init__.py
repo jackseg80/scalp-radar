@@ -17,6 +17,7 @@ from backend.strategies.funding import FundingStrategy
 from backend.strategies.grid_atr import GridATRStrategy
 from backend.strategies.grid_funding import GridFundingStrategy
 from backend.strategies.grid_multi_tf import GridMultiTFStrategy
+from backend.strategies.grid_trend import GridTrendStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
 from backend.strategies.supertrend import SuperTrendStrategy
@@ -31,6 +32,7 @@ from backend.core.config import (
     GridATRConfig,
     GridFundingConfig,
     GridMultiTFConfig,
+    GridTrendConfig,
     LiquidationConfig,
     MomentumConfig,
     SuperTrendConfig,
@@ -51,13 +53,14 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
     "grid_atr": (GridATRConfig, GridATRStrategy),
     "grid_multi_tf": (GridMultiTFConfig, GridMultiTFStrategy),
     "grid_funding": (GridFundingConfig, GridFundingStrategy),
+    "grid_trend": (GridTrendConfig, GridTrendStrategy),
 }
 
 # Stratégies qui nécessitent extra_data (funding rates, OI) pour le backtest
 STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation", "grid_funding"}
 
 # Stratégies grid/DCA (utilisent MultiPositionEngine au lieu de BacktestEngine)
-GRID_STRATEGIES: set[str] = {"envelope_dca", "envelope_dca_short", "grid_atr", "grid_multi_tf", "grid_funding"}
+GRID_STRATEGIES: set[str] = {"envelope_dca", "envelope_dca_short", "grid_atr", "grid_multi_tf", "grid_funding", "grid_trend"}
 
 # Stratégies SANS fast engine (pas d'implémentation numpy rapide)
 _NO_FAST_ENGINE: set[str] = {"funding", "liquidation"}

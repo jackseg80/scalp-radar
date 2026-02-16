@@ -406,6 +406,7 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "grid_atr": ["ma_period", "atr_period"],
     "grid_multi_tf": ["ma_period", "atr_period", "st_atr_period", "st_atr_multiplier"],
     "grid_funding": ["ma_period"],
+    "grid_trend": ["ema_fast", "ema_slow", "adx_period", "atr_period"],
 }
 
 

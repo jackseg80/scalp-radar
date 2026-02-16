@@ -155,3 +155,21 @@ grid_funding:
     sl_percent: [10.0, 15.0, 20.0, 25.0]
     tp_mode: ["funding_positive", "sma_cross", "funding_or_sma"]
     min_hold_candles: [4, 8, 16]
+
+# Grid Trend : 2592 combos (3×2×1×3×1×3×2×2×4×3), ~8 min/asset
+grid_trend:
+  wfo:
+    is_days: 360
+    oos_days: 90
+    step_days: 90
+  default:
+    ema_fast: [10, 20, 30]
+    ema_slow: [50, 100]
+    adx_period: [14]
+    adx_threshold: [15, 20, 25]
+    atr_period: [14]
+    pull_start: [0.5, 1.0, 1.5]
+    pull_step: [0.5, 1.0]
+    num_levels: [2, 3]
+    trail_mult: [1.5, 2.0, 2.5, 3.0]
+    sl_percent: [10, 15, 20]

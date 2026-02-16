@@ -39,10 +39,10 @@ def _build_entry_prices(
     Chaque nouvelle stratégie grid = ajouter un elif de 3-5 lignes ici.
     """
     n = cache.n_candles
-    sma_arr = cache.bb_sma[params["ma_period"]]
     entry_prices = np.full((n, num_levels), np.nan)
 
     if strategy_name in ("envelope_dca", "envelope_dca_short"):
+        sma_arr = cache.bb_sma[params["ma_period"]]
         lower_offsets = [
             params["envelope_start"] + lvl * params["envelope_step"]
             for lvl in range(num_levels)
@@ -60,6 +60,7 @@ def _build_entry_prices(
                 entry_prices[:, lvl] = sma_arr * (1 + envelope_offsets[lvl])
 
     elif strategy_name == "grid_atr":
+        sma_arr = cache.bb_sma[params["ma_period"]]
         atr_arr = cache.atr_by_period[params["atr_period"]]
         multipliers = [
             params["atr_multiplier_start"] + lvl * params["atr_multiplier_step"]
@@ -75,6 +76,7 @@ def _build_entry_prices(
         entry_prices[invalid, :] = np.nan
 
     elif strategy_name == "grid_multi_tf":
+        sma_arr = cache.bb_sma[params["ma_period"]]
         atr_arr = cache.atr_by_period[params["atr_period"]]
         st_key = (params["st_atr_period"], params["st_atr_multiplier"])
         st_dir = cache.supertrend_dir_4h[st_key]
@@ -89,6 +91,32 @@ def _build_entry_prices(
             entry_prices[short_mask, lvl] = sma_arr[short_mask] + atr_arr[short_mask] * multipliers[lvl]
         # NaN propagation : ATR invalide ou pas de direction Supertrend
         invalid = np.isnan(atr_arr) | (atr_arr <= 0) | np.isnan(st_dir)
+        entry_prices[invalid, :] = np.nan
+
+    elif strategy_name == "grid_trend":
+        ema_fast_arr = cache.ema_by_period[params["ema_fast"]]
+        ema_slow_arr = cache.ema_by_period[params["ema_slow"]]
+        atr_arr = cache.atr_by_period[params["atr_period"]]
+        adx_arr = cache.adx_by_period[params["adx_period"]]
+        adx_threshold = params["adx_threshold"]
+
+        multipliers = [
+            params["pull_start"] + lvl * params["pull_step"]
+            for lvl in range(num_levels)
+        ]
+        long_mask = (ema_fast_arr > ema_slow_arr) & (adx_arr > adx_threshold)
+        short_mask = (ema_fast_arr < ema_slow_arr) & (adx_arr > adx_threshold)
+        for lvl in range(num_levels):
+            entry_prices[long_mask, lvl] = (
+                ema_fast_arr[long_mask] - atr_arr[long_mask] * multipliers[lvl]
+            )
+            entry_prices[short_mask, lvl] = (
+                ema_fast_arr[short_mask] + atr_arr[short_mask] * multipliers[lvl]
+            )
+        invalid = (
+            np.isnan(ema_fast_arr) | np.isnan(ema_slow_arr)
+            | np.isnan(atr_arr) | np.isnan(adx_arr) | (atr_arr <= 0)
+        )
         entry_prices[invalid, :] = np.nan
 
     else:
@@ -109,16 +137,21 @@ def _simulate_grid_common(
     sl_pct: float,
     direction: int,
     directions: np.ndarray | None = None,
+    trail_mult: float = 0.0,
+    trail_atr_arr: np.ndarray | None = None,
 ) -> tuple[list[float], list[float], float]:
     """Boucle chaude unifiée pour toutes les stratégies grid/DCA.
 
     Args:
         entry_prices: (n_candles, num_levels) pré-calculé par _build_entry_prices.
-        sma_arr: SMA pour TP dynamique (retour vers la SMA).
+        sma_arr: SMA pour TP dynamique (retour vers la SMA). Ignoré si trail_mult > 0.
         sl_pct: déjà divisé par 100.
         direction: 1 = LONG, -1 = SHORT (scalar fixe, ou initial pour directions dynamiques).
-        directions: si fourni, array 1D de directions par candle (1/-1/NaN).
+        directions: si fourni, array 1D de directions par candle (1/-1/0/NaN).
             Override le scalar `direction` à chaque candle. Force-close au flip.
+            0 = zone neutre (pas de nouvelles ouvertures, positions gérées).
+        trail_mult: multiplicateur ATR pour trailing stop (0 = désactivé → TP SMA classique).
+        trail_atr_arr: array ATR pour le calcul du trailing stop distance.
     """
     capital = bt_config.initial_capital
     leverage = bt_config.leverage
@@ -136,95 +169,151 @@ def _simulate_grid_common(
     # Direction tracking pour le mode dynamique
     last_dir = 0  # 0 = pas encore initialisé
 
+    # Trailing stop state
+    hwm = 0.0  # High Water Mark (LONG) ou Low Water Mark (SHORT)
+    neutral_zone = False
+
     for i in range(n):
-        # --- Directions dynamiques (grid_multi_tf) ---
+        # --- Directions dynamiques (grid_multi_tf, grid_trend) ---
         if directions is not None:
             cur_dir = directions[i]
             if math.isnan(cur_dir):
-                continue  # Pas de direction Supertrend → skip
+                continue  # Pas de data → skip total
             cur_dir_int = int(cur_dir)
-            # Force-close si direction a flippé
-            if positions and last_dir != 0 and cur_dir_int != last_dir:
-                pnl = _calc_grid_pnl(
-                    positions, cache.closes[i], taker_fee, slippage_pct, last_dir,
-                )
-                trade_pnls.append(pnl)
-                if capital > 0:
-                    trade_returns.append(pnl / capital)
-                capital += pnl
-                positions = []
-            last_dir = cur_dir_int
-            direction = cur_dir_int  # Override le scalar pour TP/SL et entry
+
+            if cur_dir_int == 0:
+                # Zone neutre : gérer positions existantes, ne pas en ouvrir
+                neutral_zone = True
+                # NE PAS mettre à jour direction ni last_dir
+            else:
+                neutral_zone = False
+                # Force-close si direction a flippé
+                if positions and last_dir != 0 and cur_dir_int != last_dir:
+                    pnl = _calc_grid_pnl(
+                        positions, cache.closes[i], taker_fee, slippage_pct, last_dir,
+                    )
+                    trade_pnls.append(pnl)
+                    if capital > 0:
+                        trade_returns.append(pnl / capital)
+                    capital += pnl
+                    positions = []
+                    hwm = 0.0
+                last_dir = cur_dir_int
+                direction = cur_dir_int  # Override le scalar pour TP/SL et entry
 
         # Skip candles invalides (NaN propagé depuis _build_entry_prices)
         if math.isnan(entry_prices[i, 0]):
             continue
 
-        # 1. Check TP/SL global si positions ouvertes
+        # 1. Check sorties si positions ouvertes
         if positions:
             total_qty = sum(p[2] for p in positions)
             avg_entry = sum(p[1] * p[2] for p in positions) / total_qty
 
             is_green = cache.closes[i] > cache.opens[i]
 
-            tp_price = sma_arr[i]  # Dynamique (retour vers la SMA)
-
-            if direction == 1:
-                # LONG : SL en dessous, TP au-dessus
-                sl_price = avg_entry * (1 - sl_pct)
-                sl_hit = cache.lows[i] <= sl_price
-                tp_hit = cache.highs[i] >= tp_price
-            else:
-                # SHORT : SL au-dessus, TP en dessous
-                sl_price = avg_entry * (1 + sl_pct)
-                sl_hit = cache.highs[i] >= sl_price
-                tp_hit = cache.lows[i] <= tp_price
-
             exit_reason = None
             exit_price = 0.0
 
-            if tp_hit and sl_hit:
-                # Heuristique OHLC
+            # SL classique (toujours actif)
+            if direction == 1:
+                sl_price = avg_entry * (1 - sl_pct)
+                sl_hit = cache.lows[i] <= sl_price
+            else:
+                sl_price = avg_entry * (1 + sl_pct)
+                sl_hit = cache.highs[i] >= sl_price
+
+            if trail_mult > 0 and trail_atr_arr is not None:
+                # --- MODE TRAILING STOP (grid_trend) ---
                 if direction == 1:
-                    if is_green:
-                        exit_reason = "tp_global"
-                        exit_price = tp_price
-                    else:
-                        exit_reason = "sl_global"
-                        exit_price = sl_price
+                    hwm = max(hwm, cache.highs[i])
                 else:
-                    if cache.closes[i] < cache.opens[i]:
-                        exit_reason = "tp_global"
-                        exit_price = tp_price
+                    # LWM : init si hwm == 0, puis toujours min
+                    hwm = min(hwm, cache.lows[i]) if hwm > 0 else cache.lows[i]
+
+                trail_distance = trail_atr_arr[i] * trail_mult
+                if direction == 1:
+                    trail_price = hwm - trail_distance
+                    trail_hit = trail_price > 0 and cache.lows[i] <= trail_price
+                else:
+                    trail_price = hwm + trail_distance
+                    trail_hit = cache.highs[i] >= trail_price
+
+                if trail_hit and sl_hit:
+                    # Heuristique OHLC : bougie verte → trail (prix montait), rouge → SL
+                    if direction == 1:
+                        exit_reason = "sl_global" if not is_green else "trail_stop"
                     else:
-                        exit_reason = "sl_global"
-                        exit_price = sl_price
-            elif sl_hit:
-                exit_reason = "sl_global"
-                exit_price = sl_price
-            elif tp_hit:
-                exit_reason = "tp_global"
-                exit_price = tp_price
+                        exit_reason = "sl_global" if is_green else "trail_stop"
+                elif sl_hit:
+                    exit_reason = "sl_global"
+                elif trail_hit:
+                    exit_reason = "trail_stop"
+
+                if exit_reason == "trail_stop":
+                    exit_price = trail_price
+                elif exit_reason == "sl_global":
+                    exit_price = sl_price
+
+            else:
+                # --- MODE TP CLASSIQUE (SMA) ---
+                tp_price = sma_arr[i]  # Dynamique (retour vers la SMA)
+
+                if direction == 1:
+                    tp_hit = cache.highs[i] >= tp_price
+                else:
+                    tp_hit = cache.lows[i] <= tp_price
+
+                if tp_hit and sl_hit:
+                    if direction == 1:
+                        if is_green:
+                            exit_reason = "tp_global"
+                            exit_price = tp_price
+                        else:
+                            exit_reason = "sl_global"
+                            exit_price = sl_price
+                    else:
+                        if cache.closes[i] < cache.opens[i]:
+                            exit_reason = "tp_global"
+                            exit_price = tp_price
+                        else:
+                            exit_reason = "sl_global"
+                            exit_price = sl_price
+                elif sl_hit:
+                    exit_reason = "sl_global"
+                    exit_price = sl_price
+                elif tp_hit:
+                    exit_reason = "tp_global"
+                    exit_price = tp_price
 
             if exit_reason is not None:
-                pnl = _calc_grid_pnl(
-                    positions, exit_price,
-                    maker_fee if exit_reason == "tp_global" else taker_fee,
-                    slippage_pct if exit_reason != "tp_global" else 0.0,
-                    direction,
-                )
+                # trail_stop et sl_global → taker fee + slippage
+                # tp_global → maker fee, pas de slippage
+                if exit_reason == "tp_global":
+                    fee = maker_fee
+                    slip = 0.0
+                else:
+                    fee = taker_fee
+                    slip = slippage_pct
+
+                pnl = _calc_grid_pnl(positions, exit_price, fee, slip, direction)
                 trade_pnls.append(pnl)
                 if capital > 0:
                     trade_returns.append(pnl / capital)
                 capital += pnl
                 positions = []
+                hwm = 0.0
                 continue
 
         # 2. Guard capital épuisé
         if capital <= 0:
             continue
 
-        # 3. Ouvrir de nouvelles positions si niveaux touchés
+        # 3. Zone neutre : pas de nouvelles ouvertures
+        if neutral_zone:
+            continue
+
+        # 4. Ouvrir de nouvelles positions si niveaux touchés
         if len(positions) < num_levels:
             filled = {p[0] for p in positions}
             for lvl in range(num_levels):
@@ -250,6 +339,12 @@ def _simulate_grid_common(
                         continue
                     entry_fee = qty * ep * taker_fee
                     positions.append((lvl, ep, qty, entry_fee))
+                    # Init HWM à la première ouverture (trailing stop)
+                    if trail_mult > 0 and hwm == 0.0:
+                        if direction == 1:
+                            hwm = cache.highs[i]
+                        else:
+                            hwm = cache.lows[i]
 
     # Force close fin de données
     if positions:
@@ -261,6 +356,50 @@ def _simulate_grid_common(
         capital += pnl
 
     return trade_pnls, trade_returns, capital
+
+
+# ─── Grid Trend ───────────────────────────────────────────────────────────
+
+
+def _simulate_grid_trend(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Simulation Grid Trend (trend following DCA avec trailing stop ATR).
+
+    Direction dynamique EMA cross + filtre ADX. Trailing stop ATR.
+    """
+    num_levels = params["num_levels"]
+    sl_pct = params["sl_percent"] / 100
+    trail_mult = params["trail_mult"]
+
+    ema_fast_arr = cache.ema_by_period[params["ema_fast"]]
+    ema_slow_arr = cache.ema_by_period[params["ema_slow"]]
+    atr_arr = cache.atr_by_period[params["atr_period"]]
+    adx_arr = cache.adx_by_period[params["adx_period"]]
+    adx_threshold = params["adx_threshold"]
+
+    # Directions array : +1 (LONG), -1 (SHORT), 0 (neutre)
+    n = cache.n_candles
+    dir_arr = np.zeros(n, dtype=np.float64)
+    long_mask = (ema_fast_arr > ema_slow_arr) & (adx_arr > adx_threshold)
+    short_mask = (ema_fast_arr < ema_slow_arr) & (adx_arr > adx_threshold)
+    nan_mask = np.isnan(ema_fast_arr) | np.isnan(ema_slow_arr) | np.isnan(adx_arr)
+    dir_arr[long_mask] = 1.0
+    dir_arr[short_mask] = -1.0
+    dir_arr[nan_mask] = np.nan
+
+    entry_prices = _build_entry_prices("grid_trend", cache, params, num_levels, direction=1)
+
+    # EMA fast comme sma_arr placeholder (non utilisé pour TP car trail_mult > 0)
+    return _simulate_grid_common(
+        entry_prices, ema_fast_arr, cache, bt_config, num_levels, sl_pct,
+        direction=1,
+        directions=dir_arr,
+        trail_mult=trail_mult,
+        trail_atr_arr=atr_arr,
+    )
 
 
 # ─── Grid Funding ─────────────────────────────────────────────────────────
@@ -473,6 +612,10 @@ def run_multi_backtest_from_cache(
         )
     elif strategy_name == "grid_funding":
         trade_pnls, trade_returns, final_capital = _simulate_grid_funding(
+            cache, params, bt_config,
+        )
+    elif strategy_name == "grid_trend":
+        trade_pnls, trade_returns, final_capital = _simulate_grid_trend(
             cache, params, bt_config,
         )
     else:

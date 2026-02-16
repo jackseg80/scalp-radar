@@ -12,6 +12,7 @@ from backend.strategies.funding import FundingStrategy
 from backend.strategies.grid_atr import GridATRStrategy
 from backend.strategies.grid_funding import GridFundingStrategy
 from backend.strategies.grid_multi_tf import GridMultiTFStrategy
+from backend.strategies.grid_trend import GridTrendStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
 from backend.strategies.supertrend import SuperTrendStrategy
@@ -34,6 +35,7 @@ def create_strategy(name: str, config: AppConfig) -> BaseStrategy:
         "grid_atr": (GridATRStrategy, strategies_config.grid_atr),
         "grid_multi_tf": (GridMultiTFStrategy, strategies_config.grid_multi_tf),
         "grid_funding": (GridFundingStrategy, strategies_config.grid_funding),
+        "grid_trend": (GridTrendStrategy, strategies_config.grid_trend),
     }
     if name not in mapping:
         raise ValueError(f"Stratégie inconnue : {name}")
@@ -71,5 +73,7 @@ def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
         strategies.append(GridMultiTFStrategy(strats.grid_multi_tf))
     if strats.grid_funding.enabled:
         strategies.append(GridFundingStrategy(strats.grid_funding))
+    if strats.grid_trend.enabled:
+        strategies.append(GridTrendStrategy(strats.grid_trend))
 
     return strategies
