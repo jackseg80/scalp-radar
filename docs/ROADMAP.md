@@ -987,10 +987,10 @@ Phase 5: Scaling Stratégies     ✅
 ## ÉTAT ACTUEL (16 février 2026)
 
 - **902 tests**, 0 régression
-- **Phases 1-5 terminées** — 12 sprints/hotfixes rien que pour la Phase 5 (16+17, 19-19e, 20a-20f)
-- **Phase 6 en cours** — Sprint 21a terminé (Grid Multi-TF backtest + WFO)
+- **Phases 1-5 terminées** — 13 sprints/hotfixes rien que pour la Phase 5 (16+17, 19-19e, 20a-20f, 21a-quater)
+- **Phase 6 en cours** — Sprint 21a terminé (Grid Multi-TF backtest + WFO), Hotfix 21a-quater (warm-up + résilience)
 - **11 stratégies** : 4 scalp 5m + 3 swing 1h + 4 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf)
-- **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
+- **21 assets** (THETA/USDT retiré — inexistant sur Bitget) : 14 Grade A + 7 Grade B pour grid_atr
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
 - **Portfolio backtest** : +14.5% return, -28.7% max DD, 73.7% WR, 0 kill switch sur 90j avec 10k$/21 assets
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)

@@ -261,6 +261,18 @@ class DataEngine:
             except Exception as e:
                 if not self._running:
                     break
+
+                err_str = str(e)
+                is_invalid_symbol = "does not have market symbol" in err_str
+
+                # Symbol invalide → abandonner immédiatement
+                if is_invalid_symbol:
+                    logger.warning(
+                        "DataEngine: {} retiré de la surveillance (non disponible sur bitget)",
+                        symbol,
+                    )
+                    break
+
                 logger.error(
                     "DataEngine: erreur watch {} : {} (tentative {}/{})",
                     symbol,
@@ -343,6 +355,13 @@ class DataEngine:
                                 "DataEngine: erreurs répétées {}, suppression logs...",
                                 symbol,
                             )
+
+                        # Erreur fatale (symbol invalide) → remonter pour backoff global
+                        if "does not have market symbol" in err_str:
+                            raise
+
+                        # Toujours yield à l'event loop pour éviter de l'affamer
+                        await asyncio.sleep(1.0)
 
     async def _on_candle_received(
         self,

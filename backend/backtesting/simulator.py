@@ -749,13 +749,17 @@ class GridStrategyRunner:
         })
 
         # Indicateurs supplémentaires (ex: Supertrend 4h pour grid_multi_tf)
-        buffers = getattr(self._indicator_engine, "_buffers", None)
-        if isinstance(buffers, dict):
-            candle_buf = buffers.get((symbol, self._strategy_tf), [])
-            if candle_buf:
-                extra = self._strategy.compute_live_indicators(list(candle_buf))
-                for tf_key, tf_data in extra.items():
-                    indicators.setdefault(tf_key, {}).update(tf_data)
+        # Skippé pendant le warm-up : indicateurs pas encore valides
+        if not self._is_warming_up:
+            buffers = getattr(self._indicator_engine, "_buffers", None)
+            if isinstance(buffers, dict):
+                candle_buf = buffers.get((symbol, self._strategy_tf), [])
+                if candle_buf:
+                    extra = self._strategy.compute_live_indicators(
+                        list(candle_buf),
+                    )
+                    for tf_key, tf_data in extra.items():
+                        indicators.setdefault(tf_key, {}).update(tf_data)
 
         # Détecter le régime (si ADX/ATR disponibles)
         main_ind = indicators.get(self._strategy_tf, {})
@@ -1455,10 +1459,16 @@ class Simulator:
         # Warm-up grid runners depuis la DB
         if self._db is not None:
             symbols = self._data_engine.get_all_symbols()
+            logger.debug(
+                "Simulator: warm-up {} grid runners × {} symbols",
+                sum(1 for r in self._runners if isinstance(r, GridStrategyRunner)),
+                len(symbols),
+            )
             for runner in self._runners:
                 if isinstance(runner, GridStrategyRunner):
                     for symbol in symbols:
                         await runner._warmup_from_db(self._db, symbol)
+            logger.info("Simulator: warm-up terminé")
 
         # Restaurer le kill switch global
         if saved_state is not None:

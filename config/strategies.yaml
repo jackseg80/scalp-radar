@@ -207,12 +207,6 @@ envelope_dca:
       ma_period: 5
       num_levels: 4
       sl_percent: 30.0
-    THETA/USDT:
-      envelope_start: 0.07
-      envelope_step: 0.05
-      ma_period: 10
-      num_levels: 4
-      sl_percent: 25.0
     UNI/USDT:
       envelope_start: 0.05
       envelope_step: 0.05
@@ -579,15 +573,6 @@ grid_multi_tf:
       ma_period: 7
       num_levels: 2
       sl_percent: 20.0
-      st_atr_multiplier: 3.0
-      st_atr_period: 10
-    THETA/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 10
-      ma_period: 7
-      num_levels: 3
-      sl_percent: 25.0
       st_atr_multiplier: 3.0
       st_atr_period: 10
     UNI/USDT:

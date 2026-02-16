@@ -211,6 +211,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 21a : Stratégie Grid Multi-TF (11e stratégie, Supertrend 4h + Grid ATR 1h, resampling anti-lookahead, fast engine directions dynamiques, 384 combos WFO, 40 tests) (898 tests)
 - Bugfix 21a-bis : Validation Bitget + Monte Carlo 0 trades — compute_indicators() retourne 4h Supertrend, MultiPositionEngine passe tous les TFs (898 tests)
 - Bugfix 21a-ter : Portfolio backtest 0 trades — compute_live_indicators() dans BaseGridStrategy pour mode live/portfolio, GridStrategyRunner merge les indicateurs 4h depuis le buffer IncrementalIndicatorEngine (902 tests)
+- Hotfix 21a-quater : Serveur bloqué au warm-up + résilience assets manquants — skip compute_live_indicators() pendant warm-up, détection symbol invalide immédiate, sleep 1s sur erreur non-rate-limit, THETA/USDT retiré (21 assets restants) (902 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

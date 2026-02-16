@@ -251,15 +251,6 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: altcoins
-- symbol: THETA/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 1h
-  max_leverage: 20
-  min_order_size: 1.0
-  tick_size: 0.0001
-  correlation_group: altcoins
 correlation_groups:
   crypto_major:
     max_concurrent_same_direction: 2
