@@ -16,7 +16,7 @@ import argparse
 import asyncio
 import json
 import sys
-from dataclasses import asdict
+import time
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
@@ -88,7 +88,25 @@ async def main(args: argparse.Namespace) -> None:
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=args.days)
 
+    t0 = time.monotonic()
     result = await backtester.run(start, end, db_path=args.db)
+    duration = time.monotonic() - t0
+
+    # Sauvegarder en DB si demandé
+    if args.save:
+        from backend.backtesting.portfolio_db import save_result_sync
+
+        result_id = save_result_sync(
+            db_path=args.db,
+            result=result,
+            strategy_name=args.strategy,
+            exchange=args.exchange,
+            kill_switch_pct=args.kill_switch_pct,
+            kill_switch_window_hours=args.kill_switch_window,
+            duration_seconds=round(duration, 1),
+            label=args.label,
+        )
+        logger.info("Résultat sauvegardé en DB (id={}, {:.0f}s)", result_id, duration)
 
     if args.json:
         output = json.dumps(_result_to_dict(result), indent=2, ensure_ascii=False)
@@ -148,6 +166,17 @@ if __name__ == "__main__":
         type=int,
         default=24,
         help="Fenêtre kill switch (heures)",
+    )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Sauvegarder le résultat en DB",
+    )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help="Label pour identifier le run",
     )
 
     args = parser.parse_args()

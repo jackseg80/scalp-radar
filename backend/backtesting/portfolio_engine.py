@@ -17,7 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from itertools import groupby
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from loguru import logger
@@ -148,6 +148,7 @@ class PortfolioBacktester:
         start: datetime,
         end: datetime,
         db_path: str = "data/scalp_radar.db",
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> PortfolioResult:
         """Lance le backtest portfolio complet."""
         n_assets = len(self._assets)
@@ -200,7 +201,7 @@ class PortfolioBacktester:
         # 4. Merge et simulate
         merged = self._merge_candles(valid_assets)
         snapshots, realized_trades = await self._simulate(
-            runners, indicator_engine, merged, warmup_ends
+            runners, indicator_engine, merged, warmup_ends, progress_callback
         )
 
         # 5. Force-close positions restantes
@@ -387,6 +388,7 @@ class PortfolioBacktester:
         indicator_engine: IncrementalIndicatorEngine,
         merged_candles: list[Candle],
         warmup_ends: dict[str, int],
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> tuple[list[PortfolioSnapshot], list[tuple[str, TradeResult]]]:
         """Boucle de simulation principale."""
         snapshots: list[PortfolioSnapshot] = []
@@ -439,6 +441,8 @@ class PortfolioBacktester:
             if (i + 1) % log_interval == 0:
                 pct = (i + 1) / total * 100
                 logger.info("Simulation : {:.0f}% ({}/{})", pct, i + 1, total)
+                if progress_callback:
+                    progress_callback(round(pct, 1), f"Simulation {pct:.0f}%")
 
         return snapshots, all_trades
 

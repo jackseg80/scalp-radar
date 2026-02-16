@@ -901,7 +901,8 @@ Phase 2: Validation         ✅   Sprint 16+17: ✅      Phase 7: Avancé
 Phase 3: Paper/Live ready   ✅   Sprint 19: Grid ATR ✅
 Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
                                  Sprint 20c: Facto   ✅
-                                 Sprint 20b: Portfolio
+                                 Sprint 20b: Portfolio✅
+                                 Sprint 20b-UI: Front✅
 ```
 
 ---
@@ -909,12 +910,12 @@ Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
 ## ÉTAT ACTUEL (16 février 2026)
 
 - **825 tests**, 0 régression
-- **Hotfix 20d** — Anti-spam Telegram (cooldown par type d'anomalie)
+- **Sprint 20b-UI** — Frontend Portfolio Backtest (DB, API REST 7 endpoints, page React, equity curve SVG, drawdown, comparateur)
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
 - **Portfolio backtest** : +14.5% return, -28.7% max DD, 73.7% WR, 0 kill switch sur 90j avec 10k$/21 assets
-- **Prochaine étape** : Sprint 20 (gestion du capital avancée) ou Sprint 8 (backtest dashboard)
+- **Prochaine étape** : Sprint 8 (backtest dashboard) ou Phase 6 (production monitoring)
 
 ---
 

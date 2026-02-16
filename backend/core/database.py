@@ -171,6 +171,7 @@ class Database:
         await self._create_sprint13_tables()
         await self._create_sprint14_tables()
         await self._create_simulator_trades_table()
+        await self._create_portfolio_tables()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -378,6 +379,45 @@ class Database:
                 ON simulation_trades(strategy_name);
             CREATE INDEX IF NOT EXISTS idx_sim_trades_exit_time
                 ON simulation_trades(exit_time);
+        """)
+
+    async def _create_portfolio_tables(self) -> None:
+        """Tables Sprint 20b-UI : résultats portfolio backtest."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS portfolio_backtests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                initial_capital REAL NOT NULL,
+                n_assets INTEGER NOT NULL,
+                period_days INTEGER NOT NULL,
+                assets TEXT NOT NULL,
+                exchange TEXT NOT NULL DEFAULT 'binance',
+                kill_switch_pct REAL NOT NULL DEFAULT 30.0,
+                kill_switch_window_hours INTEGER NOT NULL DEFAULT 24,
+                final_equity REAL NOT NULL,
+                total_return_pct REAL NOT NULL,
+                total_trades INTEGER NOT NULL,
+                win_rate REAL NOT NULL,
+                realized_pnl REAL NOT NULL,
+                force_closed_pnl REAL NOT NULL,
+                max_drawdown_pct REAL NOT NULL,
+                max_drawdown_date TEXT,
+                max_drawdown_duration_hours REAL NOT NULL,
+                peak_margin_ratio REAL NOT NULL,
+                peak_open_positions INTEGER NOT NULL,
+                peak_concurrent_assets INTEGER NOT NULL,
+                kill_switch_triggers INTEGER NOT NULL DEFAULT 0,
+                kill_switch_events TEXT,
+                equity_curve TEXT NOT NULL,
+                per_asset_results TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                duration_seconds REAL,
+                label TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_portfolio_created
+                ON portfolio_backtests(created_at);
         """)
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
