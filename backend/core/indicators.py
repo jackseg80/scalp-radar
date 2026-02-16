@@ -191,6 +191,67 @@ def atr(
 # ─── ADX + DI+/DI- ──────────────────────────────────────────────────────────
 
 
+@njit(cache=True)
+def _adx_wilder_loop(tr, plus_dm, minus_dm, period, n, adx_arr, di_plus_arr, di_minus_arr):
+    # Seeds : somme des period premières valeurs (= mean × period)
+    sm_tr = 0.0
+    sm_plus = 0.0
+    sm_minus = 0.0
+    for j in range(1, period + 1):
+        sm_tr += tr[j]
+        sm_plus += plus_dm[j]
+        sm_minus += minus_dm[j]
+
+    # DI+/DI- au premier index (period)
+    if sm_tr > 0.0:
+        di_plus_arr[period] = 100.0 * sm_plus / sm_tr
+        di_minus_arr[period] = 100.0 * sm_minus / sm_tr
+    else:
+        di_plus_arr[period] = 0.0
+        di_minus_arr[period] = 0.0
+
+    # DX pré-alloué (pas de list.append)
+    dx_arr = np.empty(n - period, dtype=np.float64)
+    di_sum = di_plus_arr[period] + di_minus_arr[period]
+    if di_sum > 0.0:
+        dx_arr[0] = abs(di_plus_arr[period] - di_minus_arr[period]) / di_sum * 100.0
+    else:
+        dx_arr[0] = 0.0
+    dx_count = 1
+
+    for i in range(period + 1, n):
+        sm_tr = sm_tr - sm_tr / period + tr[i]
+        sm_plus = sm_plus - sm_plus / period + plus_dm[i]
+        sm_minus = sm_minus - sm_minus / period + minus_dm[i]
+
+        if sm_tr > 0.0:
+            di_plus_arr[i] = 100.0 * sm_plus / sm_tr
+            di_minus_arr[i] = 100.0 * sm_minus / sm_tr
+        else:
+            di_plus_arr[i] = 0.0
+            di_minus_arr[i] = 0.0
+
+        di_sum = di_plus_arr[i] + di_minus_arr[i]
+        if di_sum > 0.0:
+            dx_arr[dx_count] = abs(di_plus_arr[i] - di_minus_arr[i]) / di_sum * 100.0
+        else:
+            dx_arr[dx_count] = 0.0
+        dx_count += 1
+
+    # ADX = Wilder smoothed DX
+    if dx_count >= period:
+        adx_val = 0.0
+        for k in range(period):
+            adx_val += dx_arr[k]
+        adx_val /= period
+        adx_arr[2 * period - 1] = adx_val
+        for k in range(period, dx_count):
+            adx_val = (adx_val * (period - 1) + dx_arr[k]) / period
+            target_idx = period + k
+            if target_idx < n:
+                adx_arr[target_idx] = adx_val
+
+
 def adx(
     highs: np.ndarray,
     lows: np.ndarray,
@@ -227,56 +288,8 @@ def adx(
     plus_dm[1:] = np.where((up > down) & (up > 0), up, 0.0)
     minus_dm[1:] = np.where((down > up) & (down > 0), down, 0.0)
 
-    # Smoothed TR, +DM, -DM (Wilder smoothing)
-    sm_tr = np.mean(tr[1 : period + 1]) * period
-    sm_plus = np.mean(plus_dm[1 : period + 1]) * period
-    sm_minus = np.mean(minus_dm[1 : period + 1]) * period
-
-    # DI+/DI- à partir de period
-    if sm_tr > 0:
-        di_plus_arr[period] = 100.0 * sm_plus / sm_tr
-        di_minus_arr[period] = 100.0 * sm_minus / sm_tr
-    else:
-        di_plus_arr[period] = 0.0
-        di_minus_arr[period] = 0.0
-
-    dx_values = []
-    di_sum = di_plus_arr[period] + di_minus_arr[period]
-    if di_sum > 0:
-        dx_values.append(abs(di_plus_arr[period] - di_minus_arr[period]) / di_sum * 100.0)
-    else:
-        dx_values.append(0.0)
-
-    for i in range(period + 1, n):
-        sm_tr = sm_tr - sm_tr / period + tr[i]
-        sm_plus = sm_plus - sm_plus / period + plus_dm[i]
-        sm_minus = sm_minus - sm_minus / period + minus_dm[i]
-
-        if sm_tr > 0:
-            di_plus_arr[i] = 100.0 * sm_plus / sm_tr
-            di_minus_arr[i] = 100.0 * sm_minus / sm_tr
-        else:
-            di_plus_arr[i] = 0.0
-            di_minus_arr[i] = 0.0
-
-        di_sum = di_plus_arr[i] + di_minus_arr[i]
-        if di_sum > 0:
-            dx_values.append(abs(di_plus_arr[i] - di_minus_arr[i]) / di_sum * 100.0)
-        else:
-            dx_values.append(0.0)
-
-    # ADX = Wilder smoothed DX
-    # dx_values[j] correspond à l'index original period + j
-    # Le seed utilise dx_values[0:period] → placé à l'index 2*period - 1
-    if len(dx_values) >= period:
-        adx_val = np.mean(dx_values[:period])
-        adx_arr[2 * period - 1] = adx_val
-        for i in range(period, len(dx_values)):
-            adx_val = (adx_val * (period - 1) + dx_values[i]) / period
-            target_idx = period + i
-            if target_idx < n:
-                adx_arr[target_idx] = adx_val
-
+    # Wilder smoothing DI+/DI-/DX + ADX (JIT-compiled)
+    _adx_wilder_loop(tr, plus_dm, minus_dm, period, n, adx_arr, di_plus_arr, di_minus_arr)
     return adx_arr, di_plus_arr, di_minus_arr
 
 
@@ -365,24 +378,9 @@ def bollinger_bands(
 # ─── SuperTrend ──────────────────────────────────────────────────────────────
 
 
-def supertrend(
-    highs: np.ndarray,
-    lows: np.ndarray,
-    closes: np.ndarray,
-    atr_arr: np.ndarray,
-    multiplier: float = 3.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """SuperTrend indicator.
-
-    Calcul itératif (la direction précédente détermine la bande active).
-
-    Retourne (supertrend_values, direction).
-    direction[i] = 1 (UP/bullish) ou -1 (DOWN/bearish).
-    NaN tant que l'ATR n'est pas disponible.
-    """
+@njit(cache=True)
+def _supertrend_loop(highs, lows, closes, atr_arr, multiplier, st_values, direction):
     n = len(closes)
-    st_values = np.full(n, np.nan, dtype=float)
-    direction = np.full(n, np.nan, dtype=float)
 
     # Trouver le premier index avec ATR valide
     first_valid = -1
@@ -398,7 +396,6 @@ def supertrend(
     hl2 = (highs[first_valid] + lows[first_valid]) / 2.0
     upper_band = hl2 + multiplier * atr_arr[first_valid]
     lower_band = hl2 - multiplier * atr_arr[first_valid]
-    # Direction initiale basée sur close vs bandes
     if closes[first_valid] > upper_band:
         direction[first_valid] = 1.0
         st_values[first_valid] = lower_band
@@ -445,4 +442,26 @@ def supertrend(
         prev_upper = upper_band
         prev_lower = lower_band
 
+    return st_values, direction
+
+
+def supertrend(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    closes: np.ndarray,
+    atr_arr: np.ndarray,
+    multiplier: float = 3.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """SuperTrend indicator.
+
+    Calcul itératif (la direction précédente détermine la bande active).
+
+    Retourne (supertrend_values, direction).
+    direction[i] = 1 (UP/bullish) ou -1 (DOWN/bearish).
+    NaN tant que l'ATR n'est pas disponible.
+    """
+    n = len(closes)
+    st_values = np.full(n, np.nan, dtype=float)
+    direction = np.full(n, np.nan, dtype=float)
+    _supertrend_loop(highs, lows, closes, atr_arr, multiplier, st_values, direction)
     return st_values, direction

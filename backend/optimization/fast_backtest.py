@@ -18,6 +18,20 @@ import numpy as np
 from backend.backtesting.engine import BacktestConfig
 from backend.optimization.indicator_cache import IndicatorCache
 
+# Numba JIT (optionnel) — fallback transparent si non installé
+try:
+    from numba import njit
+
+    NUMBA_AVAILABLE = True
+except ImportError:  # pragma: no cover
+
+    def njit(*args, **kwargs):  # type: ignore[misc]
+        if args and callable(args[0]):
+            return args[0]
+        return lambda func: func
+
+    NUMBA_AVAILABLE = False
+
 # Type retour léger (même que walk_forward._ISResult)
 _ISResult = tuple[dict[str, Any], float, float, float, int]
 
@@ -246,7 +260,830 @@ def _supertrend_signals(
     return longs, shorts
 
 
-# ─── Trade simulation (boucle minimale) ─────────────────────────────────────
+# ─── Trade simulation JIT (Numba) ────────────────────────────────────────────
+
+
+@njit(cache=True)
+def _close_trade_numba(
+    direction, entry_price, exit_price, quantity, entry_fee,
+    exit_reason, regime_int, taker_fee, maker_fee,
+    slippage_pct, high_vol_slippage_mult,
+):
+    """Calcule le net_pnl d'un trade fermé (JIT-compiled).
+
+    exit_reason: 0=tp, 1=sl, 2=signal_exit, 3=end_of_data
+    """
+    slippage_cost = 0.0
+    actual_exit_price = exit_price
+
+    if exit_reason != 0:  # Pas TP → appliquer slippage
+        slippage_rate = slippage_pct
+        if regime_int == 3:  # HIGH_VOLATILITY
+            slippage_rate *= high_vol_slippage_mult
+        slippage_cost = quantity * exit_price * slippage_rate
+        if direction == 1:
+            actual_exit_price = exit_price * (1.0 - slippage_rate)
+        else:
+            actual_exit_price = exit_price * (1.0 + slippage_rate)
+
+    if direction == 1:
+        gross_pnl = (actual_exit_price - entry_price) * quantity
+    else:
+        gross_pnl = (entry_price - actual_exit_price) * quantity
+
+    if exit_reason == 0:  # TP → maker fee
+        exit_fee = quantity * exit_price * maker_fee
+    else:
+        exit_fee = quantity * exit_price * taker_fee
+
+    return gross_pnl - (entry_fee + exit_fee) - slippage_cost
+
+
+@njit(cache=True)
+def _simulate_vwap_rsi_numba(
+    longs, shorts,
+    opens, highs, lows, closes, regime,
+    rsi_arr,
+    tp_pct, sl_pct,
+    initial_capital, taker_fee, maker_fee,
+    slippage_pct, high_vol_slippage_mult,
+    max_risk_per_trade,
+):
+    """Boucle de trades complète pour vwap_rsi (JIT-compiled)."""
+    n = len(closes)
+    trade_pnls = np.empty(n, dtype=np.float64)
+    trade_returns = np.empty(n, dtype=np.float64)
+    n_trades = 0
+    capital = initial_capital
+
+    in_position = False
+    direction = 0
+    entry_price = 0.0
+    tp_price = 0.0
+    sl_price = 0.0
+    quantity = 0.0
+    entry_fee = 0.0
+
+    for i in range(n):
+        # 1. Si position ouverte : vérifier TP/SL puis check_exit
+        if in_position:
+            exit_reason = -1  # pas de sortie
+
+            # Check TP/SL inline
+            if direction == 1:
+                tp_hit = highs[i] >= tp_price
+                sl_hit = lows[i] <= sl_price
+            else:
+                tp_hit = lows[i] <= tp_price
+                sl_hit = highs[i] >= sl_price
+
+            if tp_hit and sl_hit:
+                # OHLC heuristic inline
+                if closes[i] > opens[i]:
+                    exit_reason = 0 if direction == 1 else 1
+                elif closes[i] < opens[i]:
+                    exit_reason = 1 if direction == 1 else 0
+                else:
+                    exit_reason = 1  # Doji → SL
+            elif tp_hit:
+                exit_reason = 0  # tp
+            elif sl_hit:
+                exit_reason = 1  # sl
+            else:
+                # check_exit vwap_rsi : RSI normalisé + en profit
+                rsi_val = rsi_arr[i]
+                close = closes[i]
+                if not np.isnan(rsi_val) and not np.isnan(close):
+                    if direction == 1:
+                        if close > entry_price and rsi_val > 50.0:
+                            exit_reason = 2  # signal_exit
+                    else:
+                        if close < entry_price and rsi_val < 50.0:
+                            exit_reason = 2  # signal_exit
+
+            if exit_reason >= 0:
+                if exit_reason == 0:
+                    exit_price = tp_price
+                elif exit_reason == 1:
+                    exit_price = sl_price
+                else:
+                    exit_price = closes[i]
+
+                net_pnl = _close_trade_numba(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, exit_reason, int(regime[i]),
+                    taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+                )
+                if capital > 0.0:
+                    trade_returns[n_trades] = net_pnl / capital
+                else:
+                    trade_returns[n_trades] = 0.0
+                capital += net_pnl
+                trade_pnls[n_trades] = net_pnl
+                n_trades += 1
+                in_position = False
+
+        # 2. Si pas de position : entrée
+        if not in_position and (longs[i] or shorts[i]):
+            direction = 1 if longs[i] else -1
+            ep = closes[i]
+
+            if ep <= 0.0 or capital <= 0.0:
+                continue
+
+            tp_dist = ep * tp_pct / 100.0
+            sl_dist = ep * sl_pct / 100.0
+
+            if direction == 1:
+                tp_price = ep + tp_dist
+                sl_price = ep - sl_dist
+            else:
+                tp_price = ep - tp_dist
+                sl_price = ep + sl_dist
+
+            if sl_price <= 0.0 or tp_price <= 0.0:
+                continue
+
+            sl_distance_pct = abs(ep - sl_price) / ep
+            sl_real_cost = sl_distance_pct + taker_fee + slippage_pct
+            if sl_real_cost <= 0.0:
+                continue
+
+            risk_amount = capital * max_risk_per_trade
+            notional = risk_amount / sl_real_cost
+            quantity = notional / ep
+
+            if quantity <= 0.0:
+                continue
+
+            entry_fee = quantity * ep * taker_fee
+            if entry_fee >= capital:
+                continue
+
+            entry_price = ep
+            capital -= entry_fee
+            in_position = True
+
+    # Force close fin de données
+    if in_position:
+        exit_price = closes[n - 1]
+        net_pnl = _close_trade_numba(
+            direction, entry_price, exit_price, quantity,
+            entry_fee, 3, int(regime[n - 1]),
+            taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+        )
+        if capital > 0.0:
+            trade_returns[n_trades] = net_pnl / capital
+        else:
+            trade_returns[n_trades] = 0.0
+        capital += net_pnl
+        trade_pnls[n_trades] = net_pnl
+        n_trades += 1
+
+    return trade_pnls, trade_returns, n_trades, capital
+
+
+def _run_simulate_vwap_rsi(
+    longs: np.ndarray,
+    shorts: np.ndarray,
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Wrapper Python pour _simulate_vwap_rsi_numba — extrait les arrays."""
+    rsi_arr = cache.rsi[params["rsi_period"]]
+    trade_pnls, trade_returns, n_trades, final_capital = _simulate_vwap_rsi_numba(
+        longs, shorts,
+        cache.opens, cache.highs, cache.lows, cache.closes, cache.regime,
+        rsi_arr,
+        float(params["tp_percent"]), float(params["sl_percent"]),
+        bt_config.initial_capital, bt_config.taker_fee, bt_config.maker_fee,
+        bt_config.slippage_pct, bt_config.high_vol_slippage_mult,
+        bt_config.max_risk_per_trade,
+    )
+    return (
+        trade_pnls[:n_trades].tolist(),
+        trade_returns[:n_trades].tolist(),
+        final_capital,
+    )
+
+
+@njit(cache=True)
+def _simulate_momentum_numba(
+    longs, shorts,
+    opens, highs, lows, closes, regime,
+    atr_arr, adx_arr,
+    atr_mult_tp, atr_mult_sl, tp_pct, sl_pct,
+    initial_capital, taker_fee, maker_fee,
+    slippage_pct, high_vol_slippage_mult,
+    max_risk_per_trade,
+):
+    """Boucle de trades complète pour momentum (JIT-compiled)."""
+    n = len(closes)
+    trade_pnls = np.empty(n, dtype=np.float64)
+    trade_returns = np.empty(n, dtype=np.float64)
+    n_trades = 0
+    capital = initial_capital
+
+    in_position = False
+    direction = 0
+    entry_price = 0.0
+    tp_price = 0.0
+    sl_price = 0.0
+    quantity = 0.0
+    entry_fee = 0.0
+
+    for i in range(n):
+        if in_position:
+            exit_reason = -1
+
+            if direction == 1:
+                tp_hit = highs[i] >= tp_price
+                sl_hit = lows[i] <= sl_price
+            else:
+                tp_hit = lows[i] <= tp_price
+                sl_hit = highs[i] >= sl_price
+
+            if tp_hit and sl_hit:
+                if closes[i] > opens[i]:
+                    exit_reason = 0 if direction == 1 else 1
+                elif closes[i] < opens[i]:
+                    exit_reason = 1 if direction == 1 else 0
+                else:
+                    exit_reason = 1
+            elif tp_hit:
+                exit_reason = 0
+            elif sl_hit:
+                exit_reason = 1
+            else:
+                # check_exit momentum : ADX < 20
+                adx_val = adx_arr[i]
+                if not np.isnan(adx_val) and adx_val < 20.0:
+                    exit_reason = 2
+
+            if exit_reason >= 0:
+                if exit_reason == 0:
+                    exit_price = tp_price
+                elif exit_reason == 1:
+                    exit_price = sl_price
+                else:
+                    exit_price = closes[i]
+
+                net_pnl = _close_trade_numba(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, exit_reason, int(regime[i]),
+                    taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+                )
+                if capital > 0.0:
+                    trade_returns[n_trades] = net_pnl / capital
+                else:
+                    trade_returns[n_trades] = 0.0
+                capital += net_pnl
+                trade_pnls[n_trades] = net_pnl
+                n_trades += 1
+                in_position = False
+
+        if not in_position and (longs[i] or shorts[i]):
+            direction = 1 if longs[i] else -1
+            ep = closes[i]
+            atr_val = atr_arr[i]
+
+            if ep <= 0.0 or capital <= 0.0:
+                continue
+
+            # ATR-based TP/SL avec caps
+            if not np.isnan(atr_val) and atr_val > 0.0:
+                atr_tp = atr_val * atr_mult_tp
+                atr_sl = atr_val * atr_mult_sl
+            else:
+                atr_tp = ep * tp_pct / 100.0
+                atr_sl = ep * sl_pct / 100.0
+
+            max_tp = ep * tp_pct / 100.0
+            max_sl = ep * sl_pct / 100.0
+            tp_dist = min(atr_tp, max_tp)
+            sl_dist = min(atr_sl, max_sl)
+
+            if direction == 1:
+                tp_price = ep + tp_dist
+                sl_price = ep - sl_dist
+            else:
+                tp_price = ep - tp_dist
+                sl_price = ep + sl_dist
+
+            if sl_price <= 0.0 or tp_price <= 0.0:
+                continue
+
+            sl_distance_pct = abs(ep - sl_price) / ep
+            sl_real_cost = sl_distance_pct + taker_fee + slippage_pct
+            if sl_real_cost <= 0.0:
+                continue
+
+            risk_amount = capital * max_risk_per_trade
+            notional = risk_amount / sl_real_cost
+            quantity = notional / ep
+
+            if quantity <= 0.0:
+                continue
+
+            entry_fee = quantity * ep * taker_fee
+            if entry_fee >= capital:
+                continue
+
+            entry_price = ep
+            capital -= entry_fee
+            in_position = True
+
+    if in_position:
+        exit_price = closes[n - 1]
+        net_pnl = _close_trade_numba(
+            direction, entry_price, exit_price, quantity,
+            entry_fee, 3, int(regime[n - 1]),
+            taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+        )
+        if capital > 0.0:
+            trade_returns[n_trades] = net_pnl / capital
+        else:
+            trade_returns[n_trades] = 0.0
+        capital += net_pnl
+        trade_pnls[n_trades] = net_pnl
+        n_trades += 1
+
+    return trade_pnls, trade_returns, n_trades, capital
+
+
+def _run_simulate_momentum(
+    longs: np.ndarray, shorts: np.ndarray,
+    cache: IndicatorCache, params: dict[str, Any], bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Wrapper Python pour _simulate_momentum_numba."""
+    pnls, rets, nt, cap = _simulate_momentum_numba(
+        longs, shorts,
+        cache.opens, cache.highs, cache.lows, cache.closes, cache.regime,
+        cache.atr_arr, cache.adx_arr,
+        float(params["atr_multiplier_tp"]), float(params["atr_multiplier_sl"]),
+        float(params["tp_percent"]), float(params["sl_percent"]),
+        bt_config.initial_capital, bt_config.taker_fee, bt_config.maker_fee,
+        bt_config.slippage_pct, bt_config.high_vol_slippage_mult,
+        bt_config.max_risk_per_trade,
+    )
+    return pnls[:nt].tolist(), rets[:nt].tolist(), cap
+
+
+@njit(cache=True)
+def _simulate_bollinger_numba(
+    longs, shorts,
+    opens, highs, lows, closes, regime,
+    bb_sma_arr,
+    sl_pct,
+    initial_capital, taker_fee, maker_fee,
+    slippage_pct, high_vol_slippage_mult,
+    max_risk_per_trade,
+):
+    """Boucle de trades complète pour bollinger_mr (JIT-compiled)."""
+    n = len(closes)
+    trade_pnls = np.empty(n, dtype=np.float64)
+    trade_returns = np.empty(n, dtype=np.float64)
+    n_trades = 0
+    capital = initial_capital
+
+    in_position = False
+    direction = 0
+    entry_price = 0.0
+    tp_price = 0.0
+    sl_price = 0.0
+    quantity = 0.0
+    entry_fee = 0.0
+
+    for i in range(n):
+        if in_position:
+            exit_reason = -1
+
+            if direction == 1:
+                tp_hit = highs[i] >= tp_price
+                sl_hit = lows[i] <= sl_price
+            else:
+                tp_hit = lows[i] <= tp_price
+                sl_hit = highs[i] >= sl_price
+
+            if tp_hit and sl_hit:
+                if closes[i] > opens[i]:
+                    exit_reason = 0 if direction == 1 else 1
+                elif closes[i] < opens[i]:
+                    exit_reason = 1 if direction == 1 else 0
+                else:
+                    exit_reason = 1
+            elif tp_hit:
+                exit_reason = 0
+            elif sl_hit:
+                exit_reason = 1
+            else:
+                # check_exit bollinger_mr : SMA crossing
+                sma_val = bb_sma_arr[i]
+                close = closes[i]
+                if not np.isnan(sma_val) and not np.isnan(close):
+                    if direction == 1:
+                        if close >= sma_val:
+                            exit_reason = 2
+                    else:
+                        if close <= sma_val:
+                            exit_reason = 2
+
+            if exit_reason >= 0:
+                if exit_reason == 0:
+                    exit_price = tp_price
+                elif exit_reason == 1:
+                    exit_price = sl_price
+                else:
+                    exit_price = closes[i]
+
+                net_pnl = _close_trade_numba(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, exit_reason, int(regime[i]),
+                    taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+                )
+                if capital > 0.0:
+                    trade_returns[n_trades] = net_pnl / capital
+                else:
+                    trade_returns[n_trades] = 0.0
+                capital += net_pnl
+                trade_pnls[n_trades] = net_pnl
+                n_trades += 1
+                in_position = False
+
+        if not in_position and (longs[i] or shorts[i]):
+            direction = 1 if longs[i] else -1
+            ep = closes[i]
+
+            if ep <= 0.0 or capital <= 0.0:
+                continue
+
+            # TP très éloigné (SMA exit gère le vrai TP), SL % fixe
+            sl_dist = ep * sl_pct / 100.0
+            tp_dist = ep  # LONG: tp=2×entry, SHORT: tp=0 (won't open)
+
+            if direction == 1:
+                tp_price = ep + tp_dist
+                sl_price = ep - sl_dist
+            else:
+                tp_price = ep - tp_dist
+                sl_price = ep + sl_dist
+
+            if sl_price <= 0.0 or tp_price <= 0.0:
+                continue
+
+            sl_distance_pct = abs(ep - sl_price) / ep
+            sl_real_cost = sl_distance_pct + taker_fee + slippage_pct
+            if sl_real_cost <= 0.0:
+                continue
+
+            risk_amount = capital * max_risk_per_trade
+            notional = risk_amount / sl_real_cost
+            quantity = notional / ep
+
+            if quantity <= 0.0:
+                continue
+
+            entry_fee = quantity * ep * taker_fee
+            if entry_fee >= capital:
+                continue
+
+            entry_price = ep
+            capital -= entry_fee
+            in_position = True
+
+    if in_position:
+        exit_price = closes[n - 1]
+        net_pnl = _close_trade_numba(
+            direction, entry_price, exit_price, quantity,
+            entry_fee, 3, int(regime[n - 1]),
+            taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+        )
+        if capital > 0.0:
+            trade_returns[n_trades] = net_pnl / capital
+        else:
+            trade_returns[n_trades] = 0.0
+        capital += net_pnl
+        trade_pnls[n_trades] = net_pnl
+        n_trades += 1
+
+    return trade_pnls, trade_returns, n_trades, capital
+
+
+def _run_simulate_bollinger(
+    longs: np.ndarray, shorts: np.ndarray,
+    cache: IndicatorCache, params: dict[str, Any], bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Wrapper Python pour _simulate_bollinger_numba."""
+    bb_sma_arr = cache.bb_sma[params["bb_period"]]
+    pnls, rets, nt, cap = _simulate_bollinger_numba(
+        longs, shorts,
+        cache.opens, cache.highs, cache.lows, cache.closes, cache.regime,
+        bb_sma_arr,
+        float(params["sl_percent"]),
+        bt_config.initial_capital, bt_config.taker_fee, bt_config.maker_fee,
+        bt_config.slippage_pct, bt_config.high_vol_slippage_mult,
+        bt_config.max_risk_per_trade,
+    )
+    return pnls[:nt].tolist(), rets[:nt].tolist(), cap
+
+
+@njit(cache=True)
+def _simulate_donchian_numba(
+    longs, shorts,
+    opens, highs, lows, closes, regime,
+    atr_arr,
+    atr_tp_mult, atr_sl_mult,
+    initial_capital, taker_fee, maker_fee,
+    slippage_pct, high_vol_slippage_mult,
+    max_risk_per_trade,
+):
+    """Boucle de trades complète pour donchian_breakout (JIT-compiled)."""
+    n = len(closes)
+    trade_pnls = np.empty(n, dtype=np.float64)
+    trade_returns = np.empty(n, dtype=np.float64)
+    n_trades = 0
+    capital = initial_capital
+
+    in_position = False
+    direction = 0
+    entry_price = 0.0
+    tp_price = 0.0
+    sl_price = 0.0
+    quantity = 0.0
+    entry_fee = 0.0
+
+    for i in range(n):
+        if in_position:
+            exit_reason = -1
+
+            if direction == 1:
+                tp_hit = highs[i] >= tp_price
+                sl_hit = lows[i] <= sl_price
+            else:
+                tp_hit = lows[i] <= tp_price
+                sl_hit = highs[i] >= sl_price
+
+            if tp_hit and sl_hit:
+                if closes[i] > opens[i]:
+                    exit_reason = 0 if direction == 1 else 1
+                elif closes[i] < opens[i]:
+                    exit_reason = 1 if direction == 1 else 0
+                else:
+                    exit_reason = 1
+            elif tp_hit:
+                exit_reason = 0
+            elif sl_hit:
+                exit_reason = 1
+            # Pas de check_exit pour donchian
+
+            if exit_reason >= 0:
+                if exit_reason == 0:
+                    exit_price = tp_price
+                elif exit_reason == 1:
+                    exit_price = sl_price
+                else:
+                    exit_price = closes[i]
+
+                net_pnl = _close_trade_numba(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, exit_reason, int(regime[i]),
+                    taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+                )
+                if capital > 0.0:
+                    trade_returns[n_trades] = net_pnl / capital
+                else:
+                    trade_returns[n_trades] = 0.0
+                capital += net_pnl
+                trade_pnls[n_trades] = net_pnl
+                n_trades += 1
+                in_position = False
+
+        if not in_position and (longs[i] or shorts[i]):
+            direction = 1 if longs[i] else -1
+            ep = closes[i]
+            atr_val = atr_arr[i]
+
+            if ep <= 0.0 or capital <= 0.0:
+                continue
+
+            # ATR-based TP/SL
+            if np.isnan(atr_val) or atr_val <= 0.0:
+                continue
+            tp_dist = atr_val * atr_tp_mult
+            sl_dist = atr_val * atr_sl_mult
+
+            if direction == 1:
+                tp_price = ep + tp_dist
+                sl_price = ep - sl_dist
+            else:
+                tp_price = ep - tp_dist
+                sl_price = ep + sl_dist
+
+            if sl_price <= 0.0 or tp_price <= 0.0:
+                continue
+
+            sl_distance_pct = abs(ep - sl_price) / ep
+            sl_real_cost = sl_distance_pct + taker_fee + slippage_pct
+            if sl_real_cost <= 0.0:
+                continue
+
+            risk_amount = capital * max_risk_per_trade
+            notional = risk_amount / sl_real_cost
+            quantity = notional / ep
+
+            if quantity <= 0.0:
+                continue
+
+            entry_fee = quantity * ep * taker_fee
+            if entry_fee >= capital:
+                continue
+
+            entry_price = ep
+            capital -= entry_fee
+            in_position = True
+
+    if in_position:
+        exit_price = closes[n - 1]
+        net_pnl = _close_trade_numba(
+            direction, entry_price, exit_price, quantity,
+            entry_fee, 3, int(regime[n - 1]),
+            taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+        )
+        if capital > 0.0:
+            trade_returns[n_trades] = net_pnl / capital
+        else:
+            trade_returns[n_trades] = 0.0
+        capital += net_pnl
+        trade_pnls[n_trades] = net_pnl
+        n_trades += 1
+
+    return trade_pnls, trade_returns, n_trades, capital
+
+
+def _run_simulate_donchian(
+    longs: np.ndarray, shorts: np.ndarray,
+    cache: IndicatorCache, params: dict[str, Any], bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Wrapper Python pour _simulate_donchian_numba."""
+    atr_arr = cache.atr_by_period[params["atr_period"]]
+    pnls, rets, nt, cap = _simulate_donchian_numba(
+        longs, shorts,
+        cache.opens, cache.highs, cache.lows, cache.closes, cache.regime,
+        atr_arr,
+        float(params["atr_tp_multiple"]), float(params["atr_sl_multiple"]),
+        bt_config.initial_capital, bt_config.taker_fee, bt_config.maker_fee,
+        bt_config.slippage_pct, bt_config.high_vol_slippage_mult,
+        bt_config.max_risk_per_trade,
+    )
+    return pnls[:nt].tolist(), rets[:nt].tolist(), cap
+
+
+@njit(cache=True)
+def _simulate_supertrend_numba(
+    longs, shorts,
+    opens, highs, lows, closes, regime,
+    tp_pct, sl_pct,
+    initial_capital, taker_fee, maker_fee,
+    slippage_pct, high_vol_slippage_mult,
+    max_risk_per_trade,
+):
+    """Boucle de trades complète pour supertrend (JIT-compiled)."""
+    n = len(closes)
+    trade_pnls = np.empty(n, dtype=np.float64)
+    trade_returns = np.empty(n, dtype=np.float64)
+    n_trades = 0
+    capital = initial_capital
+
+    in_position = False
+    direction = 0
+    entry_price = 0.0
+    tp_price = 0.0
+    sl_price = 0.0
+    quantity = 0.0
+    entry_fee = 0.0
+
+    for i in range(n):
+        if in_position:
+            exit_reason = -1
+
+            if direction == 1:
+                tp_hit = highs[i] >= tp_price
+                sl_hit = lows[i] <= sl_price
+            else:
+                tp_hit = lows[i] <= tp_price
+                sl_hit = highs[i] >= sl_price
+
+            if tp_hit and sl_hit:
+                if closes[i] > opens[i]:
+                    exit_reason = 0 if direction == 1 else 1
+                elif closes[i] < opens[i]:
+                    exit_reason = 1 if direction == 1 else 0
+                else:
+                    exit_reason = 1
+            elif tp_hit:
+                exit_reason = 0
+            elif sl_hit:
+                exit_reason = 1
+            # Pas de check_exit pour supertrend
+
+            if exit_reason >= 0:
+                if exit_reason == 0:
+                    exit_price = tp_price
+                elif exit_reason == 1:
+                    exit_price = sl_price
+                else:
+                    exit_price = closes[i]
+
+                net_pnl = _close_trade_numba(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, exit_reason, int(regime[i]),
+                    taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+                )
+                if capital > 0.0:
+                    trade_returns[n_trades] = net_pnl / capital
+                else:
+                    trade_returns[n_trades] = 0.0
+                capital += net_pnl
+                trade_pnls[n_trades] = net_pnl
+                n_trades += 1
+                in_position = False
+
+        if not in_position and (longs[i] or shorts[i]):
+            direction = 1 if longs[i] else -1
+            ep = closes[i]
+
+            if ep <= 0.0 or capital <= 0.0:
+                continue
+
+            tp_dist = ep * tp_pct / 100.0
+            sl_dist = ep * sl_pct / 100.0
+
+            if direction == 1:
+                tp_price = ep + tp_dist
+                sl_price = ep - sl_dist
+            else:
+                tp_price = ep - tp_dist
+                sl_price = ep + sl_dist
+
+            if sl_price <= 0.0 or tp_price <= 0.0:
+                continue
+
+            sl_distance_pct = abs(ep - sl_price) / ep
+            sl_real_cost = sl_distance_pct + taker_fee + slippage_pct
+            if sl_real_cost <= 0.0:
+                continue
+
+            risk_amount = capital * max_risk_per_trade
+            notional = risk_amount / sl_real_cost
+            quantity = notional / ep
+
+            if quantity <= 0.0:
+                continue
+
+            entry_fee = quantity * ep * taker_fee
+            if entry_fee >= capital:
+                continue
+
+            entry_price = ep
+            capital -= entry_fee
+            in_position = True
+
+    if in_position:
+        exit_price = closes[n - 1]
+        net_pnl = _close_trade_numba(
+            direction, entry_price, exit_price, quantity,
+            entry_fee, 3, int(regime[n - 1]),
+            taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+        )
+        if capital > 0.0:
+            trade_returns[n_trades] = net_pnl / capital
+        else:
+            trade_returns[n_trades] = 0.0
+        capital += net_pnl
+        trade_pnls[n_trades] = net_pnl
+        n_trades += 1
+
+    return trade_pnls, trade_returns, n_trades, capital
+
+
+def _run_simulate_supertrend(
+    longs: np.ndarray, shorts: np.ndarray,
+    cache: IndicatorCache, params: dict[str, Any], bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Wrapper Python pour _simulate_supertrend_numba."""
+    pnls, rets, nt, cap = _simulate_supertrend_numba(
+        longs, shorts,
+        cache.opens, cache.highs, cache.lows, cache.closes, cache.regime,
+        float(params["tp_percent"]), float(params["sl_percent"]),
+        bt_config.initial_capital, bt_config.taker_fee, bt_config.maker_fee,
+        bt_config.slippage_pct, bt_config.high_vol_slippage_mult,
+        bt_config.max_risk_per_trade,
+    )
+    return pnls[:nt].tolist(), rets[:nt].tolist(), cap
+
+
+# ─── Trade simulation (boucle Python fallback) ──────────────────────────────
 
 
 def _simulate_trades(
@@ -259,11 +1096,24 @@ def _simulate_trades(
 ) -> tuple[list[float], list[float], float]:
     """Simule les trades séquentiellement.
 
-    Seule boucle Python restante. Pas de calcul d'indicateurs, juste des
-    comparaisons scalaires sur les arrays pré-indexés.
+    Dispatch vers la version JIT si numba est disponible, sinon
+    boucle Python fallback.
 
     Retourne (trade_pnls, trade_returns, final_capital).
     """
+    # Dispatch numba (par stratégie)
+    if NUMBA_AVAILABLE:
+        if strategy_name == "vwap_rsi":
+            return _run_simulate_vwap_rsi(longs, shorts, cache, params, bt_config)
+        if strategy_name == "momentum":
+            return _run_simulate_momentum(longs, shorts, cache, params, bt_config)
+        if strategy_name == "bollinger_mr":
+            return _run_simulate_bollinger(longs, shorts, cache, params, bt_config)
+        if strategy_name == "donchian_breakout":
+            return _run_simulate_donchian(longs, shorts, cache, params, bt_config)
+        if strategy_name == "supertrend":
+            return _run_simulate_supertrend(longs, shorts, cache, params, bt_config)
+
     n = cache.n_candles
     capital = bt_config.initial_capital
     trade_pnls: list[float] = []
