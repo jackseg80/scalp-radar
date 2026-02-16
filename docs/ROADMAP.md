@@ -596,17 +596,22 @@ Système automatisé de trading crypto qui :
 
 ---
 
-## PHASE 5 — SCALING STRATÉGIES (Sprints 16-20) ← ON EST ICI
+## PHASE 5 — SCALING STRATÉGIES (Sprints 16-20) ✅ TERMINÉ
 
 | Sprint | Contenu | Status |
 |--------|---------|--------|
 | 16+17 | Dashboard Scanner + Monitoring DCA Live | ✅ |
 | 18 | ~~Multi-asset Live envelope_dca~~ — Superseded par grid_atr | ⏭️ Superseded |
 | 19 | Stratégie Grid ATR (10e stratégie, fast engine, 3240 combos WFO) | ✅ |
+| 19b-d | Combo results dense, régimes marché, grading Bitget 3 paliers | ✅ |
+| 19e | Scanner Grid Fix (colonnes dynamiques, GridDetail) | ✅ |
 | 20a | Sizing equal allocation + margin guard 70% | ✅ |
 | 20b | Portfolio Backtest Multi-Asset (CLI + engine) | ✅ |
-| 20c | Factorisation fast engine (`_simulate_grid_common`) | ✅ |
 | 20b-UI | Portfolio Frontend + API + Comparateur | ✅ |
+| 20c | Factorisation fast engine (`_simulate_grid_common`) | ✅ |
+| 20d | Anti-spam Telegram (cooldown par type d'anomalie) | ✅ |
+| 20e | Kill switch grid-compatible + warm-up fixes | ✅ |
+| 20f | Panneau Simulator P&L réalisé + non réalisé + equity | ✅ |
 
 ### Sprint 16+17 — Dashboard Scanner amélioré + Monitoring DCA Live ✅
 **But** : Ajouter la visibilité grid DCA au Scanner et ActivePositions, sans casser l'architecture multi-stratégie.
@@ -744,8 +749,6 @@ Système automatisé de trading crypto qui :
 
 ---
 
-## PHASE 6 — ROBUSTESSE & PRODUCTION (Sprints 20-22)
-
 ### Sprint 20c — Factorisation Fast Engine + Auto-dispatch WFO ✅
 
 **But** : Factoriser `_simulate_envelope_dca()` et `_simulate_grid_atr()` (80% de code dupliqué) en une architecture extensible.
@@ -851,47 +854,79 @@ Système automatisé de trading crypto qui :
 
 **Tests** : 5 nouveaux → 852 passants
 
-### Sprint 20 — Gestion du Capital Avancée
+---
 
-**But** : Optimiser l'allocation de capital entre stratégies et assets.
+## PHASE 6 — MULTI-STRATÉGIE & LIVE (Sprints 21-25)
+
+| Sprint | Contenu | Status |
+|--------|---------|--------|
+| 21 | Nouvelle stratégie complémentaire (trend-following ou funding grid) | 📋 Planifié |
+| 22 | Live trading progressif (1000$ → 5000$) | 📋 Planifié |
+| 23 | Monitoring V2 (alertes enrichies, rapport hebdo Telegram) | 📋 Planifié |
+| 24 | Data Pipeline Robuste (backfill auto, détection anomalies) | 📋 Planifié |
+| 25 | Gestion du Capital Avancée (Kelly, risk parity, rebalancing) | 📋 Planifié |
+
+### Sprint 21 — Stratégie Complémentaire
+
+**But** : Ajouter une stratégie avec un profil différent de grid_atr pour diversifier.
+
+**Candidates** :
+
+- **Grid Multi-TF** : Supertrend 4h filtre tendance + Grid ATR 1h exécution
+- **Grid Funding** : DCA déclenché par funding rate négatif extrême
+- **Grid RSI** : DCA déclenché par RSI extrême + niveaux %
+
+**Workflow** : Implémenter → param_grids.yaml → WFO → Grade ≥ B → Paper → Live.
+
+**Infrastructure prête** : Sprint 20c a factorisé `_simulate_grid_common()` — ajouter une nouvelle stratégie grid = 3-5 lignes dans `_build_entry_prices()`.
+
+### Sprint 22 — Live Trading Progressif
+
+**But** : Passer du paper trading au live avec capital réel progressif.
+
+**Étapes** :
+
+- 1000$ sur 3-5 assets Grade A (validation 2 semaines)
+- 2500$ sur 7-10 assets (validation 1 mois)
+- 5000$ sur 15+ assets (objectif long terme)
+- Monitoring slippage paper vs live à chaque palier
+
+### Sprint 23 — Monitoring & Alertes V2
+
+**But** : Surveillance avancée et rapports automatiques.
+
+**Features** :
+
+- Dashboard de performance live (P&L cumulé, drawdown, Sharpe rolling)
+- Alertes configurables (drawdown > X%, divergence paper/live)
+- Rapport quotidien/hebdomadaire automatique par Telegram
+- Logs structurés pour post-mortem (chaque trade avec full context)
+
+### Sprint 24 — Data Pipeline Robuste
+
+**But** : Garantir la qualité et la disponibilité des données.
+
+**Features** :
+
+- Backfill automatique des trous (candles manquées)
+- Détection de données aberrantes (spikes, gaps, volumes 0)
+- Archivage et compression des données anciennes (> 1 an)
+- Health check data freshness par asset × timeframe
+
+### Sprint 25 — Gestion du Capital Avancée
+
+**But** : Optimiser l'allocation de capital entre assets.
 
 **Features** :
 
 - Position sizing dynamique (Kelly criterion, fixed fractional)
-- Capital allocation par stratégie basée sur le grade et la performance récente
-- Max drawdown par stratégie et global
-- Rebalancing automatique (ex: stratégie sous-performe → réduit allocation)
+- Capital allocation basée sur le grade et la performance récente
+- Rebalancing automatique (sous-performance → réduit allocation)
 - Risk parity (égaliser le risque entre assets, pas le capital)
-
-**Scope** : ~2 sessions.
-
-### Sprint 21 — Data Pipeline Robuste
-**But** : Garantir la qualité et la disponibilité des données.
-
-**Features** :
-- Backfill automatique des trous (candles manquées)
-- Détection de données aberrantes (spikes, gaps, volumes 0)
-- Multi-exchange (Binance spot pour backtest, Bitget futures pour live)
-- Archivage et compression des données anciennes (> 1 an)
-- Health check data freshness par asset × timeframe
-
-**Scope** : ~1-2 sessions.
-
-### Sprint 22 — Monitoring & Alertes V2
-**But** : Surveillance avancée et rapports automatiques.
-
-**Features** :
-- Dashboard de performance live (P&L cumulé, drawdown, Sharpe rolling)
-- Alertes configurables (drawdown > X%, stratégie sous-performe, divergence paper/live)
-- Rapport quotidien/hebdomadaire automatique par Telegram
-- Comparaison paper vs live (slippage réel, fills partiels, latence)
-- Logs structurés pour post-mortem (chaque trade avec full context)
-
-**Scope** : ~2 sessions.
 
 ---
 
-## PHASE 7 — AVANCÉ (Sprints 23+, selon besoins)
+## PHASE 7 — AVANCÉ (Sprints 26+, selon besoins)
 
 ### Walk-Forward Adaptatif
 - Reoptimisation automatique quand la performance dégrade (ex: OOS Sharpe < seuil pendant N fenêtres)
@@ -925,18 +960,14 @@ Système automatisé de trading crypto qui :
 ## VUE SYNTHÉTIQUE
 
 ```
-TERMINÉ                          EN COURS              À VENIR
-═══════                          ════════              ═══════
+TERMINÉ                              À VENIR
+═══════                              ═══════
 
-Phase 1: Infrastructure     ✅   Phase 5: Scaling      Phase 6: Production
-Phase 2: Validation         ✅   Sprint 16+17: ✅      Phase 7: Avancé
-Phase 3: Paper/Live ready   ✅   Sprint 19: Grid ATR ✅
-Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
-                                 Sprint 20c: Facto   ✅
-                                 Sprint 20b: Portfolio✅
-                                 Sprint 20b-UI: Front✅
-                                 Hotfix 20e: KS grid ✅
-                                 Hotfix 20f: Equity  ✅
+Phase 1: Infrastructure         ✅   Phase 6: Multi-Stratégie & Live
+Phase 2: Optimisation           ✅   Phase 7: Avancé (WFO adaptatif, ML, multi-exchange)
+Phase 3: Paper → Live           ✅
+Phase 4: Recherche & Visu       ✅
+Phase 5: Scaling Stratégies     ✅
 ```
 
 ---
@@ -944,12 +975,13 @@ Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
 ## ÉTAT ACTUEL (16 février 2026)
 
 - **852 tests**, 0 régression
-- **Hotfix 20f** — Panneau Simulator affiche P&L réalisé + non réalisé + equity, marge/disponible
+- **Phases 1-5 terminées** — 12 sprints/hotfixes rien que pour la Phase 5 (16+17, 19-19e, 20a-20f)
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
 - **Portfolio backtest** : +14.5% return, -28.7% max DD, 73.7% WR, 0 kill switch sur 90j avec 10k$/21 assets
-- **Prochaine étape** : Sprint 8 (backtest dashboard) ou Phase 6 (production monitoring)
+- **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
+- **Prochaine étape** : Phase 6 — nouvelle stratégie complémentaire ou live trading progressif
 
 ---
 
@@ -1071,7 +1103,7 @@ docs/plans/          # 27 sprint plans (1-19 + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 770 passants, 0 régression
+- **Tests** : 852 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
