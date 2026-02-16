@@ -9,14 +9,25 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
+from backend.core.config import get_config
 from backend.execution.executor import TradeEvent, TradeEventType, to_futures_symbol
 
 router = APIRouter(prefix="/api/executor", tags=["executor"])
 
 
-@router.get("/status")
+async def verify_executor_key(x_api_key: str = Header(None, alias="X-API-Key")) -> None:
+    """Vérifie l'API key pour les endpoints executor."""
+    config = get_config()
+    server_key = config.secrets.sync_api_key
+    if not server_key:
+        raise HTTPException(status_code=401, detail="API key non configurée")
+    if not x_api_key or x_api_key != server_key:
+        raise HTTPException(status_code=401, detail="API key invalide")
+
+
+@router.get("/status", dependencies=[Depends(verify_executor_key)])
 async def executor_status(request: Request) -> dict:
     """Statut détaillé de l'executor."""
     executor = getattr(request.app.state, "executor", None)
@@ -25,7 +36,7 @@ async def executor_status(request: Request) -> dict:
     return executor.get_status()
 
 
-@router.post("/test-trade")
+@router.post("/test-trade", dependencies=[Depends(verify_executor_key)])
 async def test_trade(
     request: Request,
     symbol: str = Query(default="BTC/USDT", description="Symbole spot (ex: BTC/USDT, ETH/USDT)"),
@@ -133,7 +144,7 @@ async def test_trade(
     }
 
 
-@router.post("/test-close")
+@router.post("/test-close", dependencies=[Depends(verify_executor_key)])
 async def test_close(
     request: Request,
     symbol: str = Query(default="BTC/USDT", description="Symbole spot (ex: BTC/USDT, ETH/USDT)"),

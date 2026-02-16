@@ -62,7 +62,7 @@ scalp-radar/
 ├── config/                       # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/                     # models, config, database, indicators, position_manager, grid_position_manager, state_manager, data_engine
-│   ├── strategies/               # base, base_grid, factory + 12 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding)
+│   ├── strategies/               # base, base_grid, factory + 13 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 │   ├── optimization/             # walk_forward, overfitting, report, indicator_cache, fast_backtest, fast_multi_backtest
 │   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder, portfolio_engine, portfolio_db
 │   ├── execution/                # executor, risk_manager, adaptive_selector
@@ -70,12 +70,12 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
-├── tests/                        # 944 tests (pytest, 47 fichiers)
+├── tests/                        # 1004 tests (pytest, 49 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
 └── docs/plans/                   # Sprint plans 1-19 archivés
 ```
 
-## Trading Strategies (12 implémentées)
+## Trading Strategies (13 implémentées)
 
 ### 5m Scalp (4)
 
@@ -148,14 +148,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 ## Config Files (5 YAML)
 
 - `assets.yaml` — 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
-- `strategies.yaml` — 12 stratégies + custom + per_asset overrides
+- `strategies.yaml` — 13 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
 - `param_grids.yaml` — Espaces de recherche WFO + per-strategy config (is_days, oos_days, step_days)
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22) : 944 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit) : 1004 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -215,6 +215,9 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 21a-quater : Serveur bloqué au warm-up + résilience assets manquants — skip compute_live_indicators() pendant warm-up, détection symbol invalide immédiate, sleep 1s sur erreur non-rate-limit, THETA/USDT retiré (21 assets restants) (902 tests)
 - Sprint 22 : Stratégie Grid Funding (12e stratégie, DCA sur funding rate négatif, LONG-only, fast engine avec funding payments 8h, 2592 combos WFO, 42 tests) (944 tests)
 - Bugfix 22-bis : Validation Bitget + stabilité 0 trades — extra_data_by_timestamp manquant dans run_multi_backtest_single pour report.py et overfitting.py (944 tests)
+- Sprint Perf : Numba JIT Optimization — speedup 5-10x WFO (indicateurs Wilder + boucle trades), fallback transparent si absent (941 tests excl. JIT)
+- Sprint 23 : Grid Trend (13e stratégie, trend following DCA, EMA cross + ADX + trailing stop ATR, 2592 combos WFO, 46 tests) (990 tests)
+- Micro-Sprint Audit : Auth endpoints executor (API key), async I/O StateManager (asyncio.to_thread), buffer candles DataEngine (flush 5s) (1004 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

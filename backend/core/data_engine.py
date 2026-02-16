@@ -117,6 +117,10 @@ class DataEngine:
         # Callbacks pour les consommateurs
         self._callbacks: list[Callable] = []
 
+        # Buffer d'écriture DB (flush toutes les 5s au lieu de 1 INSERT par candle)
+        self._write_buffer: list[Candle] = []
+        self._flush_task: asyncio.Task | None = None
+
         # Données additionnelles (funding, OI)
         self._funding_rates: dict[str, float] = {}
         self._open_interest: dict[str, list[OISnapshot]] = {}
@@ -194,6 +198,11 @@ class DataEngine:
                 )
                 await asyncio.sleep(self._SUBSCRIBE_BATCH_DELAY)
 
+        # Tâche de flush buffer candles
+        self._flush_task = asyncio.create_task(
+            self._flush_candle_buffer(), name="flush_candles"
+        )
+
         # Tâches de polling pour funding rate et OI
         self._tasks.append(
             asyncio.create_task(self._poll_funding_rates(), name="poll_funding")
@@ -214,6 +223,25 @@ class DataEngine:
         logger.info("DataEngine: arrêt en cours...")
         self._running = False
         self._connected = False
+
+        # Annuler la tâche de flush et flush final du buffer restant
+        if self._flush_task and not self._flush_task.done():
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+        self._flush_task = None
+
+        # Flush final des candles en attente avant fermeture DB
+        if self._write_buffer:
+            try:
+                batch = self._write_buffer.copy()
+                self._write_buffer.clear()
+                await self.db.insert_candles_batch(batch)
+                logger.info("DataEngine: flush final {} candles", len(batch))
+            except Exception as e:
+                logger.error("DataEngine: erreur flush final: {}", e)
 
         # Annuler les tâches
         for task in self._tasks:
@@ -415,11 +443,8 @@ class DataEngine:
 
         self._last_update = datetime.now(tz=timezone.utc)
 
-        # Persister en base
-        try:
-            await self.db.insert_candles_batch([candle])
-        except Exception as e:
-            logger.error("DataEngine: erreur persistance: {}", e)
+        # Ajouter au buffer d'écriture (flush périodique toutes les 5s)
+        self._write_buffer.append(candle)
 
         # Notifier les callbacks
         for callback in self._callbacks:
@@ -429,6 +454,25 @@ class DataEngine:
                     await result
             except Exception as e:
                 logger.error("DataEngine: erreur callback: {}", e)
+
+    # ─── FLUSH BUFFER ──────────────────────────────────────────────────────
+
+    _FLUSH_INTERVAL = 5  # secondes
+
+    async def _flush_candle_buffer(self) -> None:
+        """Flush périodique du buffer de candles vers la DB."""
+        while self._running:
+            try:
+                await asyncio.sleep(self._FLUSH_INTERVAL)
+                if self._write_buffer:
+                    batch = self._write_buffer.copy()
+                    self._write_buffer.clear()
+                    try:
+                        await self.db.insert_candles_batch(batch)
+                    except Exception as e:
+                        logger.error("DataEngine: erreur flush candles: {}", e)
+            except asyncio.CancelledError:
+                break
 
     # ─── POLLING FUNDING & OI ──────────────────────────────────────────────
 

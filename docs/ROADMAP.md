@@ -862,10 +862,12 @@ Système automatisé de trading crypto qui :
 |--------|---------|--------|
 | 21a | Grid Multi-TF (Supertrend 4h + Grid ATR 1h) — backtest + WFO | ✅ |
 | 21b | Grid Multi-TF — support live (Simulator, TimeFrame.H4) | 📋 Planifié |
-| 22 | Live trading progressif (1000$ → 5000$) | 📋 Planifié |
-| 23 | Monitoring V2 (alertes enrichies, rapport hebdo Telegram) | 📋 Planifié |
-| 24 | Data Pipeline Robuste (backfill auto, détection anomalies) | 📋 Planifié |
-| 25 | Gestion du Capital Avancée (Kelly, risk parity, rebalancing) | 📋 Planifié |
+| 22 | Grid Funding (DCA sur funding négatif, LONG-only, 2592 combos WFO) | ✅ |
+| Perf | Numba JIT Optimization (speedup 5-10x WFO) | ✅ |
+| 23 | Grid Trend (trend following DCA, EMA cross + ADX + trailing ATR) | ✅ |
+| Audit | Micro-Sprint Audit (auth executor, async I/O, candle buffer) | ✅ |
+| 24 | Live trading progressif (1000$ → 5000$) | 📋 Planifié |
+| 25 | Monitoring V2 (alertes enrichies, rapport hebdo Telegram) | 📋 Planifié |
 
 ### Sprint 21a — Grid Multi-TF (Backtest + WFO) ✅
 
@@ -953,7 +955,39 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 944 tests (42 nouveaux pour grid_funding), 0 régression.
 
-### Sprint 23 — Live Trading Progressif
+### Sprint 23 — Grid Trend ✅
+
+**But** : 13e stratégie — trend following DCA avec EMA cross + ADX filtre + trailing stop ATR.
+
+**Implémentation** :
+- EMA cross (fast/slow) pour direction, ADX > seuil pour force du trend, zone neutre si ADX < seuil
+- Trailing stop ATR (high watermark), force close au flip de direction
+- Fast engine + IndicatorCache (ema_by_period, adx_by_period)
+- 2592 combos WFO, 46 tests
+
+**Résultat** : 990 tests, 0 régression.
+
+### Micro-Sprint Audit ✅
+
+**But** : Corriger 3 problèmes identifiés par audit de sécurité et performance.
+
+**Fix 1 — Auth endpoints executor** :
+- Dépendance FastAPI `verify_executor_key` sur les 3 routes (`/status`, `/test-trade`, `/test-close`)
+- Vérifie `X-API-Key` contre `sync_api_key` de la config (même clé que sync WFO)
+- Sans clé configurée ou clé invalide → 401
+
+**Fix 2 — Async I/O StateManager** :
+- `_write_json_file()` et `_read_json_file()` statiques, exécutés via `asyncio.to_thread()`
+- Les 4 méthodes save/load (runner + executor) ne bloquent plus l'event loop
+
+**Fix 3 — Buffer candles DataEngine** :
+- `_write_buffer` accumule les candles, `_flush_candle_buffer()` flush toutes les 5s
+- Les callbacks (Simulator) restent immédiats, seule la persistance DB est bufferisée
+- `stop()` fait un flush final avant fermeture DB
+
+**Résultat** : 1004 tests (+14 nouveaux), 0 régression.
+
+### Sprint 24 — Live Trading Progressif
 
 **But** : Passer du paper trading au live avec capital réel progressif.
 
@@ -964,7 +998,7 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 - 5000$ sur 15+ assets (objectif long terme)
 - Monitoring slippage paper vs live à chaque palier
 
-### Sprint 24 — Monitoring & Alertes V2
+### Sprint 25 — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
 
@@ -1045,18 +1079,18 @@ Phase 5: Scaling Stratégies     ✅
 
 ---
 
-## ÉTAT ACTUEL (16 février 2026)
+## ÉTAT ACTUEL (17 février 2026)
 
-- **941 tests** (3 exclus = crash JIT Python 3.13 pré-existant dans grid engine), 0 régression fonctionnelle
-- **Phases 1-5 terminées + Sprint Perf** — Numba JIT sur indicateurs Wilder + boucle trades (speedup 5-10x WFO)
-- **Phase 6 en cours** — Sprint 22 terminé (Grid Funding), Sprint 21a terminé (Grid Multi-TF), Sprint Perf terminé (Numba)
-- **12 stratégies** : 4 scalp 5m + 3 swing 1h + 5 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding)
+- **1004 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Micro-Sprint Audit**
+- **Phase 6 en cours** — Sprint 22 (Grid Funding), Sprint Perf (Numba), Sprint 23 (Grid Trend), Micro-Sprint Audit terminés
+- **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **21 assets** (THETA/USDT retiré — inexistant sur Bitget) : 14 Grade A + 7 Grade B pour grid_atr
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
-- **Portfolio backtest** : +14.5% return, -28.7% max DD, 73.7% WR, 0 kill switch sur 90j avec 10k$/21 assets
+- **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : WFO grid_funding sur assets avec funding data → WFO grid_multi_tf → Sprint 21b/23 (live progressif)
+- **Prochaine étape** : WFO grid_trend + grid_funding sur assets → Sprint 24 (live progressif)
 
 ---
 
@@ -1178,7 +1212,7 @@ docs/plans/          # 27 sprint plans (1-19 + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 852 passants, 0 régression
+- **Tests** : 1004 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

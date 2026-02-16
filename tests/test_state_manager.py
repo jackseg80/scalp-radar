@@ -403,3 +403,71 @@ class TestPeriodicSave:
 
         await sm.stop()
         assert sm._running is False
+
+
+class TestAsyncIO:
+    """Tests que le I/O fichier passe bien par asyncio.to_thread."""
+
+    @pytest.mark.asyncio
+    async def test_save_uses_to_thread(self, tmp_path):
+        """Vérifie que save_runner_state appelle asyncio.to_thread avec _write_json_file."""
+        state_file = str(tmp_path / "state.json")
+        sm = StateManager(db=MagicMock(), state_file=state_file)
+        runner = _make_runner()
+
+        with patch("backend.core.state_manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            # to_thread doit appeler la vraie fonction pour que le test soit valide
+            mock_to_thread.side_effect = lambda fn, *args: fn(*args)
+            await sm.save_runner_state([runner])
+
+            mock_to_thread.assert_called_once()
+            call_args = mock_to_thread.call_args
+            assert call_args[0][0] == StateManager._write_json_file
+
+        # Vérifier que le fichier a bien été écrit
+        assert (tmp_path / "state.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_load_uses_to_thread(self, tmp_path):
+        """Vérifie que load_runner_state appelle asyncio.to_thread avec _read_json_file."""
+        state_file = str(tmp_path / "state.json")
+        sm = StateManager(db=MagicMock(), state_file=state_file)
+
+        # Écrire un état valide d'abord
+        runner = _make_runner()
+        await sm.save_runner_state([runner])
+
+        with patch("backend.core.state_manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.side_effect = lambda fn, *args: fn(*args)
+            result = await sm.load_runner_state()
+
+            mock_to_thread.assert_called_once()
+            call_args = mock_to_thread.call_args
+            assert call_args[0][0] == StateManager._read_json_file
+
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_executor_save_load_roundtrip(self, tmp_path):
+        """Vérifie que save/load executor fonctionne avec to_thread."""
+        executor_file = str(tmp_path / "executor_state.json")
+        sm = StateManager(
+            db=MagicMock(),
+            state_file=str(tmp_path / "state.json"),
+            executor_state_file=executor_file,
+        )
+
+        executor = MagicMock()
+        executor.get_state_for_persistence.return_value = {
+            "positions": {"BTC/USDT:USDT": {"direction": "LONG", "entry_price": 100000}},
+            "daily_stats": {"trades": 5},
+        }
+        risk_manager = MagicMock()
+
+        await sm.save_executor_state(executor, risk_manager)
+        assert (tmp_path / "executor_state.json").exists()
+
+        result = await sm.load_executor_state()
+        assert result is not None
+        assert "positions" in result
+        assert result["positions"]["BTC/USDT:USDT"]["direction"] == "LONG"

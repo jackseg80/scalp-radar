@@ -108,68 +108,72 @@ class StateManager:
 
             state["runners"][runner.name] = runner_state
 
-        # Écriture atomique
-        Path(self._state_file).parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = self._state_file + ".tmp"
-        try:
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_file, self._state_file)
-            logger.debug(
-                "StateManager: état sauvegardé ({} runners)",
-                len(state["runners"]),
-            )
-        except OSError as e:
-            logger.error("StateManager: erreur sauvegarde: {}", e)
-            # Nettoyer le tmp si échec
-            try:
-                os.unlink(tmp_file)
-            except OSError:
-                pass
+        # Écriture atomique (offloaded dans un thread pour ne pas bloquer l'event loop)
+        await asyncio.to_thread(self._write_json_file, self._state_file, state)
+        logger.debug(
+            "StateManager: état sauvegardé ({} runners)",
+            len(state["runners"]),
+        )
 
     async def load_runner_state(self) -> dict[str, Any] | None:
         """Charge l'état sauvegardé depuis le fichier JSON.
 
         Retourne None si le fichier est absent, vide ou corrompu.
         """
-        if not Path(self._state_file).exists():
+        data = await asyncio.to_thread(self._read_json_file, self._state_file)
+        if data is None:
             logger.info("StateManager: pas de fichier d'état, démarrage fresh")
             return None
 
-        try:
-            with open(self._state_file, encoding="utf-8") as f:
-                data = json.load(f)
-
-            # Validation minimale
-            if not isinstance(data, dict) or "runners" not in data:
-                logger.warning(
-                    "StateManager: fichier d'état invalide (clé 'runners' absente), démarrage fresh"
-                )
-                return None
-
-            if not isinstance(data["runners"], dict) or not data["runners"]:
-                logger.warning(
-                    "StateManager: fichier d'état vide (aucun runner), démarrage fresh"
-                )
-                return None
-
-            saved_at = data.get("saved_at", "inconnu")
-            logger.info(
-                "StateManager: état chargé ({} runners, sauvegardé à {})",
-                len(data["runners"]),
-                saved_at,
-            )
-            return data
-
-        except json.JSONDecodeError as e:
+        # Validation minimale
+        if not isinstance(data, dict) or "runners" not in data:
             logger.warning(
-                "StateManager: fichier d'état corrompu ({}), démarrage fresh", e
+                "StateManager: fichier d'état invalide (clé 'runners' absente), démarrage fresh"
             )
             return None
-        except OSError as e:
+
+        if not isinstance(data["runners"], dict) or not data["runners"]:
             logger.warning(
-                "StateManager: erreur lecture fichier d'état ({}), démarrage fresh", e
+                "StateManager: fichier d'état vide (aucun runner), démarrage fresh"
             )
+            return None
+
+        saved_at = data.get("saved_at", "inconnu")
+        logger.info(
+            "StateManager: état chargé ({} runners, sauvegardé à {})",
+            len(data["runners"]),
+            saved_at,
+        )
+        return data
+
+    # ─── Helpers I/O (exécutés dans un thread via asyncio.to_thread) ─────
+
+    @staticmethod
+    def _write_json_file(file_path: str, data: dict[str, Any]) -> None:
+        """Écrit un dict JSON dans un fichier de manière atomique (tmp + replace)."""
+        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = file_path + ".tmp"
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_file, file_path)
+        except OSError as e:
+            logger.error("StateManager: erreur écriture {}: {}", file_path, e)
+            try:
+                os.unlink(tmp_file)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _read_json_file(file_path: str) -> dict[str, Any] | None:
+        """Lit un fichier JSON. Retourne None si absent, vide ou corrompu."""
+        if not Path(file_path).exists():
+            return None
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("StateManager: erreur lecture {}: {}", file_path, e)
             return None
 
     async def start_periodic_save(
@@ -214,47 +218,27 @@ class StateManager:
             "executor": executor.get_state_for_persistence(),
         }
 
-        Path(self._executor_state_file).parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = self._executor_state_file + ".tmp"
-        try:
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_file, self._executor_state_file)
-            logger.debug("StateManager: état executor sauvegardé")
-        except OSError as e:
-            logger.error("StateManager: erreur sauvegarde executor: {}", e)
-            try:
-                os.unlink(tmp_file)
-            except OSError:
-                pass
+        await asyncio.to_thread(self._write_json_file, self._executor_state_file, state)
+        logger.debug("StateManager: état executor sauvegardé")
 
     async def load_executor_state(self) -> dict[str, Any] | None:
         """Charge l'état de l'Executor sauvegardé."""
-        if not Path(self._executor_state_file).exists():
+        data = await asyncio.to_thread(self._read_json_file, self._executor_state_file)
+        if data is None:
             logger.info("StateManager: pas de fichier état executor, démarrage fresh")
             return None
 
-        try:
-            with open(self._executor_state_file, encoding="utf-8") as f:
-                data = json.load(f)
-
-            if not isinstance(data, dict) or "executor" not in data:
-                logger.warning(
-                    "StateManager: fichier état executor invalide, démarrage fresh"
-                )
-                return None
-
-            saved_at = data.get("saved_at", "inconnu")
-            logger.info(
-                "StateManager: état executor chargé (sauvegardé à {})", saved_at,
-            )
-            return data.get("executor")
-
-        except (json.JSONDecodeError, OSError) as e:
+        if not isinstance(data, dict) or "executor" not in data:
             logger.warning(
-                "StateManager: erreur lecture état executor ({}), démarrage fresh", e,
+                "StateManager: fichier état executor invalide, démarrage fresh"
             )
             return None
+
+        saved_at = data.get("saved_at", "inconnu")
+        logger.info(
+            "StateManager: état executor chargé (sauvegardé à {})", saved_at,
+        )
+        return data.get("executor")
 
     async def stop(self) -> None:
         """Arrête la boucle de sauvegarde."""
