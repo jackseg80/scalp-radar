@@ -604,8 +604,9 @@ Système automatisé de trading crypto qui :
 | 18 | ~~Multi-asset Live envelope_dca~~ — Superseded par grid_atr | ⏭️ Superseded |
 | 19 | Stratégie Grid ATR (10e stratégie, fast engine, 3240 combos WFO) | ✅ |
 | 20a | Sizing equal allocation + margin guard 70% | ✅ |
-| 20b | Backtest portfolio (multi-stratégie, corrélations) | Planifié |
-| 20c | Factorisation fast engine (`_simulate_grid_common`) | Planifié |
+| 20b | Portfolio Backtest Multi-Asset (CLI + engine) | ✅ |
+| 20c | Factorisation fast engine (`_simulate_grid_common`) | ✅ |
+| 20b-UI | Portfolio Frontend + API + Comparateur | ✅ |
 
 ### Sprint 16+17 — Dashboard Scanner amélioré + Monitoring DCA Live ✅
 **But** : Ajouter la visibilité grid DCA au Scanner et ActivePositions, sans casser l'architecture multi-stratégie.
@@ -790,6 +791,36 @@ Système automatisé de trading crypto qui :
 
 **Limitation connue** : ATR period fixe à 14 dans `IncrementalIndicatorEngine` (le `atr_period` per_asset du WFO n'est pas utilisé dans le path live). Matche le comportement prod.
 
+### Sprint 20b-UI — Portfolio Backtest Frontend + Comparateur ✅
+**But** : Persister les résultats portfolio en DB, ajouter une API REST, et créer un frontend React pour visualiser et comparer les runs.
+
+**Backend** :
+- Table `portfolio_backtests` dans SQLite (27 colonnes, equity_curve JSON sous-échantillonnée à 500 pts)
+- CRUD sync+async dans `portfolio_db.py` (même pattern que `optimization_db.py`)
+- 7 endpoints API : presets (4), backtests CRUD, run async (`asyncio.create_task`), status, compare
+- Job tracker in-memory (un seul backtest à la fois), progress via WebSocket broadcast
+- `progress_callback` optionnel ajouté à `PortfolioBacktester.run()` et `_simulate()`
+- CLI `--save` et `--label` dans `portfolio_backtest.py`
+
+**Frontend** :
+- Onglet "Portfolio" dans le dashboard (6e tab)
+- `PortfolioPage.jsx` : config panel (presets, capital, jours, assets, kill switch) + résultats
+- `EquityCurveSVG.jsx` : SVG interactif (hover tooltip, multi-courbes, normalisation %, ResizeObserver)
+- `DrawdownChart.jsx` : mini chart drawdown inversé avec seuil kill switch
+- `PortfolioCompare.jsx` : tableau comparatif 7 métriques + deltas colorés
+- 4 presets : Conservateur (1k$/5 assets), Équilibré (5k$/10), Agressif (10k$/tous), Long terme (10k$/7/365j)
+
+**Tests** : 15 nouveaux → 821 passants
+
+### Hotfix 20d — Anti-spam Telegram ✅
+**Problème** : `Notifier.notify_anomaly()` envoyait un message Telegram à chaque appel sans cooldown. Le Watchdog appelle `notify_anomaly(ALL_STRATEGIES_STOPPED)` toutes les ~5 min quand le kill switch est actif → 102 messages identiques en quelques heures.
+
+**Fix** : Cooldown par type d'anomalie dans le Notifier. Le log WARNING reste systématique (fichiers de log), seul l'envoi Telegram est throttlé.
+
+**Cooldowns** : SL_PLACEMENT_FAILED=5min, WS/DATA/EXECUTOR=30min, KILL_SWITCH/ALL_STOPPED=1h, défaut=10min.
+
+**Tests** : 4 nouveaux → 825 passants
+
 ### Sprint 20 — Gestion du Capital Avancée
 **But** : Optimiser l'allocation de capital entre stratégies et assets.
 
@@ -875,10 +906,10 @@ Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
 
 ---
 
-## ÉTAT ACTUEL (15 février 2026)
+## ÉTAT ACTUEL (16 février 2026)
 
-- **806 tests**, 0 régression
-- **Sprint 20b complété** (Phase 6 en cours) — Portfolio Backtest Multi-Asset
+- **825 tests**, 0 régression
+- **Hotfix 20d** — Anti-spam Telegram (cooldown par type d'anomalie)
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)

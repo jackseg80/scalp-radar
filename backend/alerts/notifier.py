@@ -6,6 +6,7 @@ Si Telegram est None (token absent), les notifications sont juste loguées.
 
 from __future__ import annotations
 
+import time
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,19 @@ _ANOMALY_MESSAGES = {
 }
 
 
+# Cooldowns par type d'anomalie (secondes) — seul l'envoi Telegram est throttlé
+_ANOMALY_COOLDOWNS: dict[AnomalyType, int] = {
+    AnomalyType.SL_PLACEMENT_FAILED: 300,       # 5 min — critique, garder court
+    AnomalyType.WS_DISCONNECTED: 1800,           # 30 min
+    AnomalyType.DATA_STALE: 1800,                # 30 min
+    AnomalyType.EXECUTOR_DISCONNECTED: 1800,     # 30 min
+    AnomalyType.ALL_STRATEGIES_STOPPED: 3600,    # 1h — état persistant
+    AnomalyType.KILL_SWITCH_GLOBAL: 3600,        # 1h
+    AnomalyType.KILL_SWITCH_LIVE: 3600,          # 1h
+}
+_DEFAULT_COOLDOWN = 600  # 10 min pour tout type non listé
+
+
 class Notifier:
     """Centralise les notifications vers Telegram (+ futurs canaux).
 
@@ -47,6 +61,7 @@ class Notifier:
 
     def __init__(self, telegram: TelegramClient | None = None) -> None:
         self._telegram = telegram
+        self._last_anomaly_sent: dict[AnomalyType, float] = {}
 
     async def notify_trade(self, trade: dict, strategy: str) -> None:
         """Notifie un trade clôturé."""
@@ -68,15 +83,25 @@ class Notifier:
     async def notify_anomaly(
         self, anomaly_type: AnomalyType, details: str = ""
     ) -> None:
-        """Notifie une anomalie détectée par le Watchdog."""
+        """Notifie une anomalie détectée par le Watchdog.
+
+        Le log WARNING est systématique. L'envoi Telegram est throttlé
+        par un cooldown par type d'anomalie pour éviter le spam.
+        """
         message = _ANOMALY_MESSAGES.get(anomaly_type, str(anomaly_type))
         if details:
             message = f"{message} — {details}"
 
         logger.warning("Notifier: anomalie {}: {}", anomaly_type.value, message)
         if self._telegram:
-            text = f"<b>Anomalie</b>\n{message}"
-            await self._telegram.send_message(text)
+            now = time.monotonic()
+            cooldown = _ANOMALY_COOLDOWNS.get(anomaly_type, _DEFAULT_COOLDOWN)
+            last_sent = self._last_anomaly_sent.get(anomaly_type, 0)
+
+            if now - last_sent >= cooldown:
+                text = f"<b>Anomalie</b>\n{message}"
+                await self._telegram.send_message(text)
+                self._last_anomaly_sent[anomaly_type] = now
 
     async def notify_startup(self, strategies: list[str]) -> None:
         """Notifie le démarrage."""

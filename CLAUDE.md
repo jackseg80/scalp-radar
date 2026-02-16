@@ -153,7 +153,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b) : 806 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b + Hotfix 20d) : 825 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -203,6 +203,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 20a : Sizing equal allocation (`capital/nb_assets/levels`) + margin guard 70% (`max_margin_ratio`), Scanner grade fix (774 tests)
 - Hotfix 19e : Scanner Grid Fix — colonnes dynamiques (Score/Signaux masquées si aucune stratégie mono), colonne Dist.SMA, direction grid, tri par grade, GridDetail (niveaux vert/rouge, TP/SL, P&L) — frontend pur, zéro backend (774 tests)
 - Sprint 20b : Portfolio Backtest Multi-Asset — N runners capital partagé, 21 assets × 90j, snapshots equity/margin/positions, drawdown peak-to-trough, kill switch fenêtre glissante, force-close séparé, rapport CLI + JSON (806 tests)
+- Hotfix 20d : Anti-spam Telegram — cooldown par type d'anomalie dans Notifier (SL=5min, WS/DATA=30min, KS/ALL_STOPPED=1h), log WARNING toujours, envoi Telegram throttlé (825 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 
