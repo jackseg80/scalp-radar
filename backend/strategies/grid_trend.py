@@ -199,6 +199,37 @@ class GridTrendStrategy(BaseGridStrategy):
             return grid_state.avg_entry_price * (1 - sl_pct)
         return grid_state.avg_entry_price * (1 + sl_pct)
 
+    def compute_live_indicators(
+        self, candles: list[Candle],
+    ) -> dict[str, dict[str, Any]]:
+        """Calcule EMA fast/slow + ADX depuis le buffer de candles 1h (mode live/portfolio).
+
+        Retourne {timeframe: {"ema_fast": ..., "ema_slow": ..., "adx": ...}}.
+        Nécessite suffisamment de candles pour que ADX soit stable.
+        """
+        min_needed = max(
+            self._config.ema_slow,
+            self._config.adx_period * 2 + 1,
+        ) + 20
+        if len(candles) < min_needed:
+            return {}
+
+        closes = np.array([c.close for c in candles], dtype=float)
+        highs = np.array([c.high for c in candles], dtype=float)
+        lows = np.array([c.low for c in candles], dtype=float)
+
+        ema_fast_arr = ema(closes, self._config.ema_fast)
+        ema_slow_arr = ema(closes, self._config.ema_slow)
+        adx_arr, _, _ = adx(highs, lows, closes, self._config.adx_period)
+
+        return {
+            self._config.timeframe: {
+                "ema_fast": float(ema_fast_arr[-1]),
+                "ema_slow": float(ema_slow_arr[-1]),
+                "adx": float(adx_arr[-1]),
+            }
+        }
+
     def get_params(self) -> dict[str, Any]:
         return {
             "ema_fast": self._config.ema_fast,

@@ -985,6 +985,81 @@ class TestGridTrendRegistry:
 
 
 # ═════════════════════════════════════════════════════════════════════════
+# Section 9 — compute_live_indicators (Sprint 23b)
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestGridTrendLiveIndicators:
+    """Tests compute_live_indicators pour paper trading / portfolio backtest."""
+
+    def _make_candles(self, n: int = 200, *, base: float = 100.0) -> list[Candle]:
+        """Crée n candles sinusoïdales 1h."""
+        from datetime import timedelta
+        candles = []
+        for i in range(n):
+            close = base + 5.0 * math.sin(2 * math.pi * i / 48)
+            candles.append(Candle(
+                symbol="BTC/USDT",
+                timeframe="1h",
+                timestamp=_NOW + timedelta(hours=i),
+                open=close + 0.1,
+                high=close + 1.0,
+                low=close - 1.0,
+                close=close,
+                volume=100.0,
+            ))
+        return candles
+
+    def test_returns_ema_adx_with_enough_candles(self):
+        """compute_live_indicators retourne EMA fast/slow + ADX avec suffisamment de candles."""
+        strat = _make_strategy(ema_fast=20, ema_slow=50, adx_period=14)
+        candles = self._make_candles(n=200)
+        result = strat.compute_live_indicators(candles)
+        assert "1h" in result
+        assert "ema_fast" in result["1h"]
+        assert "ema_slow" in result["1h"]
+        assert "adx" in result["1h"]
+        assert isinstance(result["1h"]["ema_fast"], float)
+        assert isinstance(result["1h"]["ema_slow"], float)
+        assert isinstance(result["1h"]["adx"], float)
+        assert not math.isnan(result["1h"]["ema_fast"])
+        assert not math.isnan(result["1h"]["ema_slow"])
+
+    def test_returns_empty_with_too_few_candles(self):
+        """compute_live_indicators retourne {} si pas assez de candles."""
+        strat = _make_strategy(ema_fast=20, ema_slow=50, adx_period=14)
+        candles = self._make_candles(n=10)  # Bien moins que min_needed (~69)
+        result = strat.compute_live_indicators(candles)
+        assert result == {}
+
+    def test_runner_merges_live_indicators(self):
+        """GridStrategyRunner.on_candle() merge les indicateurs live de grid_trend."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from backend.backtesting.simulator import GridStrategyRunner
+        from backend.core.incremental_indicators import IncrementalIndicatorEngine
+
+        strategy = _make_strategy()
+        config = MagicMock()
+        config.risk = MagicMock()
+        config.risk.max_margin_ratio = 0.7
+
+        indicator_engine = IncrementalIndicatorEngine([strategy])
+        candles = self._make_candles(n=200)
+
+        for c in candles:
+            indicator_engine.update("BTC/USDT", "1h", c)
+
+        buf = indicator_engine._buffers.get(("BTC/USDT", "1h"), [])
+        extra = strategy.compute_live_indicators(list(buf))
+        assert "1h" in extra, "compute_live_indicators doit retourner les indicateurs 1h"
+        assert "ema_fast" in extra["1h"]
+        assert "ema_slow" in extra["1h"]
+        assert "adx" in extra["1h"]
+
+
+# ═════════════════════════════════════════════════════════════════════════
 # Section 8 — Tests de PARITÉ (stratégies existantes inchangées)
 # ═════════════════════════════════════════════════════════════════════════
 

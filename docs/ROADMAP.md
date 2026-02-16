@@ -866,6 +866,7 @@ Système automatisé de trading crypto qui :
 | Perf | Numba JIT Optimization (speedup 5-10x WFO) | ✅ |
 | 23 | Grid Trend (trend following DCA, EMA cross + ADX + trailing ATR) | ✅ |
 | Audit | Micro-Sprint Audit (auth executor, async I/O, candle buffer) | ✅ |
+| 23b | Grid Trend compute_live_indicators (paper/portfolio fix) | ✅ |
 | 24 | Live trading progressif (1000$ → 5000$) | 📋 Planifié |
 | 25 | Monitoring V2 (alertes enrichies, rapport hebdo Telegram) | 📋 Planifié |
 
@@ -987,6 +988,28 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 1004 tests (+14 nouveaux), 0 régression.
 
+### Sprint 23b — Grid Trend compute_live_indicators ✅
+
+**But** : Permettre au paper trading et portfolio backtest de grid_trend de générer des trades (0 trades sans cette méthode).
+
+**Problème** : `IncrementalIndicatorEngine` calcule SMA + ATR mais pas EMA ni ADX. Le `GridStrategyRunner.on_candle()` appelle `compute_live_indicators()` et merge le résultat dans les indicateurs, mais `GridTrendStrategy` héritait le défaut `{}` de `BaseGridStrategy`.
+
+**Implémentation** :
+
+- Override `compute_live_indicators()` dans `GridTrendStrategy` (~30 lignes)
+- Calcule EMA fast/slow + ADX depuis le buffer de candles 1h
+- Retourne `{timeframe: {"ema_fast", "ema_slow", "adx"}}` pour la dernière candle
+- Guard : retourne `{}` si pas assez de candles (identique à `min_candles`)
+- Pattern identique à `GridMultiTFStrategy.compute_live_indicators()` (Supertrend 4h)
+
+**Tests** : 3 nouveaux tests (Section 9 de test_grid_trend.py)
+
+- `test_returns_ema_adx_with_enough_candles` — vérifie les 3 indicateurs retournés
+- `test_returns_empty_with_too_few_candles` — vérifie le guard min candles
+- `test_runner_merges_live_indicators` — pipeline IncrementalIndicatorEngine → buffer → merge
+
+**Résultat** : 1007 tests (+3 nouveaux), 0 régression.
+
 ### Sprint 24 — Live Trading Progressif
 
 **But** : Passer du paper trading au live avec capital réel progressif.
@@ -1081,9 +1104,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (17 février 2026)
 
-- **1004 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Micro-Sprint Audit**
-- **Phase 6 en cours** — Sprint 22 (Grid Funding), Sprint Perf (Numba), Sprint 23 (Grid Trend), Micro-Sprint Audit terminés
+- **1007 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit**
+- **Phase 6 en cours** — Sprint 22 (Grid Funding), Sprint Perf (Numba), Sprint 23/23b (Grid Trend), Micro-Sprint Audit terminés
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **21 assets** (THETA/USDT retiré — inexistant sur Bitget) : 14 Grade A + 7 Grade B pour grid_atr
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
