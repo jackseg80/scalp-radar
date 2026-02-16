@@ -473,7 +473,7 @@ class LiveStrategyRunner:
         assets_with_positions = 0
         if self._position is not None and self._position_symbol:
             assets_with_positions = 1
-        equity = self._capital + unrealized_pnl
+        equity = self._capital + margin_used + unrealized_pnl
 
         return {
             "name": self.name,
@@ -1086,7 +1086,7 @@ class GridStrategyRunner:
                     unrealized_pnl += (pos.entry_price - current_price) * pos.quantity
                 margin_used += (pos.entry_price * pos.quantity) / self._leverage
 
-        equity = self._capital + unrealized_pnl
+        equity = self._capital + margin_used + unrealized_pnl
 
         return {
             "name": self.name,

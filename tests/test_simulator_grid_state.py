@@ -342,8 +342,8 @@ class TestGridRunnerUnrealizedPnl:
         # Marge: (100×2)/10 + (95×2)/10 = 20 + 19 = 39
         assert status["margin_used"] == 39.0
 
-    def test_status_equity_equals_capital_plus_unrealized(self):
-        """equity = capital + unrealized_pnl."""
+    def test_status_equity_equals_capital_plus_margin_plus_unrealized(self):
+        """equity = capital + margin_used + unrealized_pnl."""
         config = MagicMock()
         config.risk.initial_capital = 10_000.0
         config.assets = []
@@ -357,9 +357,11 @@ class TestGridRunnerUnrealizedPnl:
 
         status = runner.get_status()
 
+        # margin = (100 × 5) / 10 = 50
         assert status["unrealized_pnl"] == -50.0
-        assert status["equity"] == status["capital"] + status["unrealized_pnl"]
-        assert status["equity"] == 10_000.0 - 50.0
+        assert status["margin_used"] == 50.0
+        assert status["equity"] == status["capital"] + status["margin_used"] + status["unrealized_pnl"]
+        assert status["equity"] == 10_000.0 + 50.0 - 50.0
 
     def test_status_no_positions_unrealized_zero(self):
         """Sans positions, unrealized_pnl = 0, equity = capital."""
