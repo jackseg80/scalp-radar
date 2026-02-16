@@ -163,7 +163,7 @@ grid_trend:
     oos_days: 90
     step_days: 90
   default:
-    ema_fast: [10, 20, 30]
+    ema_fast: [20, 30, 40]
     ema_slow: [50, 100]
     adx_period: [14]
     adx_threshold: [15, 20, 25]
