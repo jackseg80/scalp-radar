@@ -153,7 +153,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d) : 825 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f) : 852 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -205,6 +205,8 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 20b : Portfolio Backtest Multi-Asset — N runners capital partagé, 21 assets × 90j, snapshots equity/margin/positions, drawdown peak-to-trough, kill switch fenêtre glissante, force-close séparé, rapport CLI + JSON (806 tests)
 - Hotfix 20d : Anti-spam Telegram — cooldown par type d'anomalie dans Notifier (SL=5min, WS/DATA=30min, KS/ALL_STOPPED=1h), log WARNING toujours, envoi Telegram throttlé (825 tests)
 - Sprint 20b-UI : Frontend Portfolio Backtest — table portfolio_backtests DB, portfolio_db.py CRUD sync+async, 7 endpoints API REST (presets, CRUD, run async, status, compare), PortfolioPage React (config panel, equity curve SVG, drawdown chart, comparateur multi-runs), progress_callback engine, CLI --save/--label (825 tests)
+- Hotfix 20e : Kill switch grid-compatible + warm-up fixes — grace period 10 bougies, seuils grid 25%/25%, guard anti-phantom trades post-warmup (847 tests)
+- Hotfix 20f : Panneau Simulator P&L réalisé + non réalisé + equity — `get_status()` enrichi (unrealized_pnl, margin_used, equity), equity curve avec point "now", SessionStats refonte complète, EquityCurve affiche equity (852 tests)
 
 **Sprint 8** (Backtest Dashboard) planifié mais non implémenté.
 

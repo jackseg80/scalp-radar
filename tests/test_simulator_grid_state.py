@@ -291,3 +291,106 @@ class TestGetGridStateWithPositions:
         assert g["sl_price"] is None
         assert g["tp_distance_pct"] is None
         assert g["sl_distance_pct"] is None
+
+
+# ─── Tests unrealized_pnl / margin / equity (Hotfix 20f) ────────────────
+
+
+class TestGridRunnerUnrealizedPnl:
+    """Tests pour les champs unrealized_pnl, margin_used, equity dans get_status()."""
+
+    def test_status_includes_unrealized_pnl(self):
+        """Runner avec 2 positions LONG à des prix différents → unrealized_pnl correct."""
+        config = MagicMock()
+        config.risk.initial_capital = 10_000.0
+        config.assets = []
+        engine = _make_data_engine({"BTC/USDT": 105.0, "ETH/USDT": 55.0})
+        runner = _make_grid_runner("grid_atr", config, engine, leverage=10)
+
+        # 2 positions : BTC acheté à 100 (prix courant 105), ETH à 50 (prix courant 55)
+        runner._positions["BTC/USDT"] = [
+            _make_position(level=0, direction=Direction.LONG, entry_price=100.0, quantity=2.0),
+        ]
+        runner._positions["ETH/USDT"] = [
+            _make_position(level=0, direction=Direction.LONG, entry_price=50.0, quantity=3.0),
+        ]
+        # Simuler les prix courants (normalement mis à jour par on_candle)
+        runner._last_prices["BTC/USDT"] = 105.0
+        runner._last_prices["ETH/USDT"] = 55.0
+
+        status = runner.get_status()
+
+        # BTC: (105 - 100) × 2 = 10, ETH: (55 - 50) × 3 = 15 → total = 25
+        assert status["unrealized_pnl"] == 25.0
+
+    def test_status_includes_margin_used(self):
+        """margin_used = somme (entry_price × quantity / leverage) pour toutes les positions."""
+        config = MagicMock()
+        config.risk.initial_capital = 10_000.0
+        config.assets = []
+        engine = _make_data_engine({"BTC/USDT": 100.0})
+        runner = _make_grid_runner("grid_atr", config, engine, leverage=10)
+
+        runner._positions["BTC/USDT"] = [
+            _make_position(level=0, entry_price=100.0, quantity=2.0),
+            _make_position(level=1, entry_price=95.0, quantity=2.0),
+        ]
+        runner._last_prices["BTC/USDT"] = 100.0
+
+        status = runner.get_status()
+
+        # Marge: (100×2)/10 + (95×2)/10 = 20 + 19 = 39
+        assert status["margin_used"] == 39.0
+
+    def test_status_equity_equals_capital_plus_unrealized(self):
+        """equity = capital + unrealized_pnl."""
+        config = MagicMock()
+        config.risk.initial_capital = 10_000.0
+        config.assets = []
+        engine = _make_data_engine({"BTC/USDT": 90.0})
+        runner = _make_grid_runner("grid_atr", config, engine, leverage=10)
+
+        runner._positions["BTC/USDT"] = [
+            _make_position(level=0, direction=Direction.LONG, entry_price=100.0, quantity=5.0),
+        ]
+        runner._last_prices["BTC/USDT"] = 90.0  # perte de 10 × 5 = -50
+
+        status = runner.get_status()
+
+        assert status["unrealized_pnl"] == -50.0
+        assert status["equity"] == status["capital"] + status["unrealized_pnl"]
+        assert status["equity"] == 10_000.0 - 50.0
+
+    def test_status_no_positions_unrealized_zero(self):
+        """Sans positions, unrealized_pnl = 0, equity = capital."""
+        config = MagicMock()
+        config.risk.initial_capital = 10_000.0
+        config.assets = []
+        engine = _make_data_engine({})
+        runner = _make_grid_runner("grid_atr", config, engine, leverage=10)
+
+        status = runner.get_status()
+
+        assert status["unrealized_pnl"] == 0.0
+        assert status["margin_used"] == 0.0
+        assert status["equity"] == 10_000.0
+        assert status["assets_with_positions"] == 0
+
+    def test_status_short_position_unrealized(self):
+        """Position SHORT : unrealized = (entry - current) × qty."""
+        config = MagicMock()
+        config.risk.initial_capital = 10_000.0
+        config.assets = []
+        engine = _make_data_engine({"BTC/USDT": 95.0})
+        runner = _make_grid_runner("grid_atr", config, engine, leverage=10)
+
+        runner._positions["BTC/USDT"] = [
+            _make_position(level=0, direction=Direction.SHORT, entry_price=100.0, quantity=2.0),
+        ]
+        runner._last_prices["BTC/USDT"] = 95.0
+
+        status = runner.get_status()
+
+        # SHORT: (100 - 95) × 2 = 10
+        assert status["unrealized_pnl"] == 10.0
+        assert status["assets_with_positions"] == 1

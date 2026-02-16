@@ -467,6 +467,20 @@ tr:last-child td { border-bottom: none; }
   height: 120px;
 }
 
+/* ─── SESSION STATS (Simulator Panel) ─────────────────────────────────── */
+.sim-section {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.sim-stats-row {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 0;
+  font-family: var(--font-mono);
+}
+
 /* ─── COLLAPSIBLE ──────────────────────────────────────────────────────── */
 .collapsible-header {
   display: flex;

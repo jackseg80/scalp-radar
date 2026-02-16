@@ -836,6 +836,21 @@ Système automatisé de trading crypto qui :
 
 **Tests** : 22 nouveaux → 847 passants
 
+### Hotfix 20f — Panneau Simulator : P&L réalisé + non réalisé + equity ✅
+
+**Problème** : Le panneau "SIMULATOR (PAPER)" n'affichait que le P&L réalisé (trades fermés). Avec 3 grids ouvertes à -77$ et 0 trades fermés, le dashboard affichait "P&L Net: +0.00" et "Capital: 9531$" — trompeur.
+
+**Fixes** :
+
+1. **Backend** : `GridStrategyRunner.get_status()` enrichi avec `unrealized_pnl`, `margin_used`, `equity`, `assets_with_positions` — calcul depuis `_last_prices` mis à jour à chaque `on_candle()`
+2. **Backend** : `LiveStrategyRunner.get_status()` enrichi avec les mêmes champs (cohérence frontend)
+3. **Backend** : `get_equity_curve()` ajoute un point "now" avec l'equity courante (capital + unrealized) et retourne `current_equity`
+4. **Frontend** : SessionStats refonte complète — P&L Total (réalisé + non réalisé) en gros, détail réalisé/non réalisé, equity avec %, marge/disponible, stats compactes, info grids
+5. **Frontend** : EquityCurve affiche "Equity" au lieu de "Capital actuel", utilise `current_equity`
+6. **Frontend** : `getSummary()` inclut le P&L total (pas juste réalisé)
+
+**Tests** : 5 nouveaux → 852 passants
+
 ### Sprint 20 — Gestion du Capital Avancée
 
 **But** : Optimiser l'allocation de capital entre stratégies et assets.
@@ -921,14 +936,15 @@ Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
                                  Sprint 20b: Portfolio✅
                                  Sprint 20b-UI: Front✅
                                  Hotfix 20e: KS grid ✅
+                                 Hotfix 20f: Equity  ✅
 ```
 
 ---
 
 ## ÉTAT ACTUEL (16 février 2026)
 
-- **847 tests**, 0 régression
-- **Hotfix 20e** — Kill switch grid-compatible, guard anti-phantom trades, grace period post-warmup
+- **852 tests**, 0 régression
+- **Hotfix 20f** — Panneau Simulator affiche P&L réalisé + non réalisé + equity, marge/disponible
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)

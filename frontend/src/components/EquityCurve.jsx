@@ -13,6 +13,7 @@ export default function EquityCurve() {
 
   const points = data?.equity || []
   const initialCapital = data?.initial_capital ?? 10000
+  const currentEquity = data?.current_equity ?? data?.current_capital ?? null
 
   if (loading && points.length === 0) {
     return (
@@ -48,10 +49,10 @@ export default function EquityCurve() {
     )
   }
 
-  return <EquityChart points={points} initialCapital={initialCapital} />
+  return <EquityChart points={points} initialCapital={initialCapital} currentEquity={currentEquity} />
 }
 
-function EquityChart({ points, initialCapital }) {
+function EquityChart({ points, initialCapital, currentEquity }) {
   const values = points.map(p => typeof p === 'number' ? p : p.capital || p.equity || p.value || 0)
 
   if (values.length === 0) return null
@@ -77,7 +78,8 @@ function EquityChart({ points, initialCapital }) {
 
   const areaPoints = `${PADDING.left},${baselineY} ${polyPoints} ${toX(values.length - 1).toFixed(1)},${baselineY}`
 
-  const pnl = lastValue - initialCapital
+  const displayValue = currentEquity ?? lastValue
+  const pnl = displayValue - initialCapital
   const pnlPct = ((pnl / initialCapital) * 100).toFixed(2)
 
   return (
@@ -103,9 +105,9 @@ function EquityChart({ points, initialCapital }) {
         </text>
       </svg>
       <div className="flex-between" style={{ marginTop: 4 }}>
-        <span className="text-xs muted">Capital actuel</span>
+        <span className="text-xs muted">Equity</span>
         <span className={`mono text-xs ${isProfit ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
-          {lastValue.toLocaleString('fr-FR', { maximumFractionDigits: 2 })}$
+          {displayValue.toLocaleString('fr-FR', { maximumFractionDigits: 0 })}$
           ({pnl >= 0 ? '+' : ''}{pnlPct}%)
         </span>
       </div>

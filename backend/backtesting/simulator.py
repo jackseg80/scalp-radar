@@ -467,6 +467,14 @@ class LiveStrategyRunner:
         )
 
     def get_status(self) -> dict:
+        # Champs unrealized pour cohérence avec GridStrategyRunner
+        unrealized_pnl = 0.0
+        margin_used = 0.0
+        assets_with_positions = 0
+        if self._position is not None and self._position_symbol:
+            assets_with_positions = 1
+        equity = self._capital + unrealized_pnl
+
         return {
             "name": self.name,
             "capital": self._capital,
@@ -478,6 +486,10 @@ class LiveStrategyRunner:
             "is_active": self._stats.is_active,
             "kill_switch": self._kill_switch_triggered,
             "has_position": self._position is not None,
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "margin_used": round(margin_used, 2),
+            "equity": round(equity, 2),
+            "assets_with_positions": assets_with_positions,
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:
@@ -540,6 +552,9 @@ class GridStrategyRunner:
 
         # Leverage pour calcul marge (réservation capital)
         self._leverage = getattr(strategy._config, "leverage", 15)
+
+        # Prix courants par symbol (mis à jour à chaque on_candle)
+        self._last_prices: dict[str, float] = {}
 
         # Buffer de closes pour calcul SMA interne
         self._strategy_tf = getattr(strategy._config, "timeframe", "1h")
@@ -708,7 +723,8 @@ class GridStrategyRunner:
             # Compteur grace period (kill switch runner)
             self._candles_since_warmup += 1
 
-        # Maintenir le buffer de closes
+        # Maintenir le buffer de closes + prix courant
+        self._last_prices[symbol] = candle.close
         if symbol not in self._close_buffer:
             self._close_buffer[symbol] = deque(
                 maxlen=max(self._ma_period + 20, 50)
@@ -1052,6 +1068,26 @@ class GridStrategyRunner:
         total_positions = sum(len(positions) for positions in self._positions.values())
         all_positions = [p for positions in self._positions.values() for p in positions]
 
+        # P&L non réalisé + marge utilisée
+        unrealized_pnl = 0.0
+        margin_used = 0.0
+        assets_with_positions = 0
+        for symbol, positions in self._positions.items():
+            if not positions:
+                continue
+            assets_with_positions += 1
+            current_price = self._last_prices.get(symbol, 0.0)
+            if current_price <= 0:
+                continue
+            for pos in positions:
+                if pos.direction.value == "LONG":
+                    unrealized_pnl += (current_price - pos.entry_price) * pos.quantity
+                else:
+                    unrealized_pnl += (pos.entry_price - current_price) * pos.quantity
+                margin_used += (pos.entry_price * pos.quantity) / self._leverage
+
+        equity = self._capital + unrealized_pnl
+
         return {
             "name": self.name,
             "capital": self._capital,
@@ -1073,6 +1109,10 @@ class GridStrategyRunner:
                 / (sum(p.quantity for p in all_positions) or 1.0)
                 if all_positions else 0.0
             ),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "margin_used": round(margin_used, 2),
+            "equity": round(equity, 2),
+            "assets_with_positions": assets_with_positions,
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:
@@ -1868,9 +1908,25 @@ class Simulator:
         # Si un seul runner, capital initial = config. Si multiple, somme.
         initial_capital = sum(r._initial_capital for r in self._runners) if self._runners else default_capital
 
+        # Equity courante = capital + unrealized P&L
+        total_unrealized = sum(
+            r.get_status().get("unrealized_pnl", 0.0) for r in self._runners
+        )
+        current_equity = current_capital + total_unrealized
+
+        # Ajouter un point "now" avec l'equity courante (inclut non réalisé)
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        equity_with_now = list(equity)
+        equity_with_now.append({
+            "timestamp": now_iso,
+            "capital": round(current_equity, 2),
+            "trade_pnl": 0,
+        })
+
         return {
-            "equity": equity,
+            "equity": equity_with_now,
             "current_capital": round(current_capital, 2),
+            "current_equity": round(current_equity, 2),
             "initial_capital": round(initial_capital, 2),
         }
 
