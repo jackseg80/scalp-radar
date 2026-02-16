@@ -246,6 +246,34 @@ class GridATRConfig(BaseModel):
         return {**base, **overrides}
 
 
+class GridMultiTFConfig(BaseModel):
+    """Grid Multi-TF : filtre Supertrend 4h + exécution Grid ATR 1h."""
+
+    enabled: bool = False
+    live_eligible: bool = False
+    timeframe: str = "1h"
+    # Filtre trend (4h Supertrend)
+    st_atr_period: int = Field(default=10, ge=2, le=50)
+    st_atr_multiplier: float = Field(default=3.0, gt=0)
+    # Exécution grid (1h) — mêmes params que grid_atr
+    ma_period: int = Field(default=14, ge=2, le=50)
+    atr_period: int = Field(default=14, ge=2, le=50)
+    atr_multiplier_start: float = Field(default=2.0, gt=0)
+    atr_multiplier_step: float = Field(default=1.0, gt=0)
+    num_levels: int = Field(default=3, ge=1, le=6)
+    sl_percent: float = Field(default=20.0, gt=0)
+    sides: list[str] = Field(default=["long", "short"])
+    leverage: int = Field(default=6, ge=1, le=20)
+    weight: float = Field(default=0.20, ge=0, le=1)
+    per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:
+        """Retourne les paramètres avec overrides per_asset appliqués."""
+        base = self.model_dump(exclude={"per_asset", "enabled", "live_eligible", "weight"})
+        overrides = self.per_asset.get(symbol, {})
+        return {**base, **overrides}
+
+
 class CustomStrategyConfig(BaseModel):
     enabled: bool = False
     timeframe: str = "1h"
@@ -264,6 +292,7 @@ class StrategiesConfig(BaseModel):
     envelope_dca: EnvelopeDCAConfig = Field(default_factory=EnvelopeDCAConfig)
     envelope_dca_short: EnvelopeDCAShortConfig = Field(default_factory=EnvelopeDCAShortConfig)
     grid_atr: GridATRConfig = Field(default_factory=GridATRConfig)
+    grid_multi_tf: GridMultiTFConfig = Field(default_factory=GridMultiTFConfig)
     custom_strategies: dict[str, CustomStrategyConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -274,6 +303,7 @@ class StrategiesConfig(BaseModel):
                 self.momentum, self.funding,
                 self.bollinger_mr, self.donchian_breakout, self.supertrend,
                 self.envelope_dca, self.envelope_dca_short, self.grid_atr,
+                self.grid_multi_tf,
             ]
             if s.enabled
         ]

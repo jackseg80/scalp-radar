@@ -67,7 +67,7 @@ def save_result_sync(
     Returns:
         result_id (int) : ID du résultat inséré
     """
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     try:
         # Sanitize JSON values (NaN/Infinity → None)
         best_params_json = json.dumps(_sanitize_dict(report.recommended_params))
@@ -182,7 +182,7 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
     Returns:
         "created" si inséré, "exists" si doublon (UNIQUE constraint).
     """
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     try:
         conn.execute("BEGIN")
 
@@ -616,7 +616,7 @@ def save_combo_results_sync(db_path: str, result_id: int, combo_results: list[di
     if not combo_results:
         return 0
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     try:
         data = [
             (

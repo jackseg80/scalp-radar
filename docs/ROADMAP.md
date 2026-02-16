@@ -860,25 +860,35 @@ Système automatisé de trading crypto qui :
 
 | Sprint | Contenu | Status |
 |--------|---------|--------|
-| 21 | Nouvelle stratégie complémentaire (trend-following ou funding grid) | 📋 Planifié |
+| 21a | Grid Multi-TF (Supertrend 4h + Grid ATR 1h) — backtest + WFO | ✅ |
+| 21b | Grid Multi-TF — support live (Simulator, TimeFrame.H4) | 📋 Planifié |
 | 22 | Live trading progressif (1000$ → 5000$) | 📋 Planifié |
 | 23 | Monitoring V2 (alertes enrichies, rapport hebdo Telegram) | 📋 Planifié |
 | 24 | Data Pipeline Robuste (backfill auto, détection anomalies) | 📋 Planifié |
 | 25 | Gestion du Capital Avancée (Kelly, risk parity, rebalancing) | 📋 Planifié |
 
-### Sprint 21 — Stratégie Complémentaire
+### Sprint 21a — Grid Multi-TF (Backtest + WFO) ✅
 
-**But** : Ajouter une stratégie avec un profil différent de grid_atr pour diversifier.
+**But** : 11e stratégie — Supertrend 4h filtre directionnel + Grid ATR 1h exécution. Corrige le défaut principal de grid_atr (LONG en bear market → -46% drawdown).
 
-**Candidates** :
+**Architecture** : Candles 1h → resampling 4h (UTC-aligned, anti-lookahead) → Supertrend → direction (UP=LONG, DOWN=SHORT). Flip de direction → force-close.
 
-- **Grid Multi-TF** : Supertrend 4h filtre tendance + Grid ATR 1h exécution
-- **Grid Funding** : DCA déclenché par funding rate négatif extrême
-- **Grid RSI** : DCA déclenché par RSI extrême + niveaux %
+**Implémentation** :
 
-**Workflow** : Implémenter → param_grids.yaml → WFO → Grade ≥ B → Paper → Live.
+- `GridMultiTFConfig` (config.py) + `GridMultiTFStrategy` (grid_multi_tf.py) héritant `BaseGridStrategy`
+- `compute_indicators()` calcule SMA+ATR 1h ET Supertrend 4h (resampling interne, anti-lookahead)
+- Fast engine : `_build_entry_prices()` avec directions dynamiques, `_simulate_grid_common()` avec `directions` array
+- Cache : `_resample_1h_to_4h()` + `supertrend_dir_4h` field dans `IndicatorCache`
+- Registry, factory, param_grids.yaml (384 combos), strategies.yaml (enabled: false)
+- `_INDICATOR_PARAMS` : `["ma_period", "atr_period", "st_atr_period", "st_atr_multiplier"]`
 
-**Infrastructure prête** : Sprint 20c a factorisé `_simulate_grid_common()` — ajouter une nouvelle stratégie grid = 3-5 lignes dans `_build_entry_prices()`.
+**Bugfix 21a-bis** : Validation Bitget et Monte Carlo retournaient 0 trades car `compute_indicators()` ne calculait pas le Supertrend 4h et `MultiPositionEngine` ne passait que le TF principal dans `ctx_indicators`. Corrigé.
+
+**Résultat** : 898 tests (40 nouveaux pour grid_multi_tf), 0 régression. Parité fast engine vs MultiPositionEngine validée.
+
+### Sprint 21b — Grid Multi-TF Live (Planifié)
+
+**But** : Support live pour grid_multi_tf (Simulator, GridStrategyRunner, TimeFrame.H4, DataEngine).
 
 ### Sprint 22 — Live Trading Progressif
 
@@ -974,14 +984,15 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (16 février 2026)
 
-- **852 tests**, 0 régression
+- **898 tests**, 0 régression
 - **Phases 1-5 terminées** — 12 sprints/hotfixes rien que pour la Phase 5 (16+17, 19-19e, 20a-20f)
-- **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
+- **Phase 6 en cours** — Sprint 21a terminé (Grid Multi-TF backtest + WFO)
+- **11 stratégies** : 4 scalp 5m + 3 swing 1h + 4 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
 - **Portfolio backtest** : +14.5% return, -28.7% max DD, 73.7% WR, 0 kill switch sur 90j avec 10k$/21 assets
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
-- **Prochaine étape** : Phase 6 — nouvelle stratégie complémentaire ou live trading progressif
+- **Prochaine étape** : WFO grid_multi_tf sur 21 assets → Sprint 21b (support live) si Grade ≥ B
 
 ---
 

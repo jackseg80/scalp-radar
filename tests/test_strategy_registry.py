@@ -32,6 +32,7 @@ ALL_STRATEGIES = [
     "envelope_dca",
     "envelope_dca_short",
     "grid_atr",
+    "grid_multi_tf",
 ]
 
 
@@ -65,7 +66,7 @@ def test_create_strategy_unknown_raises():
 
 # ─── Stratégies grid ────────────────────────────────────────────────────
 
-GRID_STRATEGY_NAMES = ["envelope_dca", "envelope_dca_short", "grid_atr"]
+GRID_STRATEGY_NAMES = ["envelope_dca", "envelope_dca_short", "grid_atr", "grid_multi_tf"]
 NON_GRID_STRATEGY_NAMES = [s for s in ALL_STRATEGIES if s not in GRID_STRATEGY_NAMES]
 
 
@@ -93,6 +94,7 @@ INDICATOR_PARAMS_EXPECTED = {
     "envelope_dca": ["ma_period"],
     "envelope_dca_short": ["ma_period"],
     "grid_atr": ["ma_period", "atr_period"],
+    "grid_multi_tf": ["ma_period", "atr_period", "st_atr_period", "st_atr_multiplier"],
 }
 
 
@@ -197,3 +199,20 @@ def test_create_grid_atr_with_params():
     assert isinstance(strategy, GridATRStrategy)
     assert strategy.name == "grid_atr"
     assert strategy.max_positions == 4
+
+
+def test_create_grid_multi_tf_with_params():
+    """create_strategy_with_params crée un GridMultiTFStrategy."""
+    from backend.strategies.grid_multi_tf import GridMultiTFStrategy
+
+    params = {
+        "st_atr_period": 14, "st_atr_multiplier": 2.0,
+        "ma_period": 10, "atr_period": 20,
+        "atr_multiplier_start": 1.5, "atr_multiplier_step": 0.5,
+        "num_levels": 3, "sl_percent": 20.0,
+        "sides": ["long", "short"], "leverage": 6,
+    }
+    strategy = create_strategy_with_params("grid_multi_tf", params)
+    assert isinstance(strategy, GridMultiTFStrategy)
+    assert strategy.name == "grid_multi_tf"
+    assert strategy.max_positions == 3

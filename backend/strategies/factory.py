@@ -10,6 +10,7 @@ from backend.strategies.envelope_dca import EnvelopeDCAStrategy
 from backend.strategies.envelope_dca_short import EnvelopeDCAShortStrategy
 from backend.strategies.funding import FundingStrategy
 from backend.strategies.grid_atr import GridATRStrategy
+from backend.strategies.grid_multi_tf import GridMultiTFStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
 from backend.strategies.supertrend import SuperTrendStrategy
@@ -30,6 +31,7 @@ def create_strategy(name: str, config: AppConfig) -> BaseStrategy:
         "envelope_dca": (EnvelopeDCAStrategy, strategies_config.envelope_dca),
         "envelope_dca_short": (EnvelopeDCAShortStrategy, strategies_config.envelope_dca_short),
         "grid_atr": (GridATRStrategy, strategies_config.grid_atr),
+        "grid_multi_tf": (GridMultiTFStrategy, strategies_config.grid_multi_tf),
     }
     if name not in mapping:
         raise ValueError(f"Stratégie inconnue : {name}")
@@ -63,5 +65,7 @@ def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
         strategies.append(EnvelopeDCAShortStrategy(strats.envelope_dca_short))
     if strats.grid_atr.enabled:
         strategies.append(GridATRStrategy(strats.grid_atr))
+    if strats.grid_multi_tf.enabled:
+        strategies.append(GridMultiTFStrategy(strats.grid_multi_tf))
 
     return strategies

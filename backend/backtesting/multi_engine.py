@@ -94,10 +94,11 @@ class MultiPositionEngine:
         for candle in main_candles:
             ts_iso = candle.timestamp.isoformat()
 
-            # Indicateurs
+            # Indicateurs (tous les TFs, pas seulement le main_tf)
             ctx_indicators: dict[str, dict[str, Any]] = {}
-            if ts_iso in main_indicators:
-                ctx_indicators[main_tf] = main_indicators[ts_iso]
+            for tf_key, tf_indicators in indicators_by_tf.items():
+                if ts_iso in tf_indicators:
+                    ctx_indicators[tf_key] = tf_indicators[ts_iso]
 
             main_ind = ctx_indicators.get(main_tf, {})
 

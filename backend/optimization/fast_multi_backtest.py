@@ -74,6 +74,23 @@ def _build_entry_prices(
         invalid = np.isnan(atr_arr) | (atr_arr <= 0)
         entry_prices[invalid, :] = np.nan
 
+    elif strategy_name == "grid_multi_tf":
+        atr_arr = cache.atr_by_period[params["atr_period"]]
+        st_key = (params["st_atr_period"], params["st_atr_multiplier"])
+        st_dir = cache.supertrend_dir_4h[st_key]
+        multipliers = [
+            params["atr_multiplier_start"] + lvl * params["atr_multiplier_step"]
+            for lvl in range(num_levels)
+        ]
+        long_mask = st_dir == 1
+        short_mask = st_dir == -1
+        for lvl in range(num_levels):
+            entry_prices[long_mask, lvl] = sma_arr[long_mask] - atr_arr[long_mask] * multipliers[lvl]
+            entry_prices[short_mask, lvl] = sma_arr[short_mask] + atr_arr[short_mask] * multipliers[lvl]
+        # NaN propagation : ATR invalide ou pas de direction Supertrend
+        invalid = np.isnan(atr_arr) | (atr_arr <= 0) | np.isnan(st_dir)
+        entry_prices[invalid, :] = np.nan
+
     else:
         raise ValueError(f"Stratégie grid inconnue pour _build_entry_prices: {strategy_name}")
 
@@ -91,6 +108,7 @@ def _simulate_grid_common(
     num_levels: int,
     sl_pct: float,
     direction: int,
+    directions: np.ndarray | None = None,
 ) -> tuple[list[float], list[float], float]:
     """Boucle chaude unifiée pour toutes les stratégies grid/DCA.
 
@@ -98,7 +116,9 @@ def _simulate_grid_common(
         entry_prices: (n_candles, num_levels) pré-calculé par _build_entry_prices.
         sma_arr: SMA pour TP dynamique (retour vers la SMA).
         sl_pct: déjà divisé par 100.
-        direction: 1 = LONG, -1 = SHORT.
+        direction: 1 = LONG, -1 = SHORT (scalar fixe, ou initial pour directions dynamiques).
+        directions: si fourni, array 1D de directions par candle (1/-1/NaN).
+            Override le scalar `direction` à chaque candle. Force-close au flip.
     """
     capital = bt_config.initial_capital
     leverage = bt_config.leverage
@@ -113,7 +133,29 @@ def _simulate_grid_common(
     # Positions : list of (level_idx, entry_price, quantity, entry_fee)
     positions: list[tuple[int, float, float, float]] = []
 
+    # Direction tracking pour le mode dynamique
+    last_dir = 0  # 0 = pas encore initialisé
+
     for i in range(n):
+        # --- Directions dynamiques (grid_multi_tf) ---
+        if directions is not None:
+            cur_dir = directions[i]
+            if math.isnan(cur_dir):
+                continue  # Pas de direction Supertrend → skip
+            cur_dir_int = int(cur_dir)
+            # Force-close si direction a flippé
+            if positions and last_dir != 0 and cur_dir_int != last_dir:
+                pnl = _calc_grid_pnl(
+                    positions, cache.closes[i], taker_fee, slippage_pct, last_dir,
+                )
+                trade_pnls.append(pnl)
+                if capital > 0:
+                    trade_returns.append(pnl / capital)
+                capital += pnl
+                positions = []
+            last_dir = cur_dir_int
+            direction = cur_dir_int  # Override le scalar pour TP/SL et entry
+
         # Skip candles invalides (NaN propagé depuis _build_entry_prices)
         if math.isnan(entry_prices[i, 0]):
             continue
@@ -246,6 +288,10 @@ def run_multi_backtest_from_cache(
         trade_pnls, trade_returns, final_capital = _simulate_grid_atr(
             cache, params, bt_config, direction=1,
         )
+    elif strategy_name == "grid_multi_tf":
+        trade_pnls, trade_returns, final_capital = _simulate_grid_multi_tf(
+            cache, params, bt_config,
+        )
     else:
         raise ValueError(f"Stratégie grid inconnue pour fast engine: {strategy_name}")
 
@@ -294,6 +340,28 @@ def _simulate_grid_atr(
     entry_prices = _build_entry_prices("grid_atr", cache, params, num_levels, direction)
     return _simulate_grid_common(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct, direction,
+    )
+
+
+def _simulate_grid_multi_tf(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Simulation Grid Multi-TF (direction dynamique Supertrend 4h).
+
+    La direction change au cours du temps : force-close au flip.
+    """
+    num_levels = params["num_levels"]
+    sl_pct = params["sl_percent"] / 100
+    sma_arr = cache.bb_sma[params["ma_period"]]
+    st_key = (params["st_atr_period"], params["st_atr_multiplier"])
+    dir_arr = cache.supertrend_dir_4h[st_key]
+    entry_prices = _build_entry_prices("grid_multi_tf", cache, params, num_levels, direction=1)
+    return _simulate_grid_common(
+        entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct,
+        direction=1,
+        directions=dir_arr,
     )
 
 

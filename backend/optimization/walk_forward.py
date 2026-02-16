@@ -402,6 +402,7 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "envelope_dca": ["ma_period"],
     "envelope_dca_short": ["ma_period"],
     "grid_atr": ["ma_period", "atr_period"],
+    "grid_multi_tf": ["ma_period", "atr_period", "st_atr_period", "st_atr_multiplier"],
 }
 
 

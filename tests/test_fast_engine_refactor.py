@@ -95,6 +95,7 @@ def _make_cache(
         bb_lower={},
         supertrend_direction={},
         atr_by_period=atr_by_period if atr_by_period is not None else {14: atr_14},
+        supertrend_dir_4h={},
     )
 
 
@@ -256,12 +257,13 @@ class TestFastEngineStrategies:
     """Tests pour la constante FAST_ENGINE_STRATEGIES."""
 
     def test_content(self):
-        """Contient les 8 stratégies attendues."""
+        """Contient les 9 stratégies attendues."""
         from backend.optimization import FAST_ENGINE_STRATEGIES
 
         expected = {
             "vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout",
             "supertrend", "envelope_dca", "envelope_dca_short", "grid_atr",
+            "grid_multi_tf",
         }
         assert FAST_ENGINE_STRATEGIES == expected
 

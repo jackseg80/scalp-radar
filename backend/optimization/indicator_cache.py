@@ -86,6 +86,9 @@ class IndicatorCache:
     # ATR multi-period (pour Donchian/SuperTrend avec atr_period variable)
     atr_by_period: dict[int, np.ndarray]                       # {period: atr_array}
 
+    # Grid Multi-TF : Supertrend 4h mappé sur indices 1h (anti-lookahead)
+    supertrend_dir_4h: dict[tuple[int, float], np.ndarray]     # {(st_atr_period, st_mult): dir_1h}
+
 
 def build_cache(
     candles_by_tf: dict[str, list[Candle]],
@@ -188,8 +191,8 @@ def build_cache(
         for period in ma_periods:
             bb_sma_dict[period] = sma(closes, period)
 
-    # Grid ATR : SMA + ATR multi-period (enveloppes = SMA ± ATR × multiplier)
-    if strategy_name == "grid_atr":
+    # Grid ATR / Grid Multi-TF : SMA + ATR multi-period
+    if strategy_name in ("grid_atr", "grid_multi_tf"):
         ma_periods_atr: set[int] = set()
         if "ma_period" in param_grid_values:
             ma_periods_atr.update(param_grid_values["ma_period"])
@@ -218,9 +221,9 @@ def build_cache(
                 bb_upper_dict[(period, std_dev)] = upper
                 bb_lower_dict[(period, std_dev)] = lower
 
-    # --- ATR multi-period (pour donchian/supertrend/grid_atr) ---
+    # --- ATR multi-period (pour donchian/supertrend/grid_atr/grid_multi_tf) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr"):
+    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf"):
         atr_periods: set[int] = set()
         if "atr_period" in param_grid_values:
             atr_periods.update(param_grid_values["atr_period"])
@@ -230,7 +233,7 @@ def build_cache(
             if p not in atr_by_period_dict:
                 atr_by_period_dict[p] = atr(highs, lows, closes, p)
 
-    # --- SuperTrend ---
+    # --- SuperTrend (1h, pour stratégie supertrend) ---
     st_direction_dict: dict[tuple[int, float], np.ndarray] = {}
     if strategy_name == "supertrend":
         atr_multipliers: set[float] = set()
@@ -242,6 +245,37 @@ def build_cache(
             for mult in atr_multipliers:
                 _, direction_arr = supertrend(highs, lows, closes, atr_by_period_dict[p], mult)
                 st_direction_dict[(p, mult)] = direction_arr
+
+    # --- SuperTrend 4h (pour grid_multi_tf, resampleé depuis 1h) ---
+    st_dir_4h_dict: dict[tuple[int, float], np.ndarray] = {}
+    if strategy_name == "grid_multi_tf":
+        h4_highs, h4_lows, h4_closes, mapping_1h = _resample_1h_to_4h(
+            main_candles, closes, highs, lows,
+        )
+        if len(h4_closes) > 0:
+            st_atr_periods: set[int] = set()
+            if "st_atr_period" in param_grid_values:
+                st_atr_periods.update(param_grid_values["st_atr_period"])
+            if not st_atr_periods:
+                st_atr_periods.add(10)
+
+            st_multipliers: set[float] = set()
+            if "st_atr_multiplier" in param_grid_values:
+                st_multipliers.update(param_grid_values["st_atr_multiplier"])
+            if not st_multipliers:
+                st_multipliers.add(3.0)
+
+            for st_period in st_atr_periods:
+                atr_4h = atr(h4_highs, h4_lows, h4_closes, st_period)
+                for st_mult in st_multipliers:
+                    _, st_dir = supertrend(h4_highs, h4_lows, h4_closes, atr_4h, st_mult)
+                    # Mapper sur les indices 1h via le mapping anti-lookahead
+                    st_dir_1h = np.full(n, np.nan)
+                    for i in range(n):
+                        idx_4h = mapping_1h[i]
+                        if idx_4h >= 0 and not np.isnan(st_dir[idx_4h]):
+                            st_dir_1h[i] = st_dir[idx_4h]
+                    st_dir_4h_dict[(st_period, st_mult)] = st_dir_1h
 
     return IndicatorCache(
         n_candles=n,
@@ -271,6 +305,7 @@ def build_cache(
         bb_lower=bb_lower_dict,
         supertrend_direction=st_direction_dict,
         atr_by_period=atr_by_period_dict,
+        supertrend_dir_4h=st_dir_4h_dict,
     )
 
 
@@ -364,3 +399,69 @@ def _rolling_min(arr: np.ndarray, window: int) -> np.ndarray:
     for i in range(window, len(arr)):
         result[i] = np.min(arr[i - window:i])
     return result
+
+
+def _resample_1h_to_4h(
+    main_candles: list[Candle],
+    closes: np.ndarray,
+    highs: np.ndarray,
+    lows: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Resample 1h → 4h aligné aux frontières UTC (00h, 04h, 08h, 12h, 16h, 20h).
+
+    Returns:
+        (highs_4h, lows_4h, closes_4h, mapping_1h_to_4h)
+        mapping_1h_to_4h[i] = index du dernier 4h COMPLÉTÉ avant candle 1h[i], ou -1.
+        Anti-lookahead : une candle 4h n'est utilisable qu'après sa clôture.
+    """
+    n = len(main_candles)
+    if n == 0:
+        empty = np.array([], dtype=float)
+        return empty, empty, empty, np.full(0, -1, dtype=np.int32)
+
+    # Calculer le bucket 4h pour chaque candle 1h (14400s = 4h)
+    bucket_size = 14400
+    timestamps = np.array([c.timestamp.timestamp() for c in main_candles])
+    buckets = (timestamps // bucket_size).astype(np.int64)
+
+    # Identifier les buckets uniques dans l'ordre
+    unique_buckets = []
+    prev_bucket = -1
+    for b in buckets:
+        if b != prev_bucket:
+            unique_buckets.append(int(b))
+            prev_bucket = b
+    unique_buckets_arr = np.array(unique_buckets)
+
+    # Construire OHLC 4h pour chaque bucket
+    h4_highs_list = []
+    h4_lows_list = []
+    h4_closes_list = []
+    bucket_ids = []  # bucket id correspondant
+
+    for bucket_id in unique_buckets_arr:
+        mask = buckets == bucket_id
+        h4_highs_list.append(float(np.max(highs[mask])))
+        h4_lows_list.append(float(np.min(lows[mask])))
+        # Close = dernier close du bucket
+        indices = np.where(mask)[0]
+        h4_closes_list.append(float(closes[indices[-1]]))
+        bucket_ids.append(bucket_id)
+
+    h4_highs_out = np.array(h4_highs_list, dtype=float)
+    h4_lows_out = np.array(h4_lows_list, dtype=float)
+    h4_closes_out = np.array(h4_closes_list, dtype=float)
+
+    # Mapping anti-lookahead : pour chaque candle 1h[i],
+    # trouver l'index du dernier bucket 4h COMPLÉTÉ (= bucket précédent).
+    # Le bucket courant n'est pas encore complété.
+    bucket_ids_arr = np.array(bucket_ids)
+    mapping = np.full(n, -1, dtype=np.int32)
+    for i in range(n):
+        current_bucket = buckets[i]
+        # Trouver l'index du bucket PRÉCÉDENT le bucket courant
+        idx = np.searchsorted(bucket_ids_arr, current_bucket, side="left") - 1
+        if idx >= 0:
+            mapping[i] = idx
+
+    return h4_highs_out, h4_lows_out, h4_closes_out, mapping
