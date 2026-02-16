@@ -291,6 +291,8 @@ class StrategiesConfig(BaseModel):
 class KillSwitchConfig(BaseModel):
     max_session_loss_percent: float = Field(default=5.0, gt=0)
     max_daily_loss_percent: float = Field(default=10.0, gt=0)
+    grid_max_session_loss_percent: Optional[float] = None
+    grid_max_daily_loss_percent: Optional[float] = None
     global_max_loss_pct: float = Field(default=30.0, gt=0)
     global_window_hours: int = Field(default=24, ge=1)
 

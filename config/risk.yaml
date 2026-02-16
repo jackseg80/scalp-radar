@@ -4,6 +4,8 @@ max_margin_ratio: 0.70  # Max 70% du capital en marge simultanée
 kill_switch:
   max_session_loss_percent: 5.0
   max_daily_loss_percent: 10.0
+  grid_max_session_loss_percent: 25.0   # stratégies grid (drawdown structurel normal)
+  grid_max_daily_loss_percent: 25.0     # stratégies grid
   global_max_loss_pct: 30       # capital total toutes stratégies, fenêtre glissante
   global_window_hours: 24       # fenêtre glissante en heures
 

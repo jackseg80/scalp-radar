@@ -557,6 +557,10 @@ class GridStrategyRunner:
         self._is_warming_up = True
         self._pending_restore: dict | None = None  # État à appliquer après warm-up
 
+        # Grace period : pas de kill switch runner pendant les N premières bougies
+        self._candles_since_warmup: int = 0
+        self._grace_period_candles: int = 10  # 10 bougies 1h = ~10h de grâce
+
     def _get_sl_percent(self, symbol: str) -> float:
         """Résout le sl_percent pour un symbol (avec override per_asset)."""
         config = self._strategy._config
@@ -685,6 +689,24 @@ class GridStrategyRunner:
             candle_age = now - candle.timestamp
             if candle_age <= self.WARMUP_AGE_THRESHOLD:
                 self._end_warmup()
+
+        # Guard anti-phantom trades : dans les premières minutes post-warmup,
+        # skip les bougies historiques (> 2h). Protège contre le batch de watch_ohlcv().
+        if not self._is_warming_up:
+            warmup_ended = getattr(self, '_warmup_ended_at', None)
+            if warmup_ended is not None:
+                real_elapsed = (
+                    datetime.now(tz=timezone.utc) - warmup_ended
+                ).total_seconds()
+                if real_elapsed < 300:  # 5 min post-warmup
+                    candle_age_s = (
+                        datetime.now(tz=timezone.utc) - candle.timestamp
+                    ).total_seconds()
+                    if candle_age_s > 7200:
+                        return  # Bougie historique, ne pas trader
+
+            # Compteur grace period (kill switch runner)
+            self._candles_since_warmup += 1
 
         # Maintenir le buffer de closes
         if symbol not in self._close_buffer:
@@ -897,9 +919,29 @@ class GridStrategyRunner:
             except RuntimeError:
                 _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
 
-        # Kill switch désactivé pour grid/DCA : les pertes temporaires
-        # sont normales (achète les dips). Protection assurée par le SL
-        # individuel par position côté serveur.
+        # Kill switch grid : seuils plus larges (drawdown structurel normal)
+        # Grace period : pas de kill switch pendant les N premières bougies post-warmup
+        if self._candles_since_warmup < self._grace_period_candles:
+            return
+
+        ks = self._config.risk.kill_switch
+        grid_session = getattr(ks, 'grid_max_session_loss_percent', None)
+        std_session = getattr(ks, 'max_session_loss_percent', None)
+        max_session = (
+            grid_session if isinstance(grid_session, (int, float)) else
+            std_session if isinstance(std_session, (int, float)) else None
+        )
+        if max_session is None:
+            return  # Pas de config kill switch → skip
+
+        session_loss_pct = abs(min(0, self._realized_pnl)) / self._initial_capital * 100
+        if session_loss_pct >= max_session:
+            self._kill_switch_triggered = True
+            self._stats.is_active = False
+            logger.warning(
+                "[{}] KILL SWITCH GRID : perte session {:.1f}% >= {:.1f}%",
+                self.name, session_loss_pct, max_session,
+            )
 
     def _emit_open_event(
         self, symbol: str, level: GridLevel, position: GridPosition
@@ -1377,6 +1419,15 @@ class Simulator:
                 logger.critical(
                     "KILL SWITCH GLOBAL restauré — tous les runners sont stoppés"
                 )
+                # Forcer la fin du warm-up pour que le state sauvegardé
+                # soit appliqué (sinon StateManager écrase avec capital=10000)
+                for runner in self._runners:
+                    if hasattr(runner, '_is_warming_up') and runner._is_warming_up:
+                        runner._end_warmup()
+                        logger.info(
+                            "[{}] Warm-up forcé terminé (kill switch global restauré)",
+                            runner.name,
+                        )
 
         # Snapshot initial du capital (référence pour la fenêtre glissante)
         self._snapshot_capital()

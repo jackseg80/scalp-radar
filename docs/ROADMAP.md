@@ -821,10 +821,27 @@ Système automatisé de trading crypto qui :
 
 **Tests** : 4 nouveaux → 825 passants
 
+### Hotfix 20e — Kill switch grid + Warm-up fixes ✅
+**Problème** : Après un restart Docker en production, 5 bugs découverts : kill switch se redéclenche immédiatement, warm-up génère 183 trades phantom (-1 409$ fictifs), StateManager écrase le bon état pendant le warm-up bloqué.
+
+**Analyse** : 2 bugs déjà corrigés (persistence grid_positions dans Sprint 15, anti-spam Telegram dans Hotfix 20d). 4 bugs restants corrigés.
+
+**Fixes** :
+1. **Bug 2** : `_end_warmup()` forcé quand kill switch global restauré au boot → state sauvegardé appliqué immédiatement
+2. **Bug 3** : Grace period de 10 bougies 1h post-warmup (pas de kill switch runner pendant la stabilisation)
+3. **Bug 4** : Seuils kill switch grid-spécifiques (25%/25% au lieu de 5%/10%), champs `grid_max_session_loss_percent` et `grid_max_daily_loss_percent` dans KillSwitchConfig + risk.yaml, fallback MagicMock-safe
+4. **Bug 5** : Guard anti-phantom trades — bougies > 2h skippées pendant 5 min après fin du warm-up
+
+**Leçon** : Le kill switch session (5%) était conçu pour les stratégies mono-position. Avec grid DCA (21 assets × 3 niveaux), le P&L non réalisé dépasse facilement -500$ en fonctionnement normal. Les seuils doivent être adaptés au type de stratégie.
+
+**Tests** : 22 nouveaux → 847 passants
+
 ### Sprint 20 — Gestion du Capital Avancée
+
 **But** : Optimiser l'allocation de capital entre stratégies et assets.
 
 **Features** :
+
 - Position sizing dynamique (Kelly criterion, fixed fractional)
 - Capital allocation par stratégie basée sur le grade et la performance récente
 - Max drawdown par stratégie et global
@@ -903,14 +920,15 @@ Phase 4: Recherche          ✅   Sprint 20a: Sizing ✅
                                  Sprint 20c: Facto   ✅
                                  Sprint 20b: Portfolio✅
                                  Sprint 20b-UI: Front✅
+                                 Hotfix 20e: KS grid ✅
 ```
 
 ---
 
 ## ÉTAT ACTUEL (16 février 2026)
 
-- **825 tests**, 0 régression
-- **Sprint 20b-UI** — Frontend Portfolio Backtest (DB, API REST 7 endpoints, page React, equity curve SVG, drawdown, comparateur)
+- **847 tests**, 0 régression
+- **Hotfix 20e** — Kill switch grid-compatible, guard anti-phantom trades, grace period post-warmup
 - **10 stratégies** : 4 scalp 5m + 3 swing 1h + 3 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr)
 - **21 assets évalués par WFO grid_atr** : 14 Grade A + 7 Grade B, 0 D/F
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
