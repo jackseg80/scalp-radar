@@ -10,6 +10,20 @@ import numpy as np
 
 from backend.core.models import MarketRegime
 
+# Numba JIT (optionnel) — fallback transparent si non installé
+try:
+    from numba import njit
+
+    NUMBA_AVAILABLE = True
+except ImportError:  # pragma: no cover
+
+    def njit(*args, **kwargs):  # type: ignore[misc]
+        if args and callable(args[0]):
+            return args[0]
+        return lambda func: func
+
+    NUMBA_AVAILABLE = False
+
 
 # ─── MOYENNES ────────────────────────────────────────────────────────────────
 
@@ -24,6 +38,13 @@ def sma(values: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
+@njit(cache=True)
+def _ema_loop(values, result, period, multiplier):
+    for i in range(period, len(values)):
+        result[i] = values[i] * multiplier + result[i - 1] * (1 - multiplier)
+    return result
+
+
 def ema(values: np.ndarray, period: int) -> np.ndarray:
     """Exponential Moving Average. Les period-1 premières valeurs sont NaN."""
     if len(values) < period:
@@ -32,12 +53,24 @@ def ema(values: np.ndarray, period: int) -> np.ndarray:
     multiplier = 2.0 / (period + 1)
     # Seed : SMA des period premières valeurs
     result[period - 1] = np.mean(values[:period])
-    for i in range(period, len(values)):
-        result[i] = values[i] * multiplier + result[i - 1] * (1 - multiplier)
+    _ema_loop(values, result, period, multiplier)
     return result
 
 
 # ─── RSI (Wilder smoothing) ─────────────────────────────────────────────────
+
+
+@njit(cache=True)
+def _rsi_wilder_loop(gains, losses, result, period, avg_gain, avg_loss):
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        if avg_loss == 0.0:
+            result[i + 1] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            result[i + 1] = 100.0 - 100.0 / (1.0 + rs)
+    return result
 
 
 def rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
@@ -56,8 +89,8 @@ def rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
     result = np.full(len(closes), np.nan, dtype=float)
 
     # Seed : moyenne simple des period premières variations
-    avg_gain = np.mean(gains[:period])
-    avg_loss = np.mean(losses[:period])
+    avg_gain = float(np.mean(gains[:period]))
+    avg_loss = float(np.mean(losses[:period]))
 
     if avg_loss == 0:
         result[period] = 100.0
@@ -65,16 +98,8 @@ def rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
         rs = avg_gain / avg_loss
         result[period] = 100.0 - 100.0 / (1.0 + rs)
 
-    # Wilder smoothing
-    for i in range(period, len(deltas)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-        if avg_loss == 0:
-            result[i + 1] = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            result[i + 1] = 100.0 - 100.0 / (1.0 + rs)
-
+    # Wilder smoothing (JIT-compiled)
+    _rsi_wilder_loop(gains, losses, result, period, avg_gain, avg_loss)
     return result
 
 
@@ -121,6 +146,15 @@ def vwap_rolling(
 # ─── ATR (Wilder smoothing) ─────────────────────────────────────────────────
 
 
+@njit(cache=True)
+def _wilder_smooth(data, result, period, seed_val, start_idx):
+    val = seed_val
+    for i in range(start_idx, len(data)):
+        val = (val * (period - 1) + data[i]) / period
+        result[i] = val
+    return result
+
+
 def atr(
     highs: np.ndarray,
     lows: np.ndarray,
@@ -137,24 +171,20 @@ def atr(
 
     result = np.full(len(closes), np.nan, dtype=float)
 
-    # True Range
+    # True Range (vectorisé)
     tr = np.empty(len(closes))
     tr[0] = highs[0] - lows[0]
-    for i in range(1, len(closes)):
-        hl = highs[i] - lows[i]
-        hc = abs(highs[i] - closes[i - 1])
-        lc = abs(lows[i] - closes[i - 1])
-        tr[i] = max(hl, hc, lc)
+    tr[1:] = np.maximum(
+        highs[1:] - lows[1:],
+        np.maximum(np.abs(highs[1:] - closes[:-1]), np.abs(lows[1:] - closes[:-1])),
+    )
 
     # Seed : moyenne simple
-    atr_val = np.mean(tr[1 : period + 1])
+    atr_val = float(np.mean(tr[1 : period + 1]))
     result[period] = atr_val
 
-    # Wilder smoothing
-    for i in range(period + 1, len(closes)):
-        atr_val = (atr_val * (period - 1) + tr[i]) / period
-        result[i] = atr_val
-
+    # Wilder smoothing (JIT-compiled)
+    _wilder_smooth(tr, result, period, atr_val, period + 1)
     return result
 
 
@@ -181,24 +211,21 @@ def adx(
     di_plus_arr = np.full(n, np.nan, dtype=float)
     di_minus_arr = np.full(n, np.nan, dtype=float)
 
-    # +DM et -DM
+    # +DM, -DM et TR (vectorisé)
     plus_dm = np.zeros(n)
     minus_dm = np.zeros(n)
     tr = np.zeros(n)
 
     tr[0] = highs[0] - lows[0]
+    tr[1:] = np.maximum(
+        highs[1:] - lows[1:],
+        np.maximum(np.abs(highs[1:] - closes[:-1]), np.abs(lows[1:] - closes[:-1])),
+    )
 
-    for i in range(1, n):
-        up = highs[i] - highs[i - 1]
-        down = lows[i - 1] - lows[i]
-
-        plus_dm[i] = up if (up > down and up > 0) else 0.0
-        minus_dm[i] = down if (down > up and down > 0) else 0.0
-
-        hl = highs[i] - lows[i]
-        hc = abs(highs[i] - closes[i - 1])
-        lc = abs(lows[i] - closes[i - 1])
-        tr[i] = max(hl, hc, lc)
+    up = highs[1:] - highs[:-1]
+    down = lows[:-1] - lows[1:]
+    plus_dm[1:] = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm[1:] = np.where((down > up) & (down > 0), down, 0.0)
 
     # Smoothed TR, +DM, -DM (Wilder smoothing)
     sm_tr = np.mean(tr[1 : period + 1]) * period
@@ -321,11 +348,13 @@ def bollinger_bands(
 
     sma_arr = sma(closes, period)
 
-    # Rolling standard deviation
+    # Rolling standard deviation (vectorisé via sliding_window_view)
+    from numpy.lib.stride_tricks import sliding_window_view
+
     std_arr = np.full(n, np.nan, dtype=float)
-    for i in range(period - 1, n):
-        window = closes[i - period + 1 : i + 1]
-        std_arr[i] = float(np.std(window, ddof=0))
+    if n >= period:
+        windows = sliding_window_view(closes, period)
+        std_arr[period - 1 :] = np.std(windows, axis=1, ddof=0)
 
     upper = sma_arr + std_dev * std_arr
     lower = sma_arr - std_dev * std_arr

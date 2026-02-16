@@ -15,6 +15,7 @@ from backend.strategies.envelope_dca import EnvelopeDCAStrategy
 from backend.strategies.envelope_dca_short import EnvelopeDCAShortStrategy
 from backend.strategies.funding import FundingStrategy
 from backend.strategies.grid_atr import GridATRStrategy
+from backend.strategies.grid_funding import GridFundingStrategy
 from backend.strategies.grid_multi_tf import GridMultiTFStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
@@ -28,6 +29,7 @@ from backend.core.config import (
     EnvelopeDCAShortConfig,
     FundingConfig,
     GridATRConfig,
+    GridFundingConfig,
     GridMultiTFConfig,
     LiquidationConfig,
     MomentumConfig,
@@ -48,16 +50,20 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
     "envelope_dca_short": (EnvelopeDCAShortConfig, EnvelopeDCAShortStrategy),
     "grid_atr": (GridATRConfig, GridATRStrategy),
     "grid_multi_tf": (GridMultiTFConfig, GridMultiTFStrategy),
+    "grid_funding": (GridFundingConfig, GridFundingStrategy),
 }
 
 # Stratégies qui nécessitent extra_data (funding rates, OI) pour le backtest
-STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation"}
+STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation", "grid_funding"}
 
 # Stratégies grid/DCA (utilisent MultiPositionEngine au lieu de BacktestEngine)
-GRID_STRATEGIES: set[str] = {"envelope_dca", "envelope_dca_short", "grid_atr", "grid_multi_tf"}
+GRID_STRATEGIES: set[str] = {"envelope_dca", "envelope_dca_short", "grid_atr", "grid_multi_tf", "grid_funding"}
 
-# Stratégies avec fast engine (WFO accéléré) = toutes sauf celles nécessitant extra_data
-FAST_ENGINE_STRATEGIES: set[str] = set(STRATEGY_REGISTRY.keys()) - STRATEGIES_NEED_EXTRA_DATA
+# Stratégies SANS fast engine (pas d'implémentation numpy rapide)
+_NO_FAST_ENGINE: set[str] = {"funding", "liquidation"}
+
+# Stratégies avec fast engine (WFO accéléré) — découplé de STRATEGIES_NEED_EXTRA_DATA
+FAST_ENGINE_STRATEGIES: set[str] = set(STRATEGY_REGISTRY.keys()) - _NO_FAST_ENGINE
 
 
 def is_grid_strategy(name: str) -> bool:

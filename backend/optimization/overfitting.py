@@ -38,6 +38,7 @@ def _run_backtest_for_strategy(
         from backend.backtesting.multi_engine import run_multi_backtest_single
         return run_multi_backtest_single(
             strategy_name, params, candles_by_tf, bt_config, main_tf,
+            extra_data_by_timestamp=extra_data_by_timestamp,
         )
     return run_backtest_single(
         strategy_name, params, candles_by_tf, bt_config, main_tf,

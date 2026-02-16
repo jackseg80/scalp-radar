@@ -257,13 +257,13 @@ class TestFastEngineStrategies:
     """Tests pour la constante FAST_ENGINE_STRATEGIES."""
 
     def test_content(self):
-        """Contient les 9 stratégies attendues."""
+        """Contient les 10 stratégies attendues."""
         from backend.optimization import FAST_ENGINE_STRATEGIES
 
         expected = {
             "vwap_rsi", "momentum", "bollinger_mr", "donchian_breakout",
             "supertrend", "envelope_dca", "envelope_dca_short", "grid_atr",
-            "grid_multi_tf",
+            "grid_multi_tf", "grid_funding",
         }
         assert FAST_ENGINE_STRATEGIES == expected
 
@@ -275,14 +275,14 @@ class TestFastEngineStrategies:
         assert "liquidation" not in FAST_ENGINE_STRATEGIES
 
     def test_derived_from_registry(self):
-        """Dérivée automatiquement du registre."""
+        """Dérivée automatiquement du registre (REGISTRY - _NO_FAST_ENGINE)."""
         from backend.optimization import (
             FAST_ENGINE_STRATEGIES,
-            STRATEGIES_NEED_EXTRA_DATA,
             STRATEGY_REGISTRY,
+            _NO_FAST_ENGINE,
         )
 
-        assert FAST_ENGINE_STRATEGIES == set(STRATEGY_REGISTRY.keys()) - STRATEGIES_NEED_EXTRA_DATA
+        assert FAST_ENGINE_STRATEGIES == set(STRATEGY_REGISTRY.keys()) - _NO_FAST_ENGINE
 
 
 # ═══════════════════════════════════════════════════════════════════════════

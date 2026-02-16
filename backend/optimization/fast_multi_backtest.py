@@ -263,6 +263,185 @@ def _simulate_grid_common(
     return trade_pnls, trade_returns, capital
 
 
+# ─── Grid Funding ─────────────────────────────────────────────────────────
+
+
+def _build_entry_signals(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    num_levels: int,
+) -> np.ndarray:
+    """Retourne entry_signals[i, lvl] = True si le funding est assez négatif.
+
+    Shape: (n, num_levels) dtype bool. NaN funding = pas de signal.
+    """
+    n = cache.n_candles
+    signals = np.zeros((n, num_levels), dtype=bool)
+
+    funding = cache.funding_rates_1h
+    if funding is None:
+        return signals
+
+    threshold_start = params["funding_threshold_start"]
+    threshold_step = params["funding_threshold_step"]
+
+    for lvl in range(num_levels):
+        threshold = -(threshold_start + lvl * threshold_step)
+        signals[:, lvl] = funding <= threshold
+
+    # NaN funding = pas de signal
+    nan_mask = np.isnan(funding)
+    signals[nan_mask, :] = False
+
+    return signals
+
+
+def _calc_grid_pnl_with_funding(
+    positions: list[tuple[float, float, int]],
+    exit_price: float,
+    exit_idx: int,
+    funding_rates: np.ndarray | None,
+    candle_timestamps: np.ndarray | None,
+    taker_fee: float,
+    slippage_pct: float,
+) -> float:
+    """PnL avec funding payments accumulés (LONG-only).
+
+    Funding payment par position : notional × funding_rate à chaque frontière 8h.
+    Pour LONG avec funding négatif : on REÇOIT |funding_rate| × notional.
+    """
+    total_pnl = 0.0
+    for entry_price, quantity, entry_idx in positions:
+        notional = entry_price * quantity
+        # PnL prix classique (LONG)
+        price_pnl = (exit_price - entry_price) * quantity
+
+        # Fees (entry + exit)
+        entry_fee = notional * taker_fee
+        exit_fee = exit_price * quantity * taker_fee
+        slippage = notional * slippage_pct + exit_price * quantity * slippage_pct
+
+        # Funding payments accumulés entre entry et exit
+        funding_pnl = 0.0
+        if (
+            funding_rates is not None
+            and candle_timestamps is not None
+            and entry_idx < exit_idx
+        ):
+            for j in range(entry_idx, exit_idx):
+                ts = candle_timestamps[j]
+                # Frontière 8h : 00:00, 08:00, 16:00 UTC
+                hour = int((ts / 3600000) % 24)
+                if hour % 8 == 0:
+                    fr = funding_rates[j]
+                    if not np.isnan(fr):
+                        # LONG : -fr × notional (fr négatif → bonus positif)
+                        funding_pnl -= fr * notional
+
+        total_pnl += price_pnl + funding_pnl - entry_fee - exit_fee - slippage
+
+    return total_pnl
+
+
+def _simulate_grid_funding(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Boucle de simulation Grid Funding (LONG-only, signal funding rate)."""
+    n = cache.n_candles
+    num_levels = params["num_levels"]
+    sl_pct = params["sl_percent"] / 100
+    ma_period = params["ma_period"]
+    min_hold = params.get("min_hold_candles", 8)
+    tp_mode = params.get("tp_mode", "funding_or_sma")
+
+    sma_arr = cache.bb_sma[ma_period]
+    funding = cache.funding_rates_1h
+    candle_ts = cache.candle_timestamps
+    entry_signals = _build_entry_signals(cache, params, num_levels)
+
+    capital = bt_config.initial_capital
+    leverage = bt_config.leverage
+    taker_fee = bt_config.taker_fee
+    slippage_pct = bt_config.slippage_pct
+
+    # Positions : list of (entry_price, quantity, entry_candle_idx, level)
+    positions: list[tuple[float, float, int, int]] = []
+    filled_levels: set[int] = set()
+    trade_pnls: list[float] = []
+    trade_returns: list[float] = []
+
+    start_idx = ma_period + 1  # attendre SMA valide
+
+    for i in range(start_idx, n):
+        close = cache.closes[i]
+        if capital <= 0 or math.isnan(close):
+            continue
+
+        # === CHECK EXIT ===
+        if positions:
+            avg_entry = sum(p[0] * p[1] for p in positions) / sum(p[1] for p in positions)
+            min_candles_held = min(i - p[2] for p in positions)
+            fr = 0.0
+            if funding is not None and not np.isnan(funding[i]):
+                fr = funding[i]
+
+            should_exit = False
+
+            # SL (toujours actif)
+            sl_price = avg_entry * (1 - sl_pct)
+            if close <= sl_price:
+                should_exit = True
+
+            # TP (seulement après min_hold)
+            if not should_exit and min_candles_held >= min_hold:
+                if tp_mode in ("funding_positive", "funding_or_sma") and fr > 0:
+                    should_exit = True
+                if tp_mode in ("sma_cross", "funding_or_sma") and close >= sma_arr[i]:
+                    should_exit = True
+
+            if should_exit:
+                pnl = _calc_grid_pnl_with_funding(
+                    [(p[0], p[1], p[2]) for p in positions],
+                    close, i, funding, candle_ts,
+                    taker_fee, slippage_pct,
+                )
+                trade_pnls.append(pnl)
+                if capital > 0:
+                    trade_returns.append(pnl / capital)
+                capital += pnl
+                positions = []
+                filled_levels = set()
+                continue
+
+        # === CHECK ENTRY ===
+        if capital > 0:
+            for lvl in range(num_levels):
+                if lvl not in filled_levels and entry_signals[i, lvl]:
+                    margin_per_level = capital / num_levels
+                    notional = margin_per_level * leverage
+                    qty = notional / close
+                    fee = notional * taker_fee
+                    capital -= fee
+                    positions.append((close, qty, i, lvl))
+                    filled_levels.add(lvl)
+
+        # === FORCE CLOSE DERNIÈRE BOUGIE ===
+        if i == n - 1 and positions:
+            pnl = _calc_grid_pnl_with_funding(
+                [(p[0], p[1], p[2]) for p in positions],
+                close, i, funding, candle_ts,
+                taker_fee, slippage_pct,
+            )
+            trade_pnls.append(pnl)
+            if capital > 0:
+                trade_returns.append(pnl / capital)
+            capital += pnl
+
+    return trade_pnls, trade_returns, capital
+
+
 # ─── Entry point ───────────────────────────────────────────────────────────
 
 
@@ -290,6 +469,10 @@ def run_multi_backtest_from_cache(
         )
     elif strategy_name == "grid_multi_tf":
         trade_pnls, trade_returns, final_capital = _simulate_grid_multi_tf(
+            cache, params, bt_config,
+        )
+    elif strategy_name == "grid_funding":
+        trade_pnls, trade_returns, final_capital = _simulate_grid_funding(
             cache, params, bt_config,
         )
     else:

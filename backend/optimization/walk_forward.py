@@ -338,6 +338,7 @@ def _run_single_backtest_worker(params: dict[str, Any]) -> _ISResult:
         from backend.backtesting.multi_engine import run_multi_backtest_single
         result = run_multi_backtest_single(
             _worker_strategy, params, _worker_candles, _worker_bt_config, _worker_main_tf,
+            extra_data_by_timestamp=_worker_extra_data,
         )
     else:
         result = run_backtest_single(
@@ -372,6 +373,7 @@ def _run_single_backtest_sequential(
         result = run_multi_backtest_single(
             strategy_name, params, candles_by_tf, bt_config, main_tf,
             precomputed_indicators=precomputed_indicators,
+            extra_data_by_timestamp=extra_data_by_timestamp,
         )
     else:
         result = run_backtest_single(
@@ -403,6 +405,7 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "envelope_dca_short": ["ma_period"],
     "grid_atr": ["ma_period", "atr_period"],
     "grid_multi_tf": ["ma_period", "atr_period", "st_atr_period", "st_atr_multiplier"],
+    "grid_funding": ["ma_period"],
 }
 
 
@@ -519,6 +522,7 @@ class WalkForwardOptimizer:
                     symbol, symbol,
                 )
 
+        db_path = db.db_path
         await db.close()
 
         if not all_candles_by_tf.get(main_tf):
@@ -634,6 +638,7 @@ class WalkForwardOptimizer:
                     coarse_grid, is_candles_by_tf, strategy_name, symbol,
                     bt_config_dict, main_tf, n_workers, metric,
                     extra_data_map=is_extra_data_map,
+                    db_path=db_path, exchange=exchange,
                 )
 
                 # Top 20
@@ -650,6 +655,7 @@ class WalkForwardOptimizer:
                         fine_grid, is_candles_by_tf, strategy_name, symbol,
                         bt_config_dict, main_tf, n_workers, metric,
                         extra_data_map=is_extra_data_map,
+                        db_path=db_path, exchange=exchange,
                     )
                     all_is_results = coarse_results + fine_results
                 else:
@@ -708,6 +714,7 @@ class WalkForwardOptimizer:
                         unique_params, oos_candles_by_tf, strategy_name, symbol,
                         bt_config_dict, main_tf, n_workers, metric,
                         extra_data_map=oos_extra_data_map,
+                        db_path=db_path, exchange=exchange,
                     )
 
                     # Index les résultats IS et OOS par params_key
@@ -737,6 +744,7 @@ class WalkForwardOptimizer:
                     from backend.backtesting.multi_engine import run_multi_backtest_single
                     oos_result = run_multi_backtest_single(
                         strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf,
+                        extra_data_by_timestamp=oos_extra_data_map,
                     )
                 else:
                     oos_result = run_backtest_single(
@@ -963,6 +971,8 @@ class WalkForwardOptimizer:
         n_workers: int,
         metric: str,
         extra_data_map: dict[str, dict[str, Any]] | None = None,
+        db_path: str | None = None,
+        exchange: str | None = None,
     ) -> list[_ISResult]:
         """Lance les backtests avec chaîne de fallback :
 
@@ -976,6 +986,7 @@ class WalkForwardOptimizer:
             try:
                 results = self._run_fast(
                     grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
+                    db_path=db_path, symbol=symbol, exchange=exchange,
                 )
                 # Trier par métrique
                 metric_idx = {"sharpe_ratio": 1, "net_return_pct": 2, "profit_factor": 3}
@@ -1030,6 +1041,9 @@ class WalkForwardOptimizer:
         strategy_name: str,
         bt_config_dict: dict,
         main_tf: str,
+        db_path: str | None = None,
+        symbol: str | None = None,
+        exchange: str | None = None,
     ) -> list[_ISResult]:
         """Fast engine : pré-calcul indicateurs + boucle de trades minimale.
 
@@ -1054,7 +1068,10 @@ class WalkForwardOptimizer:
 
         # Construire le cache (une seule fois)
         t0 = time.monotonic()
-        cache = build_cache(candles_by_tf, param_grid_values, strategy_name, main_tf)
+        cache = build_cache(
+            candles_by_tf, param_grid_values, strategy_name, main_tf,
+            db_path=db_path, symbol=symbol, exchange=exchange,
+        )
         cache_time = time.monotonic() - t0
         logger.info(
             "  Fast cache: {} bougies, {:.1f}ms",

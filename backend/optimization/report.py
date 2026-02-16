@@ -306,6 +306,7 @@ async def validate_on_bitget(
             from backend.backtesting.multi_engine import run_multi_backtest_single
             result = run_multi_backtest_single(
                 strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,
+                extra_data_by_timestamp=extra_data_map,
             )
         else:
             result = run_backtest_single(

@@ -892,7 +892,30 @@ Système automatisé de trading crypto qui :
 
 **But** : Support live pour grid_multi_tf (Simulator, GridStrategyRunner, TimeFrame.H4, DataEngine). Note : le support portfolio backtest et simulator fonctionne déjà grâce au bugfix 21a-ter.
 
-### Sprint 22 — Live Trading Progressif
+### Sprint 22 — Grid Funding (DCA sur Funding Rate Négatif) ✅
+
+**But** : 12e stratégie — entre LONG quand le funding rate est très négatif (signal structurel indépendant du prix). L'edge : les shorts paient les longs tant que le funding est négatif, même si le prix ne bouge pas. LONG-only, pas de support live.
+
+**Implémentation** (12 fichiers, ~850 lignes) :
+
+- `GridFundingConfig` + `GridFundingStrategy` (hérite `BaseGridStrategy`)
+- Fast engine : `_build_entry_signals()`, `_calc_grid_pnl_with_funding()`, `_simulate_grid_funding()`
+- IndicatorCache : `_load_funding_rates_aligned()` (sqlite3 sync, searchsorted forward-fill, DB % → raw decimal /100)
+- Walk Forward : `db_path`/`symbol`/`exchange` forwarding pour charger les funding rates dans le cache
+- Grille WFO : 2592 combos (4×3×2×3×4×3×3), fenêtres IS=360j/OOS=90j/step=90j
+- Découplage `FAST_ENGINE_STRATEGIES` : `_NO_FAST_ENGINE = {"funding", "liquidation"}` (grid_funding dans FAST_ENGINE ET NEED_EXTRA_DATA)
+
+**Corrections clés** :
+
+- Unités funding : DB stocke en % (×100), divisé par 100 partout (cache loader + strategy class)
+- Anti-lookahead : `searchsorted(side='right') - 1` direct, pas de décalage +8h
+- `MultiPositionEngine` : `extra_data_by_timestamp` ajouté au `StrategyContext` (manquait, bloquait l'OOS evaluation)
+
+**Bugfix 22-bis** : Validation Bitget et stabilité retournaient 0 trades car `extra_data_by_timestamp` (funding rates) n'était pas passé à `run_multi_backtest_single` dans `report.py:validate_on_bitget()` et `overfitting.py:_run_backtest_for_strategy()`. Même pattern que bugfix 21a-bis. Corrigé (2 lignes).
+
+**Résultat** : 944 tests (42 nouveaux pour grid_funding), 0 régression.
+
+### Sprint 23 — Live Trading Progressif
 
 **But** : Passer du paper trading au live avec capital réel progressif.
 
@@ -903,7 +926,7 @@ Système automatisé de trading crypto qui :
 - 5000$ sur 15+ assets (objectif long terme)
 - Monitoring slippage paper vs live à chaque palier
 
-### Sprint 23 — Monitoring & Alertes V2
+### Sprint 24 — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
 
@@ -986,15 +1009,15 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (16 février 2026)
 
-- **902 tests**, 0 régression
+- **944 tests**, 0 régression
 - **Phases 1-5 terminées** — 13 sprints/hotfixes rien que pour la Phase 5 (16+17, 19-19e, 20a-20f, 21a-quater)
-- **Phase 6 en cours** — Sprint 21a terminé (Grid Multi-TF backtest + WFO), Hotfix 21a-quater (warm-up + résilience)
-- **11 stratégies** : 4 scalp 5m + 3 swing 1h + 4 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf)
+- **Phase 6 en cours** — Sprint 22 terminé (Grid Funding), Sprint 21a terminé (Grid Multi-TF)
+- **12 stratégies** : 4 scalp 5m + 3 swing 1h + 5 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding)
 - **21 assets** (THETA/USDT retiré — inexistant sur Bitget) : 14 Grade A + 7 Grade B pour grid_atr
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
 - **Portfolio backtest** : +14.5% return, -28.7% max DD, 73.7% WR, 0 kill switch sur 90j avec 10k$/21 assets
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
-- **Prochaine étape** : WFO grid_multi_tf sur 21 assets → Sprint 21b (support live) si Grade ≥ B
+- **Prochaine étape** : WFO grid_funding sur assets avec funding data → WFO grid_multi_tf → Sprint 21b/23 (live progressif)
 
 ---
 

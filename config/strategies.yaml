@@ -593,6 +593,22 @@ grid_multi_tf:
       sl_percent: 20.0
       st_atr_multiplier: 2.0
       st_atr_period: 14
+grid_funding:
+  enabled: false
+  live_eligible: false
+  timeframe: 1h
+  funding_threshold_start: 0.0005
+  funding_threshold_step: 0.0005
+  num_levels: 3
+  tp_mode: funding_or_sma
+  ma_period: 14
+  sl_percent: 15.0
+  min_hold_candles: 8
+  sides:
+  - long
+  leverage: 6
+  weight: 0.2
+  per_asset: {}
 custom_strategies:
   swing_baseline:
     enabled: false

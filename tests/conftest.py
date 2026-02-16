@@ -149,6 +149,8 @@ def make_indicator_cache():
         supertrend_direction: dict | None = None,
         atr_by_period: dict | None = None,
         supertrend_dir_4h: dict | None = None,
+        funding_rates_1h: np.ndarray | None = None,
+        candle_timestamps: np.ndarray | None = None,
     ) -> IndicatorCache:
         if closes is None:
             closes = np.full(n, 100.0)
@@ -192,6 +194,8 @@ def make_indicator_cache():
             supertrend_direction=supertrend_direction if supertrend_direction is not None else {},
             atr_by_period=atr_by_period if atr_by_period is not None else {},
             supertrend_dir_4h=supertrend_dir_4h if supertrend_dir_4h is not None else {},
+            funding_rates_1h=funding_rates_1h,
+            candle_timestamps=candle_timestamps,
         )
 
     return _make

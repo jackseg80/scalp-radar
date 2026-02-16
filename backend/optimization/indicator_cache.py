@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import sqlite3
+
 from backend.core.indicators import (
     adx,
     atr,
@@ -89,6 +91,52 @@ class IndicatorCache:
     # Grid Multi-TF : Supertrend 4h mappé sur indices 1h (anti-lookahead)
     supertrend_dir_4h: dict[tuple[int, float], np.ndarray]     # {(st_atr_period, st_mult): dir_1h}
 
+    # Grid Funding : funding rates alignés sur candles 1h (forward-fill, raw decimal)
+    funding_rates_1h: np.ndarray | None = None    # shape (n,), raw decimal (/100 depuis DB)
+    candle_timestamps: np.ndarray | None = None   # epoch ms, shape (n,)
+
+
+def _load_funding_rates_aligned(
+    symbol: str,
+    exchange: str,
+    candle_timestamps: np.ndarray,
+    db_path: str,
+) -> np.ndarray:
+    """Charge les funding rates et les aligne sur les candles 1h.
+
+    Anti-lookahead : searchsorted direct (le taux settlé à T est connu à T).
+    Forward-fill via l'index searchsorted (chaque candle utilise le dernier taux connu).
+    Les valeurs DB sont en % (×100) — on divise par 100 → raw decimal.
+
+    Returns:
+        np.ndarray shape (n,) — funding rate en raw decimal, NaN si indisponible.
+    """
+    n = len(candle_timestamps)
+    if n == 0:
+        return np.array([], dtype=float)
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT timestamp, funding_rate FROM funding_rates "
+        "WHERE symbol = ? AND exchange = ? ORDER BY timestamp",
+        (symbol, exchange),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return np.full(n, np.nan)
+
+    fr_timestamps = np.array([r[0] for r in rows], dtype=np.float64)
+    fr_values = np.array([r[1] for r in rows], dtype=np.float64) / 100  # % → raw decimal
+
+    # Forward-fill : pour chaque candle, trouver le dernier funding connu
+    indices = np.searchsorted(fr_timestamps, candle_timestamps, side="right") - 1
+    result = np.full(n, np.nan)
+    valid = indices >= 0
+    result[valid] = fr_values[indices[valid]]
+
+    return result
+
 
 def build_cache(
     candles_by_tf: dict[str, list[Candle]],
@@ -96,17 +144,21 @@ def build_cache(
     strategy_name: str,
     main_tf: str = "5m",
     filter_tf: str = "15m",
+    db_path: str | None = None,
+    symbol: str | None = None,
+    exchange: str | None = None,
 ) -> IndicatorCache:
     """Construit le cache d'indicateurs pour une fenêtre de données.
-
-    Réutilise les fonctions existantes de indicators.py.
 
     Args:
         candles_by_tf: Bougies par timeframe (au minimum main_tf).
         param_grid_values: Valeurs du grid {param_name: [values]}.
-        strategy_name: "vwap_rsi" ou "momentum".
+        strategy_name: Nom de la stratégie.
         main_tf: Timeframe principal (défaut "5m").
         filter_tf: Timeframe filtre (défaut "15m").
+        db_path: Chemin DB pour charger les funding rates (grid_funding).
+        symbol: Symbol pour la query funding (grid_funding).
+        exchange: Exchange pour la query funding (grid_funding).
     """
     main_candles = candles_by_tf[main_tf]
     n = len(main_candles)
@@ -246,6 +298,25 @@ def build_cache(
                 _, direction_arr = supertrend(highs, lows, closes, atr_by_period_dict[p], mult)
                 st_direction_dict[(p, mult)] = direction_arr
 
+    # --- Grid Funding : SMA + funding rates depuis DB ---
+    funding_1h: np.ndarray | None = None
+    candle_ts: np.ndarray | None = None
+    if strategy_name == "grid_funding":
+        if db_path is None or symbol is None or exchange is None:
+            raise ValueError("grid_funding requires db_path, symbol, and exchange")
+        ma_periods_fund: set[int] = set()
+        if "ma_period" in param_grid_values:
+            ma_periods_fund.update(param_grid_values["ma_period"])
+        if not ma_periods_fund:
+            ma_periods_fund.add(14)
+        for period in ma_periods_fund:
+            if period not in bb_sma_dict:
+                bb_sma_dict[period] = sma(closes, period)
+        candle_ts = np.array(
+            [c.timestamp.timestamp() * 1000 for c in main_candles], dtype=np.float64,
+        )
+        funding_1h = _load_funding_rates_aligned(symbol, exchange, candle_ts, db_path)
+
     # --- SuperTrend 4h (pour grid_multi_tf, resampleé depuis 1h) ---
     st_dir_4h_dict: dict[tuple[int, float], np.ndarray] = {}
     if strategy_name == "grid_multi_tf":
@@ -306,6 +377,8 @@ def build_cache(
         supertrend_direction=st_direction_dict,
         atr_by_period=atr_by_period_dict,
         supertrend_dir_4h=st_dir_4h_dict,
+        funding_rates_1h=funding_1h,
+        candle_timestamps=candle_ts,
     )
 
 
@@ -383,10 +456,17 @@ def _rolling_max(arr: np.ndarray, window: int) -> np.ndarray:
 
     rolling_max[i] = max(arr[i-window:i]). NaN avant window.
     Même logique que MomentumStrategy._compute_main.
+    Vectorisé via sliding_window_view.
     """
+    from numpy.lib.stride_tricks import sliding_window_view
+
     result = np.full_like(arr, np.nan, dtype=float)
-    for i in range(window, len(arr)):
-        result[i] = np.max(arr[i - window:i])
+    n = len(arr)
+    if n > window:
+        views = sliding_window_view(arr, window)  # shape (n - window + 1, window)
+        # views[j] = arr[j:j+window], on veut max(arr[i-window:i]) pour i=window..n-1
+        # soit views[0..n-window-1] → result[window..n-1]
+        result[window:] = np.max(views[: n - window], axis=1)
     return result
 
 
@@ -394,10 +474,15 @@ def _rolling_min(arr: np.ndarray, window: int) -> np.ndarray:
     """Rolling min sur fenêtre glissante (exclut l'élément courant).
 
     rolling_min[i] = min(arr[i-window:i]). NaN avant window.
+    Vectorisé via sliding_window_view.
     """
+    from numpy.lib.stride_tricks import sliding_window_view
+
     result = np.full_like(arr, np.nan, dtype=float)
-    for i in range(window, len(arr)):
-        result[i] = np.min(arr[i - window:i])
+    n = len(arr)
+    if n > window:
+        views = sliding_window_view(arr, window)
+        result[window:] = np.min(views[: n - window], axis=1)
     return result
 
 

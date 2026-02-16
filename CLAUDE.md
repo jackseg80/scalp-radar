@@ -62,7 +62,7 @@ scalp-radar/
 ├── config/                       # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/                     # models, config, database, indicators, position_manager, grid_position_manager, state_manager, data_engine
-│   ├── strategies/               # base, base_grid, factory + 11 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf)
+│   ├── strategies/               # base, base_grid, factory + 12 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding)
 │   ├── optimization/             # walk_forward, overfitting, report, indicator_cache, fast_backtest, fast_multi_backtest
 │   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder, portfolio_engine, portfolio_db
 │   ├── execution/                # executor, risk_manager, adaptive_selector
@@ -70,12 +70,12 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
-├── tests/                        # 825 tests (pytest, 46 fichiers)
+├── tests/                        # 944 tests (pytest, 47 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
 └── docs/plans/                   # Sprint plans 1-19 archivés
 ```
 
-## Trading Strategies (10 implémentées)
+## Trading Strategies (12 implémentées)
 
 ### 5m Scalp (4)
 
@@ -90,12 +90,13 @@ scalp-radar/
 2. **Donchian Breakout** — TP/SL ATR multiples
 3. **SuperTrend** — Trend-following ATR-based
 
-### 1h Grid/DCA (4)
+### 1h Grid/DCA (5)
 
 1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: false`, remplacé par grid_atr)
 2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
 3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: true`, paper trading actif sur 21 assets — 14 Grade A, 7 Grade B)
 4. **Grid Multi-TF** — Supertrend 4h filtre directionnel + Grid ATR 1h exécution, LONG quand ST=UP / SHORT quand ST=DOWN, force-close au flip (`enabled: false`, WFO en cours)
+5. **Grid Funding** — DCA sur funding rate négatif (LONG-only), multi-niveaux par seuil, TP = funding positif / SMA cross, funding payments accumulés 8h (`enabled: false`, WFO à lancer)
 
 ## Multi-Strategy Arena
 
@@ -147,14 +148,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 ## Config Files (5 YAML)
 
 - `assets.yaml` — 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
-- `strategies.yaml` — 11 stratégies + custom + per_asset overrides
+- `strategies.yaml` — 12 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
 - `param_grids.yaml` — Espaces de recherche WFO + per-strategy config (is_days, oos_days, step_days)
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a) : 902 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22) : 944 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -212,6 +213,8 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Bugfix 21a-bis : Validation Bitget + Monte Carlo 0 trades — compute_indicators() retourne 4h Supertrend, MultiPositionEngine passe tous les TFs (898 tests)
 - Bugfix 21a-ter : Portfolio backtest 0 trades — compute_live_indicators() dans BaseGridStrategy pour mode live/portfolio, GridStrategyRunner merge les indicateurs 4h depuis le buffer IncrementalIndicatorEngine (902 tests)
 - Hotfix 21a-quater : Serveur bloqué au warm-up + résilience assets manquants — skip compute_live_indicators() pendant warm-up, détection symbol invalide immédiate, sleep 1s sur erreur non-rate-limit, THETA/USDT retiré (21 assets restants) (902 tests)
+- Sprint 22 : Stratégie Grid Funding (12e stratégie, DCA sur funding rate négatif, LONG-only, fast engine avec funding payments 8h, 2592 combos WFO, 42 tests) (944 tests)
+- Bugfix 22-bis : Validation Bitget + stabilité 0 trades — extra_data_by_timestamp manquant dans run_multi_backtest_single pour report.py et overfitting.py (944 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

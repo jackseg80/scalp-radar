@@ -140,3 +140,18 @@ grid_multi_tf:
     atr_multiplier_step: [0.5, 1.0]
     num_levels: [2, 3]
     sl_percent: [15.0, 20.0, 25.0]
+
+# Grid Funding : 2592 combos (4×3×2×3×4×3×3), ~8 min/asset
+grid_funding:
+  wfo:
+    is_days: 360
+    oos_days: 90
+    step_days: 90
+  default:
+    funding_threshold_start: [0.0003, 0.0005, 0.0008, 0.001]
+    funding_threshold_step: [0.0003, 0.0005, 0.001]
+    num_levels: [2, 3]
+    ma_period: [7, 14, 21]
+    sl_percent: [10.0, 15.0, 20.0, 25.0]
+    tp_mode: ["funding_positive", "sma_cross", "funding_or_sma"]
+    min_hold_candles: [4, 8, 16]

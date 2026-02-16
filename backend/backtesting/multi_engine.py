@@ -31,9 +31,15 @@ class MultiPositionEngine:
     3. Clôture forcée en fin de données
     """
 
-    def __init__(self, config: BacktestConfig, strategy: BaseGridStrategy) -> None:
+    def __init__(
+        self,
+        config: BacktestConfig,
+        strategy: BaseGridStrategy,
+        extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self._config = config
         self._strategy = strategy
+        self._extra_data = extra_data_by_timestamp or {}
         self._gpm = GridPositionManager(PositionManagerConfig(
             leverage=config.leverage,
             maker_fee=config.maker_fee,
@@ -116,6 +122,9 @@ class MultiPositionEngine:
             # Grid state
             grid_state = self._gpm.compute_grid_state(positions, candle.close)
 
+            # Extra data (funding rates, OI) aligné au timestamp
+            extra = self._extra_data.get(ts_iso, {})
+
             # Context
             ctx = StrategyContext(
                 symbol=self._config.symbol,
@@ -125,6 +134,7 @@ class MultiPositionEngine:
                 current_position=None,
                 capital=capital,
                 config=None,  # type: ignore[arg-type]
+                extra_data=extra,
             )
 
             # a. Si positions ouvertes : check TP/SL global puis should_close_all
@@ -230,6 +240,7 @@ def run_multi_backtest_single(
     bt_config: BacktestConfig,
     main_tf: str = "1h",
     precomputed_indicators: dict[str, dict[str, dict[str, Any]]] | None = None,
+    extra_data_by_timestamp: dict[str, dict[str, Any]] | None = None,
 ) -> BacktestResult:
     """Lance un backtest multi-position unique avec paramètres custom.
 
@@ -239,7 +250,10 @@ def run_multi_backtest_single(
     from backend.optimization import create_strategy_with_params
 
     strategy = create_strategy_with_params(strategy_name, params)
-    engine = MultiPositionEngine(bt_config, strategy)  # type: ignore[arg-type]
+    engine = MultiPositionEngine(
+        bt_config, strategy,  # type: ignore[arg-type]
+        extra_data_by_timestamp=extra_data_by_timestamp,
+    )
     return engine.run(
         candles_by_tf, main_tf=main_tf,
         precomputed_indicators=precomputed_indicators,
