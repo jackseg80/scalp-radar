@@ -802,6 +802,34 @@ class Database:
             for row in rows
         ]
 
+    # ─── REGIME PROFILES (Sprint 27) ────────────────────────────────────────
+
+    async def get_regime_profiles(
+        self, strategy_name: str,
+    ) -> dict[str, dict]:
+        """Charge les regime_analysis WFO pour une stratégie.
+
+        Retourne {symbol: {regime: {avg_oos_sharpe: ..., ...}}} pour les
+        résultats is_latest=1 qui ont un regime_analysis non NULL.
+        """
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT asset, regime_analysis FROM optimization_results "
+            "WHERE strategy_name = ? AND is_latest = 1 "
+            "AND regime_analysis IS NOT NULL",
+            (strategy_name,),
+        )
+        rows = await cursor.fetchall()
+        profiles: dict[str, dict] = {}
+        for row in rows:
+            try:
+                ra = json.loads(row["regime_analysis"])
+                if isinstance(ra, dict):
+                    profiles[row["asset"]] = ra
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return profiles
+
     async def get_equity_curve_from_trades(self, since: str | None = None) -> list[dict]:
         """Calcule l'equity curve depuis les trades en DB (robuste aux restarts).
 

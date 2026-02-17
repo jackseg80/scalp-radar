@@ -431,6 +431,7 @@ class RiskConfig(BaseModel):
     adaptive_selector: AdaptiveSelectorConfig = Field(
         default_factory=AdaptiveSelectorConfig,
     )
+    regime_filter_enabled: bool = Field(default=True)  # Sprint 27
 
     @model_validator(mode="after")
     def validate_leverage(self) -> RiskConfig:

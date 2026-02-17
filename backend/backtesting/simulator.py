@@ -45,6 +45,15 @@ from backend.strategies.factory import get_enabled_strategies
 if TYPE_CHECKING:
     from backend.core.database import Database
 
+# Sprint 27 : Mapping MarketRegime live → clé WFO regime_analysis
+REGIME_LIVE_TO_WFO: dict[MarketRegime, str] = {
+    MarketRegime.TRENDING_UP: "bull",
+    MarketRegime.TRENDING_DOWN: "bear",
+    MarketRegime.RANGING: "range",
+    MarketRegime.HIGH_VOLATILITY: "crash",
+    # LOW_VOLATILITY intentionnellement absent → toujours autorisé
+}
+
 
 def _safe_round(val: Any, decimals: int = 1) -> float | None:
     """Arrondi safe — retourne None si NaN ou None."""
@@ -524,6 +533,7 @@ class GridStrategyRunner:
         grid_position_manager: GridPositionManager,
         data_engine: DataEngine,
         db_path: str | None = None,
+        regime_profile: dict[str, dict] | None = None,
     ) -> None:
         self._strategy = strategy
         self._config = config
@@ -531,6 +541,11 @@ class GridStrategyRunner:
         self._gpm = grid_position_manager
         self._data_engine = data_engine
         self._db_path = db_path
+
+        # Sprint 27 : profil WFO par régime, indexé par symbol
+        # Format: {"BTC/USDT": {"bull": {"avg_oos_sharpe": 6.88, ...}, ...}}
+        self._regime_profile = regime_profile
+        self._regime_filter_blocks: int = 0
 
         self._initial_capital = config.risk.initial_capital
         self._capital = self._initial_capital
@@ -591,6 +606,42 @@ class GridStrategyRunner:
             if isinstance(overrides, dict) and "sl_percent" in overrides:
                 return float(overrides["sl_percent"])
         return float(default_sl) if isinstance(default_sl, (int, float)) else 25.0
+
+    def _should_allow_new_grid(self, symbol: str) -> bool:
+        """Sprint 27 : Filtre Darwinien — bloque si régime WFO défavorable.
+
+        Logique :
+        - Filtre désactivé dans config → True
+        - Pas de profil → True (backward compat)
+        - Régime live non mappé (LOW_VOLATILITY) → True
+        - Régime WFO non couvert → True (bénéfice du doute)
+        - avg_oos_sharpe < 0 → False (bloqué)
+        - Sinon → True
+        """
+        if not getattr(self._config.risk, "regime_filter_enabled", True):
+            return True
+        if not self._regime_profile:
+            return True
+        symbol_profile = self._regime_profile.get(symbol)
+        if not symbol_profile:
+            return True
+        wfo_key = REGIME_LIVE_TO_WFO.get(self._current_regime)
+        if wfo_key is None:
+            return True
+        regime_data = symbol_profile.get(wfo_key)
+        if regime_data is None:
+            return True
+        avg_sharpe = regime_data.get("avg_oos_sharpe", 0.0)
+        if not isinstance(avg_sharpe, (int, float)):
+            return True
+        if avg_sharpe < 0:
+            self._regime_filter_blocks += 1
+            logger.info(
+                "[{}] REGIME FILTER : {} bloqué (régime={}, sharpe={:.2f})",
+                self.name, symbol, wfo_key, avg_sharpe,
+            )
+            return False
+        return True
 
     @property
     def name(self) -> str:
@@ -874,6 +925,11 @@ class GridStrategyRunner:
                         },
                     })
                 return
+
+        # Sprint 27 : Filtre Darwinien — bloquer si régime défavorable
+        # Uniquement quand aucune position ouverte (ne touche pas les grilles existantes)
+        if not positions and not self._should_allow_new_grid(symbol):
+            return
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
         if len(positions) < self._strategy.max_positions:
@@ -1204,6 +1260,7 @@ class GridStrategyRunner:
             "equity": round(equity, 2),
             "initial_capital": self._initial_capital,
             "assets_with_positions": assets_with_positions,
+            "regime_filter_blocks": self._regime_filter_blocks,
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:
@@ -1638,6 +1695,28 @@ class Simulator:
                     for symbol in symbols:
                         await runner._warmup_from_db(self._db, symbol)
             logger.info("Simulator: warm-up terminé")
+
+        # Sprint 27 : Charger les profils régime WFO pour les grid runners
+        if self._db is not None:
+            for runner in self._runners:
+                if isinstance(runner, GridStrategyRunner):
+                    try:
+                        profiles = await self._db.get_regime_profiles(
+                            runner.name,
+                        )
+                        if profiles:
+                            runner._regime_profile = profiles
+                            logger.info(
+                                "Simulator: regime profiles chargés pour "
+                                "'{}' ({} assets)",
+                                runner.name, len(profiles),
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Simulator: erreur chargement regime profiles "
+                            "'{}': {}",
+                            runner.name, e,
+                        )
 
         # Restaurer le kill switch global
         if saved_state is not None:

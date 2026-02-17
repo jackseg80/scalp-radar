@@ -191,6 +191,17 @@ class PortfolioBacktester:
         db = Database(db_path)
         await db.init()
         candles_by_symbol = await self._load_candles(db, start, end)
+
+        # Sprint 27 : Charger les profils régime WFO avant fermeture DB
+        regime_profiles_by_strategy: dict[str, dict[str, dict]] = {}
+        for strat_name, _ in self._multi_strategies:
+            try:
+                profiles = await db.get_regime_profiles(strat_name)
+                if profiles:
+                    regime_profiles_by_strategy[strat_name] = profiles
+            except Exception:
+                pass
+
         await db.close()
 
         if not candles_by_symbol:
@@ -221,7 +232,7 @@ class PortfolioBacktester:
 
         # 2. Créer les runners
         runners, indicator_engine = self._create_runners(
-            filtered_multi, per_runner_capital
+            filtered_multi, per_runner_capital, regime_profiles_by_strategy
         )
 
         # 3. Warm-up
@@ -287,6 +298,7 @@ class PortfolioBacktester:
         self,
         multi_strategies: list[tuple[str, list[str]]],
         per_runner_capital: float,
+        regime_profiles: dict[str, dict[str, dict]] | None = None,
     ) -> tuple[dict[str, GridStrategyRunner], IncrementalIndicatorEngine]:
         """Crée 1 runner par (stratégie, asset) avec params WFO per_asset.
 
@@ -325,6 +337,12 @@ class PortfolioBacktester:
             )
             gpm = GridPositionManager(gpm_config)
 
+            # Sprint 27 : profil régime pour cette stratégie
+            strat_name = runner_key.split(":", 1)[0] if ":" in runner_key else runner_key
+            strat_profiles = (
+                regime_profiles.get(strat_name) if regime_profiles else None
+            )
+
             runner = GridStrategyRunner(
                 strategy=strategy,
                 config=self._config,
@@ -332,6 +350,7 @@ class PortfolioBacktester:
                 grid_position_manager=gpm,
                 data_engine=None,  # type: ignore[arg-type]
                 db_path=None,
+                regime_profile=strat_profiles,
             )
 
             runner._nb_assets = 1
