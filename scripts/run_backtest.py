@@ -118,9 +118,31 @@ def run_backtest(args: argparse.Namespace) -> None:
             main_count, strategy.min_candles.get(main_tf, 0),
         )
 
+    # Charger extra_data (funding rates) pour les stratégies grid
+    extra_data_map = None
+    if strategy_name in GRID_STRATEGIES:
+        from backend.backtesting.extra_data_builder import build_extra_data_map
+
+        db2 = Database()
+        funding_rates, oi_records = asyncio.run(
+            _load_extra_data(db2, args.symbol)
+        )
+        main_candles = candles_by_tf.get(main_tf, [])
+        if funding_rates or oi_records:
+            extra_data_map = build_extra_data_map(
+                main_candles, funding_rates, oi_records,
+            )
+            logger.info(
+                "Extra data chargées : {} funding rates, {} OI records",
+                len(funding_rates), len(oi_records),
+            )
+
     # Lancer le backtest (moteur adapté au type de stratégie)
     if strategy_name in GRID_STRATEGIES:
-        engine = MultiPositionEngine(bt_config, strategy)  # type: ignore[arg-type]
+        engine = MultiPositionEngine(
+            bt_config, strategy,  # type: ignore[arg-type]
+            extra_data_by_timestamp=extra_data_map,
+        )
     else:
         engine = BacktestEngine(bt_config, strategy)
     result = engine.run(candles_by_tf, main_tf=main_tf)
@@ -159,6 +181,20 @@ async def _load_data(
     await db.init()
     try:
         return await load_candles(db, symbol, timeframes, start, end)
+    finally:
+        await db.close()
+
+
+async def _load_extra_data(
+    db: Database,
+    symbol: str,
+) -> tuple[list[dict], list[dict]]:
+    """Charge funding rates et OI depuis la DB."""
+    await db.init()
+    try:
+        funding_rates = await db.get_funding_rates(symbol)
+        oi_records = await db.get_open_interest(symbol, timeframe="5m")
+        return funding_rates, oi_records
     finally:
         await db.close()
 

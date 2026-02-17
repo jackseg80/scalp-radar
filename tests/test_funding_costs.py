@@ -647,3 +647,70 @@ class TestEdgeCases:
         )
 
         assert cap_nan == pytest.approx(cap_no, rel=1e-10)
+
+
+# ─── Section 7 : MultiPositionEngine reçoit extra_data (1 test) ─────
+
+
+class TestMultiEngineExtraData:
+    """Vérifie que MultiPositionEngine utilise extra_data pour calculer le funding."""
+
+    def test_multi_engine_funding_with_extra_data(self):
+        """MultiPositionEngine avec extra_data produit funding_paid_total != 0."""
+        from backend.backtesting.extra_data_builder import build_extra_data_map
+        from backend.core.config import EnvelopeDCAConfig
+        from backend.strategies.envelope_dca import EnvelopeDCAStrategy
+
+        # 100 candles 1h avec prix sinusoïdal (amplitude large) → positions ouvertes/fermées
+        base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        n = 100
+        candles = []
+        for i in range(n):
+            price = 100 + 20 * np.sin(2 * np.pi * i / 30)
+            candles.append(Candle(
+                symbol="BTC/USDT", exchange="binance", timeframe="1h",
+                timestamp=base + timedelta(hours=i),
+                open=price, high=price + 2, low=price - 2,
+                close=price, volume=1000.0,
+            ))
+
+        # Funding rates toutes les 8h, taux positif → LONG paie
+        funding_rates = []
+        for i in range(0, n, 8):
+            ts = base + timedelta(hours=i)
+            funding_rates.append({
+                "timestamp": int(ts.timestamp() * 1000),
+                "funding_rate": 0.05,  # 0.05% en DB → /100 par builder
+            })
+
+        extra_map = build_extra_data_map(candles, funding_rates=funding_rates)
+
+        config = EnvelopeDCAConfig(
+            ma_period=5, num_levels=3, envelope_start=0.03,
+            envelope_step=0.02, sl_percent=25.0, sides=["long"],
+            leverage=6,
+        )
+        strategy = EnvelopeDCAStrategy(config)
+
+        bt_config = BacktestConfig(
+            symbol="BTC/USDT",
+            start_date=base,
+            end_date=base + timedelta(hours=n),
+            initial_capital=10_000.0,
+            leverage=6,
+        )
+
+        # Avec extra_data → funding non-zero
+        engine_with = MultiPositionEngine(
+            bt_config, strategy, extra_data_by_timestamp=extra_map,
+        )
+        result_with = engine_with.run({"1h": candles}, main_tf="1h")
+
+        # Sans extra_data → funding = 0
+        engine_without = MultiPositionEngine(bt_config, strategy)
+        result_without = engine_without.run({"1h": candles}, main_tf="1h")
+
+        # Vérifications
+        assert result_without.funding_paid_total == 0.0
+        assert result_with.funding_paid_total != 0.0
+        assert result_with.funding_paid_total < 0  # LONG paie sur taux positif
