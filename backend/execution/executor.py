@@ -202,17 +202,7 @@ class Executor:
         """Dernier solde connu sur l'exchange (USDT total)."""
         return self._exchange_balance
 
-    @property
-    def _sandbox_params(self) -> dict[str, str]:
-        """Params productType + marginCoin pour le demo trading Bitget."""
-        if self._config.secrets.bitget_sandbox:
-            return {"productType": "SUSDT-FUTURES", "marginCoin": "SUSDT"}
-        return {}
-
-    @property
-    def _margin_coin(self) -> str:
-        """Devise de marge : SUSDT en sandbox, USDT en mainnet."""
-        return "SUSDT" if self._config.secrets.bitget_sandbox else "USDT"
+    # Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
 
     # ─── Lifecycle ─────────────────────────────────────────────────────
 
@@ -220,14 +210,13 @@ class Executor:
         """Initialise l'exchange ccxt Pro, réconcilie, lance la surveillance."""
         import ccxt.pro as ccxtpro
 
-        sandbox = self._config.secrets.bitget_sandbox
         self._exchange = ccxtpro.bitget({
             "apiKey": self._config.secrets.bitget_api_key,
             "secret": self._config.secrets.bitget_secret,
             "password": self._config.secrets.bitget_passphrase,
             "enableRateLimit": True,
             "options": {"defaultType": "swap"},
-            "sandbox": sandbox,
+            "sandbox": False,  # Sandbox Bitget cassé (ccxt #25523) — mainnet only
         })
 
         try:
@@ -237,9 +226,9 @@ class Executor:
 
             # 2. Fetch balance pour le capital initial
             balance = await self._exchange.fetch_balance({
-                "type": "swap", **self._sandbox_params,
+                "type": "swap",
             })
-            coin = self._margin_coin
+            coin = "USDT"
             free = float(balance.get("free", {}).get(coin, 0))
             total = float(balance.get("total", {}).get(coin, 0))
             self._risk_manager.set_initial_capital(total)
@@ -273,10 +262,9 @@ class Executor:
             self._watch_task = asyncio.create_task(self._watch_orders_loop())
             self._poll_task = asyncio.create_task(self._poll_positions_loop())
 
-            mode = "SANDBOX" if sandbox else "MAINNET"
             logger.info(
-                "Executor: démarré en mode {} ({} symboles actifs)",
-                mode, len(active_symbols),
+                "Executor: démarré en mode MAINNET ({} symboles actifs)",
+                len(active_symbols),
             )
 
         except Exception as e:
@@ -328,7 +316,7 @@ class Executor:
         self._exchange.options["hedged"] = False
         try:
             await self._exchange.set_position_mode(
-                False, futures_symbol, params=self._sandbox_params,
+                False, futures_symbol,
             )
             logger.info("Executor: position mode set à 'one-way' pour {}", futures_symbol)
         except Exception as e:
@@ -337,7 +325,7 @@ class Executor:
 
         try:
             await self._exchange.set_leverage(
-                leverage, futures_symbol, params=self._sandbox_params,
+                leverage, futures_symbol,
             )
             logger.info("Executor: leverage set à {}x pour {}", leverage, futures_symbol)
         except Exception as e:
@@ -345,7 +333,7 @@ class Executor:
 
         try:
             await self._exchange.set_margin_mode(
-                margin_mode, futures_symbol, params=self._sandbox_params,
+                margin_mode, futures_symbol,
             )
             logger.info("Executor: margin mode set à '{}' pour {}", margin_mode, futures_symbol)
         except Exception as e:
@@ -400,9 +388,9 @@ class Executor:
 
         # Pre-trade check
         balance = await self._exchange.fetch_balance({
-            "type": "swap", **self._sandbox_params,
+            "type": "swap",
         })
-        coin = self._margin_coin
+        coin = "USDT"
         free = float(balance.get("free", {}).get(coin, 0))
         total = float(balance.get("total", {}).get(coin, 0))
 
@@ -424,7 +412,6 @@ class Executor:
         try:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
-                params=self._sandbox_params,
             )
         except Exception as e:
             logger.error("Executor: échec ordre d'entrée: {}", e)
@@ -464,7 +451,7 @@ class Executor:
             try:
                 await self._exchange.create_order(
                     futures_sym, "market", close_side, filled_qty,
-                    params={"reduceOnly": True, **self._sandbox_params},
+                    params={"reduceOnly": True},
                 )
             except Exception as e:
                 logger.critical("Executor: ÉCHEC close market urgence: {}", e)
@@ -525,7 +512,6 @@ class Executor:
                         "triggerPrice": sl_price,
                         "triggerType": "mark_price",
                         "reduceOnly": True,
-                        **self._sandbox_params,
                     },
                 )
                 sl_id = sl_order.get("id", "")
@@ -559,7 +545,6 @@ class Executor:
                     "triggerPrice": tp_price,
                     "triggerType": "mark_price",
                     "reduceOnly": True,
-                    **self._sandbox_params,
                 },
             )
             tp_id = tp_order.get("id", "")
@@ -599,7 +584,7 @@ class Executor:
             # Setup leverage au 1er trade grid (pas au start)
             try:
                 await self._exchange.set_leverage(
-                    grid_leverage, futures_sym, params=self._sandbox_params,
+                    grid_leverage, futures_sym,
                 )
                 logger.info(
                     "Executor: leverage grid set a {}x pour {}",
@@ -609,9 +594,9 @@ class Executor:
                 logger.warning("Executor: set leverage grid: {}", e)
 
             balance = await self._exchange.fetch_balance(
-                {"type": "swap", **self._sandbox_params},
+                {"type": "swap"},
             )
-            coin = self._margin_coin
+            coin = "USDT"
             free = float(balance.get("free", {}).get(coin, 0))
             total = float(balance.get("total", {}).get(coin, 0))
 
@@ -639,7 +624,6 @@ class Executor:
         try:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
-                params=self._sandbox_params,
             )
         except Exception as e:
             logger.error("Executor: échec grid entry: {}", e)
@@ -713,7 +697,7 @@ class Executor:
         if state.sl_order_id:
             try:
                 await self._exchange.cancel_order(
-                    state.sl_order_id, futures_sym, params=self._sandbox_params,
+                    state.sl_order_id, futures_sym,
                 )
             except Exception as e:
                 logger.warning("Executor: échec cancel ancien SL grid: {}", e)
@@ -752,7 +736,7 @@ class Executor:
         try:
             await self._exchange.create_order(
                 futures_sym, "market", close_side, state.total_quantity,
-                params={"reduceOnly": True, **self._sandbox_params},
+                params={"reduceOnly": True},
             )
         except Exception as e:
             logger.critical("Executor: ÉCHEC close urgence grid: {}", e)
@@ -780,7 +764,7 @@ class Executor:
         if event.exit_reason != "sl_global" and state.sl_order_id:
             try:
                 await self._exchange.cancel_order(
-                    state.sl_order_id, futures_sym, params=self._sandbox_params,
+                    state.sl_order_id, futures_sym,
                 )
             except Exception as e:
                 logger.debug("Executor: annulation SL grid échouée (probablement déjà exécuté): {}", e)
@@ -790,7 +774,7 @@ class Executor:
             try:
                 close_order = await self._exchange.create_order(
                     futures_sym, "market", close_side, state.total_quantity,
-                    params={"reduceOnly": True, **self._sandbox_params},
+                    params={"reduceOnly": True},
                 )
                 exit_price = float(
                     close_order.get("average") or event.exit_price or 0,
@@ -888,7 +872,7 @@ class Executor:
         try:
             close_order = await self._exchange.create_order(
                 futures_sym, "market", close_side, pos.quantity,
-                params={"reduceOnly": True, **self._sandbox_params},
+                params={"reduceOnly": True},
             )
             exit_price = float(close_order.get("average") or event.exit_price or 0)
         except Exception as e:
@@ -941,7 +925,6 @@ class Executor:
                 try:
                     await self._exchange.cancel_order(
                         order_id, pos.symbol,
-                        params=self._sandbox_params,
                     )
                     logger.debug("Executor: {} annulé ({})", label, order_id)
                 except Exception as e:
@@ -958,9 +941,7 @@ class Executor:
                     await asyncio.sleep(1)
                     continue
 
-                orders = await self._exchange.watch_orders(
-                    params=self._sandbox_params,
-                )
+                orders = await self._exchange.watch_orders()
                 for order in orders:
                     await self._process_watched_order(order)
 
@@ -1205,7 +1186,6 @@ class Executor:
                 try:
                     sl_order = await self._exchange.fetch_order(
                         state.sl_order_id, futures_sym,
-                        params=self._sandbox_params,
                     )
                     if sl_order.get("status") in ("closed", "filled"):
                         exit_price = float(
@@ -1225,7 +1205,7 @@ class Executor:
             # Rétablir le leverage
             try:
                 await self._exchange.set_leverage(
-                    state.leverage, futures_sym, params=self._sandbox_params,
+                    state.leverage, futures_sym,
                 )
             except Exception:
                 pass
@@ -1270,7 +1250,7 @@ class Executor:
         """
         try:
             open_orders = await self._exchange.fetch_open_orders(
-                params={"type": "swap", **self._sandbox_params},
+                params={"type": "swap"},
             )
         except Exception as e:
             logger.warning("Executor: impossible de fetch open orders: {}", e)
@@ -1310,7 +1290,7 @@ class Executor:
             symbol = order.get("symbol", "unknown")
             try:
                 await self._exchange.cancel_order(
-                    order_id, symbol, params=self._sandbox_params,
+                    order_id, symbol,
                 )
                 cancelled.append(f"{order_id} ({symbol})")
                 logger.info("Executor: ordre orphelin annulé: {} ({})", order_id, symbol)
@@ -1330,7 +1310,6 @@ class Executor:
         try:
             trades = await self._exchange.fetch_my_trades(
                 symbol, limit=5,
-                params=self._sandbox_params,
             )
             if trades:
                 # Dernier trade = le plus récent
@@ -1354,7 +1333,6 @@ class Executor:
                 try:
                     order = await self._exchange.fetch_order(
                         order_id, symbol,
-                        params=self._sandbox_params,
                     )
                     if order.get("status") in ("closed", "filled"):
                         return reason
@@ -1366,12 +1344,7 @@ class Executor:
     # ─── Helpers ───────────────────────────────────────────────────────
 
     async def _fetch_positions_safe(self, symbol: str | None = None) -> list[dict]:
-        """Fetch positions, gère le sandbox (pas de symbole pour éviter erreur marginCoin)."""
-        if self._config.secrets.bitget_sandbox:
-            positions = await self._exchange.fetch_positions(params=self._sandbox_params)
-            if symbol:
-                positions = [p for p in positions if p.get("symbol") == symbol]
-            return positions
+        """Fetch positions depuis Bitget (mainnet only)."""
         if symbol:
             return await self._exchange.fetch_positions([symbol])
         return await self._exchange.fetch_positions()
@@ -1468,7 +1441,6 @@ class Executor:
         result: dict[str, Any] = {
             "enabled": self.is_enabled,
             "connected": self.is_connected,
-            "sandbox": self._config.secrets.bitget_sandbox,
             "position": pos_info,
             "positions": positions_list,
             "risk_manager": self._risk_manager.get_status(),

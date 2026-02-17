@@ -29,7 +29,6 @@ def _make_config() -> MagicMock:
     config.secrets.bitget_api_key = "test_key"
     config.secrets.bitget_secret = "test_secret"
     config.secrets.bitget_passphrase = "test_pass"
-    config.secrets.bitget_sandbox = False
     config.risk.position.max_concurrent_positions = 3
     config.risk.position.default_leverage = 15
     config.risk.margin.min_free_margin_percent = 20
@@ -197,7 +196,7 @@ class TestGridOpen:
 
         # Leverage setup
         executor._exchange.set_leverage.assert_called_with(
-            6, "BTC/USDT:USDT", params={},
+            6, "BTC/USDT:USDT",
         )
         # Position enregistrée
         assert "BTC/USDT:USDT" in executor._grid_states
@@ -252,7 +251,7 @@ class TestGridOpen:
         assert len(state.positions) == 2
         # Ancien SL annulé
         executor._exchange.cancel_order.assert_called_with(
-            "old_sl", "BTC/USDT:USDT", params={},
+            "old_sl", "BTC/USDT:USDT",
         )
         # Nouveau SL placé
         assert state.sl_order_id == "new_sl"

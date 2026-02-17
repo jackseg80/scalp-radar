@@ -195,7 +195,7 @@ curl http://localhost:8000/health | python3 -m json.tool
 
 ```bash
 LIVE_TRADING=true       # Active l'executor (défaut: false = simulation only)
-BITGET_SANDBOX=false    # Mainnet (true = demo trading, non fonctionnel actuellement)
+# Note: Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
 ```
 
 ## Optimisation WFO

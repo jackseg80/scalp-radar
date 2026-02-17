@@ -1,6 +1,5 @@
 bitget:
   name: "Bitget"
-  sandbox: false
   websocket:
     url: "wss://ws.bitget.com/v2/ws/public"
     ping_interval: 25

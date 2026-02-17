@@ -27,7 +27,6 @@ def _make_config() -> MagicMock:
     config.secrets.bitget_api_key = "test_key"
     config.secrets.bitget_secret = "test_secret"
     config.secrets.bitget_passphrase = "test_pass"
-    config.secrets.bitget_sandbox = True
     config.risk.position.max_concurrent_positions = 3
     config.risk.position.default_leverage = 15
     config.risk.margin.min_free_margin_percent = 20
@@ -61,8 +60,8 @@ def _make_mock_exchange() -> AsyncMock:
         },
     })
     exchange.fetch_balance = AsyncMock(return_value={
-        "free": {"USDT": 5_000.0, "SUSDT": 5_000.0},
-        "total": {"USDT": 10_000.0, "SUSDT": 10_000.0},
+        "free": {"USDT": 5_000.0},
+        "total": {"USDT": 10_000.0},
     })
     exchange.fetch_positions = AsyncMock(return_value=[])
     exchange.set_leverage = AsyncMock()
@@ -575,11 +574,6 @@ class TestReconciliation:
                     {"contracts": 0.001, "side": "long", "entryPrice": 100_000.0,
                      "symbol": "BTC/USDT:USDT"},
                 ]
-            if params:  # sandbox
-                return [
-                    {"contracts": 0.001, "side": "long", "entryPrice": 100_000.0,
-                     "symbol": "BTC/USDT:USDT"},
-                ]
             return []
 
         executor._exchange.fetch_positions = AsyncMock(side_effect=_fake_fetch_positions)
@@ -717,7 +711,6 @@ class TestOrphanOrders:
 
         executor._exchange.cancel_order.assert_called_once_with(
             "old_tp_from_crash", "BTC/USDT:USDT",
-            params=executor._sandbox_params,
         )
         last_call = notifier.notify_reconciliation.call_args_list[-1][0][0]
         assert "orphelin" in last_call.lower()
@@ -747,7 +740,6 @@ class TestLeverageSetup:
         await executor._setup_leverage_and_margin("BTC/USDT:USDT")
         executor._exchange.set_leverage.assert_called_once_with(
             15, "BTC/USDT:USDT",
-            params={"productType": "SUSDT-FUTURES", "marginCoin": "SUSDT"},
         )
 
     @pytest.mark.asyncio
@@ -781,7 +773,6 @@ class TestLifecycle:
         status = executor.get_status()
         assert status["enabled"] is True
         assert status["connected"] is True
-        assert status["sandbox"] is True
         assert status["position"] is None
         assert status["positions"] == []
 
@@ -1006,7 +997,6 @@ class TestMultiPosition:
         # Seul l'orphelin SOL annulé
         executor._exchange.cancel_order.assert_called_once_with(
             "old_orphan", "SOL/USDT:USDT",
-            params=executor._sandbox_params,
         )
 
     def test_persistence_multi_position_roundtrip(self):

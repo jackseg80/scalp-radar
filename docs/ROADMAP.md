@@ -1254,7 +1254,91 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 1078 tests (+29 nouveaux), 0 régression. Funding costs appliqués à TOUTES les stratégies grid dans les deux moteurs (event-driven + fast).
 
-### Sprint 27 — Monitoring & Alertes V2
+### Sprint 27 — Filtre Darwinien par Régime ✅
+
+**But** : Bloquer automatiquement les nouvelles grilles DCA dans un régime de marché si les résultats WFO sont négatifs dans ce régime.
+
+**Problème** : grid_atr performe bien en backtest général mais échoue en bear market soutenu (7/21 assets Sharpe négatif sur 90j récents). Besoin d'un filtre intelligent basé sur les profils WFO par régime.
+
+**Changements** :
+
+1. **Database `get_regime_profiles()`** — Récupère `avg_oos_sharpe` par régime depuis `regime_metrics` WFO
+2. **GridStrategyRunner `_should_block_entry_by_regime()`** — Check si Sharpe < 0 dans le régime actuel
+3. **Mapping `REGIME_LIVE_TO_WFO`** — Convertit Bull/Bear/Range/Crash live → Bull/Bear/Range WFO
+4. **Compteur `_regime_filter_blocks`** — Sauvegardé dans state + exposé dans `get_status()`
+5. **Config `risk.yaml`** — `regime_filter_enabled: true` (activé par défaut)
+
+**Tests** : 12 nouveaux tests → 1090 passants
+
+- Test activation/désactivation via config
+- Test blocage Bear market (avg_oos_sharpe = -0.2)
+- Test autorisation Bull market (avg_oos_sharpe = 0.8)
+- Test absence profil WFO (pas de blocage, fallback sécurisé)
+- Test compteur `_regime_filter_blocks` persisté
+- Test mapping régimes live→WFO (Crash→Bear)
+
+**Résultat** : Protection automatique contre les régimes défavorables. grid_atr continue de tourner en Bull/Range, s'arrête en Bear prolongé.
+
+### Hotfix 28a — Préparation Déploiement Live ✅
+
+**But** : Corriger 3 bugs critiques avant le déploiement live.
+
+**Bugs corrigés** :
+
+1. **Selector cold start crash** — `AdaptiveSelector.start()` chargeait les trades DB → crash si table vide. Fix : `SELECT COUNT(*) FROM trades` guard
+2. **Bypass selector permanent** — `selector_bypass_at_boot` désactivé au démarrage mais jamais ré-activé → selector paralysé. Fix : auto-disable bypass quand TOUTES les stratégies atteignent `min_trades`
+3. **Warning capital mismatch fantôme** — Comparaison `risk.yaml initial_capital` vs balance Bitget au boot mais pas de réconciliation réelle. Fix : Warning seulement (pas de blocage), log + notification Telegram si écart > 10%
+
+**Tests** : 12 nouveaux tests → 1102 passants
+
+- Test `load_trade_history()` avec DB vide (cold start)
+- Test auto-disable bypass selector (3 stratégies × 3 trades → bypass OFF)
+- Test warning capital mismatch (écart 15% → warning, écart 5% → silence)
+
+**Résultat** : Bot prêt pour le déploiement live mainnet avec capital minimal. Selector fonctionne dès le boot même sans historique.
+
+### Hotfix 28b — Suppression Sandbox Bitget ✅
+
+**But** : Retirer complètement le support sandbox Bitget du code (cassé depuis ccxt issue #25523).
+
+**Problème** : Le sandbox Bitget ne fonctionne pas avec les sous-comptes. Garder l'option comme configurable est dangereux — un changement accidentel pourrait envoyer des ordres dans le vide.
+
+**Changements** :
+
+1. **Suppression config** :
+   - `.env` / `.env.example` : supprimé `BITGET_SANDBOX` + commentaires associés
+   - `config/exchanges.yaml` : supprimé `sandbox: false`
+   - `backend/core/config.py` : supprimé `ExchangeConfig.sandbox` + `SecretsConfig.bitget_sandbox`
+
+2. **Nettoyage executor** (`backend/execution/executor.py`) :
+   - Supprimé properties `_sandbox_params` et `_margin_coin`
+   - Hardcodé `"sandbox": False` dans ccxt config avec commentaire "Sandbox Bitget cassé (ccxt #25523) — mainnet only"
+   - Hardcodé `"USDT"` partout (était `self._margin_coin`)
+   - Simplifié `_fetch_positions_safe()` (plus de branche sandbox)
+   - Supprimé `sandbox` du dict `get_status()`
+   - Nettoyé ~30 sites d'appel (`params=self._sandbox_params` → supprimés)
+
+3. **Nettoyage frontend** (`frontend/src/components/ExecutorPanel.jsx`) :
+   - Supprimé état `SANDBOX` → désormais LIVE ou OFF uniquement
+   - Simplifié tooltip et badge
+
+4. **Nettoyage tests** :
+   - `test_executor.py` : supprimé assertions `sandbox`, `SUSDT`, `_sandbox_params`
+   - `test_executor_grid.py` : supprimé `params={}`
+   - `test_adaptive_selector.py` : supprimé `bitget_sandbox`
+   - `conftest.py` : supprimé `sandbox` du mock exchanges
+
+5. **Documentation** :
+   - `README.md` : commentaire "Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only"
+   - `docs/ROADMAP.md` : section "Sandbox Bitget Non Fonctionnel (SUPPRIMÉ)"
+
+**Tests** : 1102 tests passés, 0 régression
+
+**Fichiers modifiés** : 11 fichiers (6 backend, 1 frontend, 4 tests)
+
+**Résultat** : Code simplifié et plus sûr. Mainnet only = moins de confusion, moins de risque d'erreur.
+
+### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
 
@@ -1337,8 +1421,8 @@ Phase 5: Scaling Stratégies     ✅
 ## ÉTAT ACTUEL (17 février 2026)
 
 - **1102 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a**
-- **Phase 6 en cours** — Hotfix 28a (préparation live) terminé
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a + Hotfix 28b**
+- **Phase 6 en cours** — Hotfix 28b (suppression sandbox Bitget) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
@@ -1389,8 +1473,9 @@ Le block bootstrap détruit la corrélation temporelle qui est le mécanisme mê
 ### 5. deploy.sh --clean
 Supprime les fichiers state JSON avant redémarrage. À utiliser quand le format change entre sprints. Ne supprime pas la DB SQLite.
 
-### 6. Sandbox Bitget Non Fonctionnel
-Sandbox Bitget ne marche pas avec le sous-compte → mainnet avec capital minimal = sandbox de fait. `BITGET_SANDBOX=false` en prod, toujours mainnet.
+### 6. Sandbox Bitget Non Fonctionnel (SUPPRIMÉ)
+
+Sandbox Bitget cassé (ccxt issue #25523) → support complètement retiré du code. Mainnet only avec capital minimal = sandbox de fait.
 
 ### 7. ProcessPoolExecutor sur Windows
 Instable (bug JIT Python 3.13 + surchauffe CPU i9-14900HX laptop). Solution : batches de 20 tasks + 2s cooldown entre lots. 4 workers = bon compromis (8 = seulement 1.5x plus rapide mais double la chaleur). `max_tasks_per_child=50`, fallback séquentiel automatique.

@@ -22,11 +22,11 @@ export default function ExecutorPanel({ wsData }) {
     )
   }
 
-  const { enabled, connected, sandbox, risk_manager: rm, selector } = executor
+  const { enabled, connected, risk_manager: rm, selector } = executor
   // Multi-positions (nouveau) avec fallback sur position (ancien)
   const positions = executor.positions || (executor.position ? [executor.position] : [])
 
-  const isLive = enabled && !sandbox
+  const isLive = enabled
   const sessionPnl = rm?.session_pnl ?? 0
   const balance = rm?.initial_capital
 
@@ -36,9 +36,9 @@ export default function ExecutorPanel({ wsData }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: positions.length > 0 || selector ? 12 : 0 }}>
         <div className="flex-between" style={{ marginBottom: 2 }}>
           <span className="text-xs muted">Mode</span>
-          <Tooltip content={isLive ? 'LIVE = ordres réels Bitget' : sandbox ? 'SANDBOX = simulation avec solde réel' : 'OFF = executor désactivé'}>
-            <span className={`badge ${isLive ? 'badge-active' : sandbox ? 'badge-simulation' : 'badge-stopped'}`}>
-              {isLive ? 'LIVE' : sandbox ? 'SANDBOX' : 'OFF'}
+          <Tooltip content={isLive ? 'LIVE = ordres réels Bitget mainnet' : 'OFF = executor désactivé'}>
+            <span className={`badge ${isLive ? 'badge-active' : 'badge-stopped'}`}>
+              {isLive ? 'LIVE' : 'OFF'}
             </span>
           </Tooltip>
         </div>
@@ -116,10 +116,7 @@ export default function ExecutorPanel({ wsData }) {
 ExecutorPanel.getSummary = function(wsData) {
   const executor = wsData?.executor
   if (!executor) return 'OFF'
-  const { enabled, sandbox } = executor
-  if (enabled && !sandbox) return 'LIVE'
-  if (sandbox) return 'SANDBOX'
-  return 'OFF'
+  return executor.enabled ? 'LIVE' : 'OFF'
 }
 
 function PositionCard({ position }) {

@@ -395,7 +395,7 @@ class TestExecutorExchangeBalance:
 
         config = MagicMock()
         config.secrets.live_trading = True
-        config.secrets.bitget_sandbox = False
+
         risk_mgr = MagicMock()
         notifier = MagicMock()
 
@@ -408,7 +408,7 @@ class TestExecutorExchangeBalance:
 
         config = MagicMock()
         config.secrets.live_trading = True
-        config.secrets.bitget_sandbox = False
+
         risk_mgr = MagicMock()
         notifier = MagicMock()
 

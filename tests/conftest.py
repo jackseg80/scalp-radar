@@ -77,7 +77,6 @@ def config_dir(tmp_path):
     exchanges = {
         "bitget": {
             "name": "Bitget",
-            "sandbox": False,
             "websocket": {
                 "url": "wss://ws.bitget.com/v2/ws/public",
                 "ping_interval": 25,

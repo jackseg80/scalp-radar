@@ -481,7 +481,6 @@ class ApiConfig(BaseModel):
 
 class ExchangeConfig(BaseModel):
     name: str
-    sandbox: bool = False
     websocket: WebSocketConfig
     rate_limits: RateLimitsConfig = Field(default_factory=RateLimitsConfig)
     api: ApiConfig
@@ -503,7 +502,7 @@ class SecretsConfig(BaseSettings):
     enable_websocket: bool = True
     heartbeat_interval: int = 3600  # secondes (1h par défaut, overridable via .env)
     live_trading: bool = False  # LIVE_TRADING env var, défaut false = simulation only
-    bitget_sandbox: bool = False  # BITGET_SANDBOX env var, défaut false = mainnet
+    # Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
 
     # Sync WFO local → serveur
     sync_server_url: str = ""  # SYNC_SERVER_URL, ex: "http://192.168.1.200:8000"
