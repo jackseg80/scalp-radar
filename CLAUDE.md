@@ -157,7 +157,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a) : 1102 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-c) : 1114 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -228,6 +228,8 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 26 : Funding Costs Backtest — funding rate 8h settlement costs dans toutes les stratégies grid (event-driven + fast engine), fix convention /100, 25 tests (1074 tests)
 - Sprint 27 : Filtre Darwinien par Régime — bloque nouvelles grilles si WFO avg_oos_sharpe < 0 dans le régime actuel, mapping `REGIME_LIVE_TO_WFO`, compteur `_regime_filter_blocks` dans `get_status()`, DB `get_regime_profiles()`, configurable via `regime_filter_enabled` (1090 tests)
 - Hotfix 28a : Préparation déploiement live — Selector charge trades DB au boot (survit à --clean), bypass configurable au cold start (auto-désactivé quand toutes les stratégies atteignent min_trades), warning capital mismatch Bitget vs risk.yaml (1102 tests)
+- Hotfix 28b : Suppression sandbox Bitget + filtre per_asset strict GridStrategyRunner — assets non listés dans per_asset sont rejetés par on_candle() (1104 tests)
+- Hotfix 28c : Refresh périodique solde exchange — fetch_balance toutes les 5 min, log WARNING si >10% change, POST /api/executor/refresh-balance, exchange_balance dans get_status() (1114 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

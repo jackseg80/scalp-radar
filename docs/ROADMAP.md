@@ -1338,6 +1338,46 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : Code simplifié et plus sûr. Mainnet only = moins de confusion, moins de risque d'erreur.
 
+### Hotfix 28b-bis — Filtre per_asset strict GridStrategyRunner ✅
+
+**But** : Empêcher grid_atr de trader des assets non validés par WFO.
+
+**Problème** : grid_atr ouvrait des positions sur SOL, IMX, SAND (visibles sur le dashboard) alors que ces assets ne sont pas dans son `per_asset`. Le runner utilisait les paramètres par défaut pour des assets non optimisés — dangereux.
+
+**Changements** :
+
+1. **`GridStrategyRunner.__init__`** : construction de `_per_asset_keys` (set des symbols autorisés depuis per_asset)
+2. **`on_candle()`** : après le filtre timeframe, skip si `symbol not in _per_asset_keys`
+3. **Backward compatible** : per_asset vide = tous les symbols acceptés (comportement inchangé)
+4. **Tests corrigés** : 3 tests existants utilisaient BTC/USDT hors per_asset → corrigés avec ASSET0/USDT
+5. **2 nouveaux tests** : `TestGridRunnerPerAssetFilter` (skip non autorisé + backward compat)
+
+**Tests** : 1104 tests passés, 0 régression
+
+**Fichiers modifiés** : 3 fichiers (simulator.py, test_grid_runner.py, test_simulator_grid_state.py)
+
+**Résultat** : Seuls les assets validés par WFO sont tradés. Aucun trade parasite possible.
+
+### Hotfix 28c — Refresh périodique solde exchange ✅
+
+**But** : Mettre à jour le solde Bitget affiché sur le dashboard quand l'utilisateur dépose/retire des fonds.
+
+**Problème** : L'Executor ne faisait `fetch_balance()` qu'au `start()`. Le solde affiché restait figé indéfiniment.
+
+**Changements** :
+
+1. **`Executor.refresh_balance()`** : méthode publique async, fetch le solde USDT swap, log WARNING si variation >10%
+2. **`Executor._balance_refresh_loop()`** : boucle toutes les 5 min, annulée dans `stop()`
+3. **`get_status()`** : expose `exchange_balance` pour le dashboard
+4. **`POST /api/executor/refresh-balance`** : endpoint protégé par API key pour refresh manuel
+5. **10 nouveaux tests** : 8 unit (update, log >10%, pas de log <10%, erreur, no exchange, get_status ×2, boucle) + 2 routes (auth 401, executor absent 400)
+
+**Tests** : 1114 tests passés, 0 régression
+
+**Fichiers modifiés** : 4 fichiers (executor.py, executor_routes.py, test_executor.py, test_executor_routes.py)
+
+**Résultat** : Le solde se rafraîchit automatiquement. Alertes si variation anormale. Refresh manuel depuis le dashboard possible.
+
 ### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
@@ -1418,16 +1458,17 @@ Phase 5: Scaling Stratégies     ✅
 
 ---
 
-## ÉTAT ACTUEL (17 février 2026)
+## ÉTAT ACTUEL (18 février 2026)
 
-- **1102 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a + Hotfix 28b**
-- **Phase 6 en cours** — Hotfix 28b (suppression sandbox Bitget) terminé
+- **1114 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a + Hotfix 28b + Hotfix 28b-bis + Hotfix 28c**
+- **Phase 6 en cours** — Hotfix 28c (refresh balance exchange) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
-- **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot
+- **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
+- **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives) avec persistance localStorage (onglet actif + paramètres de chaque page survivent au refresh)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Prochaine étape** : Déploiement live progressif (capital minimal, selector_bypass_at_boot=true)
