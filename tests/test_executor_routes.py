@@ -83,3 +83,20 @@ class TestExecutorAuth:
         assert resp.status_code == 200
         data = resp.json()
         assert data["enabled"] is False
+
+    def test_refresh_balance_no_api_key(self, monkeypatch):
+        """POST /refresh-balance sans header → 401."""
+        _patch_config(monkeypatch, sync_api_key="secret123")
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/api/executor/refresh-balance")
+        assert resp.status_code == 401
+
+    def test_refresh_balance_no_executor(self, monkeypatch):
+        """POST /refresh-balance sans executor actif → 400."""
+        _patch_config(monkeypatch, sync_api_key="secret123")
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/api/executor/refresh-balance",
+            headers={"X-API-Key": "secret123"},
+        )
+        assert resp.status_code == 400

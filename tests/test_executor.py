@@ -1038,3 +1038,125 @@ class TestMultiPosition:
         assert executor.position is not None
         assert executor.position.symbol == "BTC/USDT:USDT"
         assert len(executor.positions) == 1
+
+
+# ─── Balance Refresh ──────────────────────────────────────────────────────
+
+
+class TestBalanceRefresh:
+
+    @pytest.mark.asyncio
+    async def test_refresh_balance_updates_value(self):
+        """refresh_balance() met à jour _exchange_balance."""
+        executor = _make_executor()
+        executor._exchange_balance = 10_000.0
+
+        # Mock fetch_balance retourne un nouveau solde
+        executor._exchange.fetch_balance = AsyncMock(return_value={
+            "free": {"USDT": 11_000.0},
+            "total": {"USDT": 12_000.0},
+        })
+
+        result = await executor.refresh_balance()
+        assert result == 12_000.0
+        assert executor._exchange_balance == 12_000.0
+
+    @pytest.mark.asyncio
+    async def test_refresh_balance_logs_large_change(self):
+        """Log WARNING si le solde change de plus de 10%."""
+        executor = _make_executor()
+        executor._exchange_balance = 10_000.0
+
+        # +50% change
+        executor._exchange.fetch_balance = AsyncMock(return_value={
+            "free": {"USDT": 15_000.0},
+            "total": {"USDT": 15_000.0},
+        })
+
+        with patch("backend.execution.executor.logger") as mock_logger:
+            await executor.refresh_balance()
+
+        assert executor._exchange_balance == 15_000.0
+        mock_logger.warning.assert_called_once()
+        args = mock_logger.warning.call_args[0]
+        assert "balance" in args[0]
+        assert args[1] == pytest.approx(50.0, abs=0.1)
+
+    @pytest.mark.asyncio
+    async def test_refresh_balance_no_log_small_change(self):
+        """Pas de WARNING si le solde change de moins de 10%."""
+        executor = _make_executor()
+        executor._exchange_balance = 10_000.0
+
+        # +5% change
+        executor._exchange.fetch_balance = AsyncMock(return_value={
+            "free": {"USDT": 10_500.0},
+            "total": {"USDT": 10_500.0},
+        })
+
+        with patch("backend.execution.executor.logger") as mock_logger:
+            await executor.refresh_balance()
+
+        assert executor._exchange_balance == 10_500.0
+        mock_logger.warning.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refresh_balance_exchange_error(self):
+        """Si fetch_balance échoue, retourne None sans crasher."""
+        executor = _make_executor()
+        executor._exchange_balance = 10_000.0
+        executor._exchange.fetch_balance = AsyncMock(side_effect=Exception("timeout"))
+
+        result = await executor.refresh_balance()
+        assert result is None
+        # Le solde reste inchangé
+        assert executor._exchange_balance == 10_000.0
+
+    @pytest.mark.asyncio
+    async def test_refresh_balance_no_exchange(self):
+        """Sans exchange, retourne None."""
+        executor = _make_executor()
+        executor._exchange = None
+
+        result = await executor.refresh_balance()
+        assert result is None
+
+    def test_get_status_includes_balance(self):
+        """get_status() expose exchange_balance."""
+        executor = _make_executor()
+        executor._exchange_balance = 5_000.0
+        status = executor.get_status()
+        assert status["exchange_balance"] == 5_000.0
+
+    def test_get_status_balance_none_when_unset(self):
+        """get_status() retourne None si balance jamais fetchée."""
+        executor = _make_executor()
+        executor._exchange_balance = None
+        status = executor.get_status()
+        assert status["exchange_balance"] is None
+
+    @pytest.mark.asyncio
+    async def test_balance_refresh_loop_runs(self):
+        """La boucle refresh appelle refresh_balance périodiquement."""
+        executor = _make_executor()
+        executor._exchange_balance = 10_000.0
+        executor._balance_refresh_interval = 0.05  # 50ms pour le test
+
+        executor._exchange.fetch_balance = AsyncMock(return_value={
+            "free": {"USDT": 10_100.0},
+            "total": {"USDT": 10_100.0},
+        })
+
+        # Lancer la boucle
+        task = asyncio.create_task(executor._balance_refresh_loop())
+        await asyncio.sleep(0.15)  # Attendre ~3 cycles
+        executor._running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        # fetch_balance a été appelé au moins une fois
+        assert executor._exchange.fetch_balance.call_count >= 1
+        assert executor._exchange_balance == 10_100.0

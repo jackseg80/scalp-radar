@@ -168,8 +168,10 @@ class Executor:
         self._connected = False
         self._watch_task: asyncio.Task[None] | None = None
         self._poll_task: asyncio.Task[None] | None = None
+        self._balance_task: asyncio.Task[None] | None = None
         self._markets: dict[str, Any] = {}  # Cache load_markets()
         self._exchange_balance: float | None = None  # Hotfix 28a
+        self._balance_refresh_interval: int = 300  # 5 minutes
 
     # ─── Properties ────────────────────────────────────────────────────
 
@@ -261,6 +263,7 @@ class Executor:
             self._connected = True
             self._watch_task = asyncio.create_task(self._watch_orders_loop())
             self._poll_task = asyncio.create_task(self._poll_positions_loop())
+            self._balance_task = asyncio.create_task(self._balance_refresh_loop())
 
             logger.info(
                 "Executor: démarré en mode MAINNET ({} symboles actifs)",
@@ -276,7 +279,7 @@ class Executor:
         """Arrête la surveillance. NE ferme PAS les positions (TP/SL restent)."""
         self._running = False
 
-        for task in (self._watch_task, self._poll_task):
+        for task in (self._watch_task, self._poll_task, self._balance_task):
             if task and not task.done():
                 task.cancel()
                 try:
@@ -292,6 +295,43 @@ class Executor:
 
         self._connected = False
         logger.info("Executor: arrêté (positions TP/SL restent sur exchange)")
+
+    # ─── Balance refresh ────────────────────────────────────────────────
+
+    async def refresh_balance(self) -> float | None:
+        """Fetch le solde exchange et met à jour _exchange_balance.
+
+        Log un WARNING si le solde change de plus de 10%.
+        Retourne le nouveau solde ou None si échec.
+        """
+        if not self._exchange:
+            return None
+        try:
+            balance = await self._exchange.fetch_balance({"type": "swap"})
+            new_total = float(balance.get("total", {}).get("USDT", 0))
+            old_total = self._exchange_balance
+
+            if old_total is not None and old_total > 0:
+                change_pct = abs(new_total - old_total) / old_total * 100
+                if change_pct > 10:
+                    logger.warning(
+                        "Executor: balance changé de {:.1f}% ({:.2f} → {:.2f} USDT)",
+                        change_pct, old_total, new_total,
+                    )
+
+            self._exchange_balance = new_total
+            return new_total
+        except Exception as e:
+            logger.warning("Executor: échec refresh balance: {}", e)
+            return None
+
+    async def _balance_refresh_loop(self) -> None:
+        """Boucle périodique de refresh du solde (toutes les 5 min)."""
+        while self._running:
+            await asyncio.sleep(self._balance_refresh_interval)
+            if not self._running:
+                break
+            await self.refresh_balance()
 
     # ─── Setup ─────────────────────────────────────────────────────────
 
@@ -1441,6 +1481,7 @@ class Executor:
         result: dict[str, Any] = {
             "enabled": self.is_enabled,
             "connected": self.is_connected,
+            "exchange_balance": self._exchange_balance,
             "position": pos_info,
             "positions": positions_list,
             "risk_manager": self._risk_manager.get_status(),

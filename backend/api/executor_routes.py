@@ -36,6 +36,20 @@ async def executor_status(request: Request) -> dict:
     return executor.get_status()
 
 
+@router.post("/refresh-balance", dependencies=[Depends(verify_executor_key)])
+async def refresh_balance(request: Request) -> dict:
+    """Force un refresh du solde exchange."""
+    executor = getattr(request.app.state, "executor", None)
+    if executor is None:
+        raise HTTPException(status_code=400, detail="Executor non actif")
+
+    new_balance = await executor.refresh_balance()
+    if new_balance is None:
+        raise HTTPException(status_code=502, detail="Échec fetch balance exchange")
+
+    return {"status": "ok", "exchange_balance": new_balance}
+
+
 @router.post("/test-trade", dependencies=[Depends(verify_executor_key)])
 async def test_trade(
     request: Request,
