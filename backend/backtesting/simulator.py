@@ -666,7 +666,12 @@ class GridStrategyRunner:
         self._warmup_ended_at = datetime.now(tz=timezone.utc)
 
     def _apply_restored_state(self, state: dict) -> None:
-        """Applique un état sauvegardé (appelé après le warm-up)."""
+        """Applique un état sauvegardé (appelé après le warm-up).
+
+        Note : kill_switch est toujours remis à False ici car les grid runners
+        n'ont pas de kill switch runner-level. Si le kill switch global est actif,
+        _stop_all_runners() le remettra à True APRÈS _end_warmup() (voir start()).
+        """
         self._capital = state.get("capital", self._initial_capital)
         self._kill_switch_triggered = False
         self._realized_pnl = state.get("realized_pnl", state.get("net_pnl", 0.0))
@@ -691,6 +696,21 @@ class GridStrategyRunner:
                 entry_fee=gp["entry_fee"],
             )
             self._positions.setdefault(symbol, []).append(pos)
+
+        # Log diagnostic positions restaurées
+        total_restored = sum(len(p) for p in self._positions.values())
+        expected = len(grid_positions)
+        if total_restored != expected:
+            logger.warning(
+                "[{}] Mismatch positions restaurées: {} attendues, {} effectives",
+                self.name, expected, total_restored,
+            )
+        elif total_restored > 0:
+            logger.info(
+                "[{}] {} positions grid restaurées (kill_switch={}, is_active={})",
+                self.name, total_restored,
+                self._kill_switch_triggered, self._stats.is_active,
+            )
 
     async def on_candle(
         self, symbol: str, timeframe: str, candle: Candle
@@ -1225,6 +1245,7 @@ class Simulator:
         # Kill switch global (filet de sécurité toutes stratégies)
         self._capital_snapshots: deque[tuple[datetime, float]] = deque(maxlen=1440)
         self._global_kill_switch = False
+        self._kill_switch_reason: dict | None = None
         self._notifier: Any = None
         self._warmup_ended_at: datetime | None = None
 
@@ -1297,6 +1318,14 @@ class Simulator:
 
         if drawdown_pct >= threshold_pct:
             self._global_kill_switch = True
+            self._kill_switch_reason = {
+                "triggered_at": datetime.now(tz=timezone.utc).isoformat(),
+                "drawdown_pct": round(drawdown_pct, 2),
+                "window_hours": window_hours,
+                "threshold_pct": threshold_pct,
+                "capital_max": round(capital_max, 2),
+                "capital_current": round(current_capital, 2),
+            }
             self._stop_all_runners()
             logger.critical(
                 "KILL SWITCH GLOBAL : drawdown {:.1f}% sur {}h >= {:.0f}%",
@@ -1318,6 +1347,24 @@ class Simulator:
         for runner in self._runners:
             runner._kill_switch_triggered = True
             runner._stats.is_active = False
+
+    def reset_kill_switch(self) -> int:
+        """Reset le kill switch global et réactive tous les runners.
+
+        Retourne le nombre de runners réactivés.
+        """
+        self._global_kill_switch = False
+        self._kill_switch_reason = None
+        reactivated = 0
+        for runner in self._runners:
+            if runner._kill_switch_triggered:
+                runner._kill_switch_triggered = False
+                runner._stats.is_active = True
+                reactivated += 1
+        logger.critical(
+            "KILL SWITCH GLOBAL RESET — {} runners réactivés", reactivated,
+        )
+        return reactivated
 
     async def periodic_check(self) -> None:
         """Snapshot capital + check global kill switch (appelé toutes les 60s)."""
@@ -1597,13 +1644,14 @@ class Simulator:
             self._global_kill_switch = saved_state.get(
                 "global_kill_switch", False,
             )
+            self._kill_switch_reason = saved_state.get(
+                "kill_switch_reason", None,
+            )
             if self._global_kill_switch:
-                self._stop_all_runners()
-                logger.critical(
-                    "KILL SWITCH GLOBAL restauré — tous les runners sont stoppés"
-                )
-                # Forcer la fin du warm-up pour que le state sauvegardé
-                # soit appliqué (sinon StateManager écrase avec capital=10000)
+                # Forcer la fin du warm-up D'ABORD pour que le state sauvegardé
+                # soit appliqué (sinon StateManager écrase avec capital=10000).
+                # _stop_all_runners() est appelé APRÈS pour avoir le dernier mot
+                # sur kill_switch_triggered (car _apply_restored_state le reset).
                 for runner in self._runners:
                     if hasattr(runner, '_is_warming_up') and runner._is_warming_up:
                         runner._end_warmup()
@@ -1611,6 +1659,40 @@ class Simulator:
                             "[{}] Warm-up forcé terminé (kill switch global restauré)",
                             runner.name,
                         )
+                self._stop_all_runners()
+
+                # Compter les positions pour le log
+                total_positions = 0
+                for runner in self._runners:
+                    if hasattr(runner, '_positions') and isinstance(runner._positions, dict):
+                        total_positions += sum(len(p) for p in runner._positions.values())
+                    elif hasattr(runner, '_position') and runner._position is not None:
+                        total_positions += 1
+
+                reason_str = ""
+                if self._kill_switch_reason:
+                    reason_str = (
+                        f" (drawdown {self._kill_switch_reason.get('drawdown_pct', '?')}%"
+                        f" sur {self._kill_switch_reason.get('window_hours', '?')}h,"
+                        f" déclenché à {self._kill_switch_reason.get('triggered_at', '?')})"
+                    )
+                logger.critical(
+                    "KILL SWITCH GLOBAL restauré{} — {} runners stoppés, {} positions",
+                    reason_str, len(self._runners), total_positions,
+                )
+
+                # Notification Telegram
+                if self._notifier:
+                    try:
+                        from backend.alerts.notifier import AnomalyType
+                        await self._notifier.notify_anomaly(
+                            AnomalyType.KILL_SWITCH_GLOBAL,
+                            f"Kill switch restauré depuis le state{reason_str}. "
+                            f"{len(self._runners)} runners stoppés, {total_positions} positions. "
+                            f"Reset via POST /api/simulator/kill-switch/reset",
+                        )
+                    except Exception as e:
+                        logger.error("Erreur notification kill switch restore: {}", e)
 
         # Snapshot initial du capital (référence pour la fenêtre glissante)
         self._snapshot_capital()
@@ -1889,6 +1971,11 @@ class Simulator:
         if self._global_kill_switch:
             return True
         return any(r.is_kill_switch_triggered for r in self._runners)
+
+    @property
+    def kill_switch_reason(self) -> dict | None:
+        """Raison du kill switch global (None si pas déclenché)."""
+        return self._kill_switch_reason
 
     def get_conditions(self) -> dict:
         """Indicateurs courants par asset + conditions par stratégie.

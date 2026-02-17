@@ -45,6 +45,7 @@ class StateManager:
         self,
         runners: list[LiveStrategyRunner | GridStrategyRunner],
         global_kill_switch: bool = False,
+        kill_switch_reason: dict | None = None,
     ) -> None:
         """Sérialise l'état de tous les runners dans un fichier JSON.
 
@@ -54,6 +55,7 @@ class StateManager:
         state: dict[str, Any] = {
             "saved_at": datetime.now(tz=timezone.utc).isoformat(),
             "global_kill_switch": global_kill_switch,
+            "kill_switch_reason": kill_switch_reason,
             "runners": {},
         }
 
@@ -205,6 +207,7 @@ class StateManager:
                     await self.save_runner_state(
                         simulator.runners,
                         global_kill_switch=simulator._global_kill_switch,
+                        kill_switch_reason=simulator._kill_switch_reason,
                     )
 
                     # Journal snapshot (toutes les 5 min)

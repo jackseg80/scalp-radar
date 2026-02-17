@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Query
+from loguru import logger
 
 router = APIRouter(prefix="/api/simulator", tags=["simulator"])
 
@@ -18,6 +19,7 @@ async def simulator_status(request: Request) -> dict:
         "running": simulator._running,
         "strategies": simulator.get_all_status(),
         "kill_switch_triggered": simulator.is_kill_switch_triggered(),
+        "kill_switch_reason": simulator.kill_switch_reason,
     }
 
 
@@ -107,4 +109,44 @@ async def simulator_performance(request: Request) -> dict:
             }
             for p in ranking
         ]
+    }
+
+
+# TODO: ajouter auth quand exposé hors réseau local
+@router.post("/kill-switch/reset")
+async def reset_kill_switch(request: Request) -> dict:
+    """Reset le kill switch global et réactive tous les runners."""
+    simulator = getattr(request.app.state, "simulator", None)
+    if simulator is None:
+        return {"error": "Simulator non disponible", "status": "error"}
+
+    if not simulator._global_kill_switch:
+        return {"status": "not_triggered", "message": "Kill switch non actif"}
+
+    reactivated = simulator.reset_kill_switch()
+
+    # Sauvegarder l'état immédiatement
+    state_manager = getattr(request.app.state, "state_manager", None)
+    if state_manager:
+        await state_manager.save_runner_state(
+            simulator.runners,
+            global_kill_switch=simulator._global_kill_switch,
+            kill_switch_reason=simulator._kill_switch_reason,
+        )
+
+    # Notification Telegram
+    notifier = getattr(request.app.state, "notifier", None)
+    if notifier:
+        try:
+            from backend.alerts.notifier import AnomalyType
+            await notifier.notify_anomaly(
+                AnomalyType.KILL_SWITCH_GLOBAL,
+                f"Kill switch RESET manuellement — {reactivated} runners réactivés",
+            )
+        except Exception as e:
+            logger.error("Erreur notification reset kill switch: {}", e)
+
+    return {
+        "status": "reset",
+        "runners_reactivated": reactivated,
     }

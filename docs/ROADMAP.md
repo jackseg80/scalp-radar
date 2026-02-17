@@ -1137,6 +1137,61 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
   - Throttle `await asyncio.sleep(0.05)` entre INSERT events si batch > 2 dans `_dispatch_candle()`
 - 0 régression (1037 tests passants)
 
+**Hotfix 25b — Kill Switch Reliability** ✅
+
+**Problème** : Le kill switch global du Simulator avait 4 problèmes en production :
+
+1. **Pas de reset API** — il fallait éditer le JSON à la main pour réinitialiser
+2. **Pas d'alerte Telegram au restore** — le kill switch se restaurait silencieusement au restart du serveur
+3. **Pas de raison persistée** — impossible de savoir pourquoi il avait triggeré (drawdown%, timestamps, seuils)
+4. **Positions perdues (11→6)** — bug dans `_apply_restored_state()` qui reset `kill_switch_triggered=False` APRÈS que `_stop_all_runners()` l'a mis à True
+
+**Bug critique** : L'ordre d'exécution dans `start()` était : restore state → `_stop_all_runners()` → `_end_warmup()` (qui appelle `_apply_restored_state()`). Le `_apply_restored_state()` écrasait le flag kill_switch après que `_stop_all_runners()` l'ait positionné, causant la perte de positions.
+
+**Fixes** :
+
+1. **FIX 1 — API Reset** : nouveau endpoint `POST /api/simulator/kill-switch/reset`
+   - Vérifie que le kill switch est actif (sinon retourne `not_triggered`)
+   - Appelle `simulator.reset_kill_switch()` qui réactive tous les runners
+   - Sauvegarde l'état immédiatement via StateManager
+   - Notifie Telegram avec le nombre de runners réactivés
+   - Retourne le count de runners réactivés
+
+2. **FIX 2 — Alerte Telegram au restore** : notification enrichie dans `start()`
+   - Restaure `_kill_switch_reason` depuis saved_state
+   - Si kill switch actif au boot : compte les positions totales (grid + mono)
+   - Construit un message détaillé avec la raison si disponible
+   - Envoie l'alerte via `notifier.notify_anomaly(AnomalyType.KILL_SWITCH_GLOBAL, ...)`
+
+3. **FIX 3 — Raison persistée** : nouveau field `_kill_switch_reason`
+   - Dict avec `triggered_at`, `drawdown_pct`, `window_hours`, `threshold_pct`, `capital_max`, `capital_current`
+   - Persisté dans `_check_global_kill_switch()` avant `_stop_all_runners()`
+   - Property `kill_switch_reason` pour exposition API
+   - Sauvegardé dans state JSON via StateManager (`kill_switch_reason` field)
+   - Exposé dans `GET /api/simulator/status`
+
+4. **FIX 4 — Bug ordre d'exécution** : reordering dans `start()`
+   - **AVANT** : restore → stop → warmup (apply state écrase kill_switch)
+   - **APRÈS** : restore → warmup → stop (stop a le dernier mot)
+   - `_end_warmup()` est appelé AVANT `_stop_all_runners()` (lignes 1654-1666)
+   - Le `_apply_restored_state()` peut reset kill_switch=False (backward compat grid runners)
+   - Mais `_stop_all_runners()` le repositionne True immédiatement après (final authority)
+   - Logs diagnostiques ajoutés : position count INFO, mismatch WARNING
+
+**Architecture** :
+- `simulator.py` : `_kill_switch_reason` field, `reset_kill_switch()` method, property, reordering `start()`
+- `state_manager.py` : signature `save_runner_state()` avec paramètre `kill_switch_reason`
+- `server.py` : expose `state_manager` dans `app.state` pour l'endpoint reset
+- `simulator_routes.py` : endpoint reset + reason dans status
+- Backward compatible : ancien JSON sans `kill_switch_reason` → `None` (via `.get()`)
+
+**Tests** : 12 nouveaux tests → 1049 passants
+- 5 tests reset endpoint (resets global, reactivates runners, saves state, not_triggered, telegram)
+- 4 tests kill_switch_reason (in status, null when inactive, cleared on reset, persisted)
+- 3 tests bug fix (warmup/stop order, position restoration, global reset)
+
+**Résultat** : 1049 tests (+12 nouveaux), 0 régression. Kill switch global pleinement fonctionnel avec visibilité et contrôle API.
+
 ### Sprint 26 — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.

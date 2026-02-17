@@ -104,10 +104,12 @@ async def lifespan(app: FastAPI):
         await state_manager.start_periodic_save(simulator)
 
         app.state.simulator = simulator
+        app.state.state_manager = state_manager
         app.state.arena = StrategyArena(simulator)
         logger.info("Simulator + Arena démarrés")
     else:
         app.state.simulator = None
+        app.state.state_manager = None
         app.state.arena = None
 
     # 4b. Executor live (Sprint 5b) — après Simulator/Arena, avant Watchdog
@@ -183,6 +185,7 @@ async def lifespan(app: FastAPI):
         await state_manager.save_runner_state(
             simulator.runners,
             global_kill_switch=simulator._global_kill_switch,
+            kill_switch_reason=simulator._kill_switch_reason,
         )
         await state_manager.stop()
     if simulator:
