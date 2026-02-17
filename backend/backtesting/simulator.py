@@ -588,6 +588,11 @@ class GridStrategyRunner:
         if self._nb_assets < 1:
             self._nb_assets = 1
 
+        # Whitelist des symbols autorisés (si per_asset défini, sinon aucune restriction)
+        self._per_asset_keys: set[str] = (
+            set(per_asset.keys()) if isinstance(per_asset, dict) and per_asset else set()
+        )
+
         # Warm-up : capital fixe pendant le replay des candles historiques
         self._is_warming_up = True
         self._pending_restore: dict | None = None  # État à appliquer après warm-up
@@ -772,6 +777,10 @@ class GridStrategyRunner:
 
         # Filtre strict : seul le timeframe de la stratégie est traité
         if timeframe != self._strategy_tf:
+            return
+
+        # Filtre per_asset : skip si symbol n'est pas dans la whitelist
+        if self._per_asset_keys and symbol not in self._per_asset_keys:
             return
 
         # Détection fin warm-up : candle récente = données live

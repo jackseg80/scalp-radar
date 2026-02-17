@@ -396,3 +396,134 @@ class TestGridRunnerUnrealizedPnl:
         # SHORT: (100 - 95) × 2 = 10
         assert status["unrealized_pnl"] == 10.0
         assert status["assets_with_positions"] == 1
+
+
+# ─── Tests per_asset filtering (Hotfix 28b) ────────────────────────────
+
+
+class TestGridRunnerPerAssetFilter:
+    """Tests pour le filtre per_asset : seuls les symbols autorisés sont tradés."""
+
+    @pytest.mark.asyncio
+    async def test_skip_symbol_not_in_per_asset(self):
+        """Si symbol pas dans per_asset → on_candle() skip sans créer de position."""
+        config = MagicMock()
+        config.risk.initial_capital = 10_000.0
+        config.assets = []
+        engine = _make_data_engine({"BTC/USDT": 100.0, "SOL/USDT": 50.0})
+
+        # Créer un runner avec per_asset = {"BTC/USDT": {}}
+        strategy = MagicMock()
+        strategy.name = "grid_atr"
+        strategy._config.timeframe = "1h"
+        strategy._config.ma_period = 7
+        strategy._config.leverage = 6
+        strategy._config.per_asset = {"BTC/USDT": {}}  # Seul BTC autorisé
+        strategy.max_positions = 4
+        strategy.min_candles = {"1h": 50}
+        strategy.get_tp_price.return_value = 110.0
+        strategy.get_sl_price.return_value = 90.0
+        strategy.get_current_conditions.return_value = []
+
+        indicator_engine = MagicMock(spec=IncrementalIndicatorEngine)
+        indicator_engine.get_indicators.return_value = {"1h": {"sma": 100.0, "close": 100.0}}
+
+        runner = GridStrategyRunner(
+            strategy=strategy,
+            config=config,
+            indicator_engine=indicator_engine,
+            grid_position_manager=_make_gpm(),
+            data_engine=engine,
+        )
+        runner._is_warming_up = False
+
+        # Pré-remplir le buffer pour passer la condition min candles
+        runner._close_buffer["BTC/USDT"] = deque([100.0] * 10, maxlen=50)
+        runner._close_buffer["SOL/USDT"] = deque([50.0] * 10, maxlen=50)
+
+        # Créer des candles test
+        from backend.core.models import Candle
+        btc_candle = Candle(
+            symbol="BTC/USDT",
+            timeframe="1h",
+            timestamp=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+            open=100.0, high=101.0, low=99.0, close=100.0, volume=1000.0,
+        )
+        sol_candle = Candle(
+            symbol="SOL/USDT",
+            timeframe="1h",
+            timestamp=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+            open=50.0, high=51.0, low=49.0, close=50.0, volume=500.0,
+        )
+
+        # Envoyer une candle BTC (autorisé)
+        await runner.on_candle("BTC/USDT", "1h", btc_candle)
+        # Envoyer une candle SOL (non autorisé)
+        await runner.on_candle("SOL/USDT", "1h", sol_candle)
+
+        # Vérifier que SOL n'a AUCUNE position
+        assert "SOL/USDT" not in runner._positions or len(runner._positions["SOL/USDT"]) == 0
+        # BTC devrait être dans _last_prices (traité)
+        assert "BTC/USDT" in runner._last_prices
+        # SOL ne devrait PAS être dans _last_prices (skippé)
+        assert "SOL/USDT" not in runner._last_prices
+
+    @pytest.mark.asyncio
+    async def test_empty_per_asset_allows_all(self):
+        """Si per_asset est vide → backward compat, tous les symbols sont acceptés."""
+        config = MagicMock()
+        config.risk.initial_capital = 10_000.0
+        config.assets = []
+        engine = _make_data_engine({"BTC/USDT": 100.0, "SOL/USDT": 50.0})
+
+        # Créer un runner avec per_asset vide
+        strategy = MagicMock()
+        strategy.name = "grid_atr"
+        strategy._config.timeframe = "1h"
+        strategy._config.ma_period = 7
+        strategy._config.leverage = 6
+        strategy._config.per_asset = {}  # Vide = tous acceptés
+        strategy.max_positions = 4
+        strategy.min_candles = {"1h": 50}
+        strategy.get_tp_price.return_value = float("nan")
+        strategy.get_sl_price.return_value = float("nan")
+        strategy.get_current_conditions.return_value = []
+
+        indicator_engine = MagicMock(spec=IncrementalIndicatorEngine)
+        indicator_engine.get_indicators.return_value = {"1h": {"sma": 100.0, "close": 100.0}}
+
+        runner = GridStrategyRunner(
+            strategy=strategy,
+            config=config,
+            indicator_engine=indicator_engine,
+            grid_position_manager=_make_gpm(),
+            data_engine=engine,
+        )
+        runner._is_warming_up = False
+
+        # Pré-remplir le buffer
+        runner._close_buffer["BTC/USDT"] = deque([100.0] * 10, maxlen=50)
+        runner._close_buffer["SOL/USDT"] = deque([50.0] * 10, maxlen=50)
+
+        # Créer des candles
+        from backend.core.models import Candle
+        btc_candle = Candle(
+            symbol="BTC/USDT",
+            timeframe="1h",
+            timestamp=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+            open=100.0, high=101.0, low=99.0, close=100.0, volume=1000.0,
+        )
+        sol_candle = Candle(
+            symbol="SOL/USDT",
+            timeframe="1h",
+            timestamp=datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc),
+            open=50.0, high=51.0, low=49.0, close=50.0, volume=500.0,
+        )
+
+        # Envoyer les deux candles
+        await runner.on_candle("BTC/USDT", "1h", btc_candle)
+        await runner.on_candle("SOL/USDT", "1h", sol_candle)
+
+        # Les deux devraient être traités (présents dans _last_prices)
+        assert "BTC/USDT" in runner._last_prices
+        assert "SOL/USDT" in runner._last_prices

@@ -1224,13 +1224,13 @@ class TestNbAssetsProportional:
         ]
         runner = _make_grid_runner(strategy=strategy)
         runner._is_warming_up = False
-        _fill_buffer(runner, n=10, base_close=100_000.0)
+        _fill_buffer(runner, symbol="ASSET0/USDT", n=10, base_close=100_000.0)
 
         capital_before = runner._capital  # 10_000
         candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
-        await runner.on_candle("BTC/USDT", "1h", candle)
+        await runner.on_candle("ASSET0/USDT", "1h", candle)
 
-        positions = runner._positions.get("BTC/USDT", [])
+        positions = runner._positions.get("ASSET0/USDT", [])
         assert len(positions) == 1
 
         # Equal allocation : margin = capital / 21 / 4 ≈ 119.05$
@@ -1255,13 +1255,13 @@ class TestNbAssetsProportional:
 
         runner = _make_grid_runner(strategy=strategy, config=config)
         runner._is_warming_up = False
-        _fill_buffer(runner, n=10, base_close=100_000.0)
+        _fill_buffer(runner, symbol="ASSET0/USDT", n=10, base_close=100_000.0)
 
         capital_before = runner._capital  # 100$
         candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
-        await runner.on_candle("BTC/USDT", "1h", candle)
+        await runner.on_candle("ASSET0/USDT", "1h", candle)
 
-        positions = runner._positions.get("BTC/USDT", [])
+        positions = runner._positions.get("ASSET0/USDT", [])
         assert len(positions) == 1
 
         # Equal allocation : margin = 100/21/4 ≈ 1.19$
@@ -1274,45 +1274,45 @@ class TestNbAssetsProportional:
 
     @pytest.mark.asyncio
     async def test_equal_allocation_sizing(self):
-        """ETH et SOL ont la MÊME marge (equal alloc), le SL contrôle seulement le risque."""
-        # ETH avec sl_percent=20
-        strategy_eth = _make_mock_strategy(max_positions=4)
-        strategy_eth._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
-        strategy_eth._config.sl_percent = 20.0
-        strategy_eth.compute_grid.return_value = [
+        """A0 et A1 ont la MÊME marge (equal alloc), le SL contrôle seulement le risque."""
+        # A0 avec sl_percent=20
+        strategy_a0 = _make_mock_strategy(max_positions=4)
+        strategy_a0._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
+        strategy_a0._config.sl_percent = 20.0
+        strategy_a0.compute_grid.return_value = [
             GridLevel(index=0, entry_price=3_000.0, direction=Direction.LONG, size_fraction=0.25),
         ]
-        runner_eth = _make_grid_runner(strategy=strategy_eth)
-        runner_eth._is_warming_up = False
-        _fill_buffer(runner_eth, symbol="ETH/USDT", n=10, base_close=3_500.0)
+        runner_a0 = _make_grid_runner(strategy=strategy_a0)
+        runner_a0._is_warming_up = False
+        _fill_buffer(runner_a0, symbol="A0/USDT", n=10, base_close=3_500.0)
 
-        candle_eth = _make_candle(close=3_100.0, low=2_900.0, high=3_200.0)
-        await runner_eth.on_candle("ETH/USDT", "1h", candle_eth)
+        candle_a0 = _make_candle(close=3_100.0, low=2_900.0, high=3_200.0)
+        await runner_a0.on_candle("A0/USDT", "1h", candle_a0)
 
-        # SOL avec sl_percent=30
-        strategy_sol = _make_mock_strategy(max_positions=4)
-        strategy_sol._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
-        strategy_sol._config.sl_percent = 30.0
-        strategy_sol.compute_grid.return_value = [
+        # A1 avec sl_percent=30
+        strategy_a1 = _make_mock_strategy(max_positions=4)
+        strategy_a1._config.per_asset = {f"A{i}/USDT": {} for i in range(21)}
+        strategy_a1._config.sl_percent = 30.0
+        strategy_a1.compute_grid.return_value = [
             GridLevel(index=0, entry_price=140.0, direction=Direction.LONG, size_fraction=0.25),
         ]
-        runner_sol = _make_grid_runner(strategy=strategy_sol)
-        runner_sol._is_warming_up = False
-        _fill_buffer(runner_sol, symbol="SOL/USDT", n=10, base_close=150.0)
+        runner_a1 = _make_grid_runner(strategy=strategy_a1)
+        runner_a1._is_warming_up = False
+        _fill_buffer(runner_a1, symbol="A1/USDT", n=10, base_close=150.0)
 
-        candle_sol = _make_candle(close=145.0, low=135.0, high=155.0)
-        await runner_sol.on_candle("SOL/USDT", "1h", candle_sol)
+        candle_a1 = _make_candle(close=145.0, low=135.0, high=155.0)
+        await runner_a1.on_candle("A1/USDT", "1h", candle_a1)
 
         # Récupérer les marges
-        pos_eth = runner_eth._positions["ETH/USDT"][0]
-        margin_eth = pos_eth.entry_price * pos_eth.quantity / 6
-        pos_sol = runner_sol._positions["SOL/USDT"][0]
-        margin_sol = pos_sol.entry_price * pos_sol.quantity / 6
+        pos_a0 = runner_a0._positions["A0/USDT"][0]
+        margin_a0 = pos_a0.entry_price * pos_a0.quantity / 6
+        pos_a1 = runner_a1._positions["A1/USDT"][0]
+        margin_a1 = pos_a1.entry_price * pos_a1.quantity / 6
 
         # Equal allocation : les deux marges sont identiques = capital/21/4
         expected_margin = 10_000 / 21 / 4
-        assert abs(margin_eth - expected_margin) < 1.0
-        assert abs(margin_sol - expected_margin) < 1.0
+        assert abs(margin_a0 - expected_margin) < 1.0
+        assert abs(margin_a1 - expected_margin) < 1.0
 
     @pytest.mark.asyncio
     async def test_margin_cap_25pct(self):
