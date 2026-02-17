@@ -27,6 +27,10 @@ _STRATEGY_CONFIG_ATTR = {
     "bollinger_mr": "bollinger_mr",
     "donchian_breakout": "donchian_breakout",
     "supertrend": "supertrend",
+    "grid_atr": "grid_atr",
+    "grid_multi_tf": "grid_multi_tf",
+    "grid_funding": "grid_funding",
+    "grid_trend": "grid_trend",
 }
 
 

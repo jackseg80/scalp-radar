@@ -235,7 +235,7 @@ envelope_dca_short:
   per_asset: {}
 grid_atr:
   enabled: true
-  live_eligible: false
+  live_eligible: true
   timeframe: 1h
   ma_period: 14
   atr_period: 14

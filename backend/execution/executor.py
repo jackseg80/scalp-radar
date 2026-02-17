@@ -112,22 +112,18 @@ class GridLiveState:
 
 # ─── MAPPING SYMBOLES ─────────────────────────────────────────────────────
 
-# Mapping symbole spot → futures swap Bitget
-SYMBOL_SPOT_TO_FUTURES: dict[str, str] = {
-    "BTC/USDT": "BTC/USDT:USDT",
-    "ETH/USDT": "ETH/USDT:USDT",
-    "SOL/USDT": "SOL/USDT:USDT",
-    "DOGE/USDT": "DOGE/USDT:USDT",
-    "LINK/USDT": "LINK/USDT:USDT",
-}
-
 
 def to_futures_symbol(spot_symbol: str) -> str:
-    """Convertit un symbole spot en symbole futures ccxt."""
-    result = SYMBOL_SPOT_TO_FUTURES.get(spot_symbol)
-    if result is None:
-        raise ValueError(f"Symbole non supporté pour futures: {spot_symbol}")
-    return result
+    """Convertit un symbole spot en symbole futures swap Bitget (ccxt).
+
+    Convention ccxt : BASE/QUOTE:SETTLE → ex. BTC/USDT:USDT
+    Tous les perpetuels USDT Bitget suivent ce pattern.
+    """
+    if ":" in spot_symbol:
+        return spot_symbol  # Déjà en format futures
+    if spot_symbol.endswith("/USDT"):
+        return f"{spot_symbol}:USDT"
+    raise ValueError(f"Symbole non supporté pour futures: {spot_symbol}")
 
 
 # ─── CONSTANTES ────────────────────────────────────────────────────────────

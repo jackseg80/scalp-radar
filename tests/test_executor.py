@@ -195,9 +195,17 @@ class TestSymbolMapping:
     def test_sol_spot_to_futures(self):
         assert to_futures_symbol("SOL/USDT") == "SOL/USDT:USDT"
 
-    def test_unknown_symbol_raises(self):
+    def test_any_usdt_pair_works(self):
+        assert to_futures_symbol("SHIB/USDT") == "SHIB/USDT:USDT"
+        assert to_futures_symbol("ICP/USDT") == "ICP/USDT:USDT"
+        assert to_futures_symbol("GALA/USDT") == "GALA/USDT:USDT"
+
+    def test_already_futures_format(self):
+        assert to_futures_symbol("BTC/USDT:USDT") == "BTC/USDT:USDT"
+
+    def test_unknown_quote_raises(self):
         with pytest.raises(ValueError, match="non supporté"):
-            to_futures_symbol("SHIB/USDT")
+            to_futures_symbol("BTC/EUR")
 
 
 # ─── Event filtering (via selector) ──────────────────────────────────────
