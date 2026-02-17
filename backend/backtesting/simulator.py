@@ -848,9 +848,13 @@ class GridStrategyRunner:
                     touched = candle.high >= level.entry_price
 
                 if touched:
-                    # Warm-up : sizing fixe à initial_capital ; Live : capital réel
-                    # Division par nb_assets pour que 21 assets simultanés ne dépassent pas le capital
-                    pos_raw = self._initial_capital if self._is_warming_up else self._capital
+                    # Sizing : fixe en portfolio mode, fixe pendant warm-up, compound en live
+                    if getattr(self, "_portfolio_mode", False):
+                        pos_raw = self._initial_capital
+                    elif self._is_warming_up:
+                        pos_raw = self._initial_capital
+                    else:
+                        pos_raw = self._capital
                     pos_per_asset = pos_raw / self._nb_assets
 
                     # Equal allocation sizing (Sprint 20a)
@@ -874,6 +878,19 @@ class GridStrategyRunner:
                     )
                     if total_margin_used + margin_per_level > pos_raw * max_margin_ratio:
                         continue  # Skip ce niveau, pas assez de marge
+
+                    # Global margin guard (Sprint 24a) — portfolio backtest seulement
+                    portfolio_runners = getattr(self, "_portfolio_runners", None)
+                    portfolio_cap = getattr(self, "_portfolio_initial_capital", None)
+                    if portfolio_runners is not None and portfolio_cap is not None:
+                        global_margin = sum(
+                            p.entry_price * p.quantity / r._leverage
+                            for r in portfolio_runners.values()
+                            for positions_list in r._positions.values()
+                            for p in positions_list
+                        )
+                        if global_margin + margin_per_level > portfolio_cap * max_margin_ratio:
+                            continue  # Skip — marge globale dépasserait le seuil
 
                     pos_capital = margin_per_level * num_levels
 

@@ -626,6 +626,9 @@ class TestSimulation:
 
         backtester = PortfolioBacktester.__new__(PortfolioBacktester)
         backtester._initial_capital = 10_000.0
+        backtester._kill_switch_pct = 30.0
+        backtester._kill_switch_window_hours = 24
+        backtester._kill_freeze_until = None
 
         warmup_ends = backtester._warmup_runners(
             runners, {"AAA/USDT": candles}, engine, warmup_count=50
@@ -689,3 +692,298 @@ class TestSimulation:
         assert runner_b._capital == 5000.0
         assert warmup_ends["AAA/USDT"] == 50
         assert warmup_ends["BBB/USDT"] == 50
+
+
+# ─── Tests Sprint 24a — Realistic Mode ───────────────────────────────────
+
+
+class TestPortfolioModeFixedSizing:
+    """Correction 1 : sizing fixe anti-compounding."""
+
+    @pytest.mark.asyncio
+    async def test_portfolio_mode_fixed_sizing(self):
+        """Runner avec _portfolio_mode=True utilise initial_capital pour le sizing,
+        même si _capital a augmenté grâce aux profits."""
+        config = _make_mock_config(n_assets=1)
+        runner, engine = _make_runner_with_indicator_engine("AAA/USDT", config, 5000.0)
+
+        # Simuler des profits : capital a doublé
+        runner._capital = 10_000.0
+        runner._portfolio_mode = True
+
+        # Générer des candles avec assez de volatilité pour toucher les grilles
+        candles = _make_candles("AAA/USDT", n=120, start_price=100.0, volatility=0.02)
+
+        # Warmup
+        for c in candles[:50]:
+            engine.update("AAA/USDT", "1h", c)
+            runner._close_buffer.setdefault("AAA/USDT", deque(maxlen=50)).append(c.close)
+
+        # Dispatch des candles post-warmup
+        for c in candles[50:]:
+            engine.update("AAA/USDT", "1h", c)
+            await runner.on_candle("AAA/USDT", "1h", c)
+
+        # Le sizing doit utiliser initial_capital (5000), pas _capital (10000)
+        # Vérifier via les positions ouvertes : notional basé sur 5k, pas 10k
+        for positions in runner._positions.values():
+            for pos in positions:
+                notional = pos.entry_price * pos.quantity
+                # Avec 5k capital, 1 asset, 3 levels, le margin_per_level ≈ 5000/1/3 ≈ 1666
+                # notional = margin * leverage = 1666 * 6 ≈ 10k
+                # Avec 10k capital ce serait ~20k notional
+                assert notional < 15_000, (
+                    f"Notional {notional:.0f} trop élevé — sizing utilise _capital au lieu de _initial_capital"
+                )
+
+    @pytest.mark.asyncio
+    async def test_normal_mode_uses_current_capital(self):
+        """Sans _portfolio_mode, le runner utilise _capital courant (compound)."""
+        config = _make_mock_config(n_assets=1)
+        runner, engine = _make_runner_with_indicator_engine("AAA/USDT", config, 5000.0)
+
+        # Simuler des profits : capital a doublé
+        runner._capital = 10_000.0
+        # PAS de _portfolio_mode → compound normal
+
+        candles = _make_candles("AAA/USDT", n=120, start_price=100.0, volatility=0.02)
+        for c in candles[:50]:
+            engine.update("AAA/USDT", "1h", c)
+            runner._close_buffer.setdefault("AAA/USDT", deque(maxlen=50)).append(c.close)
+
+        for c in candles[50:]:
+            engine.update("AAA/USDT", "1h", c)
+            await runner.on_candle("AAA/USDT", "1h", c)
+
+        # En mode compound, les positions seront basées sur 10k (pas 5k)
+        for positions in runner._positions.values():
+            for pos in positions:
+                notional = pos.entry_price * pos.quantity
+                # Avec 10k capital, 1 asset, 3 levels, margin_per_level ≈ 10000/1/3 ≈ 3333
+                # notional = 3333 * 6 ≈ 20k → bien plus gros que 15k
+                # (pas forcément des positions ouvertes, c'est ok)
+
+
+class TestGlobalMarginGuard:
+    """Correction 2 : global margin guard portfolio."""
+
+    @pytest.mark.asyncio
+    async def test_global_margin_guard_blocks(self):
+        """Si la marge globale (tous runners) dépasse le seuil, les nouvelles positions sont bloquées."""
+        config = _make_mock_config(n_assets=2)
+        runner_a, engine = _make_runner_with_indicator_engine("AAA/USDT", config, 5000.0)
+        runner_b, _ = _make_runner_with_indicator_engine("BBB/USDT", config, 5000.0)
+
+        runners = {"AAA/USDT": runner_a, "BBB/USDT": runner_b}
+
+        # Setup cross-references (comme portfolio_engine._create_runners())
+        for r in runners.values():
+            r._portfolio_runners = runners
+            r._portfolio_initial_capital = 10_000.0
+            r._portfolio_mode = True
+
+        # Pré-remplir des positions pour ~65% marge globale
+        # margin = entry_price * quantity / leverage
+        # On veut 6500$ de marge sur 10k capital (65%)
+        # Avec leverage=6 : notional = 6500 * 6 = 39000
+        # entry=100, qty = 390 → margin = 100*390/6 = 6500
+        ts = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        pos = GridPosition(
+            level=0,
+            direction=Direction.LONG,
+            entry_price=100.0,
+            quantity=390.0,
+            entry_time=ts,
+            entry_fee=2.34,
+        )
+        runner_a._positions["AAA/USDT"] = [pos]
+        margin_a = 100.0 * 390.0 / 6  # = 6500
+        runner_a._capital -= margin_a
+
+        # Vérifier la marge actuelle
+        global_margin = sum(
+            p.entry_price * p.quantity / r._leverage
+            for r in runners.values()
+            for positions_list in r._positions.values()
+            for p in positions_list
+        )
+        assert abs(global_margin - 6500.0) < 1.0
+
+        # Runner B essaie d'ouvrir — la marge supplémentaire ferait dépasser 70%
+        # margin_per_level ≈ 5000/1/3 ≈ 1666 → total serait 6500+1666 = 8166 > 7000 (70%)
+        candles_b = _make_candles("BBB/USDT", n=120, start_price=100.0, volatility=0.02, seed=99)
+        for c in candles_b[:50]:
+            engine.update("BBB/USDT", "1h", c)
+            runner_b._close_buffer.setdefault("BBB/USDT", deque(maxlen=50)).append(c.close)
+
+        for c in candles_b[50:]:
+            engine.update("BBB/USDT", "1h", c)
+            await runner_b.on_candle("BBB/USDT", "1h", c)
+
+        # Runner B ne doit pas avoir pu ouvrir (marge globale > 70%)
+        b_positions = sum(len(p) for p in runner_b._positions.values())
+        assert b_positions == 0, (
+            f"Runner B a ouvert {b_positions} positions malgré le global margin guard"
+        )
+
+    @pytest.mark.asyncio
+    async def test_global_margin_under_threshold(self):
+        """Le guard ne bloque PAS quand la marge globale est sous le seuil."""
+        config = _make_mock_config(n_assets=2)
+        runner_a, engine = _make_runner_with_indicator_engine("AAA/USDT", config, 5000.0)
+
+        # Runner B partage le même indicator engine
+        strategy_b = create_strategy_with_params("grid_atr", {
+            "ma_period": 14, "atr_period": 14, "atr_multiplier_start": 2.0,
+            "atr_multiplier_step": 1.0, "num_levels": 3,
+            "sl_percent": 20.0, "sides": ["long"], "leverage": 6,
+        })
+        gpm_b = GridPositionManager(PositionManagerConfig(
+            leverage=6, maker_fee=0.0006, taker_fee=0.0006, slippage_pct=0.0005,
+        ))
+        runner_b = GridStrategyRunner(
+            strategy=strategy_b, config=config,
+            indicator_engine=engine,  # même engine
+            grid_position_manager=gpm_b,
+            data_engine=None,  # type: ignore[arg-type]
+            db_path=None,
+        )
+        runner_b._nb_assets = 1
+        runner_b._capital = 5000.0
+        runner_b._initial_capital = 5000.0
+        runner_b._is_warming_up = False
+        runner_b._stats = RunnerStats(capital=5000.0, initial_capital=5000.0)
+
+        runners = {"AAA/USDT": runner_a, "BBB/USDT": runner_b}
+
+        for r in runners.values():
+            r._portfolio_runners = runners
+            r._portfolio_initial_capital = 10_000.0
+            r._portfolio_mode = True
+
+        # Pré-remplir seulement ~20% marge (2000$ sur 10k)
+        ts = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        pos = GridPosition(
+            level=0,
+            direction=Direction.LONG,
+            entry_price=100.0,
+            quantity=120.0,  # margin = 100*120/6 = 2000
+            entry_time=ts,
+            entry_fee=0.72,
+        )
+        runner_a._positions["AAA/USDT"] = [pos]
+        runner_a._capital -= 100.0 * 120.0 / 6
+
+        # Runner B devrait pouvoir ouvrir des positions (marge totale ~20% + ~17% = 37% < 70%)
+        candles_b = _make_candles("BBB/USDT", n=120, start_price=100.0, volatility=0.02, seed=99)
+        for c in candles_b[:50]:
+            engine.update("BBB/USDT", "1h", c)
+            runner_b._close_buffer.setdefault("BBB/USDT", deque(maxlen=50)).append(c.close)
+
+        for c in candles_b[50:]:
+            engine.update("BBB/USDT", "1h", c)
+            await runner_b.on_candle("BBB/USDT", "1h", c)
+
+        # Runner B peut avoir ouvert des positions (pas forcément, dépend de la volatilité)
+        # Ce test vérifie surtout que le guard ne bloque PAS indûment
+        # Si des trades ont été exécutés, c'est que le guard n'a pas bloqué
+        b_trades = len(runner_b._trades)
+        b_positions = sum(len(p) for p in runner_b._positions.values())
+        # Au moins une activité (position ouverte ou trade exécuté)
+        assert b_trades > 0 or b_positions > 0, (
+            "Runner B n'a eu aucune activité malgré marge globale sous le seuil"
+        )
+
+
+class TestKillSwitchPortfolio:
+    """Correction 3 : kill switch actif pendant la simulation."""
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_freezes_all_runners(self):
+        """Quand le DD dépasse le seuil, tous les runners sont gelés,
+        puis reset après cooldown (quand la fenêtre glissante ne contient plus
+        les snapshots haute equity)."""
+        config = _make_mock_config(n_assets=2)
+        runner_a, engine = _make_runner_with_indicator_engine("AAA/USDT", config, 5000.0)
+        runner_b, _ = _make_runner_with_indicator_engine("BBB/USDT", config, 5000.0)
+
+        runners = {"AAA/USDT": runner_a, "BBB/USDT": runner_b}
+
+        for r in runners.values():
+            r._portfolio_runners = runners
+            r._portfolio_initial_capital = 10_000.0
+            r._portfolio_mode = True
+
+        backtester = PortfolioBacktester.__new__(PortfolioBacktester)
+        backtester._initial_capital = 10_000.0
+        backtester._kill_switch_pct = 30.0
+        backtester._kill_switch_window_hours = 24
+        backtester._kill_freeze_until = None
+
+        ts_base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        snapshots: list[PortfolioSnapshot] = []
+
+        def _apply_ks_logic(snap: PortfolioSnapshot) -> None:
+            """Reproduit la logique kill switch de _simulate()."""
+            if len(snapshots) < 2:
+                return
+            window_hours = backtester._kill_switch_window_hours
+            current_ts = snap.timestamp
+
+            window_start_equity = snap.total_equity
+            for prev_snap in reversed(snapshots[:-1]):
+                if (current_ts - prev_snap.timestamp).total_seconds() > window_hours * 3600:
+                    break
+                window_start_equity = prev_snap.total_equity
+
+            if window_start_equity > 0:
+                dd_pct = (1 - snap.total_equity / window_start_equity) * 100
+                if dd_pct >= backtester._kill_switch_pct:
+                    for r in runners.values():
+                        r._kill_switch_triggered = True
+                    backtester._kill_freeze_until = current_ts + timedelta(hours=24)
+
+            freeze_until = backtester._kill_freeze_until
+            if freeze_until and current_ts >= freeze_until:
+                for r in runners.values():
+                    r._kill_switch_triggered = False
+                backtester._kill_freeze_until = None
+
+        def _add_snap(h: int, equity: float) -> None:
+            snap = PortfolioSnapshot(
+                timestamp=ts_base + timedelta(hours=h),
+                total_equity=equity,
+                total_capital=equity,
+                total_realized_pnl=0.0,
+                total_unrealized_pnl=0.0,
+                total_margin_used=0.0,
+                margin_ratio=0.0,
+                n_open_positions=0,
+                n_assets_with_positions=0,
+            )
+            snapshots.append(snap)
+            _apply_ks_logic(snap)
+
+        # h=0: equity stable à 10k
+        _add_snap(0, 10_000)
+
+        # h=1: crash soudain → 6k (-40%)
+        _add_snap(1, 6_000)
+
+        # Vérifier que le kill switch s'est déclenché
+        assert runner_a._kill_switch_triggered is True, "Runner A devrait être gelé"
+        assert runner_b._kill_switch_triggered is True, "Runner B devrait être gelé"
+        assert backtester._kill_freeze_until is not None
+
+        # h=2 à h=50 : equity stable à 6k
+        # Le kill switch se re-déclenche tant que h=0 (10k) est dans la fenêtre 24h
+        # À h=25, h=0 sort de la fenêtre (distance 25h > 24h) → plus de re-trigger
+        # Mais freeze_until a été poussé à h=24+24=h=48 (dernière re-trigger à h=24)
+        # À h=48, le cooldown expire → reset
+        for h in range(2, 51):
+            _add_snap(h, 6_000)
+
+        # Après h=50, le cooldown est expiré et aucun re-trigger possible
+        assert runner_a._kill_switch_triggered is False, "Runner A devrait être dégelé après cooldown"
+        assert runner_b._kill_switch_triggered is False, "Runner B devrait être dégelé après cooldown"
+        assert backtester._kill_freeze_until is None

@@ -140,6 +140,8 @@ class PortfolioBacktester:
             per_asset = getattr(strat_config, "per_asset", {}) if strat_config else {}
             self._assets = sorted(per_asset.keys()) if per_asset else []
 
+        self._kill_freeze_until: datetime | None = None  # Sprint 24a
+
         if not self._assets:
             raise ValueError("Aucun asset sélectionné pour le portfolio backtest")
 
@@ -300,12 +302,18 @@ class PortfolioBacktester:
             runner._nb_assets = 1
             runner._capital = per_asset_capital
             runner._initial_capital = per_asset_capital
+            runner._portfolio_mode = True  # Sprint 24a: sizing fixe
             runner._stats = RunnerStats(
                 capital=per_asset_capital,
                 initial_capital=per_asset_capital,
             )
 
             runners[symbol] = runner
+
+        # Sprint 24a: références croisées pour global margin guard
+        for runner in runners.values():
+            runner._portfolio_runners = runners
+            runner._portfolio_initial_capital = self._initial_capital
 
         logger.info(
             "Créé {} runners (capital={:.0f}$/asset)",
@@ -436,6 +444,37 @@ class PortfolioBacktester:
             if next_ts != candle.timestamp and last_closes:
                 snap = self._take_snapshot(runners, candle.timestamp, last_closes)
                 snapshots.append(snap)
+
+                # Kill switch temps réel (Sprint 24a)
+                if len(snapshots) >= 2:
+                    window_hours = self._kill_switch_window_hours
+                    current_ts = snap.timestamp
+
+                    # Trouver l'equity au début de la fenêtre
+                    window_start_equity = snap.total_equity
+                    for prev_snap in reversed(snapshots[:-1]):
+                        if (current_ts - prev_snap.timestamp).total_seconds() > window_hours * 3600:
+                            break
+                        window_start_equity = prev_snap.total_equity
+
+                    if window_start_equity > 0:
+                        dd_pct = (1 - snap.total_equity / window_start_equity) * 100
+                        if dd_pct >= self._kill_switch_pct:
+                            if not any(r._kill_switch_triggered for r in runners.values()):
+                                logger.warning(
+                                    "KILL SWITCH PORTFOLIO: DD={:.1f}% equity={:.0f}$",
+                                    dd_pct, snap.total_equity,
+                                )
+                            for r in runners.values():
+                                r._kill_switch_triggered = True
+                            self._kill_freeze_until = current_ts + timedelta(hours=24)
+
+                    # Reset kill switch après cooldown de 24h
+                    freeze_until = self._kill_freeze_until
+                    if freeze_until and current_ts >= freeze_until:
+                        for r in runners.values():
+                            r._kill_switch_triggered = False
+                        self._kill_freeze_until = None
 
             # Log de progression
             if (i + 1) % log_interval == 0:

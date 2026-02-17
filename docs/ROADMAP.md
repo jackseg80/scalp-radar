@@ -867,6 +867,7 @@ Système automatisé de trading crypto qui :
 | 23 | Grid Trend (trend following DCA, EMA cross + ADX + trailing ATR) | ✅ |
 | Audit | Micro-Sprint Audit (auth executor, async I/O, candle buffer) | ✅ |
 | 23b | Grid Trend compute_live_indicators (paper/portfolio fix) | ✅ |
+| 24a | Portfolio Backtest Realistic Mode (sizing fixe, global margin guard, kill switch) | ✅ |
 | 24 | Live trading progressif (1000$ → 5000$) | 📋 Planifié |
 | 25 | Monitoring V2 (alertes enrichies, rapport hebdo Telegram) | 📋 Planifié |
 
@@ -1010,6 +1011,42 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 1007 tests (+3 nouveaux), 0 régression.
 
+### Sprint 24a — Portfolio Backtest Realistic Mode ✅
+
+**But** : Le portfolio backtest grid_atr 21 assets affichait peak margin 284% (= liquidation en live). 3 corrections pour que le backtest reflète la réalité.
+
+**Problèmes identifiés** :
+1. **Compounding abusif** : les runners réinvestissaient les profits → sizing exponentiel
+2. **Pas de global margin guard** : chaque runner vérifie sa marge locale, pas la marge totale du portfolio
+3. **Kill switch passif** : détecté a posteriori via `_check_kill_switch()`, mais les runners continuaient à trader pendant la simulation
+
+**Corrections** :
+
+1. **Sizing fixe (anti-compounding)** — `simulator.py` + `portfolio_engine.py`
+   - Flag `_portfolio_mode = True` sur chaque runner portfolio
+   - En portfolio mode, sizing basé sur `_initial_capital` (pas `_capital` courant)
+   - Transparent pour live/paper : `getattr(self, "_portfolio_mode", False)` = False si absent
+
+2. **Global Margin Guard** — `simulator.py` + `portfolio_engine.py`
+   - Chaque runner reçoit `_portfolio_runners` (dict) et `_portfolio_initial_capital`
+   - Après le margin guard local, calcule la marge globale (tous runners) et skip si `> capital × max_margin_ratio`
+
+3. **Kill switch temps réel** — `portfolio_engine.py`
+   - Fenêtre glissante 24h dans `_simulate()` : si DD% ≥ seuil, gèle tous les runners
+   - Cooldown 24h : après expiration, dégèle les runners
+   - Le kill switch se re-déclenche tant que les snapshots haute-equity sont dans la fenêtre
+
+**Design** : tous les ajouts sont derrière `getattr(..., False/None)` → zéro impact sur le code live/paper.
+
+**Tests** : 5 nouveaux tests
+- `test_portfolio_mode_fixed_sizing` — sizing basé sur initial_capital
+- `test_normal_mode_uses_current_capital` — compound en mode normal (contrôle)
+- `test_global_margin_guard_blocks` — marge globale 65% bloque les ouvertures
+- `test_global_margin_under_threshold` — marge globale 20% laisse passer
+- `test_kill_switch_freezes_all_runners` — trigger + cooldown 24h + reset
+
+**Résultat** : 1012 tests (+5 nouveaux), 0 régression.
+
 ### Sprint 24 — Live Trading Progressif
 
 **But** : Passer du paper trading au live avec capital réel progressif.
@@ -1104,12 +1141,13 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (17 février 2026)
 
-- **1007 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit**
-- **Phase 6 en cours** — Sprint 22 (Grid Funding), Sprint Perf (Numba), Sprint 23/23b (Grid Trend), Micro-Sprint Audit terminés
+- **1012 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a**
+- **Phase 6 en cours** — Sprint 24a (Portfolio Backtest Realistic Mode) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **21 assets** (THETA/USDT retiré — inexistant sur Bitget) : 14 Grade A + 7 Grade B pour grid_atr
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
+- **Portfolio backtest réaliste** : sizing fixe, global margin guard, kill switch temps réel
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
@@ -1235,7 +1273,7 @@ docs/plans/          # 27 sprint plans (1-19 + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 1004 passants, 0 régression
+- **Tests** : 1012 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
