@@ -868,6 +868,7 @@ Système automatisé de trading crypto qui :
 | Audit | Micro-Sprint Audit (auth executor, async I/O, candle buffer) | ✅ |
 | 23b | Grid Trend compute_live_indicators (paper/portfolio fix) | ✅ |
 | 24a | Portfolio Backtest Realistic Mode (sizing fixe, global margin guard, kill switch) | ✅ |
+| 24b | Portfolio Backtest Multi-Stratégie (clé strategy:symbol, dispatch multi) | ✅ |
 | 24 | Live trading progressif (1000$ → 5000$) | 📋 Planifié |
 | 25 | Monitoring V2 (alertes enrichies, rapport hebdo Telegram) | 📋 Planifié |
 
@@ -1177,13 +1178,35 @@ Phase 5: Scaling Stratégies     ✅
 - **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b**
 - **Phase 6 en cours** — Sprint 24b (Portfolio Backtest Multi-Stratégie) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
-- **21 assets** (THETA/USDT retiré — inexistant sur Bitget) : 14 Grade A + 7 Grade B pour grid_atr
-- **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
-- **Portfolio backtest multi-stratégie** : grid_atr + grid_trend simultanés, sizing fixe, global margin guard, kill switch temps réel
+- **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
+- **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
+- **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : Portfolio backtest combined (grid_atr + grid_trend) → Sprint 24 (live progressif)
+- **Prochaine étape** : Observer paper trading Top 10 quelques semaines → Sprint 24 (live progressif)
+
+### Résultats Portfolio Backtest — Validation Finale
+
+**Portfolio 730 jours (complet)** :
+
+| Config | Return | Max DD | Peak Margin | Runners prof. |
+|--------|--------|--------|-------------|---------------|
+| grid_atr 21 assets | +181% | -31.6% | 23.5% | 20/21 |
+| grid_atr Top 10 | +221% | -29.8% | 25.0% | 10/10 |
+| grid_trend 6B | +77% | -20.2% | 23.6% | 5/6 |
+| Combiné 16 runners | +167% | -20.0% | 18.5% | 15/16 |
+
+**Forward test 365 derniers jours** (bull terminal + crash -44% + bear) :
+
+| Config | Return | Max DD | Runners prof. |
+|--------|--------|--------|---------------|
+| **grid_atr Top 10** | **+82.4%** | **-25.7%** | **9/10** |
+| Combiné (atr+trend) | +49.3% | -23.7% | 9/16 |
+
+**Décision** : grid_atr Top 10 = meilleur ratio rendement/risque. grid_trend échoue en forward (bear market sans trends prolongés).
+
+**Validation Bitget** : 7/21 assets grid_atr Sharpe négatif sur 90j Bitget récents (bear soutenu nov 2025 → fév 2026). WFO pas faux (fenêtres OOS 2022-2024 ont crashes AVEC recovery), mais le bear actuel piège le mean-reversion DCA.
 
 ---
 
@@ -1219,15 +1242,15 @@ Chaque import dans un worker coûte ~200MB. Utiliser `math.erf` à la place pour
 
 ```
 config/
-  strategies.yaml     # Params par stratégie (envelope_dca enabled, les 7 autres disabled)
-  param_grids.yaml    # Grilles de recherche WFO (324 combos envelope_dca)
-  assets.yaml         # 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins)
+  strategies.yaml     # Params par stratégie (grid_atr enabled Top 10, les 12 autres disabled)
+  param_grids.yaml    # Grilles de recherche WFO (3240 combos grid_atr, 2592 combos grid_trend, etc.)
+  assets.yaml         # 22 assets (21 historiques + JUP pour grid_trend)
   risk.yaml           # Kill switch, leverage, fees, adaptive selector
   exchanges.yaml      # Bitget WebSocket, rate limits, API config
 
 backend/
   core/               # Config, DataEngine, Database, StateManager, PositionManager, GridPositionManager
-  strategies/         # BaseStrategy, BaseGridStrategy, envelope_dca, envelope_dca_short, grid_atr, 7 stratégies mono Grade F
+  strategies/         # BaseStrategy, BaseGridStrategy, 13 stratégies (4 scalp, 3 swing, 6 grid/DCA)
   backtesting/        # BacktestEngine, MultiPositionEngine, Simulator, GridStrategyRunner, Arena
   optimization/       # WFO, Monte Carlo, DSR, grading, fast engine (mono + multi), indicator cache
   execution/          # Executor (mono + grid), RiskManager, AdaptiveSelector
@@ -1249,7 +1272,7 @@ scripts/
   migrate_optimization.py # Import résultats JSON → DB (Sprint 13)
 
 data/                 # SQLite DB + reports JSON (gitignored)
-docs/plans/          # 27 sprint plans (1-19 + hotfixes)
+docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 ```
 
 ---
@@ -1305,7 +1328,7 @@ docs/plans/          # 27 sprint plans (1-19 + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 1012 passants, 0 régression
+- **Tests** : 1016 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

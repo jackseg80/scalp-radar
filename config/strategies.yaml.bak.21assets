@@ -248,6 +248,27 @@ grid_atr:
   leverage: 6
   weight: 0.2
   per_asset:
+    ADA/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
+      num_levels: 2
+      sl_percent: 15.0
+    APE/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 10
+      num_levels: 4
+      sl_percent: 25.0
+    AR/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 15.0
     AVAX/USDT:
       atr_multiplier_start: 1.5
       atr_multiplier_step: 0.5
@@ -290,6 +311,13 @@ grid_atr:
       ma_period: 7
       num_levels: 4
       sl_percent: 20.0
+    ETH/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 30.0
     FET/USDT:
       atr_multiplier_start: 1.0
       atr_multiplier_step: 1.5
@@ -311,12 +339,61 @@ grid_atr:
       ma_period: 7
       num_levels: 2
       sl_percent: 30.0
+    IMX/USDT:
+      atr_multiplier_start: 1.0
+      atr_multiplier_step: 1.5
+      atr_period: 10
+      ma_period: 14
+      num_levels: 3
+      sl_percent: 30.0
+    LINK/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 25.0
     NEAR/USDT:
       atr_multiplier_start: 2.0
       atr_multiplier_step: 0.5
       atr_period: 10
       ma_period: 7
       num_levels: 4
+      sl_percent: 30.0
+    SAND/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 20.0
+    SOL/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 2
+      sl_percent: 15.0
+    SUSHI/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 20
+      ma_period: 7
+      num_levels: 4
+      sl_percent: 15.0
+    UNI/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 2
+      sl_percent: 25.0
+    XTZ/USDT:
+      atr_multiplier_start: 1.0
+      atr_multiplier_step: 1.0
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
       sl_percent: 30.0
 grid_multi_tf:
   enabled: false

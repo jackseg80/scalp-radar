@@ -43,7 +43,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (774 passants) |
+| Testing            | pytest            | Critical components must have unit tests (1016 passants) |
 
 ## Key Architecture Principles
 
@@ -70,7 +70,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
-├── tests/                        # 1004 tests (pytest, 49 fichiers)
+├── tests/                        # 1016 tests (pytest, 55 fichiers)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
 └── docs/plans/                   # Sprint plans 1-19 archivés
 ```
@@ -94,7 +94,7 @@ scalp-radar/
 
 1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: false`, remplacé par grid_atr)
 2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
-3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: true`, paper trading actif sur 21 assets — 14 Grade A, 7 Grade B)
+3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: true`, paper trading actif sur Top 10 assets)
 4. **Grid Multi-TF** — Supertrend 4h filtre directionnel + Grid ATR 1h exécution, LONG quand ST=UP / SHORT quand ST=DOWN, force-close au flip (`enabled: false`, WFO en cours)
 5. **Grid Funding** — DCA sur funding rate négatif (LONG-only), multi-niveaux par seuil, TP = funding positif / SMA cross, funding payments accumulés 8h (`enabled: false`, WFO à lancer)
 
@@ -147,7 +147,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## Config Files (5 YAML)
 
-- `assets.yaml` — 21 assets (BTC, ETH, SOL, DOGE, LINK + 16 altcoins), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
+- `assets.yaml` — 22 assets (21 historiques + JUP/USDT pour grid_trend), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
 - `strategies.yaml` — 13 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
@@ -155,7 +155,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit) : 1004 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b) : 1016 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -218,6 +218,9 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint Perf : Numba JIT Optimization — speedup 5-10x WFO (indicateurs Wilder + boucle trades), fallback transparent si absent (941 tests excl. JIT)
 - Sprint 23 : Grid Trend (13e stratégie, trend following DCA, EMA cross + ADX + trailing stop ATR, 2592 combos WFO, 46 tests) (990 tests)
 - Micro-Sprint Audit : Auth endpoints executor (API key), async I/O StateManager (asyncio.to_thread), buffer candles DataEngine (flush 5s) (1004 tests)
+- Sprint 23b : grid_trend compute_live_indicators (paper/portfolio fix, calcul EMA+ADX depuis buffer candles) (1007 tests)
+- Sprint 24a : Portfolio Backtest Realistic Mode — sizing fixe (_portfolio_mode), global margin guard (tous runners), kill switch temps réel (freeze/dégel 24h) (1012 tests)
+- Sprint 24b : Portfolio Backtest Multi-Stratégie — clé runner strategy:symbol, dispatch multi-runners par symbol, CLI --strategies/--preset combined (1016 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 
@@ -291,6 +294,16 @@ Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 - Bitget transfer 3 paliers : `>0.50 + significant` → 15 pts, `>0.50` seul → 10 pts, `>0.30` → 5 pts ; guard `bitget_trades < 15` → cap 8 pts
 - Bouton "Appliquer A/B" frontend : `POST /api/optimization/apply` → per_asset strategies.yaml + auto-add assets.yaml via ccxt
 - `fetch_history.py --symbols` : bypass assets.yaml pour télécharger des paires spécifiques
+
+**Portfolio Backtest Réaliste (Sprint 24a-b) :**
+
+- `_portfolio_mode = True` → sizing fixe sur `_initial_capital` (anti-compounding)
+- Global margin guard : marge totale tous runners < `capital × max_margin_ratio` (70%)
+- Kill switch temps réel : fenêtre glissante 24h, freeze/dégel tous runners
+- Multi-stratégie : clé `strategy:symbol`, dispatch candles à tous runners du même symbol
+- Résultats : grid_atr Top 10 = +221% (730j), +82.4% (forward 365j), DD max -29.8%
+- grid_trend non déployé (1/5 profitables en forward, bear market sans trends)
+- Paper trading actif : **grid_atr Top 10** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX)
 
 **Sync WFO :**
 
