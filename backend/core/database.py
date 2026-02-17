@@ -6,6 +6,7 @@ Gère le stockage des candles, signaux, trades et état de session.
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -172,6 +173,7 @@ class Database:
         await self._create_sprint14_tables()
         await self._create_simulator_trades_table()
         await self._create_portfolio_tables()
+        await self._create_journal_tables()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -883,6 +885,150 @@ class Database:
             available_margin=row["available_margin"],
             kill_switch_triggered=bool(row["kill_switch_triggered"]),
         )
+
+    # ─── JOURNAL (Sprint 25) ─────────────────────────────────────────────
+
+    async def _create_journal_tables(self) -> None:
+        """Tables Sprint 25 : journal d'activité live (snapshots + events)."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                equity REAL NOT NULL,
+                capital REAL NOT NULL,
+                margin_used REAL NOT NULL,
+                margin_ratio REAL NOT NULL,
+                realized_pnl REAL NOT NULL,
+                unrealized_pnl REAL NOT NULL,
+                n_positions INTEGER NOT NULL,
+                n_assets INTEGER NOT NULL,
+                breakdown_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp
+                ON portfolio_snapshots (timestamp);
+
+            CREATE TABLE IF NOT EXISTS position_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                level INTEGER,
+                direction TEXT NOT NULL,
+                price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                unrealized_pnl REAL,
+                margin_used REAL,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_events_timestamp
+                ON position_events (timestamp);
+            CREATE INDEX IF NOT EXISTS idx_events_symbol
+                ON position_events (strategy_name, symbol);
+        """)
+
+    async def insert_portfolio_snapshot(self, snapshot: dict) -> None:
+        """Insère un snapshot portfolio."""
+        assert self._conn is not None
+        await self._conn.execute(
+            """INSERT INTO portfolio_snapshots
+               (timestamp, equity, capital, margin_used, margin_ratio,
+                realized_pnl, unrealized_pnl, n_positions, n_assets, breakdown_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                snapshot["timestamp"],
+                snapshot["equity"],
+                snapshot["capital"],
+                snapshot["margin_used"],
+                snapshot["margin_ratio"],
+                snapshot["realized_pnl"],
+                snapshot["unrealized_pnl"],
+                snapshot["n_positions"],
+                snapshot["n_assets"],
+                json.dumps(snapshot.get("breakdown")) if snapshot.get("breakdown") else None,
+            ),
+        )
+        await self._conn.commit()
+
+    async def get_portfolio_snapshots(
+        self, since: str | None = None, until: str | None = None, limit: int = 2000
+    ) -> list[dict]:
+        """Récupère les snapshots portfolio, triés par timestamp ASC."""
+        assert self._conn is not None
+        query = "SELECT * FROM portfolio_snapshots WHERE 1=1"
+        params: list = []
+        if since:
+            query += " AND timestamp >= ?"
+            params.append(since)
+        if until:
+            query += " AND timestamp <= ?"
+            params.append(until)
+        query += " ORDER BY timestamp ASC LIMIT ?"
+        params.append(limit)
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_latest_snapshot(self) -> dict | None:
+        """Récupère le snapshot le plus récent."""
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT * FROM portfolio_snapshots ORDER BY timestamp DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def insert_position_event(self, event: dict) -> None:
+        """Insère un événement de position."""
+        assert self._conn is not None
+        await self._conn.execute(
+            """INSERT INTO position_events
+               (timestamp, strategy_name, symbol, event_type, level,
+                direction, price, quantity, unrealized_pnl, margin_used, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event["timestamp"],
+                event["strategy_name"],
+                event["symbol"],
+                event["event_type"],
+                event.get("level"),
+                event["direction"],
+                event["price"],
+                event["quantity"],
+                event.get("unrealized_pnl"),
+                event.get("margin_used"),
+                json.dumps(event.get("metadata")) if event.get("metadata") else None,
+            ),
+        )
+        await self._conn.commit()
+
+    async def get_position_events(
+        self, since: str | None = None, limit: int = 100,
+        strategy: str | None = None, symbol: str | None = None,
+    ) -> list[dict]:
+        """Récupère les événements de position, triés par timestamp DESC."""
+        assert self._conn is not None
+        query = "SELECT * FROM position_events WHERE 1=1"
+        params: list = []
+        if since:
+            query += " AND timestamp >= ?"
+            params.append(since)
+        if strategy:
+            query += " AND strategy_name = ?"
+            params.append(strategy)
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
     # ─── LIFECYCLE ──────────────────────────────────────────────────────────
 

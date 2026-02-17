@@ -546,6 +546,9 @@ class GridStrategyRunner:
         # Sprint 5a : queue d'événements pour l'Executor (drainée par le Simulator)
         self._pending_events: list[Any] = []
 
+        # Sprint 25 : queue d'événements pour le journal d'activité
+        self._pending_journal_events: list[dict] = []
+
         # COMPAT: duck typing pour Simulator/StateManager qui accèdent à ces attributs.
         # Voir self._positions pour le vrai état grid.
         self._position = None
@@ -831,6 +834,24 @@ class GridStrategyRunner:
                 self._positions[symbol] = []
                 if not self._is_warming_up:
                     self._emit_close_event(symbol, trade)
+                    self._pending_journal_events.append({
+                        "timestamp": trade.exit_time.isoformat(),
+                        "strategy_name": self.name,
+                        "symbol": symbol,
+                        "event_type": "CLOSE",
+                        "level": None,
+                        "direction": trade.direction.value,
+                        "price": trade.exit_price,
+                        "quantity": trade.quantity,
+                        "unrealized_pnl": round(trade.net_pnl, 2),
+                        "metadata": {
+                            "exit_reason": trade.exit_reason,
+                            "entry_price": trade.entry_price,
+                            "gross_pnl": round(trade.gross_pnl, 2),
+                            "net_pnl": round(trade.net_pnl, 2),
+                            "fee_cost": round(trade.fee_cost, 2),
+                        },
+                    })
                 return
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
@@ -929,6 +950,23 @@ class GridStrategyRunner:
                         )
                         if not self._is_warming_up:
                             self._emit_open_event(symbol, level, position)
+                            self._pending_journal_events.append({
+                                "timestamp": position.entry_time.isoformat(),
+                                "strategy_name": self.name,
+                                "symbol": symbol,
+                                "event_type": "OPEN",
+                                "level": level.index,
+                                "direction": position.direction.value,
+                                "price": position.entry_price,
+                                "quantity": position.quantity,
+                                "margin_used": round(
+                                    position.entry_price * position.quantity / self._leverage, 2,
+                                ),
+                                "metadata": {
+                                    "levels_open": len(self._positions.get(symbol, [])),
+                                    "levels_max": self._strategy.max_positions,
+                                },
+                            })
 
     def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
         """Enregistre un trade grid (fermeture de toutes les positions)."""
@@ -1285,6 +1323,72 @@ class Simulator:
         self._snapshot_capital()
         await self._check_global_kill_switch()
 
+    # ─── Journal (Sprint 25) ─────────────────────────────────────────────
+
+    async def take_journal_snapshot(self) -> dict | None:
+        """Prend un snapshot du portfolio pour le journal d'activité.
+
+        Retourne le snapshot dict ou None si aucun runner actif.
+        Appelé toutes les 5 minutes par le StateManager.
+        """
+        if not self._runners:
+            return None
+
+        now = datetime.now(tz=timezone.utc)
+        total_capital = 0.0
+        total_realized = 0.0
+        total_unrealized = 0.0
+        total_margin = 0.0
+        n_positions = 0
+        breakdown: dict[str, dict] = {}
+
+        assets_set: set[str] = set()
+        for runner in self._runners:
+            status = runner.get_status()
+            total_capital += status.get("capital", 0.0)
+            total_realized += status.get("net_pnl", 0.0)
+            total_unrealized += status.get("unrealized_pnl", 0.0)
+            total_margin += status.get("margin_used", 0.0)
+            n_pos = status.get("open_positions", 0)
+            n_positions += n_pos
+
+            # Breakdown par symbol (grid runners seulement)
+            if isinstance(runner, GridStrategyRunner) and n_pos > 0:
+                for symbol, positions in runner._positions.items():
+                    if not positions:
+                        continue
+                    assets_set.add(symbol)
+                    last_price = runner._last_prices.get(symbol, 0.0)
+                    upnl = runner._gpm.unrealized_pnl(positions, last_price)
+                    margin = sum(
+                        p.entry_price * p.quantity / runner._leverage
+                        for p in positions
+                    )
+                    breakdown[symbol] = {
+                        "strategy": runner.name,
+                        "positions": len(positions),
+                        "unrealized": round(upnl, 2),
+                        "margin": round(margin, 2),
+                        "last_price": round(last_price, 2),
+                    }
+
+        equity = total_capital + total_unrealized
+        initial = sum(r._initial_capital for r in self._runners)
+        margin_ratio = total_margin / initial if initial > 0 else 0.0
+
+        return {
+            "timestamp": now.isoformat(),
+            "equity": round(equity, 2),
+            "capital": round(total_capital, 2),
+            "margin_used": round(total_margin, 2),
+            "margin_ratio": round(margin_ratio, 4),
+            "realized_pnl": round(total_realized, 2),
+            "unrealized_pnl": round(total_unrealized, 2),
+            "n_positions": n_positions,
+            "n_assets": len(assets_set),
+            "breakdown": breakdown if breakdown else None,
+        }
+
     # ─── Orphan cleanup ─────────────────────────────────────────────────
 
     def _cleanup_orphan_runners(
@@ -1565,6 +1669,15 @@ class Simulator:
                         logger.error(
                             "Simulator: erreur callback trade event: {}", e,
                         )
+
+            # Sprint 25 : drain journal events vers la DB
+            if self._db and hasattr(runner, "_pending_journal_events") and runner._pending_journal_events:
+                journal_events, runner._pending_journal_events = runner._pending_journal_events, []
+                for event in journal_events:
+                    try:
+                        await self._db.insert_position_event(event)
+                    except Exception as e:
+                        logger.warning("Journal: erreur insert event: {}", e)
 
             # Détection collision : runner vient d'ouvrir sur un symbol déjà pris
             new_symbols = (

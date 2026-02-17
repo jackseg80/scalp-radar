@@ -194,6 +194,8 @@ class StateManager:
         interval: int,
     ) -> None:
         """Boucle de sauvegarde périodique."""
+        snapshot_counter = 0
+        snapshot_interval = 5  # Toutes les 5 itérations de 60s = 5 min
         while self._running:
             try:
                 await asyncio.sleep(interval)
@@ -204,10 +206,32 @@ class StateManager:
                         simulator.runners,
                         global_kill_switch=simulator._global_kill_switch,
                     )
+
+                    # Journal snapshot (toutes les 5 min)
+                    snapshot_counter += 1
+                    if snapshot_counter >= snapshot_interval:
+                        snapshot_counter = 0
+                        await self._save_journal_snapshot(simulator)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("StateManager: erreur sauvegarde périodique: {}", e)
+
+    async def _save_journal_snapshot(self, simulator: Simulator) -> None:
+        """Sauvegarde un snapshot journal en DB."""
+        try:
+            snapshot = await simulator.take_journal_snapshot()
+            if snapshot and self._db:
+                await self._db.insert_portfolio_snapshot(snapshot)
+                logger.debug(
+                    "Journal: snapshot equity={:.2f} margin={:.1f}% pos={}",
+                    snapshot["equity"],
+                    snapshot["margin_ratio"] * 100,
+                    snapshot["n_positions"],
+                )
+        except Exception as e:
+            logger.warning("Journal: erreur snapshot: {}", e)
 
     # ─── Sprint 5a : état Executor ────────────────────────────────────
 

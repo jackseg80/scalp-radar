@@ -1091,13 +1091,49 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 - 5000$ sur 15+ assets (objectif long terme)
 - Monitoring slippage paper vs live à chaque palier
 
-### Sprint 25 — Monitoring & Alertes V2
+### Sprint 25 — Activity Journal (Live Trading Monitor) ✅
+
+**But** : Historique complet de l'activité live entre ouverture et fermeture des positions. Courbe d'equity incluant le P&L non réalisé, événements DCA traçables.
+
+**Problème** : Seuls les trades fermés étaient enregistrés (`simulation_trades`). Impossible de tracer l'equity non réalisée, les ouvertures DCA, ou de comparer le comportement live aux prédictions du backtest.
+
+**Changements** :
+
+1. **`database.py`** — 2 nouvelles tables + 5 méthodes CRUD
+   - `portfolio_snapshots` : equity, capital, margin, unrealized, breakdown JSON (toutes les 5 min)
+   - `position_events` : OPEN/CLOSE avec level, direction, prix, metadata JSON
+   - `get_latest_snapshot()` avec ORDER BY DESC LIMIT 1
+
+2. **`simulator.py`** — Snapshot collector + hooks events
+   - `Simulator.take_journal_snapshot()` : agrège `get_status()` de tous les runners (DRY)
+   - `GridStrategyRunner._pending_journal_events` : queue séparée de `_pending_events`
+   - Hook OPEN après `_emit_open_event()` (dans le guard `not _is_warming_up`)
+   - Hook CLOSE après `_emit_close_event()` (dans le guard `not _is_warming_up`)
+   - Drain dans `_dispatch_candle()` avec `await db.insert_position_event()`
+
+3. **`state_manager.py`** — Snapshot périodique toutes les 5 min
+   - Compteur dans `_periodic_save_loop()` (toutes les 5 itérations de 60s)
+   - `_save_journal_snapshot()` helper avec try/except graceful
+
+4. **`journal_routes.py`** — 3 endpoints API
+   - `GET /api/journal/snapshots` (since, until, limit)
+   - `GET /api/journal/events` (since, strategy, symbol, limit)
+   - `GET /api/journal/summary` (dernier snapshot + 10 derniers events)
+
+5. **Frontend enrichi**
+   - `EquityCurve.jsx` : double source (snapshots journal + fallback trades), hover tooltip (equity, unrealized, margin, positions)
+   - `ActivityFeed.jsx` : section `JournalEventCard` avec pastilles CSS pour les événements DCA
+
+**Tests** : 21 nouveaux tests (DB round-trip, filtrage, snapshot collector, API endpoints)
+
+**Résultat** : 1037 tests (+21 nouveaux), 0 régression.
+
+### Sprint 26 — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
 
 **Features** :
 
-- Dashboard de performance live (P&L cumulé, drawdown, Sharpe rolling)
 - Alertes configurables (drawdown > X%, divergence paper/live)
 - Rapport quotidien/hebdomadaire automatique par Telegram
 - Logs structurés pour post-mortem (chaque trade avec full context)
@@ -1174,9 +1210,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (17 février 2026)
 
-- **1016 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b**
-- **Phase 6 en cours** — Sprint 24b (Portfolio Backtest Multi-Stratégie) terminé
+- **1037 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25**
+- **Phase 6 en cours** — Sprint 25 (Activity Journal) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
@@ -1184,7 +1220,7 @@ Phase 5: Scaling Stratégies     ✅
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : Observer paper trading Top 10 quelques semaines → Sprint 24 (live progressif)
+- **Prochaine étape** : Observer paper trading Top 10 avec journal d'activité → Sprint 26 (monitoring avancé) ou live progressif
 
 ### Résultats Portfolio Backtest — Validation Finale
 

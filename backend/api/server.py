@@ -21,6 +21,7 @@ from backend.api.arena_routes import router as arena_router
 from backend.api.conditions_routes import router as conditions_router
 from backend.api.executor_routes import router as executor_router
 from backend.api.health import router as health_router
+from backend.api.journal_routes import router as journal_router
 from backend.api.optimization_routes import router as optimization_router
 from backend.api.portfolio_routes import router as portfolio_router
 from backend.api.signals_routes import router as signals_router
@@ -222,3 +223,4 @@ app.include_router(ws_router)
 app.include_router(executor_router)
 app.include_router(optimization_router)
 app.include_router(portfolio_router)
+app.include_router(journal_router)

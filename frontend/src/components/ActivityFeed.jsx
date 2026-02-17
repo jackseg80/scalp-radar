@@ -3,22 +3,26 @@
  * Props : wsData
  * Utilise /api/simulator/trades pour les trades fermés.
  * Positions ouvertes depuis wsData.simulator_positions.
+ * Sprint 25 : événements journal (ouvertures/fermetures DCA) depuis /api/journal/events.
  */
 import { useApi } from '../hooks/useApi'
 
 const EXIT_REASONS = {
-  sl: 'fermé par SL',
-  tp: 'TP atteint',
-  signal_exit: 'sortie signal',
-  regime_change: 'changement régime',
-  end_of_data: 'fin de données',
+  sl: 'SL',
+  tp: 'TP',
+  tp_global: 'TP global',
+  sl_global: 'SL global',
+  force_close: 'Force close',
+  signal_exit: 'Signal',
+  regime_change: 'Regime',
+  end_of_data: 'Fin',
 }
 
 function timeAgo(isoString) {
   if (!isoString) return ''
   const diff = Date.now() - new Date(isoString).getTime()
   const mins = Math.floor(diff / 60000)
-  if (mins < 1) return "à l'instant"
+  if (mins < 1) return "a l'instant"
   if (mins < 60) return `il y a ${mins}min`
   const hours = Math.floor(mins / 60)
   if (hours < 24) return `il y a ${hours}h`
@@ -26,16 +30,26 @@ function timeAgo(isoString) {
   return `il y a ${days}j`
 }
 
+function formatTime(isoString) {
+  if (!isoString) return ''
+  const d = new Date(isoString)
+  return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+}
+
 export default function ActivityFeed({ wsData }) {
   const { data } = useApi('/api/simulator/trades?limit=20', 10000)
+  const { data: journalData } = useApi('/api/journal/events?limit=20', 30000)
 
   const trades = data?.trades || []
   const openPositions = wsData?.simulator_positions || []
+  const journalEvents = journalData?.events || []
+
+  const hasActivity = openPositions.length > 0 || journalEvents.length > 0 || trades.length > 0
 
   return (
     <>
-      {openPositions.length === 0 && trades.length === 0 && (
-        <div className="empty-state">Aucune activité pour le moment</div>
+      {!hasActivity && (
+        <div className="empty-state">Aucune activite pour le moment</div>
       )}
 
       {/* Positions ouvertes en premier */}
@@ -43,11 +57,63 @@ export default function ActivityFeed({ wsData }) {
         <OpenPositionCard key={`open-${i}`} pos={pos} wsData={wsData} />
       ))}
 
-      {/* Trades fermés */}
+      {/* Evenements journal (ouvertures/fermetures DCA) */}
+      {journalEvents.length > 0 && (
+        <div style={{ marginTop: openPositions.length > 0 ? 6 : 0 }}>
+          {journalEvents.slice(0, 15).map((event, i) => (
+            <JournalEventCard key={`journal-${event.id || i}`} event={event} />
+          ))}
+        </div>
+      )}
+
+      {/* Trades fermes */}
       {trades.map((trade, i) => (
         <ClosedTradeCard key={`trade-${trade.exit_time}-${i}`} trade={trade} />
       ))}
     </>
+  )
+}
+
+function JournalEventCard({ event }) {
+  const isOpen = event.event_type === 'OPEN'
+  const isProfit = event.unrealized_pnl != null && event.unrealized_pnl >= 0
+  const meta = event.metadata || {}
+
+  return (
+    <div className={`activity-card ${isOpen ? 'activity-card--journal-open' : ''}`}
+         style={{ borderLeft: `3px solid ${isOpen ? 'var(--accent)' : (isProfit ? 'var(--accent)' : 'var(--red)')}`, marginBottom: 4 }}>
+      <div className="flex-between" style={{ marginBottom: 2 }}>
+        <span style={{ fontSize: 11, fontWeight: 600 }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', marginRight: 4,
+            background: isOpen ? 'var(--accent)' : (isProfit ? 'var(--accent)' : 'var(--red)') }} />
+          {isOpen ? 'OPEN' : 'CLOSE'} {event.symbol}
+        </span>
+        <span className="text-xs muted">{formatTime(event.timestamp)}</span>
+      </div>
+      <div className="text-xs muted">
+        {event.strategy_name}
+        {event.level != null && ` Lvl ${event.level}`}
+        {' '}&middot;{' '}{event.direction}
+        {' '}&middot;{' '}{Number(event.price).toFixed(2)}$
+      </div>
+      {!isOpen && meta.net_pnl != null && (
+        <div className="text-xs" style={{ marginTop: 1 }}>
+          <span className={`mono ${meta.net_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
+            {meta.net_pnl >= 0 ? '+' : ''}{Number(meta.net_pnl).toFixed(2)}$
+          </span>
+          {meta.exit_reason && (
+            <span className="muted" style={{ marginLeft: 6 }}>
+              ({EXIT_REASONS[meta.exit_reason] || meta.exit_reason})
+            </span>
+          )}
+        </div>
+      )}
+      {isOpen && meta.levels_open != null && (
+        <div className="text-xs muted" style={{ marginTop: 1 }}>
+          {meta.levels_open}/{meta.levels_max} niveaux
+        </div>
+      )}
+    </div>
   )
 }
 
