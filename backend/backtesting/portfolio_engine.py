@@ -124,6 +124,7 @@ class PortfolioBacktester:
         exchange: str = "binance",
         kill_switch_pct: float = 30.0,
         kill_switch_window_hours: int = 24,
+        multi_strategies: list[tuple[str, list[str]]] | None = None,
     ) -> None:
         self._config = config
         self._initial_capital = initial_capital
@@ -132,18 +133,34 @@ class PortfolioBacktester:
         self._kill_switch_pct = kill_switch_pct
         self._kill_switch_window_hours = kill_switch_window_hours
 
-        # Résoudre les assets
-        if assets:
-            self._assets = assets
+        # Multi-stratégie : liste de (strategy_name, [symbols])
+        if multi_strategies:
+            self._multi_strategies = multi_strategies
         else:
-            strat_config = getattr(config.strategies, strategy_name, None)
-            per_asset = getattr(strat_config, "per_asset", {}) if strat_config else {}
-            self._assets = sorted(per_asset.keys()) if per_asset else []
+            # Résoudre les assets pour une seule stratégie (rétro-compatible)
+            if assets:
+                resolved_assets = assets
+            else:
+                strat_config = getattr(config.strategies, strategy_name, None)
+                per_asset = getattr(strat_config, "per_asset", {}) if strat_config else {}
+                resolved_assets = sorted(per_asset.keys()) if per_asset else []
+            self._multi_strategies = [(strategy_name, resolved_assets)]
+
+        # Calculer les assets uniques (pour le chargement des candles)
+        all_symbols: set[str] = set()
+        for _, symbols in self._multi_strategies:
+            all_symbols.update(symbols)
+        self._assets = sorted(all_symbols)
 
         self._kill_freeze_until: datetime | None = None  # Sprint 24a
 
         if not self._assets:
             raise ValueError("Aucun asset sélectionné pour le portfolio backtest")
+
+    @staticmethod
+    def _symbol_from_key(runner_key: str) -> str:
+        """Extrait le symbol depuis 'strategy:symbol' ou retourne la clé telle quelle."""
+        return runner_key.split(":", 1)[1] if ":" in runner_key else runner_key
 
     async def run(
         self,
@@ -153,18 +170,21 @@ class PortfolioBacktester:
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> PortfolioResult:
         """Lance le backtest portfolio complet."""
-        n_assets = len(self._assets)
-        per_asset_capital = self._initial_capital / n_assets
+        # Compter le nombre total de runners (pas de symbols uniques)
+        n_total_runners = sum(len(syms) for _, syms in self._multi_strategies)
+        per_runner_capital = self._initial_capital / n_total_runners
+        strat_names = [s for s, _ in self._multi_strategies]
         logger.info(
-            "Portfolio backtest : {} assets, {:.0f}$ total ({:.0f}$/asset), {} → {}",
-            n_assets,
+            "Portfolio backtest : {} runners ({}), {:.0f}$ total ({:.0f}$/runner), {} → {}",
+            n_total_runners,
+            "+".join(strat_names),
             self._initial_capital,
-            per_asset_capital,
+            per_runner_capital,
             start.date(),
             end.date(),
         )
 
-        # 1. Charger candles
+        # 1. Charger candles (symbols uniques)
         db = Database(db_path)
         await db.init()
         candles_by_symbol = await self._load_candles(db, start, end)
@@ -174,34 +194,40 @@ class PortfolioBacktester:
             raise ValueError("Aucune candle chargée depuis la DB")
 
         # Filtrer assets sans données suffisantes
-        valid_assets = {
+        valid_symbols = {
             s: c
             for s, c in candles_by_symbol.items()
             if len(c) >= self.DEFAULT_WARMUP + 10
         }
-        if not valid_assets:
+        if not valid_symbols:
             raise ValueError(
                 f"Aucun asset avec assez de données (min {self.DEFAULT_WARMUP + 10} candles)"
             )
-        skipped = set(candles_by_symbol) - set(valid_assets)
+        skipped = set(candles_by_symbol) - set(valid_symbols)
         if skipped:
             logger.warning("Assets ignorés (données insuffisantes) : {}", skipped)
 
-        n_assets = len(valid_assets)
-        per_asset_capital = self._initial_capital / n_assets
+        # Filtrer les multi_strategies pour ne garder que les symbols valides
+        filtered_multi = [
+            (sname, [s for s in syms if s in valid_symbols])
+            for sname, syms in self._multi_strategies
+        ]
+        filtered_multi = [(s, syms) for s, syms in filtered_multi if syms]
+        n_total_runners = sum(len(syms) for _, syms in filtered_multi)
+        per_runner_capital = self._initial_capital / n_total_runners
 
         # 2. Créer les runners
         runners, indicator_engine = self._create_runners(
-            valid_assets.keys(), per_asset_capital
+            filtered_multi, per_runner_capital
         )
 
         # 3. Warm-up
         warmup_ends = self._warmup_runners(
-            runners, valid_assets, indicator_engine, self.DEFAULT_WARMUP
+            runners, valid_symbols, indicator_engine, self.DEFAULT_WARMUP
         )
 
         # 4. Merge et simulate
-        merged = self._merge_candles(valid_assets)
+        merged = self._merge_candles(valid_symbols)
         snapshots, realized_trades = await self._simulate(
             runners, indicator_engine, merged, warmup_ends, progress_callback
         )
@@ -211,12 +237,13 @@ class PortfolioBacktester:
 
         # 6. Build result
         period_days = (end - start).days
+        runner_keys = list(runners.keys())
         return self._build_result(
             runners,
             snapshots,
             realized_trades,
             force_closed_trades,
-            list(valid_assets.keys()),
+            runner_keys,
             period_days,
         )
 
@@ -255,29 +282,35 @@ class PortfolioBacktester:
 
     def _create_runners(
         self,
-        symbols: Any,
-        per_asset_capital: float,
+        multi_strategies: list[tuple[str, list[str]]],
+        per_runner_capital: float,
     ) -> tuple[dict[str, GridStrategyRunner], IncrementalIndicatorEngine]:
-        """Crée 1 runner par asset avec params WFO per_asset."""
-        strat_config = getattr(self._config.strategies, self._strategy_name, None)
-        per_asset_overrides = (
-            getattr(strat_config, "per_asset", {}) if strat_config else {}
-        )
+        """Crée 1 runner par (stratégie, asset) avec params WFO per_asset.
 
-        strategies = []
-        runners: dict[str, GridStrategyRunner] = {}
+        Les clés des runners sont au format 'strategy_name:symbol' pour
+        supporter plusieurs stratégies sur le même symbol.
+        """
+        strategies_list: list = []
+        runner_entries: list[tuple[str, str, Any]] = []  # (runner_key, symbol, strategy)
 
-        for symbol in symbols:
-            # Params WFO per_asset (ou defaults si pas d'override)
-            params = per_asset_overrides.get(symbol, {})
-            strategy = create_strategy_with_params(self._strategy_name, params)
-            strategies.append(strategy)
+        for strat_name, symbols in multi_strategies:
+            strat_config = getattr(self._config.strategies, strat_name, None)
+            per_asset_overrides = (
+                getattr(strat_config, "per_asset", {}) if strat_config else {}
+            )
+
+            for symbol in symbols:
+                params = per_asset_overrides.get(symbol, {})
+                strategy = create_strategy_with_params(strat_name, params)
+                strategies_list.append(strategy)
+                runner_key = f"{strat_name}:{symbol}"
+                runner_entries.append((runner_key, symbol, strategy))
 
         # Indicator engine partagé
-        indicator_engine = IncrementalIndicatorEngine(strategies)
+        indicator_engine = IncrementalIndicatorEngine(strategies_list)
 
-        for symbol, strategy in zip(symbols, strategies):
-            # GPM avec leverage de la stratégie
+        runners: dict[str, GridStrategyRunner] = {}
+        for runner_key, symbol, strategy in runner_entries:
             leverage = getattr(strategy._config, "leverage", 15)
             gpm_config = PositionManagerConfig(
                 leverage=leverage,
@@ -294,31 +327,30 @@ class PortfolioBacktester:
                 config=self._config,
                 indicator_engine=indicator_engine,
                 grid_position_manager=gpm,
-                data_engine=None,  # type: ignore[arg-type]  # jamais utilisé dans on_candle()
-                db_path=None,  # pas de persistance trades
+                data_engine=None,  # type: ignore[arg-type]
+                db_path=None,
             )
 
-            # Overrides critiques pour portfolio backtest
             runner._nb_assets = 1
-            runner._capital = per_asset_capital
-            runner._initial_capital = per_asset_capital
-            runner._portfolio_mode = True  # Sprint 24a: sizing fixe
+            runner._capital = per_runner_capital
+            runner._initial_capital = per_runner_capital
+            runner._portfolio_mode = True
             runner._stats = RunnerStats(
-                capital=per_asset_capital,
-                initial_capital=per_asset_capital,
+                capital=per_runner_capital,
+                initial_capital=per_runner_capital,
             )
 
-            runners[symbol] = runner
+            runners[runner_key] = runner
 
-        # Sprint 24a: références croisées pour global margin guard
+        # Références croisées pour global margin guard
         for runner in runners.values():
             runner._portfolio_runners = runners
             runner._portfolio_initial_capital = self._initial_capital
 
         logger.info(
-            "Créé {} runners (capital={:.0f}$/asset)",
+            "Créé {} runners (capital={:.0f}$/runner)",
             len(runners),
-            per_asset_capital,
+            per_runner_capital,
         )
         return runners, indicator_engine
 
@@ -336,25 +368,33 @@ class PortfolioBacktester:
         """Alimente les buffers indicateurs, puis désactive le warm-up.
 
         Retourne l'index de la première candle de simulation par symbol.
+        Les candles d'un symbol ne sont injectées dans l'indicator engine
+        qu'une seule fois (même si plusieurs runners utilisent ce symbol).
         """
         warmup_ends: dict[str, int] = {}
+        symbol_warmed: set[str] = set()  # éviter double injection dans l'engine
 
-        for symbol, candles in candles_by_symbol.items():
-            runner = runners.get(symbol)
-            if not runner:
+        for runner_key, runner in runners.items():
+            symbol = self._symbol_from_key(runner_key)
+            candles = candles_by_symbol.get(symbol)
+            if not candles:
                 continue
 
-            n = min(warmup_count, len(candles) - 1)  # garder au moins 1 candle de sim
+            n = min(warmup_count, len(candles) - 1)
             ma_period = runner._ma_period
 
-            # Pré-init du close_buffer
             runner._close_buffer[symbol] = deque(
                 maxlen=max(ma_period + 20, 50)
             )
 
-            # Alimenter indicator engine + close_buffer
+            # Injecter dans l'indicator engine seulement une fois par symbol
+            if symbol not in symbol_warmed:
+                for i in range(n):
+                    indicator_engine.update(symbol, "1h", candles[i])
+                symbol_warmed.add(symbol)
+
+            # Alimenter le close_buffer de chaque runner
             for i in range(n):
-                indicator_engine.update(symbol, "1h", candles[i])
                 runner._close_buffer[symbol].append(candles[i].close)
 
             # Désactiver warm-up et reset propre
@@ -366,12 +406,13 @@ class PortfolioBacktester:
             runner._positions = {}
             runner._stats = RunnerStats(capital=per_cap, initial_capital=per_cap)
 
+            # warmup_ends indexé par symbol (partagé entre runners du même symbol)
             warmup_ends[symbol] = n
 
         logger.info(
             "Warm-up terminé ({} candles/asset), {} runners prêts",
             warmup_count,
-            len(warmup_ends),
+            len(runners),
         )
         return warmup_ends
 
@@ -402,17 +443,24 @@ class PortfolioBacktester:
         snapshots: list[PortfolioSnapshot] = []
         all_trades: list[tuple[str, TradeResult]] = []
 
-        # Compteurs pour savoir quand on dépasse le warmup
-        candle_count_per_symbol: dict[str, int] = {s: 0 for s in runners}
+        # Mapping symbol → [runner_keys] pour dispatcher une candle à tous les runners du symbol
+        symbol_to_runners: dict[str, list[str]] = {}
+        for key in runners:
+            sym = self._symbol_from_key(key)
+            symbol_to_runners.setdefault(sym, []).append(key)
+
+        # Compteurs pour savoir quand on dépasse le warmup (indexé par symbol)
+        all_symbols = set(symbol_to_runners.keys())
+        candle_count_per_symbol: dict[str, int] = {s: 0 for s in all_symbols}
         last_closes: dict[str, float] = {}
-        prev_timestamp: datetime | None = None
 
         total = len(merged_candles)
         log_interval = max(total // 20, 1)
 
         for i, candle in enumerate(merged_candles):
             symbol = candle.symbol
-            if symbol not in runners:
+            runner_keys = symbol_to_runners.get(symbol)
+            if not runner_keys:
                 continue
 
             candle_count_per_symbol[symbol] += 1
@@ -422,24 +470,25 @@ class PortfolioBacktester:
             if candle_count_per_symbol[symbol] <= warmup_end:
                 continue
 
-            # Mettre à jour l'indicator engine AVANT le runner
+            # Mettre à jour l'indicator engine AVANT les runners (une seule fois par symbol)
             indicator_engine.update(symbol, "1h", candle)
 
-            # Tracker trades avant dispatch
-            runner = runners[symbol]
-            trades_before = len(runner._trades)
+            # Dispatcher à TOUS les runners de ce symbol
+            for runner_key in runner_keys:
+                runner = runners[runner_key]
+                trades_before = len(runner._trades)
 
-            # Dispatch au runner
-            await runner.on_candle(symbol, "1h", candle)
+                await runner.on_candle(symbol, "1h", candle)
 
-            # Collecter les nouveaux trades
-            if len(runner._trades) > trades_before:
-                for t in runner._trades[trades_before:]:
-                    all_trades.append(t)
+                # Collecter les nouveaux trades, re-keyed avec runner_key
+                if len(runner._trades) > trades_before:
+                    for t in runner._trades[trades_before:]:
+                        # t est (symbol, TradeResult) — remplacer symbol par runner_key
+                        all_trades.append((runner_key, t[1]))
 
             last_closes[symbol] = candle.close
 
-            # Snapshot à chaque changement de timestamp (après toutes les candles du même ts)
+            # Snapshot à chaque changement de timestamp
             next_ts = merged_candles[i + 1].timestamp if i + 1 < total else None
             if next_ts != candle.timestamp and last_closes:
                 snap = self._take_snapshot(runners, candle.timestamp, last_closes)
@@ -450,7 +499,6 @@ class PortfolioBacktester:
                     window_hours = self._kill_switch_window_hours
                     current_ts = snap.timestamp
 
-                    # Trouver l'equity au début de la fenêtre
                     window_start_equity = snap.total_equity
                     for prev_snap in reversed(snapshots[:-1]):
                         if (current_ts - prev_snap.timestamp).total_seconds() > window_hours * 3600:
@@ -469,7 +517,6 @@ class PortfolioBacktester:
                                 r._kill_switch_triggered = True
                             self._kill_freeze_until = current_ts + timedelta(hours=24)
 
-                    # Reset kill switch après cooldown de 24h
                     freeze_until = self._kill_freeze_until
                     if freeze_until and current_ts >= freeze_until:
                         for r in runners.values():
@@ -499,7 +546,8 @@ class PortfolioBacktester:
         n_positions = 0
         n_assets_active = 0
 
-        for symbol, runner in runners.items():
+        for runner_key, runner in runners.items():
+            symbol = self._symbol_from_key(runner_key)
             total_capital += runner._capital
             total_realized += runner._realized_pnl
 
@@ -543,24 +591,21 @@ class PortfolioBacktester:
     ) -> list[tuple[str, TradeResult]]:
         """Force-close toutes les positions restantes.
 
-        Retourne les trades force-closed séparément pour ne pas les
-        confondre avec les trades naturels (TP/SL).
+        Retourne les trades force-closed avec la clé runner (strategy:symbol).
         """
         force_closed: list[tuple[str, TradeResult]] = []
 
-        for symbol, runner in runners.items():
+        for runner_key, runner in runners.items():
             for pos_symbol, positions in list(runner._positions.items()):
                 if not positions:
                     continue
 
-                # Utiliser le dernier close connu du close_buffer
                 closes = runner._close_buffer.get(pos_symbol)
                 if closes:
                     exit_price = closes[-1]
                 else:
-                    exit_price = positions[-1].entry_price  # fallback
+                    exit_price = positions[-1].entry_price
 
-                # Rendre la marge
                 total_notional = sum(
                     p.entry_price * p.quantity for p in positions
                 )
@@ -570,14 +615,14 @@ class PortfolioBacktester:
                 trade = runner._gpm.close_all_positions(
                     positions,
                     exit_price,
-                    positions[-1].entry_time,  # timestamp de la dernière position
+                    positions[-1].entry_time,
                     "end_of_data",
                     MarketRegime.RANGING,
                 )
                 runner._capital += trade.net_pnl
                 runner._realized_pnl += trade.net_pnl
 
-                force_closed.append((pos_symbol, trade))
+                force_closed.append((runner_key, trade))
                 runner._positions[pos_symbol] = []
 
         if force_closed:
@@ -676,7 +721,7 @@ class PortfolioBacktester:
         snapshots: list[PortfolioSnapshot],
         realized_trades: list[tuple[str, TradeResult]],
         force_closed_trades: list[tuple[str, TradeResult]],
-        assets: list[str],
+        runner_keys: list[str],
         period_days: int,
     ) -> PortfolioResult:
         """Construit le PortfolioResult final."""
@@ -715,31 +760,34 @@ class PortfolioBacktester:
         # Kill switch
         ks_events = self._check_kill_switch(snapshots)
 
-        # Per-asset breakdown
+        # Per-runner breakdown (clé = runner_key, e.g. "grid_atr:ICP/USDT")
         per_asset: dict[str, dict] = {}
-        for symbol in assets:
-            asset_trades = [t for s, t in all_trades if s == symbol]
-            asset_realized = [t for s, t in realized_trades if s == symbol]
-            asset_force = [t for s, t in force_closed_trades if s == symbol]
-            n = len(asset_trades)
-            w = sum(1 for t in asset_trades if t.net_pnl > 0)
-            pnl = sum(t.net_pnl for t in asset_trades)
-            per_asset[symbol] = {
+        for rk in runner_keys:
+            rk_trades = [t for s, t in all_trades if s == rk]
+            rk_realized = [t for s, t in realized_trades if s == rk]
+            rk_force = [t for s, t in force_closed_trades if s == rk]
+            n = len(rk_trades)
+            w = sum(1 for t in rk_trades if t.net_pnl > 0)
+            pnl = sum(t.net_pnl for t in rk_trades)
+            per_asset[rk] = {
                 "trades": n,
                 "wins": w,
                 "win_rate": (w / n * 100) if n > 0 else 0.0,
                 "net_pnl": round(pnl, 2),
-                "realized_trades": len(asset_realized),
-                "force_closed_trades": len(asset_force),
-                "realized_pnl": round(sum(t.net_pnl for t in asset_realized), 2),
-                "force_closed_pnl": round(sum(t.net_pnl for t in asset_force), 2),
+                "realized_trades": len(rk_realized),
+                "force_closed_trades": len(rk_force),
+                "realized_pnl": round(sum(t.net_pnl for t in rk_realized), 2),
+                "force_closed_pnl": round(sum(t.net_pnl for t in rk_force), 2),
             }
+
+        # Assets uniques pour le result
+        unique_assets = sorted(set(self._symbol_from_key(k) for k in runner_keys))
 
         return PortfolioResult(
             initial_capital=self._initial_capital,
-            n_assets=len(assets),
+            n_assets=len(runner_keys),
             period_days=period_days,
-            assets=assets,
+            assets=unique_assets,
             final_equity=round(final_equity, 2),
             total_return_pct=round(total_return_pct, 2),
             total_trades=total_trades,
@@ -814,20 +862,23 @@ def format_portfolio_report(result: PortfolioResult) -> str:
     lines.append("")
 
     # Per-asset (trié par P&L)
-    lines.append("  --- Par Asset ---")
+    lines.append("  --- Par Runner ---")
     sorted_assets = sorted(
         result.per_asset_results.items(),
         key=lambda x: x[1].get("net_pnl", 0),
         reverse=True,
     )
-    for symbol, stats in sorted_assets:
+    # Largeur dynamique pour les clés (strategy:symbol peut être long)
+    max_key_len = max((len(k) for k in result.per_asset_results), default=14)
+    col_w = max(max_key_len, 14)
+    for key, stats in sorted_assets:
         trades = stats.get("trades", 0)
         wr = stats.get("win_rate", 0)
         pnl = stats.get("net_pnl", 0)
         fc = stats.get("force_closed_trades", 0)
         fc_label = f" ({fc}fc)" if fc > 0 else ""
         lines.append(
-            f"    {symbol:14s}  {trades:3d} trades{fc_label:6s}  "
+            f"    {key:{col_w}s}  {trades:4d} trades{fc_label:6s}  "
             f"WR {wr:5.1f}%  P&L {pnl:+9.2f} $"
         )
 

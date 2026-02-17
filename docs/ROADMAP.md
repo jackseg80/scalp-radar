@@ -1047,6 +1047,38 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 1012 tests (+5 nouveaux), 0 régression.
 
+### Sprint 24b — Portfolio Backtest Multi-Stratégie ✅
+
+**But** : Supporter plusieurs stratégies simultanées dans le portfolio backtest pour mesurer la complémentarité grid_atr + grid_trend sur un pool de capital unique.
+
+**Problème** : `PortfolioBacktester` ne prenait qu'un seul `strategy_name`. Impossible de tester grid_atr (10 assets) + grid_trend (6 assets) ensemble.
+
+**Changements** :
+
+1. **`portfolio_engine.py`** — paramètre `multi_strategies: list[tuple[str, list[str]]]`
+   - Clés des runners au format `strategy:symbol` (ex: `grid_atr:ICP/USDT`)
+   - `_symbol_from_key()` extrait le symbol, rétro-compatible avec l'ancien format
+   - `_create_runners()` itère sur `multi_strategies`, crée N runners avec indicator engine partagé
+   - `_warmup_runners()` injecte les candles une seule fois par symbol dans l'engine
+   - `_simulate()` mapping `symbol → [runner_keys]` pour dispatcher à tous les runners d'un symbol
+   - `_build_result()` breakdown `per_asset_results` indexé par `runner_key`
+   - `format_portfolio_report()` section "Par Runner" avec largeur dynamique
+
+2. **`scripts/portfolio_backtest.py`** — CLI enrichi
+   - `--strategies strat1:sym1,sym2+strat2:sym3,sym4` — format explicite
+   - `--preset combined` — lit automatiquement les per_asset de grid_atr + grid_trend
+
+3. **Rétro-compatibilité totale** — sans `multi_strategies`, auto-construit `[(strategy_name, assets)]`
+
+**Tests** : 4 nouveaux tests
+
+- `test_multi_strategy_creates_runners` — 2 runners avec clés strategy:symbol
+- `test_same_symbol_dispatched_to_both` — même symbol dispatché aux 2 runners
+- `test_capital_split` — 4 runners × 2500$ chacun
+- `test_backward_compatible` — mode single-strategy inchangé
+
+**Résultat** : 1016 tests (+4 nouveaux), 0 régression.
+
 ### Sprint 24 — Live Trading Progressif
 
 **But** : Passer du paper trading au live avec capital réel progressif.
@@ -1141,17 +1173,17 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (17 février 2026)
 
-- **1012 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a**
-- **Phase 6 en cours** — Sprint 24a (Portfolio Backtest Realistic Mode) terminé
+- **1016 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b**
+- **Phase 6 en cours** — Sprint 24b (Portfolio Backtest Multi-Stratégie) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **21 assets** (THETA/USDT retiré — inexistant sur Bitget) : 14 Grade A + 7 Grade B pour grid_atr
 - **Paper trading actif** : grid_atr sur 21 assets (prod déployée), envelope_dca disabled (remplacé par grid_atr)
-- **Portfolio backtest réaliste** : sizing fixe, global margin guard, kill switch temps réel
+- **Portfolio backtest multi-stratégie** : grid_atr + grid_trend simultanés, sizing fixe, global margin guard, kill switch temps réel
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : WFO grid_trend + grid_funding sur assets → Sprint 24 (live progressif)
+- **Prochaine étape** : Portfolio backtest combined (grid_atr + grid_trend) → Sprint 24 (live progressif)
 
 ---
 

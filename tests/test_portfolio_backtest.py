@@ -556,7 +556,7 @@ class TestPerAssetBreakdown:
             snapshots=[],
             realized_trades=realized,
             force_closed_trades=force_closed,
-            assets=["AAA/USDT", "BBB/USDT"],
+            runner_keys=["AAA/USDT", "BBB/USDT"],
             period_days=90,
         )
 
@@ -606,7 +606,7 @@ class TestFormatReport:
         assert "P&L réalisé" in report
         assert "P&L force-closed" in report
         assert "Kill Switch" in report
-        assert "Par Asset" in report
+        assert "Par Runner" in report
 
 
 # ─── Test Integration Simulation ───────────────────────────────────────────
@@ -987,3 +987,149 @@ class TestKillSwitchPortfolio:
         assert runner_a._kill_switch_triggered is False, "Runner A devrait être dégelé après cooldown"
         assert runner_b._kill_switch_triggered is False, "Runner B devrait être dégelé après cooldown"
         assert backtester._kill_freeze_until is None
+
+
+# ─── Tests Sprint 24b — Multi-Stratégie ──────────────────────────────────
+
+
+class TestMultiStrategyCreatesRunners:
+    """multi_strategies crée des runners avec clés strategy:symbol."""
+
+    def test_multi_strategy_creates_runners(self):
+        config = _make_mock_config(n_assets=1)
+        # Configurer per_asset pour les deux stratégies
+        config.strategies.grid_atr.per_asset = {}
+        config.strategies.grid_trend = MagicMock()
+        config.strategies.grid_trend.per_asset = {}
+
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            multi_strategies=[
+                ("grid_atr", ["AAA/USDT"]),
+                ("grid_trend", ["AAA/USDT"]),
+            ],
+        )
+
+        runners, engine = backtester._create_runners(
+            backtester._multi_strategies, 5000.0
+        )
+
+        assert "grid_atr:AAA/USDT" in runners
+        assert "grid_trend:AAA/USDT" in runners
+        assert len(runners) == 2
+        # Chaque runner a le bon capital
+        for r in runners.values():
+            assert r._capital == 5000.0
+            assert r._initial_capital == 5000.0
+            assert r._portfolio_mode is True
+
+
+class TestMultiStrategySameSymbolDispatched:
+    """Même symbol dans 2 stratégies → les 2 runners reçoivent les candles."""
+
+    @pytest.mark.asyncio
+    async def test_same_symbol_dispatched_to_both(self):
+        config = _make_mock_config(n_assets=1)
+        config.strategies.grid_atr.per_asset = {}
+        config.strategies.grid_trend = MagicMock()
+        config.strategies.grid_trend.per_asset = {}
+
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            multi_strategies=[
+                ("grid_atr", ["AAA/USDT"]),
+                ("grid_trend", ["AAA/USDT"]),
+            ],
+        )
+
+        runners, engine = backtester._create_runners(
+            backtester._multi_strategies, 5000.0
+        )
+        candles = _make_flat_candles("AAA/USDT", n=120, price=100.0)
+
+        # Warm-up
+        warmup_ends = backtester._warmup_runners(
+            runners, {"AAA/USDT": candles}, engine, warmup_count=50
+        )
+        assert warmup_ends["AAA/USDT"] == 50
+
+        # Simulate
+        merged = PortfolioBacktester._merge_candles({"AAA/USDT": candles})
+        snapshots, trades = await backtester._simulate(
+            runners, engine, merged, warmup_ends
+        )
+
+        # Les deux runners doivent avoir reçu des candles (close_buffer alimenté)
+        for rk in ["grid_atr:AAA/USDT", "grid_trend:AAA/USDT"]:
+            runner = runners[rk]
+            buf = runner._close_buffer.get("AAA/USDT")
+            assert buf is not None, f"Runner {rk} n'a pas de close_buffer"
+            assert len(buf) >= 50, f"Runner {rk} close_buffer trop court ({len(buf)})"
+
+
+class TestMultiStrategyCapitalSplit:
+    """2 stratégies × 2 assets = 4 runners → chacun reçoit 2500$."""
+
+    def test_capital_split(self):
+        config = _make_mock_config(n_assets=2)
+        config.strategies.grid_atr.per_asset = {}
+        config.strategies.grid_trend = MagicMock()
+        config.strategies.grid_trend.per_asset = {}
+
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            multi_strategies=[
+                ("grid_atr", ["AAA/USDT", "BBB/USDT"]),
+                ("grid_trend", ["AAA/USDT", "BBB/USDT"]),
+            ],
+        )
+
+        runners, engine = backtester._create_runners(
+            backtester._multi_strategies, 2500.0
+        )
+
+        assert len(runners) == 4
+        expected_keys = {
+            "grid_atr:AAA/USDT",
+            "grid_atr:BBB/USDT",
+            "grid_trend:AAA/USDT",
+            "grid_trend:BBB/USDT",
+        }
+        assert set(runners.keys()) == expected_keys
+
+        for r in runners.values():
+            assert r._capital == 2500.0
+            assert r._initial_capital == 2500.0
+
+
+class TestSingleStrategyBackwardCompatible:
+    """multi_strategies=None + strategy_name='grid_atr' → rétro-compatible."""
+
+    def test_backward_compatible(self):
+        config = _make_mock_config(n_assets=2)
+        config.strategies.grid_atr.per_asset = {
+            "AAA/USDT": {},
+            "BBB/USDT": {},
+        }
+
+        # Sans multi_strategies → mode single
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            strategy_name="grid_atr",
+        )
+
+        # _multi_strategies doit être auto-construit
+        assert backtester._multi_strategies == [("grid_atr", ["AAA/USDT", "BBB/USDT"])]
+        assert backtester._assets == ["AAA/USDT", "BBB/USDT"]
+
+        runners, engine = backtester._create_runners(
+            backtester._multi_strategies, 5000.0
+        )
+
+        assert len(runners) == 2
+        assert "grid_atr:AAA/USDT" in runners
+        assert "grid_atr:BBB/USDT" in runners

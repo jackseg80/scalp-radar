@@ -68,10 +68,51 @@ def _result_to_dict(result: PortfolioResult) -> dict:
     return d
 
 
+def _parse_multi_strategies(raw: str) -> list[tuple[str, list[str]]]:
+    """Parse le format 'strat1:sym1,sym2+strat2:sym3,sym4'."""
+    result = []
+    for part in raw.split("+"):
+        part = part.strip()
+        if ":" not in part:
+            raise ValueError(f"Format invalide '{part}' — attendu 'strategy:sym1,sym2'")
+        strat_name, symbols_str = part.split(":", 1)
+        symbols = [s.strip() for s in symbols_str.split(",") if s.strip()]
+        if not symbols:
+            raise ValueError(f"Aucun symbol pour la stratégie '{strat_name}'")
+        result.append((strat_name.strip(), symbols))
+    return result
+
+
+def _resolve_preset(preset: str, config) -> list[tuple[str, list[str]]]:
+    """Résout un preset en multi_strategies."""
+    if preset == "combined":
+        strats = []
+        for sname in ["grid_atr", "grid_trend"]:
+            scfg = getattr(config.strategies, sname, None)
+            pa = getattr(scfg, "per_asset", {}) if scfg else {}
+            if pa:
+                strats.append((sname, sorted(pa.keys())))
+        if not strats:
+            raise ValueError("Preset 'combined' : aucun per_asset trouvé pour grid_atr/grid_trend")
+        return strats
+    raise ValueError(f"Preset inconnu : '{preset}' (disponibles : combined)")
+
+
 async def main(args: argparse.Namespace) -> None:
     """Point d'entrée principal."""
     setup_logging(level="INFO")
     config = get_config()
+
+    # Résoudre multi_strategies
+    multi_strategies = None
+    strategy_label = args.strategy
+
+    if args.preset:
+        multi_strategies = _resolve_preset(args.preset, config)
+        strategy_label = args.preset
+    elif args.strategies:
+        multi_strategies = _parse_multi_strategies(args.strategies)
+        strategy_label = "+".join(s for s, _ in multi_strategies)
 
     assets = args.assets.split(",") if args.assets else None
 
@@ -83,6 +124,7 @@ async def main(args: argparse.Namespace) -> None:
         exchange=args.exchange,
         kill_switch_pct=args.kill_switch_pct,
         kill_switch_window_hours=args.kill_switch_window,
+        multi_strategies=multi_strategies,
     )
 
     end = datetime.now(timezone.utc)
@@ -99,7 +141,7 @@ async def main(args: argparse.Namespace) -> None:
         result_id = save_result_sync(
             db_path=args.db,
             result=result,
-            strategy_name=args.strategy,
+            strategy_name=strategy_label,
             exchange=args.exchange,
             kill_switch_pct=args.kill_switch_pct,
             kill_switch_window_hours=args.kill_switch_window,
@@ -177,6 +219,18 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Label pour identifier le run",
+    )
+    parser.add_argument(
+        "--strategies",
+        type=str,
+        default=None,
+        help="Multi-stratégie : 'strat1:sym1,sym2+strat2:sym3,sym4'",
+    )
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default=None,
+        help="Preset multi-stratégie (ex: 'combined' = grid_atr + grid_trend per_asset)",
     )
 
     args = parser.parse_args()
