@@ -1,7 +1,7 @@
 # Scalp Radar
 
 Outil de trading multi-stratégies pour crypto futures (Bitget).
-9 stratégies (4 scalp 5m + 3 swing 1h + 2 grid/DCA 1h), optimisation Walk-Forward automatique,
+13 stratégies (4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h), optimisation Walk-Forward automatique,
 paper trading live, executor mainnet, et dashboard temps réel.
 
 ## Prérequis
@@ -71,27 +71,66 @@ uv run python -m scripts.fetch_oi
 uv run pytest tests/ -v
 ```
 
-689 tests couvrant : modèles, config, database, indicateurs, 9 stratégies (4 scalp 5m + 3 swing 1h + 2 grid/DCA), backtesting (mono + multi-position), simulator, arena, API, state manager, telegram, watchdog, executor (mono + grid DCA), risk manager, optimisation WFO, fast engines, funding/OI data, regime analysis, combo results.
+1037+ tests couvrant : modèles, config, database, indicateurs, 13 stratégies (4 scalp 5m + 3 swing 1h + 6 grid/DCA), backtesting (mono + multi-position + portfolio), simulator, arena, API, state manager, telegram, watchdog, executor (mono + grid DCA), risk manager, optimisation WFO, fast engines, funding/OI data, regime analysis, combo results, activity journal.
 
 ## Endpoints
+
+### Core & Simulator
 
 | Endpoint | Description |
 | --- | --- |
 | `GET /health` | Status du système (data engine, database, uptime) |
-| `GET /api/simulator/status` | Statut du simulateur et stratégies actives |
+| `GET /api/simulator/status` | Statut du simulateur et stratégies actives (inclut kill_switch_reason) |
 | `GET /api/simulator/positions` | Positions ouvertes par stratégie |
 | `GET /api/simulator/trades` | Trades récents (paginé, ?limit=50) |
 | `GET /api/simulator/performance` | Métriques de performance par stratégie |
+| `GET /api/simulator/conditions` | Indicateurs courants + conditions par stratégie/asset |
+| `GET /api/simulator/equity` | Courbe d'equity (depuis trades + journal, ?since= filter) |
+| `GET /api/simulator/grid-state` | État grid/DCA des runners actifs |
+| `POST /api/simulator/kill-switch/reset` | Reset kill switch global et réactive tous les runners |
+
+### Arena & Signals
+
+| Endpoint | Description |
+| --- | --- |
 | `GET /api/arena/ranking` | Classement des stratégies par return % |
 | `GET /api/arena/strategy/{name}` | Détail d'une stratégie (status + trades + perf) |
 | `GET /api/signals/recent` | Derniers signaux (paginé, ?limit=20) |
-| `GET /api/simulator/conditions` | Indicateurs courants + conditions par stratégie/asset |
 | `GET /api/signals/matrix` | Matrice simplifiée heatmap (stratégie × asset) |
-| `GET /api/simulator/equity` | Courbe d'equity (depuis trades, ?since= filter) |
+
+### Executor (Live Trading)
+
+| Endpoint | Description |
+| --- | --- |
 | `GET /api/executor/status` | Statut executor (position, SL/TP, kill switch) |
 | `POST /api/executor/test-trade?symbol=BTC/USDT` | Ouvre un trade test (capital minimal, symbole configurable) |
 | `POST /api/executor/test-close?symbol=BTC/USDT` | Ferme la position ouverte par market close |
-| `WS /ws/live` | WebSocket push temps réel (status, ranking, prix, executor, positions) |
+
+### Portfolio Backtest
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /api/portfolio/presets` | Presets de configuration portfolio (top_10, all_assets, etc.) |
+| `GET /api/portfolio/backtests` | Liste des runs portfolio sauvegardés |
+| `GET /api/portfolio/backtests/{id}` | Détail d'un run portfolio |
+| `POST /api/portfolio/backtests` | Créer et lancer un backtest portfolio |
+| `POST /api/portfolio/run` | Lancer un backtest portfolio async (returns job_id) |
+| `GET /api/portfolio/status/{job_id}` | Status d'un job portfolio en cours |
+| `POST /api/portfolio/compare` | Comparer plusieurs runs portfolio |
+
+### Activity Journal
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /api/journal/snapshots` | Snapshots equity/margin/unrealized (?limit=288 par défaut, 24h) |
+| `GET /api/journal/events` | Événements positions (OPEN/CLOSE/ADJUST, ?limit=100) |
+| `GET /api/journal/stats` | Statistiques journal (premier/dernier snapshot, count events) |
+
+### WebSocket
+
+| Endpoint | Description |
+| --- | --- |
+| `WS /ws/live` | Push temps réel (status, ranking, prix, executor, positions, grid_state) |
 
 ## Stack technique
 
@@ -111,16 +150,16 @@ Voir [CLAUDE.md](CLAUDE.md) pour l'architecture complète et les décisions tech
 ```text
 config/              # Paramètres YAML (assets, strategies, risk, exchanges, param_grids)
 backend/core/        # Modèles, config, database, data engine, indicateurs, position managers (mono + grid)
-backend/strategies/  # 9 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian, supertrend, envelope_dca, envelope_dca_short) + base_grid + factory
+backend/strategies/  # 13 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend) + base_grid + factory
 backend/optimization/# WFO, overfitting detection, fast engines (mono + multi), indicator cache, grading
-backend/backtesting/ # Engines (mono + multi-position), metrics, simulator (paper trading), arena
+backend/backtesting/ # Engines (mono + multi-position + portfolio), metrics, simulator (paper trading), arena, portfolio_engine, portfolio_db
 backend/execution/   # Executor live trading (Bitget), risk manager, adaptive selector
-backend/api/         # FastAPI + endpoints simulator/arena/signals/executor + WebSocket
+backend/api/         # FastAPI + endpoints simulator/arena/signals/executor/portfolio + WebSocket
 backend/alerts/      # Telegram client, Notifier, Heartbeat
 backend/monitoring/  # Watchdog (data freshness, WS, stratégies)
-scripts/             # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server
-frontend/src/        # React dashboard (28 composants, Scanner/Heatmap/Explorer/Research/Diagnostic)
-tests/               # pytest (689 tests, 41 fichiers)
+scripts/             # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
+frontend/src/        # React dashboard (32+ composants, Scanner/Heatmap/Explorer/Research/Portfolio/Diagnostic)
+tests/               # pytest (1037+ tests, 55+ fichiers)
 ```
 
 ## Déploiement production
@@ -198,3 +237,25 @@ uv run python -m scripts.optimize --all --apply
 - [x] Sprint 14c — DiagnosticPanel (analyse intelligente WFO, 6 règles)
 - [x] Sprint 15 — Stratégie Envelope DCA SHORT (miroir LONG, fast engine direction=-1)
 - [x] Sprint 15b — Analyse par régime de marché (Bull/Bear/Range/Crash)
+- [x] Sprint 15c-15d — Grading refinement (combo_score, consistance, top 5, bouton apply A/B, auto-add assets)
+- [x] Sprint 16+17 — Dashboard Scanner Grid (GridSummary, endpoint grid-state, WS push, DataEngine batching)
+- [x] Sprint 19 — Stratégie Grid ATR (10e stratégie, enveloppes ATR adaptatives, 3240 combos WFO)
+- [x] Sprint 19b-19d — Grid ATR wfo_combo_results + régimes marché + grading Bitget transfer
+- [x] Sprint 20a — Sizing equal allocation + margin guard 70%
+- [x] Sprint 20b — Portfolio Backtest Multi-Asset (21 assets × 90j, kill switch temps réel, snapshots equity/margin)
+- [x] Sprint 20b-UI — Frontend Portfolio Backtest (CRUD, equity curve SVG, drawdown chart, comparateur multi-runs)
+- [x] Sprint 21a — Stratégie Grid Multi-TF (11e stratégie, Supertrend 4h + Grid ATR 1h, 384 combos WFO)
+- [x] Sprint 22 — Stratégie Grid Funding (12e stratégie, DCA funding négatif, funding payments 8h, 2592 combos WFO)
+- [x] Sprint Perf — Numba JIT Optimization (speedup 5-10x WFO, fallback transparent)
+- [x] Sprint 23 — Grid Trend (13e stratégie, trend following DCA, EMA cross + ADX + trailing stop ATR, 2592 combos WFO)
+- [x] Micro-Sprint Audit — Auth executor (API key), async I/O StateManager, buffer candles DataEngine
+- [x] Sprint 23b — Grid Trend compute_live_indicators (paper/portfolio fix)
+- [x] Sprint 24a — Portfolio Backtest Realistic Mode (sizing fixe, global margin guard, kill switch temps réel)
+- [x] Sprint 24b — Portfolio Backtest Multi-Stratégie (clé runner strategy:symbol, dispatch multi-runners)
+- [x] Sprint 25 — Activity Journal (snapshots equity/margin 5min, hooks OPEN/CLOSE DCA, ActivityFeed frontend)
+- [x] Hotfix 25a — Retry DB writes journal (3 tentatives, backoff, throttle batch events)
+- [ ] Hotfix 25b — Kill Switch Reliability (en cours : reset API, alerte restore, raison persistée, fix positions perdues)
+
+---
+
+**Dernière mise à jour :** 2026-02-17
