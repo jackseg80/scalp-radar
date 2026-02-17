@@ -6,6 +6,7 @@ Gère le stockage des candles, signaux, trades et état de session.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 from datetime import datetime
@@ -932,10 +933,31 @@ class Database:
                 ON position_events (strategy_name, symbol);
         """)
 
+    async def _execute_with_retry(
+        self, query: str, params: tuple, *, max_retries: int = 3
+    ) -> None:
+        """Execute + commit avec retry sur 'database is locked'."""
+        assert self._conn is not None
+        backoff = 0.1
+        for attempt in range(max_retries):
+            try:
+                await self._conn.execute(query, params)
+                await self._conn.commit()
+                return
+            except Exception as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    logger.warning(
+                        "DB locked (attempt {}/{}), retry in {}s",
+                        attempt + 1, max_retries, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
+                else:
+                    raise
+
     async def insert_portfolio_snapshot(self, snapshot: dict) -> None:
         """Insère un snapshot portfolio."""
-        assert self._conn is not None
-        await self._conn.execute(
+        await self._execute_with_retry(
             """INSERT INTO portfolio_snapshots
                (timestamp, equity, capital, margin_used, margin_ratio,
                 realized_pnl, unrealized_pnl, n_positions, n_assets, breakdown_json)
@@ -953,7 +975,6 @@ class Database:
                 json.dumps(snapshot.get("breakdown")) if snapshot.get("breakdown") else None,
             ),
         )
-        await self._conn.commit()
 
     async def get_portfolio_snapshots(
         self, since: str | None = None, until: str | None = None, limit: int = 2000
@@ -985,8 +1006,7 @@ class Database:
 
     async def insert_position_event(self, event: dict) -> None:
         """Insère un événement de position."""
-        assert self._conn is not None
-        await self._conn.execute(
+        await self._execute_with_retry(
             """INSERT INTO position_events
                (timestamp, strategy_name, symbol, event_type, level,
                 direction, price, quantity, unrealized_pnl, margin_used, metadata_json)
@@ -1005,7 +1025,6 @@ class Database:
                 json.dumps(event.get("metadata")) if event.get("metadata") else None,
             ),
         )
-        await self._conn.commit()
 
     async def get_position_events(
         self, since: str | None = None, limit: int = 100,

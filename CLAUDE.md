@@ -18,6 +18,7 @@ and presents results via a real-time dashboard.
   - **IMPORTANT pour Claude Code** : Mettre à jour ce fichier après chaque plan de sprint complété
   - Ajouter les résultats, leçons apprises, bugs corrigés dans la section du sprint concerné
   - Mettre à jour "ÉTAT ACTUEL" avec le nouveau nombre de tests et la prochaine étape
+  - **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 13 stratégies de trading (logique, paramètres, exemples)
   - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI, requêtes DB, déploiement, méthodologie
   - **IMPORTANT pour Claude Code** : Consulter ce fichier avant de proposer des commandes
 
@@ -221,6 +222,8 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 23b : grid_trend compute_live_indicators (paper/portfolio fix, calcul EMA+ADX depuis buffer candles) (1007 tests)
 - Sprint 24a : Portfolio Backtest Realistic Mode — sizing fixe (_portfolio_mode), global margin guard (tous runners), kill switch temps réel (freeze/dégel 24h) (1012 tests)
 - Sprint 24b : Portfolio Backtest Multi-Stratégie — clé runner strategy:symbol, dispatch multi-runners par symbol, CLI --strategies/--preset combined (1016 tests)
+- Sprint 25 : Activity Journal — 2 tables DB (portfolio_snapshots, position_events), snapshots equity/margin/unrealized 5min, hooks OPEN/CLOSE DCA, 3 endpoints API, frontend EquityCurve double source + ActivityFeed événements journal (1037 tests)
+- Hotfix 25a : Retry DB writes journal — `_execute_with_retry()` 3 tentatives avec backoff 100ms/200ms sur "database is locked", throttle 50ms entre INSERT events si batch > 2 (1037 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

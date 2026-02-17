@@ -1128,6 +1128,15 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 1037 tests (+21 nouveaux), 0 régression.
 
+**Hotfix 25a — Retry DB writes** :
+
+- Problème : "database is locked" avec connexion sync sqlite3 de DataEngine `_flush_candle_buffer()` en concurrent avec les INSERT journal
+- Solution :
+  - `_execute_with_retry()` dans database.py (3 tentatives, backoff 100ms/200ms sur "locked")
+  - `insert_portfolio_snapshot()` et `insert_position_event()` utilisent retry
+  - Throttle `await asyncio.sleep(0.05)` entre INSERT events si batch > 2 dans `_dispatch_candle()`
+- 0 régression (1037 tests passants)
+
 ### Sprint 26 — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.

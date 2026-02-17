@@ -8,6 +8,7 @@ Sprint 11 : GridStrategyRunner pour les stratégies grid/DCA (envelope_dca).
 
 from __future__ import annotations
 
+import asyncio
 import math
 import sqlite3
 from collections import deque
@@ -1673,9 +1674,11 @@ class Simulator:
             # Sprint 25 : drain journal events vers la DB
             if self._db and hasattr(runner, "_pending_journal_events") and runner._pending_journal_events:
                 journal_events, runner._pending_journal_events = runner._pending_journal_events, []
-                for event in journal_events:
+                for i, event in enumerate(journal_events):
                     try:
                         await self._db.insert_position_event(event)
+                        if len(journal_events) > 2 and i < len(journal_events) - 1:
+                            await asyncio.sleep(0.05)
                     except Exception as e:
                         logger.warning("Journal: erreur insert event: {}", e)
 
