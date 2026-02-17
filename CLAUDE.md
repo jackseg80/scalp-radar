@@ -19,6 +19,7 @@ and presents results via a real-time dashboard.
   - Ajouter les résultats, leçons apprises, bugs corrigés dans la section du sprint concerné
   - Mettre à jour "ÉTAT ACTUEL" avec le nouveau nombre de tests et la prochaine étape
   - **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 13 stratégies de trading (logique, paramètres, exemples)
+  - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Architecture runtime, flux de données, boot/shutdown, persistence
   - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI, requêtes DB, déploiement, méthodologie
   - **IMPORTANT pour Claude Code** : Consulter ce fichier avant de proposer des commandes
 
