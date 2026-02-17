@@ -79,3 +79,15 @@ class TestConfigValidation:
         """Un répertoire vide doit échouer."""
         with pytest.raises(Exception):
             AppConfig(config_dir=tmp_path, env_file=None)
+
+    def test_selector_bypass_env_override_true(self, config_dir, monkeypatch, tmp_path):
+        """SELECTOR_BYPASS_AT_BOOT=true dans .env override risk.yaml (false)."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SELECTOR_BYPASS_AT_BOOT=true\n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.risk.selector_bypass_at_boot is True
+
+    def test_selector_bypass_env_not_set(self, config_dir):
+        """Sans env var, risk.yaml value est utilisée (false)."""
+        config = AppConfig(config_dir=config_dir, env_file=None)
+        assert config.risk.selector_bypass_at_boot is False

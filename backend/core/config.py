@@ -503,6 +503,7 @@ class SecretsConfig(BaseSettings):
     heartbeat_interval: int = 3600  # secondes (1h par défaut, overridable via .env)
     live_trading: bool = False  # LIVE_TRADING env var, défaut false = simulation only
     # Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
+    selector_bypass_at_boot: bool | None = None  # Override risk.yaml si défini dans .env
 
     # Sync WFO local → serveur
     sync_server_url: str = ""  # SYNC_SERVER_URL, ex: "http://192.168.1.200:8000"
@@ -565,6 +566,10 @@ class AppConfig:
         if env_file and Path(env_file).exists():
             kwargs["_env_file"] = str(env_file)
         self.secrets = SecretsConfig(**kwargs)
+
+        # Override YAML par env var (.env)
+        if self.secrets.selector_bypass_at_boot is not None:
+            self.risk.selector_bypass_at_boot = self.secrets.selector_bypass_at_boot
 
         # Validations croisées
         self._validate_cross_config()
