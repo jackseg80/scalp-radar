@@ -185,7 +185,7 @@ class TestExtraDataBuilder:
             ts_iso = candle.timestamp.isoformat()
             assert ts_iso in result
             assert EXTRA_FUNDING_RATE in result[ts_iso]
-            assert result[ts_iso][EXTRA_FUNDING_RATE] == 0.05
+            assert result[ts_iso][EXTRA_FUNDING_RATE] == 0.05 / 100  # DB % → decimal
 
     def test_funding_updates_on_new_rate(self):
         """Le funding rate change quand un nouveau rate arrive."""
@@ -205,8 +205,8 @@ class TestExtraDataBuilder:
         # Premières 12 bougies = 0.01, après = 0.05
         ts_first = candles[0].timestamp.isoformat()
         ts_last = candles[-1].timestamp.isoformat()
-        assert result[ts_first][EXTRA_FUNDING_RATE] == 0.01
-        assert result[ts_last][EXTRA_FUNDING_RATE] == 0.05
+        assert result[ts_first][EXTRA_FUNDING_RATE] == 0.01 / 100  # DB % → decimal
+        assert result[ts_last][EXTRA_FUNDING_RATE] == 0.05 / 100  # DB % → decimal
 
     def test_oi_change_pct(self):
         """L'OI change est calculé correctement (variation %)."""

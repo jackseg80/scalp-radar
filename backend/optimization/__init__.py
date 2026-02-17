@@ -57,7 +57,11 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
 }
 
 # Stratégies qui nécessitent extra_data (funding rates, OI) pour le backtest
-STRATEGIES_NEED_EXTRA_DATA: set[str] = {"funding", "liquidation", "grid_funding"}
+STRATEGIES_NEED_EXTRA_DATA: set[str] = {
+    "funding", "liquidation",
+    "grid_funding", "grid_atr", "envelope_dca", "envelope_dca_short",
+    "grid_multi_tf", "grid_trend",
+}
 
 # Stratégies grid/DCA (utilisent MultiPositionEngine au lieu de BacktestEngine)
 GRID_STRATEGIES: set[str] = {"envelope_dca", "envelope_dca_short", "grid_atr", "grid_multi_tf", "grid_funding", "grid_trend"}

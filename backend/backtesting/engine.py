@@ -55,6 +55,7 @@ class BacktestResult:
     equity_curve: list[float]
     equity_timestamps: list[datetime]
     final_capital: float
+    funding_paid_total: float = 0.0
 
 
 class BacktestEngine:

@@ -1192,7 +1192,69 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 1049 tests (+12 nouveaux), 0 régression. Kill switch global pleinement fonctionnel avec visibilité et contrôle API.
 
-### Sprint 26 — Monitoring & Alertes V2
+### Sprint 26 — Funding Costs dans le Backtest ✅
+
+**But** : Appliquer les coûts de funding rate (toutes les 8h : 00:00, 08:00, 16:00 UTC) à TOUTES les stratégies grid/DCA dans les deux moteurs de backtest (event-driven + fast engine).
+
+**Problème** : Seule la stratégie `grid_funding` calculait les funding costs. Les 5 autres stratégies grid (`grid_atr`, `envelope_dca`, `envelope_dca_short`, `grid_multi_tf`, `grid_trend`) ignoraient le funding, faussant les résultats WFO. En live sur Bitget futures, TOUTES les positions ouvertes paient ou reçoivent du funding toutes les 8h.
+
+**Formule** : `funding_payment = -funding_rate × notional_value × direction`
+- LONG + funding positif → paie (coût)
+- LONG + funding négatif → reçoit (revenu)
+- SHORT : inversé
+
+**Changements** :
+
+1. **Phase 0 — Fix Convention /100** (CRITIQUE CASCADE)
+   - `extra_data_builder.py` ligne 62 : divise par 100 (DB stocke en %, convertir en decimal)
+   - `grid_funding.py` ligne 125 : retire la division /100 (sinon double division !)
+   - Tests adaptés : `funding_rate=-0.10` → `-0.001` (decimal équivalent)
+
+2. **Phase 1 — MultiPositionEngine** (event-driven)
+   - `engine.py` : nouveau champ `BacktestResult.funding_paid_total: float = 0.0`
+   - `multi_engine.py` : settlement detection 8h UTC avec timezone handling, formule unifiée
+   - Utilise `entry_price × quantity` (pas `candle.close`) pour cohérence avec fast engine
+
+3. **Phase 2 — Fast Engine** (`_simulate_grid_common`)
+   - Settlement mask vectorisé : `hours = ((candle_ts_ms / 3600000) % 24).astype(int)`
+   - Funding costs appliqués entre exit check et capital guard
+   - Wrappers grid_atr/envelope_dca/grid_multi_tf/grid_trend passent `funding_rates`
+
+4. **Phase 3 — Indicator Cache**
+   - Étendre la condition `grid_funding` → set de 6 stratégies grid
+   - db_path optionnel (graceful degradation : `funding_rates_1h=None` si pas de DB)
+
+5. **Phase 4 — Plumbing WFO**
+   - `STRATEGIES_NEED_EXTRA_DATA` étendu aux 6 grid strategies
+   - `portfolio_engine.py` : champ `PortfolioResult.funding_paid_total`
+
+6. **Hotfix 26a — Affichage Funding** ✅
+   - `metrics.py` : 5 nouveaux champs (`funding_paid_total`, `backtest_start`, `backtest_end`, `initial_capital`, `leverage`)
+   - Section "Contexte" dans `format_metrics_table()` + ligne "Funding" conditionnelle (caché si zéro)
+   - `report.py` : `ValidationResult.funding_paid_total` extrait depuis backtest
+   - `optimize.py` : affichage "Funding total" dans section Validation Bitget
+
+**Tests** : 29 nouveaux tests (25 Sprint 26 + 4 Hotfix 26a) → 1078 passants
+
+- 5 tests settlement detection (UTC conversion, mask vectorisé, 3 heures 0/8/16)
+- 6 tests calcul funding (LONG/SHORT × positif/négatif, notional entry_price, accumulation)
+- 4 tests convention /100 (extra_data_builder, indicator_cache, grid_funding no double, end-to-end)
+- 3 tests backward compat (BacktestResult sans funding, constructeur kwargs)
+- 4 tests parité engines (grid_atr/envelope_dca/grid_trend < 0.1% delta, stratégies sans funding inchangées)
+- 2 tests portfolio aggregation (somme runners, snapshot includes funding)
+- 1 test edge case (NaN funding rate skipped)
+- 4 tests affichage (funding dans metrics, table shows/hides, contexte)
+
+**Pièges résolus** :
+- **Convention /100 cascade** : extra_data_builder ET grid_funding (double division bug)
+- **Entry prices NaN skip** : `_simulate_grid_common` skip TOUTE la candle (exit + funding) si NaN → tests utilisent prix valides non-triggering
+- **Timestamp timezone** : normaliser en UTC explicitement (candle.timestamp peut être naive)
+- **Notional calculation** : utiliser `entry_price` (cohérence fast engine), pas `candle.close`
+- **Dataclass fields** : champs avec default EN DERNIER (sinon TypeError)
+
+**Résultat** : 1078 tests (+29 nouveaux), 0 régression. Funding costs appliqués à TOUTES les stratégies grid dans les deux moteurs (event-driven + fast).
+
+### Sprint 27 — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
 
@@ -1274,9 +1336,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (17 février 2026)
 
-- **1037 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25**
-- **Phase 6 en cours** — Sprint 25 (Activity Journal) terminé
+- **1078 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26**
+- **Phase 6 en cours** — Sprint 26 (Funding Costs) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j

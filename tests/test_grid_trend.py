@@ -939,8 +939,9 @@ class TestGridTrendRegistry:
     def test_in_fast_engine_strategies(self):
         assert "grid_trend" in FAST_ENGINE_STRATEGIES
 
-    def test_not_in_extra_data(self):
-        assert "grid_trend" not in STRATEGIES_NEED_EXTRA_DATA
+    def test_in_extra_data(self):
+        """grid_trend est dans STRATEGIES_NEED_EXTRA_DATA (Sprint 26 funding costs)."""
+        assert "grid_trend" in STRATEGIES_NEED_EXTRA_DATA
 
     def test_create_with_params(self):
         strat = create_strategy_with_params("grid_trend", {

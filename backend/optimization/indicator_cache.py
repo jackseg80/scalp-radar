@@ -302,24 +302,30 @@ def build_cache(
                 _, direction_arr = supertrend(highs, lows, closes, atr_by_period_dict[p], mult)
                 st_direction_dict[(p, mult)] = direction_arr
 
-    # --- Grid Funding : SMA + funding rates depuis DB ---
+    # --- Funding rates depuis DB (toutes stratégies grid) ---
+    _GRID_STRATEGIES_WITH_FUNDING = {
+        "grid_funding", "grid_atr", "envelope_dca", "envelope_dca_short",
+        "grid_multi_tf", "grid_trend",
+    }
     funding_1h: np.ndarray | None = None
     candle_ts: np.ndarray | None = None
-    if strategy_name == "grid_funding":
-        if db_path is None or symbol is None or exchange is None:
-            raise ValueError("grid_funding requires db_path, symbol, and exchange")
-        ma_periods_fund: set[int] = set()
-        if "ma_period" in param_grid_values:
-            ma_periods_fund.update(param_grid_values["ma_period"])
-        if not ma_periods_fund:
-            ma_periods_fund.add(14)
-        for period in ma_periods_fund:
-            if period not in bb_sma_dict:
-                bb_sma_dict[period] = sma(closes, period)
+    if strategy_name in _GRID_STRATEGIES_WITH_FUNDING:
+        # candle_timestamps toujours nécessaire (settlement mask fast engine)
         candle_ts = np.array(
             [c.timestamp.timestamp() * 1000 for c in main_candles], dtype=np.float64,
         )
-        funding_1h = _load_funding_rates_aligned(symbol, exchange, candle_ts, db_path)
+        if db_path is not None and symbol is not None and exchange is not None:
+            funding_1h = _load_funding_rates_aligned(symbol, exchange, candle_ts, db_path)
+        # SMA supplémentaire pour grid_funding TP
+        if strategy_name == "grid_funding":
+            ma_periods_fund: set[int] = set()
+            if "ma_period" in param_grid_values:
+                ma_periods_fund.update(param_grid_values["ma_period"])
+            if not ma_periods_fund:
+                ma_periods_fund.add(14)
+            for period in ma_periods_fund:
+                if period not in bb_sma_dict:
+                    bb_sma_dict[period] = sma(closes, period)
 
     # --- SuperTrend 4h (pour grid_multi_tf, resampleé depuis 1h) ---
     st_dir_4h_dict: dict[tuple[int, float], np.ndarray] = {}

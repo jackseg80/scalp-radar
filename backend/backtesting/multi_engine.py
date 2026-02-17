@@ -15,8 +15,14 @@ from backend.backtesting.engine import BacktestConfig, BacktestResult
 from backend.core.grid_position_manager import GridPositionManager
 from backend.core.models import Candle, Direction, MarketRegime
 from backend.core.position_manager import PositionManagerConfig, TradeResult
-from backend.strategies.base import StrategyContext
+from backend.strategies.base import EXTRA_FUNDING_RATE, StrategyContext
 from backend.strategies.base_grid import BaseGridStrategy, GridPosition
+
+# Stratégies grid qui paient/reçoivent du funding (toutes les grid/DCA)
+_GRID_STRATEGIES_WITH_FUNDING: set[str] = {
+    "grid_funding", "grid_atr", "envelope_dca", "envelope_dca_short",
+    "grid_multi_tf", "grid_trend",
+}
 
 
 class MultiPositionEngine:
@@ -76,11 +82,13 @@ class MultiPositionEngine:
 
         # État
         capital = self._config.initial_capital
+        funding_total = 0.0
         positions: list[GridPosition] = []
         trades: list[TradeResult] = []
         equity_curve: list[float] = []
         equity_timestamps: list[datetime] = []
         current_regime = MarketRegime.RANGING
+        apply_funding = self._strategy.name in _GRID_STRATEGIES_WITH_FUNDING
 
         main_candles = candles_by_tf[main_tf]
         main_indicators = indicators_by_tf.get(main_tf, {})
@@ -195,7 +203,24 @@ class MultiPositionEngine:
                             positions.append(pos)
                             capital -= pos.entry_fee
 
-            # c. Equity curve
+            # c. Funding costs aux settlements 8h (00:00, 08:00, 16:00 UTC)
+            if apply_funding and positions and extra:
+                from datetime import timezone
+                if candle.timestamp.tzinfo is None:
+                    utc_hour = candle.timestamp.hour
+                else:
+                    utc_hour = candle.timestamp.astimezone(timezone.utc).hour
+                if utc_hour % 8 == 0:
+                    fr = extra.get(EXTRA_FUNDING_RATE)
+                    if fr is not None and not np.isnan(fr):
+                        direction = 1 if positions[0].direction == Direction.LONG else -1
+                        for pos in positions:
+                            notional = pos.entry_price * pos.quantity
+                            payment = -fr * notional * direction
+                            capital += payment
+                            funding_total += payment
+
+            # d. Equity curve
             upnl = self._gpm.unrealized_pnl(positions, candle.close)
             equity_curve.append(capital + upnl)
             equity_timestamps.append(candle.timestamp)
@@ -230,6 +255,7 @@ class MultiPositionEngine:
             equity_curve=equity_curve,
             equity_timestamps=equity_timestamps,
             final_capital=capital,
+            funding_paid_total=funding_total,
         )
 
 

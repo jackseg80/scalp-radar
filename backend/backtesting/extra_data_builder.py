@@ -59,7 +59,7 @@ def build_extra_data_map(
             f_idx += 1
 
         if current_funding_rate is not None:
-            extra[EXTRA_FUNDING_RATE] = current_funding_rate
+            extra[EXTRA_FUNDING_RATE] = current_funding_rate / 100  # DB stocke en %, convertir en decimal
 
         # --- Open Interest ---
         current_oi_value: float | None = None

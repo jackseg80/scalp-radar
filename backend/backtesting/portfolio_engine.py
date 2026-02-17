@@ -93,6 +93,9 @@ class PortfolioResult:
     # Trades
     all_trades: list[tuple[str, TradeResult]] = field(default_factory=list)
 
+    # Funding costs (agrégé de tous les runners, 0.0 si non calculé)
+    funding_paid_total: float = 0.0
+
 
 # ---------------------------------------------------------------------------
 # Portfolio Backtester

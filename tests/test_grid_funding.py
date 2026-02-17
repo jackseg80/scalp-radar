@@ -59,7 +59,7 @@ def _make_context(
     """Crée un StrategyContext minimal pour les tests."""
     extra: dict[str, Any] = {}
     if funding_rate is not None:
-        extra["funding_rate"] = funding_rate  # en % (comme build_extra_data_map)
+        extra["funding_rate"] = funding_rate  # raw decimal (comme build_extra_data_map)
     return StrategyContext(
         symbol="TEST/USDT",
         timestamp=timestamp or datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -782,18 +782,20 @@ class TestCacheDB:
         assert cache.funding_rates_1h is None
         assert cache.candle_timestamps is None
 
-    def test_error_without_db_path(self):
-        """ValueError si db_path manquant pour grid_funding."""
+    def test_no_error_without_db_path(self):
+        """Sans db_path, build_cache charge sans funding (pas d'erreur)."""
         from backend.optimization.indicator_cache import build_cache
 
         candles = _make_candles(30)
-        with pytest.raises(ValueError, match="db_path"):
-            build_cache(
-                {"1h": candles},
-                {"ma_period": [14]},
-                "grid_funding",
-                main_tf="1h",
-            )
+        cache = build_cache(
+            {"1h": candles},
+            {"ma_period": [14]},
+            "grid_funding",
+            main_tf="1h",
+        )
+        # Funding non chargé mais pas de crash
+        assert cache.funding_rates_1h is None
+        assert cache.candle_timestamps is not None  # timestamps toujours remplis
 
     def test_candle_timestamps_filled(self):
         """candle_timestamps est rempli pour grid_funding."""
@@ -838,8 +840,8 @@ class TestComputeGrid:
         strat = GridFundingStrategy(cfg)
 
         gs = GridState(positions=[], avg_entry_price=0.0, total_quantity=0.0, total_notional=0.0, unrealized_pnl=0.0)
-        # Funding = -0.1% en DB % → raw = -0.001
-        ctx = _make_context(close=100.0, funding_rate=-0.10)
+        # Funding = -0.1% → raw decimal = -0.001 (extra_data_builder divise par 100)
+        ctx = _make_context(close=100.0, funding_rate=-0.001)
 
         levels = strat.compute_grid(ctx, gs)
 
@@ -888,7 +890,7 @@ class TestComputeGrid:
             )],
             avg_entry_price=100.0, total_quantity=1.0, total_notional=100.0, unrealized_pnl=0.0,
         )
-        ctx = _make_context(close=100.0, funding_rate=-0.10)
+        ctx = _make_context(close=100.0, funding_rate=-0.001)
 
         levels = strat.compute_grid(ctx, gs)
 

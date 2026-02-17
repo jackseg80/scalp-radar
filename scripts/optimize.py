@@ -458,6 +458,8 @@ def _print_report(
     print(f"  Sharpe Bitget        : {v.bitget_sharpe:.2f} [CI 95%: {v.bitget_sharpe_ci_low:.2f} - {v.bitget_sharpe_ci_high:.2f}]")
     transfer_mark = "OK" if v.transfer_ratio > 0.50 else "X"
     print(f"  Transfer ratio       : {v.transfer_ratio:.2f} {transfer_mark}")
+    if v.funding_paid_total != 0.0:
+        print(f"  Funding total        : {v.funding_paid_total:+.2f}")
     vol_str = "Oui" if v.volume_warning else "Non"
     print(f"  Volume divergence    : {vol_str}")
 

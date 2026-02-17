@@ -451,3 +451,61 @@ class TestMetrics:
         assert metrics.total_trades == 0
         assert metrics.win_rate == 0.0
         assert metrics.net_pnl == 0.0
+
+    def test_metrics_include_funding(self):
+        """funding_paid_total est extrait de BacktestResult dans les métriques."""
+        from backend.backtesting.engine import BacktestResult
+        trades = self._make_trades()
+        result = BacktestResult(
+            config=_default_config(),
+            strategy_name="test",
+            strategy_params={},
+            trades=trades,
+            equity_curve=[10000, 10000.38, 9999.93, 10000.15],
+            equity_timestamps=[
+                datetime(2024, 1, 15, i, tzinfo=timezone.utc) for i in range(4)
+            ],
+            final_capital=10000.15,
+            funding_paid_total=-42.50,
+        )
+        metrics = calculate_metrics(result)
+        assert metrics.funding_paid_total == -42.50
+        assert metrics.initial_capital == 10000
+        assert metrics.leverage == 15  # default dans _default_config()
+
+    def test_format_table_shows_funding(self):
+        """La ligne Funding apparaît dans le tableau quand funding != 0."""
+        metrics = BacktestMetrics(
+            total_trades=10, net_pnl=100.0, gross_pnl=150.0,
+            total_fees=30.0, total_slippage=5.0,
+            funding_paid_total=-25.50,
+        )
+        table = format_metrics_table(metrics, title="TEST")
+        assert "Funding" in table
+        assert "-25.50" in table
+
+    def test_format_table_hides_funding_if_zero(self):
+        """La ligne Funding n'apparaît PAS quand funding == 0."""
+        metrics = BacktestMetrics(
+            total_trades=10, net_pnl=100.0, gross_pnl=150.0,
+            total_fees=30.0, total_slippage=5.0,
+            funding_paid_total=0.0,
+        )
+        table = format_metrics_table(metrics)
+        assert "Funding" not in table
+
+    def test_format_table_shows_context(self):
+        """La section Contexte apparaît avec période, capital et levier."""
+        metrics = BacktestMetrics(
+            total_trades=5,
+            backtest_start="2024-01-01",
+            backtest_end="2024-06-30",
+            initial_capital=10000,
+            leverage=6,
+        )
+        table = format_metrics_table(metrics, title="GRID ATR")
+        assert "Contexte" in table
+        assert "2024-01-01" in table
+        assert "2024-06-30" in table
+        assert "10,000" in table or "10000" in table
+        assert "x6" in table

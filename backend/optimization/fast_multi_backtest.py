@@ -173,6 +173,13 @@ def _simulate_grid_common(
     hwm = 0.0  # High Water Mark (LONG) ou Low Water Mark (SHORT)
     neutral_zone = False
 
+    # Funding settlement mask (00:00, 08:00, 16:00 UTC)
+    funding_rates = cache.funding_rates_1h
+    settlement_mask = np.zeros(n, dtype=bool)
+    if funding_rates is not None and cache.candle_timestamps is not None:
+        hours = ((cache.candle_timestamps / 3600000) % 24).astype(int)
+        settlement_mask = (hours % 8 == 0)
+
     for i in range(n):
         # --- Directions dynamiques (grid_multi_tf, grid_trend) ---
         if directions is not None:
@@ -305,15 +312,23 @@ def _simulate_grid_common(
                 hwm = 0.0
                 continue
 
-        # 2. Guard capital épuisé
+        # 2. Funding costs aux settlements 8h
+        if positions and settlement_mask[i] and funding_rates is not None:
+            fr = funding_rates[i]
+            if not math.isnan(fr):
+                for _lvl, entry_price, quantity, _fee in positions:
+                    notional = entry_price * quantity
+                    capital += -fr * notional * direction
+
+        # 3. Guard capital épuisé
         if capital <= 0:
             continue
 
-        # 3. Zone neutre : pas de nouvelles ouvertures
+        # 4. Zone neutre : pas de nouvelles ouvertures
         if neutral_zone:
             continue
 
-        # 4. Ouvrir de nouvelles positions si niveaux touchés
+        # 5. Ouvrir de nouvelles positions si niveaux touchés
         if len(positions) < num_levels:
             filled = {p[0] for p in positions}
             for lvl in range(num_levels):

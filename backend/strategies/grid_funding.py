@@ -69,14 +69,12 @@ class GridFundingStrategy(BaseGridStrategy):
     ) -> list[GridLevel]:
         """Signal basé sur le funding rate, pas le prix.
 
-        Lit ctx.extra_data["funding_rate"] (en %, depuis build_extra_data_map),
-        convertit en raw decimal (/100) pour comparer aux seuils.
+        Lit ctx.extra_data["funding_rate"] (raw decimal, depuis build_extra_data_map).
         """
-        # Funding rate : DB stocke en %, on convertit en raw decimal
-        funding_rate_pct = ctx.extra_data.get("funding_rate")
-        if funding_rate_pct is None:
+        # Funding rate : déjà en raw decimal (converti par extra_data_builder /100)
+        funding_rate = ctx.extra_data.get("funding_rate")
+        if funding_rate is None:
             return []
-        funding_rate = funding_rate_pct / 100  # % → raw decimal
 
         if np.isnan(funding_rate):
             return []
@@ -120,9 +118,8 @@ class GridFundingStrategy(BaseGridStrategy):
         if np.isnan(sma_val) or np.isnan(close):
             return None
 
-        # Funding rate (% → raw decimal)
-        funding_rate_pct = ctx.extra_data.get("funding_rate", 0)
-        funding_rate = funding_rate_pct / 100
+        # Funding rate (déjà en raw decimal depuis extra_data_builder)
+        funding_rate = ctx.extra_data.get("funding_rate", 0)
 
         # SL global (toujours actif, même pendant min_hold)
         sl_pct = self._config.sl_percent / 100

@@ -48,6 +48,13 @@ class BacktestMetrics:
 
     # Fee impact
     fee_drag_pct: float = 0.0
+    funding_paid_total: float = 0.0
+
+    # Contexte
+    backtest_start: str = ""
+    backtest_end: str = ""
+    initial_capital: float = 0.0
+    leverage: int = 0
 
     # Breakdown par régime
     regime_stats: dict[str, dict] = field(default_factory=dict)
@@ -57,6 +64,14 @@ def calculate_metrics(result: BacktestResult) -> BacktestMetrics:
     """Calcule toutes les métriques depuis un BacktestResult."""
     metrics = BacktestMetrics()
     trades = result.trades
+
+    # Contexte (toujours rempli, même sans trades)
+    metrics.funding_paid_total = getattr(result, "funding_paid_total", 0.0)
+    metrics.initial_capital = result.config.initial_capital
+    metrics.leverage = result.config.leverage
+    if result.equity_timestamps:
+        metrics.backtest_start = result.equity_timestamps[0].strftime("%Y-%m-%d")
+        metrics.backtest_end = result.equity_timestamps[-1].strftime("%Y-%m-%d")
 
     if not trades:
         return metrics
@@ -235,6 +250,16 @@ def format_metrics_table(metrics: BacktestMetrics, title: str = "") -> str:
         lines.append(f"  {title}")
         lines.append(f"  {border}")
 
+    # Contexte (si renseigné)
+    if metrics.backtest_start and metrics.backtest_end:
+        lines.append("")
+        lines.append("  Contexte")
+        lines.append("  --------")
+        lines.append(f"  Periode          : {metrics.backtest_start} -> {metrics.backtest_end}")
+        lines.append(f"  Capital initial  : {metrics.initial_capital:,.0f}")
+        if metrics.leverage:
+            lines.append(f"  Levier           : x{metrics.leverage}")
+
     lines.append("")
     lines.append("  Performance")
     lines.append("  -----------")
@@ -249,6 +274,8 @@ def format_metrics_table(metrics: BacktestMetrics, title: str = "") -> str:
     lines.append(f"  Gross P&L      : {metrics.gross_pnl:+.2f}")
     lines.append(f"  Fees           : -{metrics.total_fees:.2f} ({metrics.fee_drag_pct:.1f}% des gains bruts)")
     lines.append(f"  Slippage       : -{metrics.total_slippage:.2f}")
+    if metrics.funding_paid_total != 0.0:
+        lines.append(f"  Funding        : {metrics.funding_paid_total:+.2f}")
     lines.append(f"  Net P&L        : {metrics.net_pnl:+.2f}")
 
     lines.append("")

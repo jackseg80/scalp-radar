@@ -44,6 +44,7 @@ class ValidationResult:
     transfer_significant: bool
     volume_warning: bool
     volume_warning_detail: str
+    funding_paid_total: float = 0.0
 
 
 @dataclass
@@ -343,6 +344,7 @@ async def validate_on_bitget(
             transfer_significant=transfer_significant,
             volume_warning=volume_warning,
             volume_warning_detail=volume_detail,
+            funding_paid_total=getattr(result, "funding_paid_total", 0.0),
         )
     finally:
         if close_db:
