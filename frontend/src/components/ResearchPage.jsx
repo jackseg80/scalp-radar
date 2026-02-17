@@ -6,6 +6,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import WfoChart from './WfoChart'
 import InfoTooltip from './InfoTooltip'
+import { usePersistedObject } from '../hooks/usePersistedState'
 import './ResearchPage.css'
 
 const GRADE_COLORS = {
@@ -17,15 +18,26 @@ const GRADE_COLORS = {
 }
 
 export default function ResearchPage() {
-  const [view, setView] = useState('table') // 'table' | 'detail'
-  const [selectedId, setSelectedId] = useState(null)
-  const [filters, setFilters] = useState({
-    strategy: '',
-    asset: '',
-    minGrade: '',
+  // États persistés dans localStorage
+  const [persistedState, updatePersistedState] = usePersistedObject('research-page', {
+    view: 'table',
+    selectedId: null,
+    filters: {
+      strategy: '',
+      asset: '',
+      minGrade: '',
+    },
+    sortBy: 'total_score',
+    sortDir: 'desc',
   })
-  const [sortBy, setSortBy] = useState('total_score')
-  const [sortDir, setSortDir] = useState('desc')
+
+  // Raccourcis locaux pour faciliter l'accès
+  const { view, selectedId, filters, sortBy, sortDir } = persistedState
+  const setView = (v) => updatePersistedState({ view: v })
+  const setSelectedId = (id) => updatePersistedState({ selectedId: id })
+  const setFilters = (f) => updatePersistedState({ filters: f })
+  const setSortBy = (s) => updatePersistedState({ sortBy: s })
+  const setSortDir = (d) => updatePersistedState({ sortDir: d })
 
   // API: liste des résultats (fetch au montage uniquement, pas de polling)
   const [results, setResults] = useState(null)

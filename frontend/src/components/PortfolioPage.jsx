@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import EquityCurveSVG from './EquityCurveSVG'
 import DrawdownChart from './DrawdownChart'
 import PortfolioCompare from './PortfolioCompare'
+import { usePersistedState } from '../hooks/usePersistedState'
 import './PortfolioPage.css'
 
 const API = ''
@@ -89,25 +90,43 @@ export default function PortfolioPage({ wsData }) {
   const { data: presetsData } = useApi('/api/portfolio/presets')
   const presets = presetsData?.presets || []
 
-  // Config
-  const [activePreset, setActivePreset] = useState('balanced')
-  const [capital, setCapital] = useState(5000)
-  const [days, setDays] = useState(90)
-  const [assetsMode, setAssetsMode] = useState('auto') // 'auto' | 'custom'
-  const [selectedAssets, setSelectedAssets] = useState(new Set())
-  const [killSwitchPct, setKillSwitchPct] = useState(30)
-  const [label, setLabel] = useState('')
+  // Config (persisté)
+  const [activePreset, setActivePreset] = usePersistedState('portfolio-preset', 'balanced')
+  const [capital, setCapital] = usePersistedState('portfolio-capital', 5000)
+  const [days, setDays] = usePersistedState('portfolio-days', 90)
+  const [assetsMode, setAssetsMode] = usePersistedState('portfolio-assets-mode', 'auto')
+  const [selectedAssetsArray, setSelectedAssetsArray] = usePersistedState('portfolio-selected-assets', [])
+  const selectedAssets = useMemo(() => new Set(selectedAssetsArray), [selectedAssetsArray])
+  const setSelectedAssets = useCallback((setOrUpdater) => {
+    if (typeof setOrUpdater === 'function') {
+      setSelectedAssetsArray(prev => Array.from(setOrUpdater(new Set(prev))))
+    } else {
+      setSelectedAssetsArray(Array.from(setOrUpdater))
+    }
+  }, [setSelectedAssetsArray])
+  const [killSwitchPct, setKillSwitchPct] = usePersistedState('portfolio-killswitch', 30)
+  const [label, setLabel] = usePersistedState('portfolio-label', '')
 
-  // Job
+  // Sélection runs (persisté)
+  const [selectedId, setSelectedId] = usePersistedState('portfolio-selected-id', null)
+  const [compareIdsArray, setCompareIdsArray] = usePersistedState('portfolio-compare-ids', [])
+  const compareIds = useMemo(() => new Set(compareIdsArray), [compareIdsArray])
+  const setCompareIds = useCallback((setOrUpdater) => {
+    if (typeof setOrUpdater === 'function') {
+      setCompareIdsArray(prev => Array.from(setOrUpdater(new Set(prev))))
+    } else {
+      setCompareIdsArray(Array.from(setOrUpdater))
+    }
+  }, [setCompareIdsArray])
+
+  // Job (non-persisté - état temporaire)
   const [isRunning, setIsRunning] = useState(false)
   const [progress, setProgress] = useState(0)
   const [progressPhase, setProgressPhase] = useState('')
 
-  // Data
+  // Data (non-persisté - rechargé depuis API)
   const [backtests, setBacktests] = useState([])
-  const [selectedId, setSelectedId] = useState(null)
   const [detail, setDetail] = useState(null)
-  const [compareIds, setCompareIds] = useState(new Set())
   const [compareDetails, setCompareDetails] = useState([])
 
   // Charger la liste des backtests

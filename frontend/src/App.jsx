@@ -39,12 +39,24 @@ function loadSidebarWidth() {
   return SIDEBAR_DEFAULT
 }
 
+function loadActiveTab() {
+  const saved = localStorage.getItem('scalp-radar-active-tab')
+  const validTabs = ['scanner', 'heatmap', 'risk', 'research', 'explorer', 'portfolio']
+  if (saved && validTabs.includes(saved)) return saved
+  return 'scanner'
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('scanner')
+  const [activeTab, setActiveTab] = useState(loadActiveTab)
   const { lastMessage, connected } = useWebSocket(wsUrl)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const dragging = useRef(false)
   const containerRef = useRef(null)
+
+  // Sauvegarder l'onglet actif dans localStorage
+  useEffect(() => {
+    localStorage.setItem('scalp-radar-active-tab', activeTab)
+  }, [activeTab])
 
   // Resize handler
   const onMouseDown = useCallback((e) => {

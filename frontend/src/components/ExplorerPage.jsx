@@ -11,6 +11,7 @@ import DistributionChart from './DistributionChart'
 import InfoTooltip from './InfoTooltip'
 import DiagnosticPanel from './DiagnosticPanel'
 import ExportButton from './ExportDiagnostic'
+import { usePersistedState } from '../hooks/usePersistedState'
 import './ExplorerPage.css'
 
 const STATUS_COLORS = {
@@ -22,23 +23,33 @@ const STATUS_COLORS = {
 }
 
 export default function ExplorerPage({ wsData }) {
-  const [strategy, setStrategy] = useState('')
-  const [asset, setAsset] = useState('')
+  // États persistés (sélections utilisateur)
+  const [strategy, setStrategy] = usePersistedState('explorer-strategy', '')
+  const [asset, setAsset] = usePersistedState('explorer-asset', '')
+  const [paramsOverride, setParamsOverride] = usePersistedState('explorer-params', {})
+  const [activeParamsArray, setActiveParamsArray] = usePersistedState('explorer-active-params', [])
+  const activeParams = useMemo(() => new Set(activeParamsArray), [activeParamsArray])
+  const setActiveParams = useCallback((setOrUpdater) => {
+    if (typeof setOrUpdater === 'function') {
+      setActiveParamsArray(prev => Array.from(setOrUpdater(new Set(prev))))
+    } else {
+      setActiveParamsArray(Array.from(setOrUpdater))
+    }
+  }, [setActiveParamsArray])
+
+  const [axisX, setAxisX] = usePersistedState('explorer-axis-x', '')
+  const [axisY, setAxisY] = usePersistedState('explorer-axis-y', '')
+  const [metric, setMetric] = usePersistedState('explorer-metric', 'oos_sharpe')
+  const [paramsExpanded, setParamsExpanded] = usePersistedState('explorer-params-expanded', false)
+  const [selectedRunId, setSelectedRunId] = usePersistedState('explorer-run-id', null)
+
+  // États non-persistés (données temporaires)
   const [paramGrid, setParamGrid] = useState(null)
-  const [paramsOverride, setParamsOverride] = useState({})
-  const [activeParams, setActiveParams] = useState(new Set()) // Sprint 14b fix UX : params actifs
-  const [axisX, setAxisX] = useState('')
-  const [axisY, setAxisY] = useState('')
-  const [metric, setMetric] = useState('oos_sharpe')
   const [heatmapData, setHeatmapData] = useState(null)
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [paramsExpanded, setParamsExpanded] = useState(false)
-
-  // Sprint 14b : Run selector + combo results
   const [availableRuns, setAvailableRuns] = useState([])
-  const [selectedRunId, setSelectedRunId] = useState(null)
   const [comboResults, setComboResults] = useState(null)
 
   // Stratégies disponibles (chargées dynamiquement depuis le backend)
