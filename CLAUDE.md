@@ -157,7 +157,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-c) : 1114 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-d) : 1116 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -230,6 +230,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 28a : Préparation déploiement live — Selector charge trades DB au boot (survit à --clean), bypass configurable au cold start (auto-désactivé quand toutes les stratégies atteignent min_trades), warning capital mismatch Bitget vs risk.yaml (1102 tests)
 - Hotfix 28b : Suppression sandbox Bitget + filtre per_asset strict GridStrategyRunner — assets non listés dans per_asset sont rejetés par on_candle() (1104 tests)
 - Hotfix 28c : Refresh périodique solde exchange — fetch_balance toutes les 5 min, log WARNING si >10% change, POST /api/executor/refresh-balance, exchange_balance dans get_status() (1114 tests)
+- Hotfix 28d : Override env var SELECTOR_BYPASS_AT_BOOT — `.env` (gitignored) prend priorité sur risk.yaml (versionné), même pattern que LIVE_TRADING (1116 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

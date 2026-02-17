@@ -1378,6 +1378,25 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : Le solde se rafraîchit automatiquement. Alertes si variation anormale. Refresh manuel depuis le dashboard possible.
 
+### Hotfix 28d — Override env var SELECTOR_BYPASS_AT_BOOT ✅
+
+**But** : Permettre au serveur d'avoir `selector_bypass_at_boot=true` sans que `git pull` l'écrase.
+
+**Problème** : `risk.yaml` est versionné avec `selector_bypass_at_boot: false`. Sur le serveur, on veut `true` au boot (cold start live), mais chaque `git pull` remet `false`.
+
+**Changements** :
+
+1. **`SecretsConfig`** : champ `selector_bypass_at_boot: bool | None = None` — lu depuis `.env` via Pydantic BaseSettings
+2. **`AppConfig.__init__`** : si défini dans `.env`, override la valeur de `risk.yaml`
+3. **`.env.example`** : `SELECTOR_BYPASS_AT_BOOT=false` documenté
+4. **2 tests** : override `true` via `.env` + fallback `risk.yaml` si non défini
+
+**Tests** : 1116 tests passés, 0 régression
+
+**Fichiers modifiés** : 3 fichiers (config.py, test_config.py, .env.example)
+
+**Résultat** : Serveur met `SELECTOR_BYPASS_AT_BOOT=true` dans `.env` (gitignored), `risk.yaml` reste à `false` dans le repo.
+
 ### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
@@ -1460,9 +1479,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1114 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a + Hotfix 28b + Hotfix 28b-bis + Hotfix 28c**
-- **Phase 6 en cours** — Hotfix 28c (refresh balance exchange) terminé
+- **1116 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-d**
+- **Phase 6 en cours** — Hotfix 28d (env var override selector_bypass) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
