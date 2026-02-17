@@ -509,3 +509,14 @@ class TestMetrics:
         assert "2024-06-30" in table
         assert "10,000" in table or "10000" in table
         assert "x6" in table
+
+    def test_format_table_hides_context_if_no_dates(self):
+        """La section Contexte n'apparaît PAS quand backtest_start/end sont vides."""
+        metrics = BacktestMetrics(
+            total_trades=10,
+            net_pnl=150.0,
+            initial_capital=10000,  # même avec capital, pas de contexte sans dates
+            leverage=6,
+        )
+        table = format_metrics_table(metrics)
+        assert "Contexte" not in table
