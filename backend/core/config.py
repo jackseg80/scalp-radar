@@ -432,6 +432,7 @@ class RiskConfig(BaseModel):
         default_factory=AdaptiveSelectorConfig,
     )
     regime_filter_enabled: bool = Field(default=True)  # Sprint 27
+    selector_bypass_at_boot: bool = Field(default=False)  # Hotfix 28a
 
     @model_validator(mode="after")
     def validate_leverage(self) -> RiskConfig:

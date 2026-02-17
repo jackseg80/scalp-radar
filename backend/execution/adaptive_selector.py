@@ -2,6 +2,10 @@
 
 Évalue périodiquement les performances Arena et autorise/bloque les stratégies
 en fonction de critères configurables (min_trades, profit_factor, live_eligible).
+
+Hotfix 28a :
+- FIX 1 : charge les trades historiques depuis simulation_trades DB au boot
+- FIX 2 : bypass configurable au boot (autorise tout si DB vide + LIVE_TRADING)
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from loguru import logger
 if TYPE_CHECKING:
     from backend.backtesting.arena import StrategyArena
     from backend.core.config import AppConfig
+    from backend.core.database import Database
 
 
 # Mapping nom stratégie → attribut config pour accéder à live_eligible
@@ -43,14 +48,29 @@ class AdaptiveSelector:
     - Réévaluation périodique (configurable, défaut 5 min)
     """
 
-    def __init__(self, arena: StrategyArena, config: AppConfig) -> None:
+    def __init__(
+        self,
+        arena: StrategyArena,
+        config: AppConfig,
+        db: Database | None = None,
+    ) -> None:
         self._arena = arena
         self._config = config
         self._selector_config = config.risk.adaptive_selector
+        self._db = db
 
         self._allowed_strategies: set[str] = set()
         self._active_symbols: set[str] = set()
         self._task: asyncio.Task | None = None
+
+        # FIX 1 : compteurs trades DB (chargés une fois au start)
+        self._db_trade_counts: dict[str, int] = {}
+
+        # FIX 2 : bypass au boot (autorise tout sans min_trades/return/PF)
+        self._bypass_active: bool = (
+            getattr(config.risk, "selector_bypass_at_boot", False)
+            and getattr(config.secrets, "live_trading", False)
+        )
 
     # ─── Public API ──────────────────────────────────────────────────
 
@@ -64,6 +84,10 @@ class AdaptiveSelector:
         """Réévalue quelles stratégies sont autorisées en live."""
         ranking = self._arena.get_ranking()
         new_allowed: set[str] = set()
+        min_trades = self._selector_config.min_trades
+
+        # Bypass : collecter les eligible pour vérifier si TOUTES sont prêtes
+        bypass_eligible_counts: list[int] = []
 
         for perf in ranking:
             # 1. live_eligible dans strategies.yaml
@@ -74,8 +98,20 @@ class AdaptiveSelector:
             if not perf.is_active:
                 continue
 
+            # FIX 1 : trades effectifs = max(mémoire, DB)
+            effective_trades = max(
+                perf.total_trades,
+                self._db_trade_counts.get(perf.name, 0),
+            )
+
+            # Bypass mode : skip min_trades/net_return/profit_factor
+            if self._bypass_active:
+                new_allowed.add(perf.name)
+                bypass_eligible_counts.append(effective_trades)
+                continue
+
             # 3. Assez de trades en simulation
-            if perf.total_trades < self._selector_config.min_trades:
+            if effective_trades < min_trades:
                 continue
 
             # 4. Rentable (net return > 0)
@@ -87,6 +123,16 @@ class AdaptiveSelector:
                 continue
 
             new_allowed.add(perf.name)
+
+        # Auto-désactivation bypass : TOUTES les eligible doivent atteindre min_trades
+        if self._bypass_active and bypass_eligible_counts:
+            if all(count >= min_trades for count in bypass_eligible_counts):
+                logger.info(
+                    "AdaptiveSelector: bypass désactivé (toutes les stratégies "
+                    "ont >= {} trades)",
+                    min_trades,
+                )
+                self._bypass_active = False
 
         # Log les changements
         added = new_allowed - self._allowed_strategies
@@ -117,13 +163,16 @@ class AdaptiveSelector:
 
     async def start(self) -> None:
         """Évaluation initiale + lance la boucle périodique."""
+        await self._load_trade_counts_from_db()
         self.evaluate()
         self._task = asyncio.create_task(self._eval_loop())
+        bypass_msg = " (BYPASS ACTIF)" if self._bypass_active else ""
         logger.info(
-            "AdaptiveSelector démarré (intervalle={}s, min_trades={}, min_pf={:.1f})",
+            "AdaptiveSelector démarré (intervalle={}s, min_trades={}, min_pf={:.1f}){}",
             self._selector_config.eval_interval_seconds,
             self._selector_config.min_trades,
             self._selector_config.min_profit_factor,
+            bypass_msg,
         )
 
     async def stop(self) -> None:
@@ -147,9 +196,32 @@ class AdaptiveSelector:
             "min_trades": self._selector_config.min_trades,
             "min_profit_factor": self._selector_config.min_profit_factor,
             "eval_interval_seconds": self._selector_config.eval_interval_seconds,
+            "bypass_active": self._bypass_active,
+            "db_trade_counts": self._db_trade_counts,
         }
 
     # ─── Internals ───────────────────────────────────────────────────
+
+    async def _load_trade_counts_from_db(self) -> None:
+        """Charge le nombre de trades historiques depuis simulation_trades.
+
+        Résiste aux erreurs : si DB indisponible ou table absente,
+        garde un dict vide (pas de crash).
+        """
+        if self._db is None:
+            return
+        try:
+            self._db_trade_counts = await self._db.get_trade_counts_by_strategy()
+            if self._db_trade_counts:
+                logger.info(
+                    "AdaptiveSelector: trades DB chargés — {}",
+                    ", ".join(
+                        f"{k}={v}" for k, v in sorted(self._db_trade_counts.items())
+                    ),
+                )
+        except Exception:
+            logger.warning("AdaptiveSelector: impossible de charger les trades DB")
+            self._db_trade_counts = {}
 
     def _is_live_eligible(self, strategy_name: str) -> bool:
         """Vérifie le flag live_eligible dans strategies.yaml."""

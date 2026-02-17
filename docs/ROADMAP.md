@@ -1336,17 +1336,17 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (17 février 2026)
 
-- **1078 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26**
-- **Phase 6 en cours** — Sprint 26 (Funding Costs) terminé
+- **1102 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a**
+- **Phase 6 en cours** — Hotfix 28a (préparation live) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
-- **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine
+- **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot
 - **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives) avec persistance localStorage (onglet actif + paramètres de chaque page survivent au refresh)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : Observer paper trading Top 10 avec journal d'activité → Sprint 26 (monitoring avancé) ou live progressif
+- **Prochaine étape** : Déploiement live progressif (capital minimal, selector_bypass_at_boot=true)
 
 ### Résultats Portfolio Backtest — Validation Finale
 

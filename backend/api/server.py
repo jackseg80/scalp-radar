@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
     if config.secrets.live_trading and engine and simulator:
         risk_mgr = LiveRiskManager(config)
         arena = app.state.arena
-        selector = AdaptiveSelector(arena, config)
+        selector = AdaptiveSelector(arena, config, db=db)
         executor = Executor(config, risk_mgr, notifier, selector=selector)
 
         # Restaurer l'état avant start
@@ -129,6 +129,21 @@ async def lifespan(app: FastAPI):
             executor.restore_positions(executor_state)
 
         await executor.start()
+
+        # Hotfix 28a : warning si capital config diverge du solde Bitget réel
+        if executor.exchange_balance is not None:
+            config_capital = config.risk.initial_capital
+            real_balance = executor.exchange_balance
+            if config_capital > 0:
+                diff_pct = abs(real_balance - config_capital) / config_capital * 100
+                if diff_pct > 20:
+                    msg = (
+                        f"Capital mismatch: risk.yaml={config_capital:.0f}$ "
+                        f"vs Bitget={real_balance:.0f}$ (écart {diff_pct:.0f}%)"
+                    )
+                    logger.warning(msg)
+                    await notifier.notify_reconciliation(msg)
+
         await selector.start()
         simulator.set_trade_event_callback(executor.handle_event)
         logger.info("Executor live démarré (sandbox={})", config.secrets.bitget_sandbox)

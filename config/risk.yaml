@@ -44,3 +44,7 @@ adaptive_selector:
 
 # Sprint 27 : Filtre Darwinien par régime — bloque les nouvelles grilles si WFO Sharpe < 0
 regime_filter_enabled: false
+
+# Hotfix 28a : bypass le selector au boot (autorise toutes les stratégies éligibles)
+# Auto-désactivé quand toutes les stratégies atteignent min_trades
+selector_bypass_at_boot: false

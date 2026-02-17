@@ -802,6 +802,20 @@ class Database:
             for row in rows
         ]
 
+    async def get_trade_counts_by_strategy(self) -> dict[str, int]:
+        """Nombre de trades par stratégie dans simulation_trades.
+
+        Utilisé par l'AdaptiveSelector pour connaître l'historique
+        même après un --clean (qui supprime le JSON state mais pas la DB).
+        """
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT strategy_name, COUNT(*) as cnt "
+            "FROM simulation_trades GROUP BY strategy_name"
+        )
+        rows = await cursor.fetchall()
+        return {row["strategy_name"]: row["cnt"] for row in rows}
+
     # ─── REGIME PROFILES (Sprint 27) ────────────────────────────────────────
 
     async def get_regime_profiles(

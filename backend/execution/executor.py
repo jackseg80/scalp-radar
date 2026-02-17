@@ -169,6 +169,7 @@ class Executor:
         self._watch_task: asyncio.Task[None] | None = None
         self._poll_task: asyncio.Task[None] | None = None
         self._markets: dict[str, Any] = {}  # Cache load_markets()
+        self._exchange_balance: float | None = None  # Hotfix 28a
 
     # ─── Properties ────────────────────────────────────────────────────
 
@@ -195,6 +196,11 @@ class Executor:
     def positions(self) -> list[LivePosition]:
         """Toutes les positions ouvertes."""
         return list(self._positions.values())
+
+    @property
+    def exchange_balance(self) -> float | None:
+        """Dernier solde connu sur l'exchange (USDT total)."""
+        return self._exchange_balance
 
     @property
     def _sandbox_params(self) -> dict[str, str]:
@@ -237,6 +243,7 @@ class Executor:
             free = float(balance.get("free", {}).get(coin, 0))
             total = float(balance.get("total", {}).get(coin, 0))
             self._risk_manager.set_initial_capital(total)
+            self._exchange_balance = total
             logger.info(
                 "Executor: balance USDT — libre={:.2f}, total={:.2f}", free, total,
             )
