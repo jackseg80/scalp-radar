@@ -63,6 +63,8 @@ def run_backtest_from_cache(
         longs, shorts = _donchian_signals(params, cache)
     elif strategy_name == "supertrend":
         longs, shorts = _supertrend_signals(params, cache)
+    elif strategy_name == "boltrend":
+        longs, shorts = _boltrend_signals(params, cache)
     else:
         raise ValueError(f"Stratégie inconnue pour fast engine: {strategy_name}")
 
@@ -256,6 +258,51 @@ def _supertrend_signals(
     valid = ~np.isnan(prev_dir) & ~np.isnan(direction)
     longs = valid & (prev_dir == -1.0) & (direction == 1.0)
     shorts = valid & (prev_dir == 1.0) & (direction == -1.0)
+
+    return longs, shorts
+
+
+def _boltrend_signals(
+    params: dict[str, Any], cache: IndicatorCache,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Génère les masques long/short pour Bollinger Trend Following.
+
+    LONG : prev_close < prev_upper AND close > upper AND spread > min AND close > long_ma.
+    SHORT : prev_close > prev_lower AND close < lower AND spread > min AND close < long_ma.
+    """
+    bol_window = params["bol_window"]
+    bol_std = params["bol_std"]
+    long_ma_window = params["long_ma_window"]
+    min_bol_spread = params["min_bol_spread"]
+
+    bb_upper = cache.bb_upper[(bol_window, bol_std)]
+    bb_lower = cache.bb_lower[(bol_window, bol_std)]
+    long_ma = cache.bb_sma[long_ma_window]
+
+    prev_close = np.roll(cache.closes, 1)
+    prev_upper = np.roll(bb_upper, 1)
+    prev_lower = np.roll(bb_lower, 1)
+
+    # Spread = (prev_upper - prev_lower) / prev_lower
+    bb_spread = (prev_upper - prev_lower) / np.where(prev_lower > 0, prev_lower, 1.0)
+
+    valid = ~np.isnan(bb_upper) & ~np.isnan(bb_lower) & ~np.isnan(long_ma)
+    valid[0] = False  # np.roll wraparound : closes[-1] en position 0
+
+    longs = (
+        valid
+        & (prev_close < prev_upper)
+        & (cache.closes > bb_upper)
+        & (bb_spread > min_bol_spread)
+        & (cache.closes > long_ma)
+    )
+    shorts = (
+        valid
+        & (prev_close > prev_lower)
+        & (cache.closes < bb_lower)
+        & (bb_spread > min_bol_spread)
+        & (cache.closes < long_ma)
+    )
 
     return longs, shorts
 
@@ -789,6 +836,169 @@ def _run_simulate_bollinger(
 
 
 @njit(cache=True)
+def _simulate_boltrend_numba(
+    longs, shorts,
+    opens, highs, lows, closes, regime,
+    bb_sma_arr,
+    sl_pct,
+    initial_capital, taker_fee, maker_fee,
+    slippage_pct, high_vol_slippage_mult,
+    max_risk_per_trade,
+):
+    """Boucle de trades complète pour boltrend (JIT-compiled).
+
+    check_exit INVERSÉ vs bollinger_mr :
+    - LONG exit: close < SMA (breakout s'essouffle)
+    - SHORT exit: close > SMA (breakout s'essouffle)
+    """
+    n = len(closes)
+    trade_pnls = np.empty(n, dtype=np.float64)
+    trade_returns = np.empty(n, dtype=np.float64)
+    n_trades = 0
+    capital = initial_capital
+
+    in_position = False
+    direction = 0
+    entry_price = 0.0
+    tp_price = 0.0
+    sl_price = 0.0
+    quantity = 0.0
+    entry_fee = 0.0
+
+    for i in range(n):
+        if in_position:
+            exit_reason = -1
+
+            if direction == 1:
+                tp_hit = highs[i] >= tp_price
+                sl_hit = lows[i] <= sl_price
+            else:
+                tp_hit = lows[i] <= tp_price
+                sl_hit = highs[i] >= sl_price
+
+            if tp_hit and sl_hit:
+                if closes[i] > opens[i]:
+                    exit_reason = 0 if direction == 1 else 1
+                elif closes[i] < opens[i]:
+                    exit_reason = 1 if direction == 1 else 0
+                else:
+                    exit_reason = 1
+            elif tp_hit:
+                exit_reason = 0
+            elif sl_hit:
+                exit_reason = 1
+            else:
+                # check_exit boltrend : SMA crossing (INVERSÉ vs bollinger_mr)
+                sma_val = bb_sma_arr[i]
+                close = closes[i]
+                if not np.isnan(sma_val) and not np.isnan(close):
+                    if direction == 1:
+                        if close < sma_val:  # LONG: breakout s'essouffle
+                            exit_reason = 2
+                    else:
+                        if close > sma_val:  # SHORT: breakout s'essouffle
+                            exit_reason = 2
+
+            if exit_reason >= 0:
+                if exit_reason == 0:
+                    exit_price = tp_price
+                elif exit_reason == 1:
+                    exit_price = sl_price
+                else:
+                    exit_price = closes[i]
+
+                net_pnl = _close_trade_numba(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, exit_reason, int(regime[i]),
+                    taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+                )
+                if capital > 0.0:
+                    trade_returns[n_trades] = net_pnl / capital
+                else:
+                    trade_returns[n_trades] = 0.0
+                capital += net_pnl
+                trade_pnls[n_trades] = net_pnl
+                n_trades += 1
+                in_position = False
+
+        if not in_position and (longs[i] or shorts[i]):
+            direction = 1 if longs[i] else -1
+            ep = closes[i]
+
+            if ep <= 0.0 or capital <= 0.0:
+                continue
+
+            # TP très éloigné (SMA exit gère le vrai TP), SL % fixe
+            sl_dist = ep * sl_pct / 100.0
+            tp_dist = ep  # LONG: tp=2×entry, SHORT: tp≈0
+
+            if direction == 1:
+                tp_price = ep + tp_dist
+                sl_price = ep - sl_dist
+            else:
+                tp_price = ep - tp_dist
+                sl_price = ep + sl_dist
+
+            if sl_price <= 0.0 or tp_price <= 0.0:
+                continue
+
+            sl_distance_pct = abs(ep - sl_price) / ep
+            sl_real_cost = sl_distance_pct + taker_fee + slippage_pct
+            if sl_real_cost <= 0.0:
+                continue
+
+            risk_amount = capital * max_risk_per_trade
+            notional = risk_amount / sl_real_cost
+            quantity = notional / ep
+
+            if quantity <= 0.0:
+                continue
+
+            entry_fee = quantity * ep * taker_fee
+            if entry_fee >= capital:
+                continue
+
+            entry_price = ep
+            capital -= entry_fee
+            in_position = True
+
+    if in_position:
+        exit_price = closes[n - 1]
+        net_pnl = _close_trade_numba(
+            direction, entry_price, exit_price, quantity,
+            entry_fee, 3, int(regime[n - 1]),
+            taker_fee, maker_fee, slippage_pct, high_vol_slippage_mult,
+        )
+        if capital > 0.0:
+            trade_returns[n_trades] = net_pnl / capital
+        else:
+            trade_returns[n_trades] = 0.0
+        capital += net_pnl
+        trade_pnls[n_trades] = net_pnl
+        n_trades += 1
+
+    return trade_pnls, trade_returns, n_trades, capital
+
+
+def _run_simulate_boltrend(
+    longs: np.ndarray, shorts: np.ndarray,
+    cache: IndicatorCache, params: dict[str, Any], bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Wrapper Python pour _simulate_boltrend_numba."""
+    bb_sma_arr = cache.bb_sma[params["bol_window"]]
+    pnls, rets, nt, cap = _simulate_boltrend_numba(
+        longs, shorts,
+        cache.opens, cache.highs, cache.lows, cache.closes, cache.regime,
+        bb_sma_arr,
+        float(params["sl_percent"]),
+        bt_config.initial_capital, bt_config.taker_fee, bt_config.maker_fee,
+        bt_config.slippage_pct, bt_config.high_vol_slippage_mult,
+        bt_config.max_risk_per_trade,
+    )
+    return pnls[:nt].tolist(), rets[:nt].tolist(), cap
+
+
+@njit(cache=True)
 def _simulate_donchian_numba(
     longs, shorts,
     opens, highs, lows, closes, regime,
@@ -1113,6 +1323,8 @@ def _simulate_trades(
             return _run_simulate_donchian(longs, shorts, cache, params, bt_config)
         if strategy_name == "supertrend":
             return _run_simulate_supertrend(longs, shorts, cache, params, bt_config)
+        if strategy_name == "boltrend":
+            return _run_simulate_boltrend(longs, shorts, cache, params, bt_config)
 
     n = cache.n_candles
     capital = bt_config.initial_capital
@@ -1284,6 +1496,17 @@ def _check_exit(
         else:  # SHORT : close a croisé en-dessous de la SMA
             return close <= bb_sma_val
 
+    elif strategy_name == "boltrend":
+        # INVERSÉ vs bollinger_mr : breakout s'essouffle → retour à la SMA
+        bb_sma_val = float(cache.bb_sma[params["bol_window"]][i])
+        close = float(cache.closes[i])
+        if math.isnan(bb_sma_val) or math.isnan(close):
+            return False
+        if direction == 1:  # LONG exit: close < SMA
+            return close < bb_sma_val
+        else:  # SHORT exit: close > SMA
+            return close > bb_sma_val
+
     return False
 
 
@@ -1340,6 +1563,10 @@ def _open_trade(
     elif strategy_name == "supertrend":
         tp_dist = entry_price * params["tp_percent"] / 100
         sl_dist = entry_price * params["sl_percent"] / 100
+    elif strategy_name == "boltrend":
+        # TP très éloigné (SMA exit gère le vrai TP), SL % fixe
+        sl_dist = entry_price * params["sl_percent"] / 100
+        tp_dist = entry_price  # tp = entry × 2 (LONG) ou entry × 0.5 (SHORT)
     else:
         return None
 

@@ -363,6 +363,36 @@ def build_cache(
                 bb_upper_dict[(period, std_dev)] = upper
                 bb_lower_dict[(period, std_dev)] = lower
 
+    if strategy_name == "boltrend":
+        bol_windows: set[int] = set()
+        bol_stds: set[float] = set()
+        long_ma_windows: set[int] = set()
+        if "bol_window" in param_grid_values:
+            bol_windows.update(param_grid_values["bol_window"])
+        if "bol_std" in param_grid_values:
+            bol_stds.update(param_grid_values["bol_std"])
+        if "long_ma_window" in param_grid_values:
+            long_ma_windows.update(param_grid_values["long_ma_window"])
+        if not bol_windows:
+            bol_windows.add(100)
+        if not bol_stds:
+            bol_stds.add(2.2)
+        if not long_ma_windows:
+            long_ma_windows.add(550)
+
+        for period in bol_windows:
+            bb_sma_arr_bt, _, _ = bollinger_bands(closes, period, 1.0)
+            bb_sma_dict[period] = bb_sma_arr_bt
+            for std_dev in bol_stds:
+                _, upper, lower = bollinger_bands(closes, period, std_dev)
+                bb_upper_dict[(period, std_dev)] = upper
+                bb_lower_dict[(period, std_dev)] = lower
+
+        # SMA long terme (réutilise bb_sma_dict)
+        for period in long_ma_windows:
+            if period not in bb_sma_dict:
+                bb_sma_dict[period] = sma(closes, period)
+
     # --- ATR multi-period (pour donchian/supertrend/grid_atr/grid_multi_tf) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
     if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr"):

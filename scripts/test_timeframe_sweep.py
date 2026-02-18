@@ -1,10 +1,11 @@
-"""Diagnostic — Compare les performances d'une stratégie grid sur 1h, 4h, 1d.
+"""Diagnostic — Compare les performances d'une stratégie sur 1h, 4h, 1d.
 
 Usage :
   uv run python -m scripts.test_timeframe_sweep --symbol BTC/USDT --days 730
   uv run python -m scripts.test_timeframe_sweep --symbol BTC/USDT --days 730 --strategy envelope_dca
   uv run python -m scripts.test_timeframe_sweep --symbol DOGE/USDT --days 365 --strategy grid_trend
   uv run python -m scripts.test_timeframe_sweep --symbol BTC/USDT --days 365 --strategy grid_range_atr
+  uv run python -m scripts.test_timeframe_sweep --symbol ETH/USDT --days 365 --strategy boltrend
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
 from backend.core.models import Candle
+from backend.optimization.fast_backtest import run_backtest_from_cache
 from backend.optimization.fast_multi_backtest import run_multi_backtest_from_cache
 from backend.optimization.indicator_cache import build_cache, resample_candles
 
@@ -31,8 +33,11 @@ from backend.optimization.indicator_cache import build_cache, resample_candles
 # Stratégies compatibles multi-TF (exclues : grid_multi_tf, grid_funding)
 SUPPORTED_STRATEGIES = {
     "grid_atr", "envelope_dca", "envelope_dca_short", "grid_trend",
-    "grid_range_atr",
+    "grid_range_atr", "boltrend",
 }
+
+# Stratégies mono-position (utilisent run_backtest_from_cache, pas run_multi)
+_MONO_STRATEGIES = {"boltrend"}
 
 TIMEFRAMES = ["1h", "4h", "1d"]
 
@@ -43,6 +48,7 @@ _INDICATOR_KEYS: dict[str, list[str]] = {
     "envelope_dca_short": ["ma_period"],
     "grid_trend": ["ema_fast", "ema_slow", "adx_period", "atr_period"],
     "grid_range_atr": ["ma_period", "atr_period"],
+    "boltrend": ["bol_window", "bol_std", "long_ma_window"],
 }
 
 
@@ -215,29 +221,51 @@ def run(args: argparse.Namespace) -> None:
             exchange="bitget",
         )
 
-        # Run backtest
-        result = run_multi_backtest_from_cache(strategy_name, params, cache, bt_config)
-        # result = (params, sharpe, net_return_pct, profit_factor, n_trades)
-        _, sharpe, net_return_pct, profit_factor, n_trades = result
+        # Run backtest — mono vs grid
+        if strategy_name in _MONO_STRATEGIES:
+            # run_backtest_from_cache → (params, sharpe, net_return_pct, pf, n_trades)
+            _, sharpe, net_return_pct, profit_factor, n_trades = (
+                run_backtest_from_cache(strategy_name, params, cache, bt_config)
+            )
+
+            # WR : relancer la simulation pour obtenir les trade_pnls
+            from backend.optimization.fast_backtest import _simulate_trades
+            if strategy_name == "boltrend":
+                from backend.optimization.fast_backtest import _boltrend_signals
+                longs, shorts = _boltrend_signals(params, cache)
+            else:
+                longs, shorts = None, None
+            if longs is not None:
+                trade_pnls, _, _ = _simulate_trades(
+                    longs, shorts, cache, strategy_name, params, bt_config,
+                )
+                wins = sum(1 for p in trade_pnls if p > 0)
+                wr = (wins / len(trade_pnls) * 100) if trade_pnls else 0.0
+            else:
+                wr = 0.0
+        else:
+            result = run_multi_backtest_from_cache(strategy_name, params, cache, bt_config)
+            # result = (params, sharpe, net_return_pct, profit_factor, n_trades)
+            _, sharpe, net_return_pct, profit_factor, n_trades = result
+
+            # Win rate : non disponible directement, on relance la simulation
+            from backend.optimization import fast_multi_backtest as fmb
+            trade_pnls: list[float] = []
+            if strategy_name == "grid_atr":
+                trade_pnls, _, _ = fmb._simulate_grid_atr(cache, params, bt_config, direction=1)
+            elif strategy_name == "envelope_dca":
+                trade_pnls, _, _ = fmb._simulate_envelope_dca(cache, params, bt_config, direction=1)
+            elif strategy_name == "envelope_dca_short":
+                trade_pnls, _, _ = fmb._simulate_envelope_dca(cache, params, bt_config, direction=-1)
+            elif strategy_name == "grid_trend":
+                trade_pnls, _, _ = fmb._simulate_grid_trend(cache, params, bt_config)
+            elif strategy_name == "grid_range_atr":
+                trade_pnls, _, _ = fmb._simulate_grid_range(cache, params, bt_config)
+
+            wins = sum(1 for p in trade_pnls if p > 0)
+            wr = (wins / len(trade_pnls) * 100) if trade_pnls else 0.0
 
         net_pnl = net_return_pct / 100 * bt_config.initial_capital
-        # Win rate : non disponible directement, on l'estime depuis le fast engine
-        # Pour le WR, on doit relancer la simulation directement
-        from backend.optimization import fast_multi_backtest as fmb
-        trade_pnls: list[float] = []
-        if strategy_name == "grid_atr":
-            trade_pnls, _, _ = fmb._simulate_grid_atr(cache, params, bt_config, direction=1)
-        elif strategy_name == "envelope_dca":
-            trade_pnls, _, _ = fmb._simulate_envelope_dca(cache, params, bt_config, direction=1)
-        elif strategy_name == "envelope_dca_short":
-            trade_pnls, _, _ = fmb._simulate_envelope_dca(cache, params, bt_config, direction=-1)
-        elif strategy_name == "grid_trend":
-            trade_pnls, _, _ = fmb._simulate_grid_trend(cache, params, bt_config)
-        elif strategy_name == "grid_range_atr":
-            trade_pnls, _, _ = fmb._simulate_grid_range(cache, params, bt_config)
-
-        wins = sum(1 for p in trade_pnls if p > 0)
-        wr = (wins / len(trade_pnls) * 100) if trade_pnls else 0.0
 
         rows.append({
             "tf": tf,

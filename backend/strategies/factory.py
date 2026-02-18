@@ -5,6 +5,7 @@ from __future__ import annotations
 from backend.core.config import AppConfig
 from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
+from backend.strategies.boltrend import BolTrendStrategy
 from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
 from backend.strategies.envelope_dca import EnvelopeDCAStrategy
 from backend.strategies.envelope_dca_short import EnvelopeDCAShortStrategy
@@ -31,6 +32,7 @@ def create_strategy(name: str, config: AppConfig) -> BaseStrategy:
         "bollinger_mr": (BollingerMRStrategy, strategies_config.bollinger_mr),
         "donchian_breakout": (DonchianBreakoutStrategy, strategies_config.donchian_breakout),
         "supertrend": (SuperTrendStrategy, strategies_config.supertrend),
+        "boltrend": (BolTrendStrategy, strategies_config.boltrend),
         "envelope_dca": (EnvelopeDCAStrategy, strategies_config.envelope_dca),
         "envelope_dca_short": (EnvelopeDCAShortStrategy, strategies_config.envelope_dca_short),
         "grid_atr": (GridATRStrategy, strategies_config.grid_atr),
@@ -65,6 +67,8 @@ def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
         strategies.append(DonchianBreakoutStrategy(strats.donchian_breakout))
     if strats.supertrend.enabled:
         strategies.append(SuperTrendStrategy(strats.supertrend))
+    if strats.boltrend.enabled:
+        strategies.append(BolTrendStrategy(strats.boltrend))
     if strats.envelope_dca.enabled:
         strategies.append(EnvelopeDCAStrategy(strats.envelope_dca))
     if strats.envelope_dca_short.enabled:

@@ -85,6 +85,18 @@ supertrend:
   sl_percent: 2.0
   weight: 0.15
   per_asset: {}
+boltrend:
+  enabled: false
+  live_eligible: false
+  timeframe: 1h
+  bol_window: 100
+  bol_std: 2.2
+  min_bol_spread: 0.0
+  long_ma_window: 550
+  sl_percent: 15.0
+  leverage: 2
+  weight: 0.15
+  per_asset: {}
 envelope_dca:
   enabled: false
   live_eligible: true

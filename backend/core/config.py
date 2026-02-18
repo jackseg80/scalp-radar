@@ -182,6 +182,26 @@ class SuperTrendConfig(BaseModel):
         return {**base, **overrides}
 
 
+class BolTrendConfig(BaseModel):
+    enabled: bool = False
+    live_eligible: bool = False
+    timeframe: str = "1h"
+    bol_window: int = Field(default=100, ge=2)
+    bol_std: float = Field(default=2.2, gt=0)
+    min_bol_spread: float = Field(default=0.0, ge=0)
+    long_ma_window: int = Field(default=550, ge=2)
+    sl_percent: float = Field(default=15.0, gt=0)
+    leverage: int = Field(default=2, ge=1)
+    weight: float = Field(default=0.15, ge=0, le=1)
+    per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:
+        """Retourne les paramètres avec overrides per_asset appliqués."""
+        base = self.model_dump(exclude={"per_asset", "enabled", "live_eligible", "weight"})
+        overrides = self.per_asset.get(symbol, {})
+        return {**base, **overrides}
+
+
 class EnvelopeDCAConfig(BaseModel):
     enabled: bool = True
     live_eligible: bool = False
@@ -366,6 +386,7 @@ class StrategiesConfig(BaseModel):
     bollinger_mr: BollingerMRConfig = Field(default_factory=BollingerMRConfig)
     donchian_breakout: DonchianBreakoutConfig = Field(default_factory=DonchianBreakoutConfig)
     supertrend: SuperTrendConfig = Field(default_factory=SuperTrendConfig)
+    boltrend: BolTrendConfig = Field(default_factory=BolTrendConfig)
     envelope_dca: EnvelopeDCAConfig = Field(default_factory=EnvelopeDCAConfig)
     envelope_dca_short: EnvelopeDCAShortConfig = Field(default_factory=EnvelopeDCAShortConfig)
     grid_atr: GridATRConfig = Field(default_factory=GridATRConfig)
@@ -382,6 +403,7 @@ class StrategiesConfig(BaseModel):
                 self.vwap_rsi, self.liquidation, self.orderflow,
                 self.momentum, self.funding,
                 self.bollinger_mr, self.donchian_breakout, self.supertrend,
+                self.boltrend,
                 self.envelope_dca, self.envelope_dca_short, self.grid_atr,
                 self.grid_range_atr, self.grid_multi_tf, self.grid_funding,
                 self.grid_trend,

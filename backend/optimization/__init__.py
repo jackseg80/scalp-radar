@@ -10,6 +10,7 @@ from typing import Any
 
 from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
+from backend.strategies.boltrend import BolTrendStrategy
 from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
 from backend.strategies.envelope_dca import EnvelopeDCAStrategy
 from backend.strategies.envelope_dca_short import EnvelopeDCAShortStrategy
@@ -26,6 +27,7 @@ from backend.strategies.vwap_rsi import VwapRsiStrategy
 
 from backend.core.config import (
     BollingerMRConfig,
+    BolTrendConfig,
     DonchianBreakoutConfig,
     EnvelopeDCAConfig,
     EnvelopeDCAShortConfig,
@@ -50,6 +52,7 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
     "bollinger_mr": (BollingerMRConfig, BollingerMRStrategy),
     "donchian_breakout": (DonchianBreakoutConfig, DonchianBreakoutStrategy),
     "supertrend": (SuperTrendConfig, SuperTrendStrategy),
+    "boltrend": (BolTrendConfig, BolTrendStrategy),
     "envelope_dca": (EnvelopeDCAConfig, EnvelopeDCAStrategy),
     "envelope_dca_short": (EnvelopeDCAShortConfig, EnvelopeDCAShortStrategy),
     "grid_atr": (GridATRConfig, GridATRStrategy),

@@ -1616,6 +1616,40 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Fichiers** : 5 créés, 7 modifiés, 2 fichiers tests.
 
+### Sprint 30b — Stratégie BolTrend (Bollinger Trend Following, 15e stratégie) ✅
+
+**But** : Intégrer une stratégie mono-position Bollinger Breakout filtrée par tendance long terme. Breakout quand close sort des bandes de Bollinger (avec prev_close dedans), filtre SMA long terme, sortie dynamique au retour à la SMA de Bollinger.
+
+**Logique** :
+
+- **LONG** : prev_close < prev_upper AND close > upper AND spread > min_bol_spread AND close > long_ma
+- **SHORT** : prev_close > prev_lower AND close < lower AND spread > min_bol_spread AND close < long_ma
+- **Exit LONG** : close < bb_sma (breakout s'essouffle) — INVERSÉ vs bollinger_mr
+- **Exit SHORT** : close > bb_sma
+- **TP très éloigné** : entry×2 (LONG), entry×0.5 (SHORT) — check_exit gère le vrai TP
+- **SL** : % fixe depuis l'entrée (filet de sécurité)
+
+**Changements** :
+
+- `config.py` : `BolTrendConfig` (Pydantic) + champ dans `StrategiesConfig`
+- `boltrend.py` : NOUVEAU — `BolTrendStrategy(BaseStrategy)`, compute_indicators (BB + SMA long + ATR/ADX), evaluate (breakout + spread + trend filter), check_exit (SMA crossing inversé)
+- `factory.py` : import + mapping create_strategy + get_enabled_strategies
+- `__init__.py` : STRATEGY_REGISTRY (pas GRID_STRATEGIES, pas STRATEGIES_NEED_EXTRA_DATA)
+- `indicator_cache.py` : build_cache bloc boltrend (réutilise bb_sma/bb_upper/bb_lower dicts)
+- `fast_backtest.py` : `_boltrend_signals()` (vectorized np.roll), `_simulate_boltrend_numba()` (JIT), 6 points de dispatch
+- `adaptive_selector.py` : mapping `_STRATEGY_CONFIG_ATTR`
+- `strategies.yaml` + `param_grids.yaml` : config + grille WFO 486 combos (3×3×3×3×3×2)
+
+**Points critiques** :
+
+- **check_exit INVERSÉ** : bollinger_mr (mean reversion) LONG exit quand `close >= sma`, boltrend (breakout) LONG exit quand `close < sma`
+- **np.roll wraparound** : valid[0] = False (closes[-1] se retrouve en position 0)
+- **bb_sma collision safe** : `bollinger_bands()` appelle `sma()` en interne → résultats identiques
+
+**Tests** : 25 nouveaux + 1 mis à jour (test_fast_engine_refactor.py), 1261 tests au total, 0 régression.
+
+**Fichiers** : 10 modifiés/créés, 1 fichier test mis à jour.
+
 ### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
@@ -1698,10 +1732,10 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1236 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31**
-- **Phase 6 en cours** — Sprint 31 (Log Viewer) terminé
-- **14 stratégies** : 4 scalp 5m + 3 swing 1h + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
+- **1261 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b**
+- **Phase 6 en cours** — Sprint 30b (BolTrend) terminé
+- **15 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)

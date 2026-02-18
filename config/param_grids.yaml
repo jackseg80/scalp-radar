@@ -85,6 +85,20 @@ supertrend:
     tp_percent: [3.0, 4.0, 6.0, 8.0]
     sl_percent: [1.5, 2.0, 3.0, 4.0]
 
+# Bollinger Trend : 486 combos (3×3×3×3×3×2)
+boltrend:
+  wfo:
+    is_days: 180
+    oos_days: 60
+    step_days: 60
+  default:
+    bol_window: [50, 100, 150]
+    bol_std: [1.5, 2.0, 2.5]
+    long_ma_window: [200, 400, 550]
+    sl_percent: [10.0, 15.0, 20.0]
+    min_bol_spread: [0.0, 0.01, 0.02]
+    timeframe: ["1h", "4h"]
+
 # Envelope DCA : 972 combos (3×4×3×5×3×4), coarse LHS 200
 envelope_dca:
   wfo:
