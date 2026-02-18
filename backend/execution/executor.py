@@ -677,6 +677,20 @@ class Executor:
         state = self._grid_states.get(futures_sym)
         is_first_level = state is None
 
+        # Hotfix 35 : limiter le nombre de NOUVEAUX cycles grid simultanés
+        if is_first_level:
+            max_live_grids_raw = getattr(self._config.risk, "max_live_grids", 4)
+            max_live_grids = max_live_grids_raw if isinstance(max_live_grids_raw, int) else 4
+            active_grids = len(self._grid_states)
+            if active_grids >= max_live_grids:
+                logger.warning(
+                    "Executor: max grids live atteint ({}/{}), nouveau cycle {} ignoré",
+                    active_grids,
+                    max_live_grids,
+                    event.symbol,
+                )
+                return
+
         # Pre-trade check UNIQUEMENT au 1er niveau (Bug 2 fix)
         if is_first_level:
             grid_leverage = self._get_grid_leverage(event.strategy_name)

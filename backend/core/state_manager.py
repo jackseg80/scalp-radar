@@ -40,6 +40,14 @@ class StateManager:
         self._executor_state_file = executor_state_file
         self._task: asyncio.Task[None] | None = None
         self._running = False
+        # Hotfix 35 : référence executor pour sauvegarde périodique
+        self._executor: Any = None
+        self._risk_manager: Any = None
+
+    def set_executor(self, executor: Any, risk_manager: Any) -> None:
+        """Enregistre l'Executor pour la sauvegarde périodique (Hotfix 35)."""
+        self._executor = executor
+        self._risk_manager = risk_manager
 
     async def save_runner_state(
         self,
@@ -209,6 +217,13 @@ class StateManager:
                         global_kill_switch=simulator._global_kill_switch,
                         kill_switch_reason=simulator._kill_switch_reason,
                     )
+
+                    # Hotfix 35 : sauvegarde executor state (résout session_pnl fantôme)
+                    if self._executor is not None:
+                        try:
+                            await self.save_executor_state(self._executor, self._risk_manager)
+                        except Exception as e:
+                            logger.warning("StateManager: erreur sauvegarde executor: {}", e)
 
                     # Journal snapshot (toutes les 5 min)
                     snapshot_counter += 1

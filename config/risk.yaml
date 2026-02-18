@@ -49,3 +49,6 @@ regime_filter_enabled: false
 # Hotfix 28a : bypass le selector au boot (autorise toutes les stratégies éligibles)
 # Auto-désactivé quand toutes les stratégies atteignent min_trades
 selector_bypass_at_boot: false
+
+# Hotfix 35 : limite le nombre de cycles grid simultanés (filet de sécurité restart)
+max_live_grids: 4

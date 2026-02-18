@@ -510,6 +510,7 @@ class RiskConfig(BaseModel):
     )
     regime_filter_enabled: bool = Field(default=True)  # Sprint 27
     selector_bypass_at_boot: bool = Field(default=False)  # Hotfix 28a
+    max_live_grids: int = Field(default=4, ge=1)  # Hotfix 35 : max cycles grid simultanés
 
     @model_validator(mode="after")
     def validate_leverage(self) -> RiskConfig:

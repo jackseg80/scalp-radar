@@ -147,6 +147,9 @@ async def lifespan(app: FastAPI):
 
         await selector.start()
         simulator.set_trade_event_callback(executor.handle_event)
+        # Hotfix 35 : enregistrer executor dans StateManager pour sauvegarde périodique
+        if state_manager is not None:
+            state_manager.set_executor(executor, risk_mgr)
         logger.info("Executor live démarré (mainnet)")
     elif config.secrets.live_trading:
         logger.warning("LIVE_TRADING=true mais DataEngine/Simulator absents — executor non créé")

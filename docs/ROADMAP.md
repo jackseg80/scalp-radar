@@ -1756,6 +1756,39 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Tests** : 17 nouveaux, **1339 tests** au total, 0 régression.
 
+### Hotfix 35 — Stabilité restart : cooldown post-warmup, max_live_grids, sauvegarde executor ✅
+
+**But** : Premier jour live — le bot a crashé/redémarré 3 fois. Chaque restart provoquait : (1) perte du simulator state, (2) ouverture massive de grids sur TOUS les assets au premier signal post-warmup, (3) 8 positions live ouvertes en 30 secondes, (4) session_pnl fantôme persistant.
+
+**Cause racine** : Après le warm-up, le runner sort avec état "vierge" (0 positions, 1000$) dans un marché bearish → TOUS les assets sous SMA → conditions LONG remplies partout. L'Executor n'avait aucune protection contre les ouvertures massives post-restart.
+
+**3 bugs corrigés** :
+
+**Bug A — Cooldown post-warmup (`simulator.py`)** :
+
+- `POST_WARMUP_COOLDOWN = 3` : constante de classe dans `GridStrategyRunner`
+- `_post_warmup_candle_count` incrémenté à chaque bougie post-warmup, reset dans `_end_warmup()`
+- `_emit_open_event()` et `_emit_close_event()` bloquent les events Executor pendant 3 bougies (3h en TF 1h)
+- **Les positions paper s'ouvrent normalement** — seul l'envoi à l'Executor est bloqué
+
+**Bug B — Max grids simultanés (`executor.py` + `risk.yaml` + `config.py`)** :
+
+- `max_live_grids: 4` dans `risk.yaml` et champ dans `RiskConfig`
+- Guard dans `_open_grid_position()` : refuse un **nouveau** cycle si `len(_grid_states) >= max_live_grids`
+- Les niveaux DCA supplémentaires sur un cycle existant passent toujours (`is_first_level=False`)
+- Fallback `isinstance(int)` pour robustesse avec les MagicMock des tests
+
+**Bug C — Sauvegarde périodique executor (`state_manager.py` + `server.py`)** :
+
+- `set_executor(executor, risk_mgr)` : nouvelle méthode pour enregistrer l'executor
+- `_periodic_save_loop()` appelle `save_executor_state()` toutes les 60s si executor enregistré
+- `server.py` appelle `state_manager.set_executor()` après `executor.start()`
+- Résout le session_pnl fantôme qui persistait entre les restarts (état périmé après kill -9)
+
+**Fichiers modifiés** : `backend/backtesting/simulator.py`, `backend/execution/executor.py`, `backend/core/state_manager.py`, `backend/api/server.py`, `backend/core/config.py`, `config/risk.yaml`, `tests/test_hotfix_35.py` (14 nouveaux tests), `tests/test_grid_runner.py` (1 test adapté au cooldown)
+
+**Tests** : 14 nouveaux, **1353 tests** au total, 0 régression.
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -1866,9 +1899,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1339 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34**
-- **Phase 6 en cours** — Hotfix 34 (Executor P&L fills réels Bitget) terminé
+- **1353 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35**
+- **Phase 6 en cours** — Hotfix 35 (stabilité restart live : cooldown post-warmup, max_live_grids, sauvegarde périodique executor) terminé
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
