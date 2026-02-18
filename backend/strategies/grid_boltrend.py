@@ -223,8 +223,12 @@ class GridBolTrendStrategy(BaseGridStrategy):
     def get_tp_price(
         self, grid_state: GridState, current_indicators: dict
     ) -> float:
-        """TP = SMA de Bollinger (dynamique, inversé)."""
-        return current_indicators.get("bb_sma", float("nan"))
+        """TP inverse géré par should_close_all() (close < bb_sma LONG).
+
+        check_global_tp_sl() utilise la convention standard high >= tp_price,
+        incompatible avec un TP inverse. On retourne NaN pour le désactiver.
+        """
+        return float("nan")
 
     def get_sl_price(
         self, grid_state: GridState, current_indicators: dict

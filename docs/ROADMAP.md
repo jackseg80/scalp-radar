@@ -1682,6 +1682,27 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Tests** : 32 nouveaux, 1309 tests au total, 0 régression.
 
+### Hotfix 33a — Bug TP inverse grid_boltrend (validation Bitget) ✅
+
+**Problème** : La validation Bitget de `grid_boltrend` donnait Sharpe -14.51 sur ETH/USDT alors que le fast engine (test_regime_performance) donnait +1.35 sur la même période avec les mêmes params.
+
+**Cause racine** : `get_tp_price()` retournait `bb_sma`. `check_global_tp_sl()` dans `multi_engine.py` interprète ce prix avec la convention standard LONG : `tp_hit = candle.high >= tp_price`. Or après un breakout LONG (`close > bb_upper > bb_sma`), la condition `high >= bb_sma` est **toujours vraie** → sortie immédiate sur chaque candle en perte (on paie frais entrée + sortie sans tenir la position). `should_close_all()` qui contient la bonne logique inverse (`close < bb_sma`) n'est jamais atteint.
+
+**Fix** : `get_tp_price()` retourne `float("nan")` pour désactiver `check_global_tp_sl()`. Le TP inverse est entièrement géré par `should_close_all()`.
+
+**Résultats après fix** :
+
+- Bitget Sharpe : -14.51 → **+1.58** (ETH/USDT)
+- OOS Sharpe moyen WFO : **4.15** (30 fenêtres, 100% consistance)
+- OOS/IS ratio : **1.98** (OOS > IS = pas d'overfit)
+- Grade : **B (83/100), LIVE ELIGIBLE**
+
+**Leçon** : Pour les stratégies avec TP "inverse" (exit en dessous de bb_sma pour LONG), ne pas utiliser `get_tp_price()` — retourner `NaN` et gérer la sortie dans `should_close_all()` uniquement.
+
+**Fichiers** : `backend/strategies/grid_boltrend.py` (1 ligne modifiée).
+
+**Tests** : 1309 tests, 0 régression.
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
