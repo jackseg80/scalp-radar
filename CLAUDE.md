@@ -18,7 +18,7 @@ and presents results via a real-time dashboard.
   - **IMPORTANT pour Claude Code** : Mettre à jour ce fichier après chaque plan de sprint complété
   - Ajouter les résultats, leçons apprises, bugs corrigés dans la section du sprint concerné
   - Mettre à jour "ÉTAT ACTUEL" avec le nouveau nombre de tests et la prochaine étape
-  - **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 14 stratégies de trading (logique, paramètres, exemples)
+  - **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 16 stratégies de trading (logique, paramètres, exemples)
   - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Architecture runtime, flux de données, boot/shutdown, persistence
   - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI, requêtes DB, déploiement, méthodologie
   - **IMPORTANT pour Claude Code** : Consulter ce fichier avant de proposer des commandes
@@ -45,7 +45,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (1090 passants) |
+| Testing            | pytest            | Critical components must have unit tests (1353 passants) |
 
 ## Key Architecture Principles
 
@@ -64,7 +64,7 @@ scalp-radar/
 ├── config/                       # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/                     # models, config, database, indicators, position_manager, grid_position_manager, state_manager, data_engine
-│   ├── strategies/               # base, base_grid, factory + 14 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
+│   ├── strategies/               # base, base_grid, factory + 16 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, boltrend, envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 │   ├── optimization/             # walk_forward, overfitting, report, indicator_cache, fast_backtest, fast_multi_backtest
 │   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder, portfolio_engine, portfolio_db
 │   ├── execution/                # executor, risk_manager, adaptive_selector
@@ -72,12 +72,12 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
-├── tests/                        # 1016 tests (pytest, 55 fichiers)
+├── tests/                        # 1353 tests (pytest)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
-└── docs/plans/                   # Sprint plans 1-19 archivés
+└── docs/plans/                   # Sprint plans 1-33 archivés
 ```
 
-## Trading Strategies (14 implémentées)
+## Trading Strategies (16 implémentées)
 
 ### 5m Scalp (4)
 
@@ -86,13 +86,14 @@ scalp-radar/
 3. **Funding** — Arbitrage taux extrêmes (paper only)
 4. **Liquidation** — Cascade OI zones (paper only)
 
-### 1h Swing (3)
+### 1h Swing (4)
 
 1. **Bollinger MR** — TP dynamique SMA crossing
 2. **Donchian Breakout** — TP/SL ATR multiples
 3. **SuperTrend** — Trend-following ATR-based
+4. **BolTrend** — Bollinger Breakout + filtre SMA, mono-position, TP inverse (close < SMA = exit LONG) (`enabled: true`)
 
-### 1h Grid/DCA (6)
+### 1h Grid/DCA (8)
 
 1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: false`, remplacé par grid_atr)
 2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
@@ -100,6 +101,8 @@ scalp-radar/
 4. **Grid Range ATR** — Range trading bidirectionnel, LONG+SHORT simultanés, TP/SL individuels par position, `entry = SMA ± ATR × spacing`, TP = retour SMA (`enabled: false`, WFO à lancer)
 5. **Grid Multi-TF** — Supertrend 4h filtre directionnel + Grid ATR 1h exécution, LONG quand ST=UP / SHORT quand ST=DOWN, force-close au flip (`enabled: false`, WFO en cours)
 6. **Grid Funding** — DCA sur funding rate négatif (LONG-only), multi-niveaux par seuil, TP = funding positif / SMA cross, funding payments accumulés 8h (`enabled: false`, WFO à lancer)
+7. **Grid Trend** — Trend following DCA, EMA cross + ADX + trailing stop ATR, force-close au flip, zone neutre ADX < seuil (`enabled: false`, échoue en forward test bear market)
+8. **Grid BolTrend** — DCA event-driven sur breakout Bollinger + filtre SMA long, TP inversé (close < SMA = exit LONG), niveaux fixés au breakout (`enabled: true`, paper trading en préparation 6 assets : BTC, ETH, DOGE, DYDX, LINK, SAND)
 
 ## Multi-Strategy Arena
 
@@ -152,14 +155,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 ## Config Files (5 YAML)
 
 - `assets.yaml` — 22 assets (21 historiques + JUP/USDT pour grid_trend), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
-- `strategies.yaml` — 14 stratégies + custom + per_asset overrides
+- `strategies.yaml` — 16 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
 - `param_grids.yaml` — Espaces de recherche WFO + per-strategy config (is_days, oos_days, step_days)
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a) : 1169 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35) : 1353 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -235,6 +238,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 28d : Override env var SELECTOR_BYPASS_AT_BOOT — `.env` (gitignored) prend priorité sur risk.yaml (versionné), même pattern que LIVE_TRADING (1116 tests)
 - Hotfix 28e : Sync portfolio backtests local → serveur — réutilisation infra sync WFO (config, httpx, auth X-API-Key), endpoint POST /api/portfolio/results, push auto après save (CLI + API), sync_to_server.py étendu --only portfolio (1129 tests)
 - Sprint 29a : Grid Range ATR (14e stratégie) — range trading bidirectionnel, LONG+SHORT simultanés, TP/SL individuels par position, fast engine dédié `_simulate_grid_range()`, 2160 combos WFO, script diagnostic `test_grid_range_fast.py` (1169 tests)
+- Hotfix 30 : Deadlock Selector + DATA_STALE — force_strategies bypass (grid_atr forcé), session vierge skip net_return/PF si DB a des trades, `_last_update` avant check doublon, grid_range_atr ajouté au mapping (1183 tests)
+- Hotfix 30b : Config conflicts deploy — deploy.sh reset config/ avant git pull, force_strategies override .env (comma-separated), règle JAMAIS éditer config/*.yaml sur serveur (1188 tests)
+- Sprint 30b : Stratégie BolTrend (15e stratégie) — Bollinger Breakout + filtre SMA trend, mono-position, check_exit INVERSÉ vs bollinger_mr (close < SMA = exit LONG), fast engine Numba, 486 combos WFO, 25 tests (1213 tests)
+- Sprint 33 : Stratégie Grid BolTrend (16e stratégie) — DCA event-driven sur breakout Bollinger + filtre SMA long, fast engine dédié `_simulate_grid_boltrend()`, TP inversé (`get_tp_price()` retourne NaN), niveaux fixés au breakout, 1296 combos WFO, 32 tests (1309 tests)
+- Hotfix 33a : TP inverse grid_boltrend — `get_tp_price()` retourne `float("nan")` pour désactiver `check_global_tp_sl()`, TP géré par `should_close_all()` uniquement. Sharpe -14.51 → +1.58, Grade F → B (83/100) (1309 tests)
+- Hotfix 33b : Audit parité grid_boltrend — 3 bugs fast engine (exit_price sma_val→close_i, fees maker→taker+slip, double entry_fee dans multi_engine.py), divergence 31.73% → 2.62%, 13 tests parité (1322 tests)
+- Hotfix 34 : Executor P&L réel Bitget — `_fetch_fill_price()` (fetch_order → fetch_my_trades), `entry_fee` dans dataclasses LivePosition/GridLivePosition, `_calculate_real_pnl()` séparée, 17 tests (1339 tests)
+- Hotfix 35 : Stabilité restart live — cooldown post-warmup 3 bougies (`POST_WARMUP_COOLDOWN`) dans GridStrategyRunner, guard `max_live_grids` isinstance-safe, sauvegarde périodique executor via `StateManager._periodic_save_loop()` (60s), 14 tests (1353 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 
@@ -377,4 +388,4 @@ FORCE_STRATEGIES=grid_atr
 - Bitget API docs: <https://www.bitget.com/api-doc/>
 - ccxt Bitget: <https://docs.ccxt.com/#/exchanges/bitget>
 - Frontend prototype: `docs/prototypes/Scalp radar v2.jsx` (référence design)
-- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-19 archivés)
+- Plans détaillés : `docs/plans/sprint-{n}-*.md` (1-33 archivés)

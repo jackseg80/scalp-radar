@@ -246,6 +246,9 @@ on_candle(symbol, timeframe, candle)
     |
     +-- Détection fin warm-up : candle_age <= 2h → _end_warmup()
     |
+    +-- POST_WARMUP_COOLDOWN : 3 premières bougies post-warmup → _emit_event() bloqué
+    |     (évite ouvertures massives après restart) [Hotfix 35]
+    |
     +-- Mise à jour buffer closes + SMA interne
     |
     +-- Merge indicateurs :
@@ -362,12 +365,15 @@ Optimisé pour la vitesse (100-1000× plus rapide que le backtester standard) :
 
 ```
 IndicatorCache.build(candles, params)
-    → sma_arr, atr_arr, bb_*, supertrend, ema, adx, atr_by_period
+    → sma_arr, atr_arr, bb_*, supertrend, ema, adx, atr_by_period, ema_by_period, adx_by_period
     |
-_simulate_grid(closes, highs, lows, cache, params)
-    → itère chaque candle
-    → check entry levels (SMA ± ATR × multiplier)
-    → check TP (retour SMA) / SL (% prix moyen)
+_simulate_grid(closes, highs, lows, cache, params)          ← grid_atr, envelope_dca, ...
+_simulate_grid_range(closes, highs, lows, cache, params)    ← grid_range_atr (LONG+SHORT)
+_simulate_grid_trend(closes, highs, lows, cache, params)    ← grid_trend (EMA+ADX trailing)
+_simulate_grid_boltrend(closes, highs, lows, cache, params) ← grid_boltrend (Bollinger DCA, TP inverse)
+    → breakout Bollinger détecté → DCA event-driven
+    → exit_price = close réel (pas SMA), fees = taker + slippage
+    → TP inverse : close < SMA → fermeture LONG
     → accumule TradeResult[]
     |
 BacktestResult (net_return_pct, sharpe, win_rate, trades, ...)
@@ -414,7 +420,7 @@ Fichier : [state_manager.py](../backend/core/state_manager.py)
 | Quoi | Fichier | Fréquence | Méthode |
 |------|---------|-----------|---------|
 | État runners (capital, stats, positions) | `data/simulator_state.json` | 60s | `save_runner_state()` |
-| État executor (positions Bitget) | `data/executor_state.json` | Au shutdown | `save_executor_state()` |
+| État executor (positions Bitget) | `data/executor_state.json` | 60s + shutdown | `save_executor_state()` via `_periodic_save_loop()` (Hotfix 35) |
 | Snapshots journal | DB `portfolio_snapshots` | 5 min | `_save_journal_snapshot()` |
 
 **Écriture atomique** : écrit dans `.tmp` puis `os.replace()` (pas de corruption si crash).
@@ -570,7 +576,7 @@ Simulator._dispatch_candle(symbol, tf, candle)
     v
 GridStrategyRunner.on_candle()
     |
-    +-- compute_live_indicators() (EMA, ADX, Supertrend 4h)
+    +-- compute_live_indicators() (EMA, ADX, Supertrend 4h ; BB + long_ma pour grid_boltrend)
     +-- strategy.compute_grid(ctx, grid_state) → niveaux
     +-- candle.low <= entry_price ? → open_grid_position()
     +-- candle touches TP/SL ? → close_all_positions() → TradeResult
