@@ -43,59 +43,64 @@ export default function ActivePositions({ wsData }) {
       )}
 
       {hasPositions && (
-        <div className="positions-columns">
-          {/* Colonne PAPER */}
-          {hasPaper && (
-            <div className="positions-col">
-              <div className="positions-col-header">PAPER</div>
-              {hasGrids && (
-                <GridSummary
-                  gridState={gridState}
-                  expandedGrid={expandedGrid}
-                  onToggle={(symbol) => setExpandedGrid(prev => prev === symbol ? null : symbol)}
-                />
-              )}
-              {monoSimPositions.map((pos, i) => (
-                <PositionRow key={`sim-${i}`} pos={pos} source="PAPER" currentPrice={prices[pos.symbol]?.last} />
-              ))}
+        <>
+          {/* Bandeau résumé global (pleine largeur) */}
+          {hasGrids && (
+            <div className="grid-summary-banner">
+              <span>{gridState.summary.total_positions} grids sur {gridState.summary.total_assets} assets</span>
+              <span className="mono">
+                Marge: {gridState.summary.total_margin_used?.toFixed(0) || 0}$
+              </span>
+              <span className={`mono ${gridState.summary.total_unrealized_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                P&L: {gridState.summary.total_unrealized_pnl >= 0 ? '+' : ''}
+                {formatPnl(gridState.summary.total_unrealized_pnl)}
+              </span>
             </div>
           )}
 
-          {/* Colonne LIVE */}
-          {hasLive && (
-            <div className="positions-col">
-              <div className="positions-col-header positions-col-header--live">LIVE</div>
-              {execPositions.map((pos, i) => (
-                <PositionRow key={`live-${i}`} pos={pos} source="LIVE" currentPrice={prices[pos.symbol]?.last} />
-              ))}
-            </div>
-          )}
-        </div>
+          {/* Colonnes PAPER | LIVE */}
+          <div className="positions-columns">
+            {/* Colonne PAPER */}
+            {hasPaper && (
+              <div className="positions-col">
+                <div className="positions-col-header">PAPER</div>
+                {hasGrids && (
+                  <GridList
+                    gridState={gridState}
+                    expandedGrid={expandedGrid}
+                    onToggle={(symbol) => setExpandedGrid(prev => prev === symbol ? null : symbol)}
+                  />
+                )}
+                {monoSimPositions.map((pos, i) => (
+                  <PositionRow key={`sim-${i}`} pos={pos} source="PAPER" currentPrice={prices[pos.symbol]?.last} />
+                ))}
+              </div>
+            )}
+
+            {/* Colonne LIVE */}
+            {hasLive && (
+              <div className="positions-col">
+                <div className="positions-col-header positions-col-header--live">LIVE</div>
+                {execPositions.map((pos, i) => (
+                  <PositionRow key={`live-${i}`} pos={pos} source="LIVE" currentPrice={prices[pos.symbol]?.last} />
+                ))}
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   )
 }
 
-function GridSummary({ gridState, expandedGrid, onToggle }) {
-  const { grid_positions, summary } = gridState
+function GridList({ gridState, expandedGrid, onToggle }) {
+  const { grid_positions } = gridState
   const grids = Object.values(grid_positions || {})
 
   if (!grids.length) return null
 
   return (
-    <div style={{ marginBottom: 4 }}>
-      {/* Bandeau résumé */}
-      <div className="grid-summary-banner">
-        <span>{summary.total_positions} grids sur {summary.total_assets} assets</span>
-        <span className="mono">
-          Marge: {summary.total_margin_used?.toFixed(0) || 0}$
-        </span>
-        <span className={`mono ${summary.total_unrealized_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
-          P&L: {summary.total_unrealized_pnl >= 0 ? '+' : ''}
-          {formatPnl(summary.total_unrealized_pnl)}
-        </span>
-      </div>
-
+    <div>
       {grids.map(g => (
         <div key={`${g.strategy}-${g.symbol}`}>
           <div
