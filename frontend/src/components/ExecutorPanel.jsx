@@ -3,10 +3,22 @@
  * Props : wsData
  * Conçu pour être wrappé par CollapsibleCard dans App.jsx.
  */
+import { useState } from 'react'
 import Tooltip from './Tooltip'
 import { formatPrice } from '../utils/format'
 
+const STORAGE_KEY = 'scalp-radar-collapse-executor-positions'
+
 export default function ExecutorPanel({ wsData }) {
+  const storedOpen = localStorage.getItem(STORAGE_KEY)
+  const [positionsOpen, setPositionsOpen] = useState(storedOpen === null ? true : storedOpen === 'true')
+
+  function togglePositions() {
+    const next = !positionsOpen
+    setPositionsOpen(next)
+    localStorage.setItem(STORAGE_KEY, String(next))
+  }
+
   const executor = wsData?.executor
 
   // Pas d'executor = mode simulation
@@ -94,16 +106,26 @@ export default function ExecutorPanel({ wsData }) {
 
       {/* Positions ouvertes */}
       {positions.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="text-xs muted">
-            {positions.length} position{positions.length > 1 ? 's' : ''} ouverte{positions.length > 1 ? 's' : ''}
-          </div>
-          {positions.map((pos, idx) => {
-            // Symbole spot pour le prix live : BTC/USDT:USDT → BTC/USDT
-            const spotSymbol = (pos.symbol || '').split(':')[0]
-            const currentPrice = wsData?.prices?.[spotSymbol]?.last
-            return <PositionCard key={pos.symbol || idx} position={pos} currentPrice={currentPrice} />
-          })}
+        <div>
+          <button
+            onClick={togglePositions}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: positionsOpen ? 8 : 0, width: '100%' }}
+          >
+            <span className="text-xs muted">
+              {positions.length} position{positions.length > 1 ? 's' : ''} ouverte{positions.length > 1 ? 's' : ''}
+            </span>
+            <span className={`collapsible-arrow${positionsOpen ? ' open' : ''}`} style={{ marginLeft: 'auto', fontSize: 10 }}>▼</span>
+          </button>
+          {positionsOpen && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {positions.map((pos, idx) => {
+                // Symbole spot pour le prix live : BTC/USDT:USDT → BTC/USDT
+                const spotSymbol = (pos.symbol || '').split(':')[0]
+                const currentPrice = wsData?.prices?.[spotSymbol]?.last
+                return <PositionCard key={pos.symbol || idx} position={pos} currentPrice={currentPrice} />
+              })}
+            </div>
+          )}
         </div>
       )}
 
