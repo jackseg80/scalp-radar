@@ -58,6 +58,8 @@ class TimeFrame(str, Enum):
     M5 = "5m"
     M15 = "15m"
     H1 = "1h"
+    H4 = "4h"
+    D1 = "1d"
 
     @classmethod
     def from_string(cls, value: str) -> TimeFrame:
@@ -72,6 +74,8 @@ class TimeFrame(str, Enum):
             TimeFrame.M5: 300_000,
             TimeFrame.M15: 900_000,
             TimeFrame.H1: 3_600_000,
+            TimeFrame.H4: 14_400_000,
+            TimeFrame.D1: 86_400_000,
         }
         return mapping[self]
 

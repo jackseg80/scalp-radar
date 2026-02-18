@@ -1528,6 +1528,37 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Résultat** : 1217 tests passants (0 régression, pas de nouveaux tests backend nécessaires — frontend pur).
 
+### Sprint 30 — Multi-Timeframe Support (timeframe optimisable WFO) ✅
+
+**But** : Rendre le timeframe (1h, 4h, 1d) optimisable dans le WFO. La DB stocke des candles 1h ; le pipeline resample 1h → 4h/1d à la volée. Permet de découvrir si certaines stratégies performent mieux sur des horizons plus longs.
+
+**Approche** : Groupement des combos par timeframe dans `_run_fast()`, resampling via `resample_candles()`, OOS event-driven avec candles resamplees. ZÉRO modification de la boucle chaude (`_simulate_grid_common`, `_build_entry_prices`) ni du dataclass `IndicatorCache`.
+
+**Changements** :
+
+- `models.py` : `H4 = "4h"` et `D1 = "1d"` ajoutés au `TimeFrame` enum + `to_milliseconds()`
+- `indicator_cache.py` : nouvelle fonction `resample_candles()` — passthrough 1h, buckets UTC complets pour 4h/1d, WARNING pour buckets incomplets au milieu des données
+- `walk_forward.py` : `_run_fast()` groupe les combos par timeframe (un cache par TF), OOS resample si best_tf ≠ 1h (funding skippé pour non-1h)
+- `param_grids.yaml` : `timeframe: ["1h", "4h", "1d"]` pour grid_atr (×3 → 9720 combos), envelope_dca (×3), envelope_dca_short (×3), grid_trend (×3 → 7776 combos)
+- `test_multi_timeframe.py` : 29 tests (10 resampling, 3 total_days, 6 fast engine multi-TF, 5 parité, 3 intégration param_grids, 2 groupement _run_fast)
+- `test_timeframe_sweep.py` : script diagnostic comparaison 1h vs 4h vs 1d pour une stratégie donnée
+
+**Stratégies exclues (inchangées)** :
+
+- `grid_multi_tf` — filtre Supertrend 4h conçu pour main_tf=1h
+- `grid_funding` — funding rates indexés 1h
+- `grid_range_atr` — pas de support multi-TF
+
+**Contraintes respectées** :
+
+- ZÉRO modification `_simulate_grid_common()`, `_build_entry_prices()`, `IndicatorCache` dataclass, classes de stratégie
+- Parité bit-à-bit : `_run_fast()` sans timeframe → résultats identiques au pré-refactoring
+- 90/90 tests de parité fast engine existants (grid_atr, grid_range_atr, fast_engine_refactor) verts
+
+**Tests** : 29 nouveaux tests, 1198 tests au total, 0 régression.
+
+**Fichiers modifiés** : 6 fichiers (models.py, indicator_cache.py, walk_forward.py, param_grids.yaml, test_multi_timeframe.py, test_timeframe_sweep.py)
+
 **Différences clés vs grid_atr** :
 
 - **Bidirectionnel** : LONG sous SMA + SHORT au-dessus, simultanément (pas de direction lock)
@@ -1643,9 +1674,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1217 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c**
-- **Phase 6 en cours** — Sprint 30c (panel Executor enrichi + formatage prix adaptatif) terminé
+- **1198 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30**
+- **Phase 6 en cours** — Sprint 30 (Multi-Timeframe Support) terminé
 - **14 stratégies** : 4 scalp 5m + 3 swing 1h + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j

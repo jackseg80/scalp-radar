@@ -29,7 +29,8 @@ from backend.core.indicators import (
     volume_sma,
     vwap_rolling,
 )
-from backend.core.models import Candle, MarketRegime
+from backend.core.models import Candle, MarketRegime, TimeFrame
+from loguru import logger as _ic_logger
 
 # Mapping MarketRegime → int8 pour stockage compact
 REGIME_TO_INT: dict[MarketRegime, int] = {
@@ -98,6 +99,91 @@ class IndicatorCache:
     # Grid Trend : EMA et ADX multi-period
     ema_by_period: dict[int, np.ndarray] = field(default_factory=dict)   # {period: ema_array}
     adx_by_period: dict[int, np.ndarray] = field(default_factory=dict)   # {period: adx_array}
+
+
+# ─── Resampling générique 1h → 4h/1d ──────────────────────────────────────
+
+_TF_BUCKET_SIZES: dict[str, tuple[int, int]] = {
+    # target_tf: (bucket_seconds, candles_per_bucket)
+    "4h": (14400, 4),
+    "1d": (86400, 24),
+}
+
+
+def resample_candles(candles_1h: list[Candle], target_tf: str) -> list[Candle]:
+    """Resample des candles 1h vers un timeframe supérieur.
+
+    Args:
+        candles_1h: Candles source en 1h (triées chronologiquement).
+        target_tf: ``"1h"`` (passthrough), ``"4h"``, ou ``"1d"``.
+
+    Returns:
+        Liste de Candle resamplees. Seuls les buckets COMPLETS sont inclus
+        (4 candles pour 4h, 24 candles pour 1d).
+
+    Les candles retournées ont :
+        - timestamp = timestamp de la PREMIÈRE candle 1h du bucket
+        - open = open de la première candle 1h
+        - high = max des highs
+        - low = min des lows
+        - close = close de la dernière candle 1h
+        - volume = somme des volumes
+        - timeframe = target_tf
+        - symbol/exchange = copiés de la source
+    """
+    if target_tf == "1h":
+        return candles_1h
+
+    if not candles_1h:
+        return []
+
+    if target_tf not in _TF_BUCKET_SIZES:
+        raise ValueError(f"Timeframe cible non supporté: {target_tf} (supportés: 1h, 4h, 1d)")
+
+    bucket_seconds, expected_count = _TF_BUCKET_SIZES[target_tf]
+    target_timeframe = TimeFrame.from_string(target_tf)
+
+    # Référence pour symbol/exchange
+    ref = candles_1h[0]
+
+    # Grouper les candles par bucket
+    buckets: dict[int, list[Candle]] = {}
+    bucket_order: list[int] = []
+    for c in candles_1h:
+        bucket_id = int(c.timestamp.timestamp()) // bucket_seconds
+        if bucket_id not in buckets:
+            buckets[bucket_id] = []
+            bucket_order.append(bucket_id)
+        buckets[bucket_id].append(c)
+
+    # Construire les candles resamplees (buckets complets uniquement)
+    result: list[Candle] = []
+    n_buckets = len(bucket_order)
+    for idx, bucket_id in enumerate(bucket_order):
+        group = buckets[bucket_id]
+        if len(group) != expected_count:
+            # Warning si bucket incomplet au milieu des données (pas début/fin)
+            if 0 < idx < n_buckets - 1:
+                ts_str = group[0].timestamp.isoformat()
+                _ic_logger.warning(
+                    "resample_candles: bucket {} incomplet ({}/{} candles) au milieu des données, exclu",
+                    ts_str, len(group), expected_count,
+                )
+            continue
+
+        result.append(Candle(
+            timestamp=group[0].timestamp,
+            open=group[0].open,
+            high=max(c.high for c in group),
+            low=min(c.low for c in group),
+            close=group[-1].close,
+            volume=sum(c.volume for c in group),
+            symbol=ref.symbol,
+            timeframe=target_timeframe,
+            exchange=ref.exchange,
+        ))
+
+    return result
 
 
 def _load_funding_rates_aligned(

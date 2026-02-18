@@ -742,16 +742,33 @@ class WalkForwardOptimizer:
 
                 # --- OOS evaluation (best params uniquement) ---
 
+                # Multi-timeframe : resampler OOS si le meilleur IS
+                # utilise un timeframe différent de main_tf (1h)
+                best_tf = best_params.get("timeframe", main_tf)
+                if best_tf != main_tf and best_tf != "1h":
+                    from backend.optimization.indicator_cache import resample_candles
+                    oos_resampled = resample_candles(
+                        oos_candles_by_tf.get("1h", oos_candles_by_tf.get(main_tf, [])),
+                        best_tf,
+                    )
+                    oos_candles_for_eval = {best_tf: oos_resampled}
+                    oos_extra_for_eval = None  # funding non applicable en 4h/1d
+                    oos_eval_tf = best_tf
+                else:
+                    oos_candles_for_eval = oos_candles_by_tf
+                    oos_extra_for_eval = oos_extra_data_map
+                    oos_eval_tf = main_tf
+
                 if is_grid_strategy(strategy_name):
                     from backend.backtesting.multi_engine import run_multi_backtest_single
                     oos_result = run_multi_backtest_single(
-                        strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf,
-                        extra_data_by_timestamp=oos_extra_data_map,
+                        strategy_name, best_params, oos_candles_for_eval, bt_config, oos_eval_tf,
+                        extra_data_by_timestamp=oos_extra_for_eval,
                     )
                 else:
                     oos_result = run_backtest_single(
-                        strategy_name, best_params, oos_candles_by_tf, bt_config, main_tf,
-                        extra_data_by_timestamp=oos_extra_data_map,
+                        strategy_name, best_params, oos_candles_for_eval, bt_config, oos_eval_tf,
+                        extra_data_by_timestamp=oos_extra_for_eval,
                     )
                 oos_metrics = calculate_metrics(oos_result)
 
@@ -1050,60 +1067,88 @@ class WalkForwardOptimizer:
         """Fast engine : pré-calcul indicateurs + boucle de trades minimale.
 
         ~200x plus rapide que le moteur normal pour le grid search IS.
-        Cache construit une seule fois, puis chaque combo = seuils numpy + boucle légère.
+        Cache construit une seule fois par timeframe, puis chaque combo =
+        seuils numpy + boucle légère.
+
+        Si les combos contiennent un champ ``timeframe``, les combos sont
+        groupés par timeframe et un cache dédié est construit pour chaque groupe
+        (resampling 1h → 4h/1d à la volée). Sinon, un seul cache est construit
+        (comportement identique à l'ancien code).
         """
         from backend.optimization.fast_backtest import run_backtest_from_cache
         from backend.optimization.fast_multi_backtest import run_multi_backtest_from_cache
-        from backend.optimization.indicator_cache import build_cache
+        from backend.optimization.indicator_cache import build_cache, resample_candles
         from backend.optimization import is_grid_strategy
 
         bt_config = BacktestConfig(**bt_config_dict)
-
-        # Extraire les valeurs du grid pour le cache (toutes les variantes)
-        param_grid_values: dict[str, list] = {}
-        for params in grid:
-            for k, v in params.items():
-                if k not in param_grid_values:
-                    param_grid_values[k] = []
-                if v not in param_grid_values[k]:
-                    param_grid_values[k].append(v)
-
-        # Construire le cache (une seule fois)
-        t0 = time.monotonic()
-        cache = build_cache(
-            candles_by_tf, param_grid_values, strategy_name, main_tf,
-            db_path=db_path, symbol=symbol, exchange=exchange,
-        )
-        cache_time = time.monotonic() - t0
-        logger.info(
-            "  Fast cache: {} bougies, {:.1f}ms",
-            cache.n_candles, cache_time * 1000,
-        )
-
-        # Exécuter tous les combos
-        results: list[_ISResult] = []
-        total = len(grid)
-        t_start = time.monotonic()
-
         is_grid = is_grid_strategy(strategy_name)
 
-        for i, params in enumerate(grid):
-            if is_grid:
-                results.append(run_multi_backtest_from_cache(strategy_name, params, cache, bt_config))
-            else:
-                results.append(run_backtest_from_cache(strategy_name, params, cache, bt_config))
-            if (i + 1) % 50 == 0 or i == total - 1:
-                elapsed = time.monotonic() - t_start
-                avg_ms = elapsed / (i + 1) * 1000
-                remaining = (total - i - 1) * elapsed / (i + 1)
-                logger.info(
-                    "  Fast {}/{} — {:.1f}ms/bt — {:.1f}s restant",
-                    i + 1, total, avg_ms, remaining,
-                )
+        # Grouper les combos par timeframe
+        from collections import defaultdict
+        tf_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for params in grid:
+            tf = params.get("timeframe", main_tf)
+            tf_groups[tf].append(params)
 
-        # Libérer le cache numpy explicitement (évite accumulation mémoire sur 20 fenêtres)
-        del cache
-        gc.collect()
+        results: list[_ISResult] = []
+        total = len(grid)
+        done = 0
+        t_start = time.monotonic()
+
+        for tf, tf_combos in tf_groups.items():
+            # Resampler les candles si nécessaire
+            if tf != main_tf and tf != "1h":
+                source_candles = candles_by_tf.get("1h", candles_by_tf.get(main_tf, []))
+                resampled = resample_candles(source_candles, tf)
+                local_candles = {tf: resampled}
+            else:
+                local_candles = candles_by_tf
+
+            # Extraire les valeurs du grid pour le cache (SANS timeframe)
+            param_grid_values: dict[str, list] = {}
+            for params in tf_combos:
+                for k, v in params.items():
+                    if k == "timeframe":
+                        continue
+                    if k not in param_grid_values:
+                        param_grid_values[k] = []
+                    if v not in param_grid_values[k]:
+                        param_grid_values[k].append(v)
+
+            # Skip funding pour les timeframes non-1h
+            cache_db_path = db_path if tf == "1h" else None
+
+            # Construire le cache pour ce timeframe
+            t0 = time.monotonic()
+            cache = build_cache(
+                local_candles, param_grid_values, strategy_name, tf,
+                db_path=cache_db_path, symbol=symbol, exchange=exchange,
+            )
+            cache_time = time.monotonic() - t0
+            logger.info(
+                "  Fast cache [{}]: {} bougies, {:.1f}ms",
+                tf, cache.n_candles, cache_time * 1000,
+            )
+
+            # Exécuter les combos de ce groupe
+            for params in tf_combos:
+                if is_grid:
+                    results.append(run_multi_backtest_from_cache(strategy_name, params, cache, bt_config))
+                else:
+                    results.append(run_backtest_from_cache(strategy_name, params, cache, bt_config))
+                done += 1
+                if done % 50 == 0 or done == total:
+                    elapsed = time.monotonic() - t_start
+                    avg_ms = elapsed / done * 1000
+                    remaining = (total - done) * elapsed / done
+                    logger.info(
+                        "  Fast {}/{} — {:.1f}ms/bt — {:.1f}s restant",
+                        done, total, avg_ms, remaining,
+                    )
+
+            # Libérer le cache numpy explicitement
+            del cache
+            gc.collect()
 
         return results
 
