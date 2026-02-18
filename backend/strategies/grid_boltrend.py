@@ -244,6 +244,56 @@ class GridBolTrendStrategy(BaseGridStrategy):
             return grid_state.avg_entry_price * (1 - sl_pct)
         return grid_state.avg_entry_price * (1 + sl_pct)
 
+    def compute_live_indicators(
+        self, candles: list[Candle],
+    ) -> dict[str, dict[str, Any]]:
+        """Calcule les indicateurs Bollinger Bands pour le mode live/portfolio.
+
+        IncrementalIndicatorEngine ne calcule pas les BB ni la long_ma.
+        Cette méthode comble le manque depuis le buffer de candles brutes.
+
+        Nécessite au moins max(bol_window, long_ma_window) + 1 candles pour
+        avoir à la fois la valeur courante (i) et la valeur précédente (i-1).
+        Retourne {} si le buffer est insuffisant.
+        """
+        min_needed = max(self._config.bol_window, self._config.long_ma_window) + 1
+        if len(candles) < min_needed:
+            return {}
+
+        closes = np.array([c.close for c in candles], dtype=float)
+        highs_arr = np.array([c.high for c in candles], dtype=float)
+        lows_arr = np.array([c.low for c in candles], dtype=float)
+
+        bb_sma_arr, bb_upper_arr, bb_lower_arr = bollinger_bands(
+            closes, self._config.bol_window, self._config.bol_std,
+        )
+        long_ma_arr = sma(closes, self._config.long_ma_window)
+
+        i = len(candles) - 1  # index de la candle courante (la plus récente)
+
+        prev_close = float(closes[i - 1])
+        prev_upper = float(bb_upper_arr[i - 1])
+        prev_lower = float(bb_lower_arr[i - 1])
+
+        if not np.isnan(prev_upper) and not np.isnan(prev_lower) and prev_lower > 0:
+            prev_spread = (prev_upper - prev_lower) / prev_lower
+        else:
+            prev_spread = float("nan")
+
+        tf = self._config.timeframe
+        return {
+            tf: {
+                "bb_sma": float(bb_sma_arr[i]),
+                "bb_upper": float(bb_upper_arr[i]),
+                "bb_lower": float(bb_lower_arr[i]),
+                "long_ma": float(long_ma_arr[i]),
+                "prev_close": prev_close,
+                "prev_upper": prev_upper,
+                "prev_lower": prev_lower,
+                "prev_spread": prev_spread,
+            }
+        }
+
     def get_params(self) -> dict[str, Any]:
         return {
             "timeframe": self._config.timeframe,

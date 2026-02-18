@@ -824,3 +824,90 @@ class TestEdgeCases:
         trade_pnls, _, capital = _simulate_grid_boltrend(cache, params, bt_config)
         # Pas de crash avec capital quasi-nul
         assert isinstance(capital, float)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Section 6 : compute_live_indicators — mode live/portfolio
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _make_boltrend_candles(
+    n: int,
+    base_price: float = 100.0,
+    amplitude: float = 5.0,
+    period: int = 48,
+    spread: float = 1.0,
+) -> list:
+    """Génère N candles 1h sinusoïdales pour grid_boltrend."""
+    import math as _math
+    from datetime import timedelta
+    from backend.core.models import Candle
+
+    base_ts = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+    candles = []
+    for i in range(n):
+        price = base_price + amplitude * _math.sin(2 * _math.pi * i / period)
+        candles.append(
+            Candle(
+                symbol="BTC/USDT",
+                exchange="binance",
+                timeframe="1h",
+                timestamp=base_ts + timedelta(hours=i),
+                open=price,
+                high=price + spread,
+                low=price - spread,
+                close=price,
+                volume=100.0,
+            )
+        )
+    return candles
+
+
+class TestComputeLiveIndicators:
+    """Tests de compute_live_indicators() pour le mode live/portfolio."""
+
+    def test_returns_correct_keys_when_buffer_sufficient(self):
+        """Buffer suffisant → retourne toutes les clés BB attendues, toutes non-NaN."""
+        strategy = _make_strategy(bol_window=20, long_ma_window=30)
+        # min_needed = max(20, 30) + 1 = 31
+        candles = _make_boltrend_candles(n=50)
+        result = strategy.compute_live_indicators(candles)
+
+        assert "1h" in result
+        ind = result["1h"]
+        expected_keys = {"bb_sma", "bb_upper", "bb_lower", "long_ma",
+                         "prev_close", "prev_upper", "prev_lower", "prev_spread"}
+        assert expected_keys.issubset(ind.keys()), f"Clés manquantes : {expected_keys - ind.keys()}"
+        for key in expected_keys:
+            assert not math.isnan(ind[key]), f"'{key}' ne doit pas être NaN"
+
+    def test_returns_empty_when_buffer_too_short(self):
+        """Buffer trop court → {} (pas assez de candles pour les fenêtres)."""
+        strategy = _make_strategy(bol_window=100, long_ma_window=200)
+        # min_needed = max(100, 200) + 1 = 201, on fournit 50
+        candles = _make_boltrend_candles(n=50)
+        result = strategy.compute_live_indicators(candles)
+        assert result == {}
+
+    def test_parity_with_compute_indicators(self):
+        """Les valeurs correspondent exactement à celles de compute_indicators."""
+        strategy = _make_strategy(bol_window=20, long_ma_window=30, atr_period=5)
+        candles = _make_boltrend_candles(n=50)
+
+        # Valeurs via compute_indicators (chemin WFO, pré-calcul vectoriel)
+        full_ind = strategy.compute_indicators({"1h": candles})
+        last_ts = candles[-1].timestamp.isoformat()
+        ref = full_ind["1h"][last_ts]
+
+        # Valeurs via compute_live_indicators (chemin live/portfolio)
+        live = strategy.compute_live_indicators(candles)["1h"]
+
+        assert abs(live["bb_sma"] - ref["bb_sma"]) < 1e-9
+        assert abs(live["bb_upper"] - ref["bb_upper"]) < 1e-9
+        assert abs(live["bb_lower"] - ref["bb_lower"]) < 1e-9
+        assert abs(live["long_ma"] - ref["long_ma"]) < 1e-9
+        assert abs(live["prev_close"] - ref["prev_close"]) < 1e-9
+        assert abs(live["prev_upper"] - ref["prev_upper"]) < 1e-9
+        assert abs(live["prev_lower"] - ref["prev_lower"]) < 1e-9
+        if not math.isnan(ref["prev_spread"]):
+            assert abs(live["prev_spread"] - ref["prev_spread"]) < 1e-9
