@@ -233,16 +233,23 @@ function OpenPositions({ wsData }) {
             const direction = pos.direction || 'LONG'
             const isLong = direction === 'LONG'
             const entryPrice = isGrid ? pos.avg_entry : pos.entry_price
-            const qty = isGrid ? pos.total_quantity : pos.quantity
+            // total_quantity absent du grid_state → calculer depuis les niveaux
+            const qty = isGrid
+              ? (pos.positions || []).reduce((s, p) => s + (p.quantity || 0), 0)
+              : pos.quantity
             const notional = entryPrice && qty ? (entryPrice * qty).toFixed(0) : '--'
             const strategy = isGrid ? pos.strategy : (pos.strategy_name || pos.strategy || '')
-            const entryTime = isGrid ? pos.opened_at : pos.entry_time
+            // opened_at absent du grid_state → utiliser le premier niveau
+            const entryTime = isGrid ? pos.positions?.[0]?.entry_time : pos.entry_time
 
+            // Prix courant : les prix WS sont en format spot (BTC/USDT),
+            // mais les positions live sont en format futures (BTC/USDT:USDT)
+            const spotSymbol = symbol.replace(/:USDT$/, '')
             let pnl = null
             if (isGrid) {
               pnl = pos.unrealized_pnl
             } else {
-              const currentPrice = prices[symbol]?.last
+              const currentPrice = prices[spotSymbol]?.last
               if (currentPrice != null && entryPrice != null && qty != null) {
                 pnl = isLong
                   ? (currentPrice - entryPrice) * qty
