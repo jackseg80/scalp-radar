@@ -97,6 +97,22 @@ foreach ($s in @("ADA/USDT","APE/USDT","AR/USDT","AVAX/USDT","CRV/USDT","DYDX/US
 uv run python -m scripts.optimize --all --apply
 ```
 
+### Optimiser grid_boltrend (source binance)
+
+```powershell
+# Asset unique
+uv run python -m scripts.optimize --strategy grid_boltrend --symbol ETH/USDT --exchange binance -v
+
+# Boucle Top assets
+foreach ($s in @("BTC/USDT","ETH/USDT","DOGE/USDT","DYDX/USDT","LINK/USDT","SAND/USDT")) {
+    Write-Host "=== grid_boltrend $s ==="
+    uv run python -m scripts.optimize --strategy grid_boltrend --symbol $s --exchange binance
+}
+
+# Tous les assets
+uv run python -m scripts.optimize --strategy grid_boltrend --all-symbols --exchange binance
+```
+
 ---
 
 ## 3. Données historiques
@@ -121,6 +137,34 @@ uv run python -m scripts.fetch_history --exchange binance --days 2 --symbols ADA
 ### Backfill candles Binance (API publique, sans clé)
 ```powershell
 uv run python -m scripts.backfill_candles --symbol BTC/USDT --timeframe 1h --days 1800
+# Depuis une date précise
+uv run python -m scripts.backfill_candles --symbol ETH/USDT --timeframe 1h --since 2022-01-01
+```
+
+### Fetch funding rates historiques (requis pour grid_funding)
+
+```powershell
+# Tous les assets depuis assets.yaml (720 jours)
+uv run python -m scripts.fetch_funding
+
+# Asset spécifique
+uv run python -m scripts.fetch_funding --symbol BTC/USDT --days 720
+
+# Force re-fetch (supprime existant)
+uv run python -m scripts.fetch_funding --symbol ETH/USDT --force
+```
+
+### Fetch open interest historique (requis pour momentum/liquidation)
+
+```powershell
+# Tous les assets (5m, 720 jours)
+uv run python -m scripts.fetch_oi
+
+# Asset + timeframe spécifique
+uv run python -m scripts.fetch_oi --symbol BTC/USDT --timeframe 1h --days 365
+
+# Timeframes disponibles : 5m, 15m, 30m, 1h, 4h, 1d
+uv run python -m scripts.fetch_oi --symbol SOL/USDT --timeframe 4h --force
 ```
 
 ---
@@ -325,3 +369,207 @@ foreach ($s in @("APE/USDT","AR/USDT","AVAX/USDT")) { uv run python -m scripts.o
 9. Tests : signaux, fast engine parité, WFO integration
 10. WFO : `uv run python -m scripts.optimize --strategy my_strategy --all-assets`
 11. Résultats : commande section 1 ci-dessus
+
+---
+
+## 11. Backtest individuel (run_backtest)
+
+Lance un backtest simple sur une stratégie + asset avec le BacktestEngine event-driven.
+
+```powershell
+# Backtest vwap_rsi sur BTC/USDT, 90 jours
+uv run python -m scripts.run_backtest --strategy vwap_rsi --symbol BTC/USDT --days 90
+
+# Avec capital et levier personnalisés
+uv run python -m scripts.run_backtest --strategy bollinger_mr --symbol ETH/USDT --days 180 --capital 5000 --leverage 5
+
+# Sortie JSON (pour inspection programmatique)
+uv run python -m scripts.run_backtest --strategy grid_atr --symbol BTC/USDT --json
+
+# Écrire dans un fichier
+uv run python -m scripts.run_backtest --strategy grid_atr --symbol BTC/USDT --output results/grid_atr_btc.json --json
+```
+
+**Arguments disponibles :**
+
+| Argument | Défaut | Description |
+| --- | --- | --- |
+| `--strategy` | `vwap_rsi` | Stratégie à tester |
+| `--symbol` | `BTC/USDT` | Paire à tester |
+| `--days` | `90` | Nombre de jours de données |
+| `--capital` | `10000` | Capital initial ($) |
+| `--leverage` | depuis risk.yaml | Levier |
+| `--json` | false | Sortie JSON au lieu du tableau |
+| `--output` | — | Fichier de sortie |
+
+---
+
+## 12. Portfolio Backtest (portfolio_backtest)
+
+Simule N assets avec capital partagé (même code que la prod). Voir section 2 pour les exemples WFO.
+
+```powershell
+# grid_atr sur les Top 10 assets paper, 365 jours
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,ETH/USDT,DOGE/USDT,DYDX/USDT,ENJ/USDT,FET/USDT,GALA/USDT,ICP/USDT,NEAR/USDT,AVAX/USDT --days 365 --capital 10000
+
+# Forward test grid_atr (365 derniers jours)
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,ETH/USDT,DOGE/USDT --days 365 --capital 10000 --save --label "forward_test_2025"
+
+# grid_boltrend sur 6 assets, 730 jours
+uv run python -m scripts.portfolio_backtest --strategy grid_boltrend --assets BTC/USDT,ETH/USDT,DOGE/USDT,DYDX/USDT,LINK/USDT,SAND/USDT --capital 1000 --days 730
+
+# Multi-stratégie (grid_atr + grid_boltrend)
+uv run python -m scripts.portfolio_backtest --strategies "grid_atr:BTC/USDT,ETH/USDT+grid_boltrend:DOGE/USDT,LINK/USDT" --capital 10000 --days 365
+
+# Sortie JSON avec sauvegarde en DB
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 90 --json --save --label "q1_2025"
+```
+
+**Arguments disponibles :**
+
+| Argument | Défaut | Description |
+| --- | --- | --- |
+| `--strategy` | `grid_atr` | Stratégie (mono-stratégie) |
+| `--strategies` | — | Multi-stratégie : `strat1:sym1,sym2+strat2:sym3` |
+| `--preset` | — | Preset prédéfini (ex: `combined`) |
+| `--assets` | tous per_asset | Assets séparés par virgule |
+| `--days` | `90` | Période de backtest (jours) |
+| `--capital` | `10000` | Capital initial ($) |
+| `--exchange` | `binance` | Source des candles |
+| `--kill-switch-pct` | `30.0` | Seuil kill switch (%) |
+| `--kill-switch-window` | `24` | Fenêtre kill switch (heures) |
+| `--json` | false | Sortie JSON |
+| `--output` | — | Fichier de sortie |
+| `--save` | false | Sauvegarder en DB |
+| `--label` | — | Label du run |
+
+---
+
+## 13. Sync vers le serveur de production (sync_to_server)
+
+Pousse les résultats WFO et/ou portfolio backtests du local vers le serveur prod. Idempotent.
+
+```powershell
+# Sync tout (WFO + portfolio)
+uv run python -m scripts.sync_to_server
+
+# Sync uniquement les résultats WFO
+uv run python -m scripts.sync_to_server --only wfo
+
+# Sync uniquement les portfolio backtests
+uv run python -m scripts.sync_to_server --only portfolio
+
+# Dry-run (affiche ce qui serait envoyé sans envoyer)
+uv run python -m scripts.sync_to_server --dry-run
+```
+
+**Prérequis :** Variables `.env` configurées : `SYNC_ENABLED=true`, `SYNC_SERVER_URL`, `SYNC_API_KEY`.
+
+---
+
+## 14. Scripts Diagnostic
+
+### Sweep timeframes — comparer 1h / 4h / 1d
+
+```powershell
+# grid_atr sur ETH/USDT, 730 jours
+uv run python -m scripts.test_timeframe_sweep --symbol ETH/USDT --days 730 --strategy grid_atr
+
+# grid_boltrend sur BTC/USDT
+uv run python -m scripts.test_timeframe_sweep --symbol BTC/USDT --days 730 --strategy grid_boltrend
+
+# Avec capital personnalisé
+uv run python -m scripts.test_timeframe_sweep --symbol SOL/USDT --days 365 --strategy grid_atr --capital 5000
+```
+
+**Stratégies supportées :** `boltrend`, `envelope_dca`, `envelope_dca_short`, `grid_atr`, `grid_range_atr`, `grid_trend`
+
+### Performance par régime de marché
+
+```powershell
+# grid_boltrend sur BTC, fenêtres 60 jours
+uv run python -m scripts.test_regime_performance --strategy grid_boltrend --symbol BTC/USDT --window 60
+
+# grid_atr sur ETH, fenêtres 90 jours (défaut), pas 30 jours
+uv run python -m scripts.test_regime_performance --strategy grid_atr --symbol ETH/USDT --window 90 --step 30
+
+# Avec params override
+uv run python -m scripts.test_regime_performance --strategy grid_atr --symbol BTC/USDT --params "sl_percent=12.0,num_levels=3"
+```
+
+**Stratégies supportées :** `boltrend`, `bollinger_mr`, `donchian_breakout`, `envelope_dca`, `envelope_dca_short`, `grid_atr`, `grid_boltrend`, `grid_funding`, `grid_multi_tf`, `grid_range_atr`, `grid_trend`, `supertrend`
+
+### Diagnostic Grid Range ATR (fast engine)
+
+```powershell
+# Run basique sur BTC/USDT
+uv run python -m scripts.test_grid_range_fast --symbol BTC/USDT --days 365
+
+# Avec paramètres custom
+uv run python -m scripts.test_grid_range_fast --symbol ETH/USDT --spacing 0.5 --num-levels 3 --tp-mode fixed_center
+
+# Sweep de spacings automatique
+uv run python -m scripts.test_grid_range_fast --symbol BTC/USDT --sweep
+
+# Long-only ou Short-only
+uv run python -m scripts.test_grid_range_fast --symbol BTC/USDT --sides long
+```
+
+### Diagnostic Grid BolTrend (trade log détaillé)
+
+```powershell
+# Log des 10 premiers trades (défaut)
+uv run python -m scripts.grid_boltrend_diagnostic
+
+# Plus de candles et de trades
+uv run python -m scripts.grid_boltrend_diagnostic --n-candles 1000 --max-trades 20
+
+# Sauvegarder le log
+uv run python -m scripts.grid_boltrend_diagnostic --output results/boltrend_log.txt
+```
+
+---
+
+## 15. Benchmark Fast Engine
+
+Mesure les performances du fast engine (compilation Numba + simulation). Exclut le 1er run (compilation).
+
+```powershell
+# Benchmark toutes les stratégies grid (200 combos, 5000 candles)
+uv run python -m scripts.benchmark_fast_engine
+
+# Benchmark avec plus de combos
+uv run python -m scripts.benchmark_fast_engine --combos 500 --candles 10000
+
+# Benchmark une stratégie spécifique
+uv run python -m scripts.benchmark_fast_engine --strategies grid_atr grid_boltrend
+
+# Plus de runs pour la moyenne
+uv run python -m scripts.benchmark_fast_engine --runs 6
+```
+
+---
+
+## 16. Maintenance / Migration
+
+### Migrer les JSON WFO vers la DB (Sprint 13 — one-shot)
+
+```powershell
+# Dry-run : liste les fichiers sans importer
+uv run python -m scripts.migrate_optimization --dry-run
+
+# Import réel
+uv run python -m scripts.migrate_optimization
+```
+
+### Vérifier l'état de la DB backtests
+
+```powershell
+uv run python -m scripts.check_backtests_db
+```
+
+### Vérifier le journal des trades live
+
+```powershell
+uv run python check_journal.py
+```
