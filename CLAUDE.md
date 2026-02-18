@@ -137,13 +137,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - `.env` never committed, IP whitelist to 192.168.1.200
 - API key permissions: futures read + trade ONLY, no withdrawal
 
-### Sync WFO local → serveur (NEW)
+### Sync local → serveur (WFO + Portfolio)
 
 - Après chaque run d'optimisation local, push automatique du résultat vers le serveur prod via POST API
 - Best-effort : serveur down ne casse jamais un run local
 - Endpoint `POST /api/optimization/results` avec auth `X-API-Key`
 - Transaction sûre : INSERT OR IGNORE + UPDATE is_latest seulement si inséré (pas de perte du flag)
-- Script `sync_to_server.py` pour pousser l'historique existant (idempotent)
+- **Portfolio backtests** : même mécanisme, endpoint `POST /api/portfolio/results`, push auto après save CLI/API, dédup par `created_at`
+- Script `sync_to_server.py` pour pousser l'historique existant (idempotent, `--only wfo|portfolio`)
 - Colonne `source` ('local' ou 'server') pour tracer l'origine des résultats
 - Config : `SYNC_ENABLED`, `SYNC_SERVER_URL`, `SYNC_API_KEY` dans `.env`
 
@@ -157,7 +158,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-d) : 1116 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e) : 1129 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -231,6 +232,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 28b : Suppression sandbox Bitget + filtre per_asset strict GridStrategyRunner — assets non listés dans per_asset sont rejetés par on_candle() (1104 tests)
 - Hotfix 28c : Refresh périodique solde exchange — fetch_balance toutes les 5 min, log WARNING si >10% change, POST /api/executor/refresh-balance, exchange_balance dans get_status() (1114 tests)
 - Hotfix 28d : Override env var SELECTOR_BYPASS_AT_BOOT — `.env` (gitignored) prend priorité sur risk.yaml (versionné), même pattern que LIVE_TRADING (1116 tests)
+- Hotfix 28e : Sync portfolio backtests local → serveur — réutilisation infra sync WFO (config, httpx, auth X-API-Key), endpoint POST /api/portfolio/results, push auto après save (CLI + API), sync_to_server.py étendu --only portfolio (1129 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

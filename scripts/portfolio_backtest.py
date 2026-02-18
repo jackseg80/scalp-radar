@@ -150,6 +150,23 @@ async def main(args: argparse.Namespace) -> None:
         )
         logger.info("Résultat sauvegardé en DB (id={}, {:.0f}s)", result_id, duration)
 
+        # Push vers le serveur (best-effort, même pattern que WFO)
+        try:
+            import sqlite3 as _sqlite3
+
+            from backend.backtesting.portfolio_db import push_portfolio_to_server
+
+            _conn = _sqlite3.connect(args.db)
+            _conn.row_factory = _sqlite3.Row
+            _row = _conn.execute(
+                "SELECT * FROM portfolio_backtests WHERE id = ?", (result_id,)
+            ).fetchone()
+            _conn.close()
+            if _row:
+                push_portfolio_to_server(dict(_row))
+        except Exception as push_exc:
+            logger.warning("Push portfolio serveur échoué : {}", push_exc)
+
     if args.json:
         output = json.dumps(_result_to_dict(result), indent=2, ensure_ascii=False)
     else:

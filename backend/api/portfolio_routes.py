@@ -7,7 +7,8 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
+from fastapi.responses import Response
 from loguru import logger
 from pydantic import BaseModel
 
@@ -16,6 +17,8 @@ from backend.backtesting.portfolio_db import (
     delete_backtest_async,
     get_backtest_by_id_async,
     get_backtests_async,
+    push_portfolio_to_server,
+    save_portfolio_from_payload_sync,
     save_result_async,
 )
 from backend.backtesting.portfolio_engine import PortfolioBacktester
@@ -196,6 +199,61 @@ async def compare_backtests(
     return {"runs": runs}
 
 
+# ─── POST (sync local → serveur) ─────────────────────────────────────────
+
+_PORTFOLIO_REQUIRED_FIELDS = [
+    "strategy_name", "initial_capital", "n_assets", "period_days",
+    "assets", "final_equity", "total_return_pct", "total_trades",
+    "win_rate", "equity_curve", "per_asset_results", "created_at",
+]
+
+
+@router.post("/results", status_code=201)
+async def post_portfolio_result(
+    payload: dict = Body(...),
+    x_api_key: str = Header(None, alias="X-API-Key"),
+    response: Response = None,
+) -> dict:
+    """Reçoit un portfolio backtest depuis le local et l'insère en DB serveur.
+
+    - 201 si inséré
+    - 200 si doublon (déjà existant, dédupliqué sur created_at)
+    - 401 si clé API manquante/invalide
+    - 422 si champs obligatoires manquants
+    """
+    config = get_config()
+    server_key = config.secrets.sync_api_key
+    if not server_key:
+        raise HTTPException(status_code=401, detail="Sync non configuré sur ce serveur")
+    if not x_api_key or x_api_key != server_key:
+        raise HTTPException(status_code=401, detail="Clé API invalide")
+
+    missing = [f for f in _PORTFOLIO_REQUIRED_FIELDS if f not in payload or payload[f] is None]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Champs obligatoires manquants : {', '.join(missing)}",
+        )
+
+    db_path = _get_db_path_from_config()
+    status = save_portfolio_from_payload_sync(db_path, payload)
+
+    if status == "exists":
+        response.status_code = 200
+        return {"status": "already_exists"}
+
+    return {"status": "created"}
+
+
+def _get_db_path_from_config() -> str:
+    """Résout le DB path sans Request (pour le endpoint sync)."""
+    config = get_config()
+    db_url = config.secrets.database_url
+    if db_url.startswith("sqlite:///"):
+        return db_url[10:]
+    return "data/scalp_radar.db"
+
+
 # ─── Background task ─────────────────────────────────────────────────────
 
 async def _run_backtest(db_path: str, body: RunPortfolioRequest, job_id: str) -> None:
@@ -237,6 +295,7 @@ async def _run_backtest(db_path: str, body: RunPortfolioRequest, job_id: str) ->
 
         duration = time.monotonic() - t0
 
+        created_at = datetime.now(tz=timezone.utc).isoformat()
         result_id = await save_result_async(
             db_path,
             result,
@@ -247,6 +306,21 @@ async def _run_backtest(db_path: str, body: RunPortfolioRequest, job_id: str) ->
             duration_seconds=round(duration, 1),
             label=body.label,
         )
+
+        # Push vers le serveur (best-effort, même pattern que WFO)
+        try:
+            import aiosqlite
+
+            async with aiosqlite.connect(db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                cursor = await conn.execute(
+                    "SELECT * FROM portfolio_backtests WHERE id = ?", (result_id,)
+                )
+                row = await cursor.fetchone()
+            if row:
+                push_portfolio_to_server(dict(row))
+        except Exception as push_exc:
+            logger.warning("Push portfolio serveur échoué : {}", push_exc)
 
         if _current_job and _current_job["id"] == job_id:
             _current_job["status"] = "completed"

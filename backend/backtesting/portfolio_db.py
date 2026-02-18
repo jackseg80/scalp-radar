@@ -2,6 +2,7 @@
 
 Fonctions sync (sqlite3) pour le CLI portfolio_backtest.py.
 Fonctions async (aiosqlite) pour l'API FastAPI.
+Sync local → serveur : push_portfolio_to_server() + save_portfolio_from_payload_sync().
 
 Même pattern que optimization_db.py.
 """
@@ -243,3 +244,150 @@ async def delete_backtest_async(
         )
         await conn.commit()
         return cursor.rowcount > 0
+
+
+# ─── Sync local → serveur ────────────────────────────────────────────────
+
+
+def build_portfolio_payload_from_row(row: dict) -> dict:
+    """Construit un payload POST depuis une row DB portfolio_backtests.
+
+    Les colonnes DB correspondent au format POST attendu.
+    Les JSON blobs restent en string (le serveur les stocke tels quels).
+    """
+    return {
+        "strategy_name": row["strategy_name"],
+        "initial_capital": row["initial_capital"],
+        "n_assets": row["n_assets"],
+        "period_days": row["period_days"],
+        "assets": row["assets"],
+        "exchange": row.get("exchange", "binance"),
+        "kill_switch_pct": row.get("kill_switch_pct", 30.0),
+        "kill_switch_window_hours": row.get("kill_switch_window_hours", 24),
+        "final_equity": row["final_equity"],
+        "total_return_pct": row["total_return_pct"],
+        "total_trades": row["total_trades"],
+        "win_rate": row["win_rate"],
+        "realized_pnl": row["realized_pnl"],
+        "force_closed_pnl": row["force_closed_pnl"],
+        "max_drawdown_pct": row["max_drawdown_pct"],
+        "max_drawdown_date": row.get("max_drawdown_date"),
+        "max_drawdown_duration_hours": row["max_drawdown_duration_hours"],
+        "peak_margin_ratio": row["peak_margin_ratio"],
+        "peak_open_positions": row["peak_open_positions"],
+        "peak_concurrent_assets": row["peak_concurrent_assets"],
+        "kill_switch_triggers": row.get("kill_switch_triggers", 0),
+        "kill_switch_events": row.get("kill_switch_events"),
+        "equity_curve": row["equity_curve"],
+        "per_asset_results": row["per_asset_results"],
+        "created_at": row["created_at"],
+        "duration_seconds": row.get("duration_seconds"),
+        "label": row.get("label"),
+        "source": row.get("source", "local"),
+    }
+
+
+def save_portfolio_from_payload_sync(db_path: str, payload: dict) -> str:
+    """Insère un portfolio backtest depuis un payload JSON (récepteur serveur).
+
+    Retourne 'created' ou 'exists' (dédupliqué sur created_at).
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        # Vérifier doublon par created_at (ISO timestamp unique en pratique)
+        cursor = conn.execute(
+            "SELECT id FROM portfolio_backtests WHERE created_at = ?",
+            (payload["created_at"],),
+        )
+        if cursor.fetchone() is not None:
+            return "exists"
+
+        row = {
+            "strategy_name": payload["strategy_name"],
+            "initial_capital": payload["initial_capital"],
+            "n_assets": payload["n_assets"],
+            "period_days": payload["period_days"],
+            "assets": payload["assets"],
+            "exchange": payload.get("exchange", "binance"),
+            "kill_switch_pct": payload.get("kill_switch_pct", 30.0),
+            "kill_switch_window_hours": payload.get("kill_switch_window_hours", 24),
+            "final_equity": payload["final_equity"],
+            "total_return_pct": payload["total_return_pct"],
+            "total_trades": payload["total_trades"],
+            "win_rate": payload["win_rate"],
+            "realized_pnl": payload["realized_pnl"],
+            "force_closed_pnl": payload["force_closed_pnl"],
+            "max_drawdown_pct": payload["max_drawdown_pct"],
+            "max_drawdown_date": payload.get("max_drawdown_date"),
+            "max_drawdown_duration_hours": payload["max_drawdown_duration_hours"],
+            "peak_margin_ratio": payload["peak_margin_ratio"],
+            "peak_open_positions": payload["peak_open_positions"],
+            "peak_concurrent_assets": payload["peak_concurrent_assets"],
+            "kill_switch_triggers": payload.get("kill_switch_triggers", 0),
+            "kill_switch_events": payload.get("kill_switch_events"),
+            "equity_curve": payload["equity_curve"],
+            "per_asset_results": payload["per_asset_results"],
+            "created_at": payload["created_at"],
+            "duration_seconds": payload.get("duration_seconds"),
+            "label": payload.get("label"),
+        }
+        conn.execute(_INSERT_SQL, row)
+        conn.commit()
+        logger.info(
+            "Portfolio backtest reçu et inséré : {} @ {}",
+            payload["strategy_name"], payload["created_at"],
+        )
+        return "created"
+    finally:
+        conn.close()
+
+
+def push_portfolio_to_server(
+    db_row: dict,
+) -> None:
+    """Pousse un portfolio backtest vers le serveur de production (best-effort).
+
+    Ne crashe JAMAIS le run local. Log warning si erreur.
+    Réutilise la même config sync que les résultats WFO.
+    """
+    try:
+        from backend.core.config import get_config
+        config = get_config()
+
+        if not config.secrets.sync_enabled:
+            return
+        if not config.secrets.sync_server_url:
+            logger.warning("sync_enabled=true mais sync_server_url vide — push portfolio ignoré")
+            return
+        if not config.secrets.sync_api_key:
+            logger.warning("sync_enabled=true mais sync_api_key vide — push portfolio ignoré")
+            return
+
+        import httpx
+
+        payload = build_portfolio_payload_from_row(db_row)
+        url = f"{config.secrets.sync_server_url.rstrip('/')}/api/portfolio/results"
+
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                url,
+                json=payload,
+                headers={"X-API-Key": config.secrets.sync_api_key},
+            )
+
+        if resp.status_code in (200, 201):
+            status = resp.json().get("status", "ok")
+            logger.info(
+                "Portfolio pushé au serveur : {} → {} ({})",
+                payload["strategy_name"], resp.status_code, status,
+            )
+        else:
+            logger.warning(
+                "Push portfolio échoué : {} → HTTP {} : {}",
+                payload["strategy_name"], resp.status_code, resp.text[:200],
+            )
+    except Exception as exc:
+        logger.warning(
+            "Push portfolio échoué (réseau) : {}",
+            exc,
+        )

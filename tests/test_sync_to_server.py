@@ -76,9 +76,15 @@ def test_sync_dry_run(monkeypatch, populated_db, capsys):
     monkeypatch.setattr("scripts.sync_to_server.get_config", lambda: mock_config)
     monkeypatch.setattr("sys.argv", ["sync_to_server", "--dry-run"])
 
-    with patch("httpx.Client") as mock_client:
+    mock_client_instance = MagicMock()
+    mock_client_instance.__enter__ = MagicMock(return_value=mock_client_instance)
+    mock_client_instance.__exit__ = MagicMock(return_value=False)
+
+    with patch("httpx.Client", return_value=mock_client_instance):
         main()
-        mock_client.assert_not_called()
+
+    # En dry-run, aucun POST n'est envoyé
+    mock_client_instance.post.assert_not_called()
 
     captured = capsys.readouterr()
     assert "dry-run" in captured.out.lower()

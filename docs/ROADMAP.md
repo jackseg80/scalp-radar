@@ -1397,6 +1397,26 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : Serveur met `SELECTOR_BYPASS_AT_BOOT=true` dans `.env` (gitignored), `risk.yaml` reste à `false` dans le repo.
 
+### Hotfix 28e — Sync Portfolio Backtests local → serveur ✅
+
+**But** : Les portfolio backtests restaient uniquement en DB locale. Étendre le mécanisme de sync existant (WFO) pour pousser aussi les portfolio backtests vers le serveur.
+
+**Implémentation** : Réutilisation de l'infra existante (`SYNC_ENABLED/SYNC_SERVER_URL/SYNC_API_KEY`, httpx best-effort, auth `X-API-Key`).
+
+**Changements** :
+
+- `portfolio_db.py` : +3 fonctions (`build_portfolio_payload_from_row()`, `save_portfolio_from_payload_sync()`, `push_portfolio_to_server()`)
+- `portfolio_routes.py` : +endpoint `POST /api/portfolio/results` (auth + dédup par `created_at`) + push auto après save API background task
+- `portfolio_backtest.py` : push auto après `--save` CLI
+- `sync_to_server.py` : étendu pour sync WFO + portfolio, option `--only wfo|portfolio`
+- Résilience : `_load_all_portfolio_backtests()` gère les DB sans table portfolio (anciennes DB)
+
+**Tests** : 13 nouveaux tests (payload, insert, dedup, push best-effort, endpoint auth/201/200/422, script dry-run/post)
+
+**Résultat** : 1129 tests, 0 régression. Portfolio backtests visibles sur le serveur via Recherche/Explorer.
+
+**Fichiers modifiés** : 6 fichiers (portfolio_db.py, portfolio_routes.py, portfolio_backtest.py, sync_to_server.py, test_portfolio_sync.py, test_sync_to_server.py)
+
 ### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
@@ -1479,9 +1499,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1116 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-d**
-- **Phase 6 en cours** — Hotfix 28d (env var override selector_bypass) terminé
+- **1129 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e**
+- **Phase 6 en cours** — Hotfix 28e (sync portfolio backtests local → serveur) terminé
 - **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
