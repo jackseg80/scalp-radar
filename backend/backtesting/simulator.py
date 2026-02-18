@@ -1461,8 +1461,6 @@ class Simulator:
             status = runner.get_status()
             total_capital += status.get("capital", 0.0)
             total_realized += status.get("net_pnl", 0.0)
-            total_unrealized += status.get("unrealized_pnl", 0.0)
-            total_margin += status.get("margin_used", 0.0)
             n_pos = status.get("open_positions", 0)
             n_positions += n_pos
 
@@ -1472,12 +1470,15 @@ class Simulator:
                     if not positions:
                         continue
                     assets_set.add(symbol)
-                    last_price = runner._last_prices.get(symbol, 0.0)
+                    # Utiliser DataEngine pour prix courant (correct même après kill switch)
+                    last_price = self._get_current_price(symbol) or 0.0
                     upnl = runner._gpm.unrealized_pnl(positions, last_price)
                     margin = sum(
                         p.entry_price * p.quantity / runner._leverage
                         for p in positions
                     )
+                    total_unrealized += upnl
+                    total_margin += margin
                     breakdown[symbol] = {
                         "strategy": runner.name,
                         "positions": len(positions),
@@ -1485,6 +1486,10 @@ class Simulator:
                         "margin": round(margin, 2),
                         "last_price": round(last_price, 2),
                     }
+            else:
+                # Mono runner : unrealized/margin depuis get_status()
+                total_unrealized += status.get("unrealized_pnl", 0.0)
+                total_margin += status.get("margin_used", 0.0)
 
         equity = total_capital + total_unrealized
         initial = sum(r._initial_capital for r in self._runners)
