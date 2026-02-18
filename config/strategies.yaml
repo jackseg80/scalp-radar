@@ -318,6 +318,22 @@ grid_atr:
       ma_period: 7
       num_levels: 4
       sl_percent: 30.0
+grid_range_atr:
+  enabled: false
+  live_eligible: false
+  timeframe: 1h
+  ma_period: 20
+  atr_period: 14
+  atr_spacing_mult: 0.3
+  num_levels: 2
+  sl_percent: 10.0
+  tp_mode: dynamic_sma
+  sides:
+  - long
+  - short
+  leverage: 6
+  weight: 0.2
+  per_asset: {}
 grid_multi_tf:
   enabled: false
   live_eligible: false

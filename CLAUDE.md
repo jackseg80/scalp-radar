@@ -18,7 +18,7 @@ and presents results via a real-time dashboard.
   - **IMPORTANT pour Claude Code** : Mettre à jour ce fichier après chaque plan de sprint complété
   - Ajouter les résultats, leçons apprises, bugs corrigés dans la section du sprint concerné
   - Mettre à jour "ÉTAT ACTUEL" avec le nouveau nombre de tests et la prochaine étape
-  - **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 13 stratégies de trading (logique, paramètres, exemples)
+  - **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 14 stratégies de trading (logique, paramètres, exemples)
   - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Architecture runtime, flux de données, boot/shutdown, persistence
   - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI, requêtes DB, déploiement, méthodologie
   - **IMPORTANT pour Claude Code** : Consulter ce fichier avant de proposer des commandes
@@ -64,7 +64,7 @@ scalp-radar/
 ├── config/                       # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/                     # models, config, database, indicators, position_manager, grid_position_manager, state_manager, data_engine
-│   ├── strategies/               # base, base_grid, factory + 13 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
+│   ├── strategies/               # base, base_grid, factory + 14 stratégies (vwap_rsi, momentum, funding, liquidation, bollinger_mr, donchian_breakout, supertrend, envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 │   ├── optimization/             # walk_forward, overfitting, report, indicator_cache, fast_backtest, fast_multi_backtest
 │   ├── backtesting/              # engine, multi_engine, metrics, simulator, arena, extra_data_builder, portfolio_engine, portfolio_db
 │   ├── execution/                # executor, risk_manager, adaptive_selector
@@ -77,7 +77,7 @@ scalp-radar/
 └── docs/plans/                   # Sprint plans 1-19 archivés
 ```
 
-## Trading Strategies (13 implémentées)
+## Trading Strategies (14 implémentées)
 
 ### 5m Scalp (4)
 
@@ -92,13 +92,14 @@ scalp-radar/
 2. **Donchian Breakout** — TP/SL ATR multiples
 3. **SuperTrend** — Trend-following ATR-based
 
-### 1h Grid/DCA (5)
+### 1h Grid/DCA (6)
 
 1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: false`, remplacé par grid_atr)
 2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
 3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: true`, paper trading actif sur Top 10 assets)
-4. **Grid Multi-TF** — Supertrend 4h filtre directionnel + Grid ATR 1h exécution, LONG quand ST=UP / SHORT quand ST=DOWN, force-close au flip (`enabled: false`, WFO en cours)
-5. **Grid Funding** — DCA sur funding rate négatif (LONG-only), multi-niveaux par seuil, TP = funding positif / SMA cross, funding payments accumulés 8h (`enabled: false`, WFO à lancer)
+4. **Grid Range ATR** — Range trading bidirectionnel, LONG+SHORT simultanés, TP/SL individuels par position, `entry = SMA ± ATR × spacing`, TP = retour SMA (`enabled: false`, WFO à lancer)
+5. **Grid Multi-TF** — Supertrend 4h filtre directionnel + Grid ATR 1h exécution, LONG quand ST=UP / SHORT quand ST=DOWN, force-close au flip (`enabled: false`, WFO en cours)
+6. **Grid Funding** — DCA sur funding rate négatif (LONG-only), multi-niveaux par seuil, TP = funding positif / SMA cross, funding payments accumulés 8h (`enabled: false`, WFO à lancer)
 
 ## Multi-Strategy Arena
 
@@ -151,14 +152,14 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 ## Config Files (5 YAML)
 
 - `assets.yaml` — 22 assets (21 historiques + JUP/USDT pour grid_trend), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
-- `strategies.yaml` — 13 stratégies + custom + per_asset overrides
+- `strategies.yaml` — 14 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
 - `param_grids.yaml` — Espaces de recherche WFO + per-strategy config (is_days, oos_days, step_days)
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e) : 1129 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a) : 1169 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -233,6 +234,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 28c : Refresh périodique solde exchange — fetch_balance toutes les 5 min, log WARNING si >10% change, POST /api/executor/refresh-balance, exchange_balance dans get_status() (1114 tests)
 - Hotfix 28d : Override env var SELECTOR_BYPASS_AT_BOOT — `.env` (gitignored) prend priorité sur risk.yaml (versionné), même pattern que LIVE_TRADING (1116 tests)
 - Hotfix 28e : Sync portfolio backtests local → serveur — réutilisation infra sync WFO (config, httpx, auth X-API-Key), endpoint POST /api/portfolio/results, push auto après save (CLI + API), sync_to_server.py étendu --only portfolio (1129 tests)
+- Sprint 29a : Grid Range ATR (14e stratégie) — range trading bidirectionnel, LONG+SHORT simultanés, TP/SL individuels par position, fast engine dédié `_simulate_grid_range()`, 2160 combos WFO, script diagnostic `test_grid_range_fast.py` (1169 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

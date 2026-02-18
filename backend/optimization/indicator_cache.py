@@ -248,7 +248,7 @@ def build_cache(
             bb_sma_dict[period] = sma(closes, period)
 
     # Grid ATR / Grid Multi-TF : SMA + ATR multi-period
-    if strategy_name in ("grid_atr", "grid_multi_tf"):
+    if strategy_name in ("grid_atr", "grid_multi_tf", "grid_range_atr"):
         ma_periods_atr: set[int] = set()
         if "ma_period" in param_grid_values:
             ma_periods_atr.update(param_grid_values["ma_period"])
@@ -279,7 +279,7 @@ def build_cache(
 
     # --- ATR multi-period (pour donchian/supertrend/grid_atr/grid_multi_tf) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend"):
+    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr"):
         atr_periods: set[int] = set()
         if "atr_period" in param_grid_values:
             atr_periods.update(param_grid_values["atr_period"])
@@ -304,8 +304,8 @@ def build_cache(
 
     # --- Funding rates depuis DB (toutes stratégies grid) ---
     _GRID_STRATEGIES_WITH_FUNDING = {
-        "grid_funding", "grid_atr", "envelope_dca", "envelope_dca_short",
-        "grid_multi_tf", "grid_trend",
+        "grid_funding", "grid_atr", "grid_range_atr", "envelope_dca",
+        "envelope_dca_short", "grid_multi_tf", "grid_trend",
     }
     funding_1h: np.ndarray | None = None
     candle_ts: np.ndarray | None = None

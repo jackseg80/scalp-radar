@@ -1417,6 +1417,43 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Fichiers modifiés** : 6 fichiers (portfolio_db.py, portfolio_routes.py, portfolio_backtest.py, sync_to_server.py, test_portfolio_sync.py, test_sync_to_server.py)
 
+### Sprint 29a — Grid Range ATR (14e stratégie, bidirectionnelle) ✅
+
+**But** : Monétiser les micro-oscillations quand le prix reste près de la SMA. Contrairement à grid_atr (unidirectionnel), grid_range_atr ouvre des LONG **et** SHORT simultanément avec des TP/SL individuels par position.
+
+**Différences clés vs grid_atr** :
+
+- **Bidirectionnel** : LONG sous SMA + SHORT au-dessus, simultanément (pas de direction lock)
+- **TP/SL individuels** : chaque position se ferme indépendamment (retour SMA = TP, % entry = SL)
+- **tp_mode** : `dynamic_sma` (SMA courante) ou `fixed_center` (SMA au moment de l'ouverture)
+- **sides configurable** : `["long", "short"]`, `["long"]` ou `["short"]`
+- **Level encoding** : LONG = 0..N-1, SHORT = N..2N-1
+
+**Changements** :
+
+- `config.py` : `GridRangeATRConfig` (Pydantic) + champ dans `StrategiesConfig`
+- `grid_range_atr.py` : NOUVEAU — `GridRangeATRStrategy(BaseGridStrategy)`, `compute_grid()` retourne les 2 côtés, `should_close_all()` → None, `get_tp_price()`/`get_sl_price()` → NaN (TODO Sprint 29b)
+- `factory.py` : import + mapping create_strategy + get_enabled_strategies
+- `__init__.py` : STRATEGY_REGISTRY + GRID_STRATEGIES + STRATEGIES_NEED_EXTRA_DATA
+- `indicator_cache.py` : 3 sets étendus (SMA, ATR multi-period, funding)
+- `fast_multi_backtest.py` : `_simulate_grid_range()` (~160 lignes, boucle individuelle TP/SL, funding per-position) + dispatch
+- `walk_forward.py` : `_INDICATOR_PARAMS["grid_range_atr"]`
+- `multi_engine.py` : `_GRID_STRATEGIES_WITH_FUNDING`
+- `strategies.yaml` + `param_grids.yaml` : config + grille WFO 2160 combos
+- `test_grid_range_fast.py` : script diagnostic fast engine (mode simple + --sweep spacings)
+
+**Contraintes respectées** :
+
+- ZÉRO modification `_simulate_grid_common()`, `BaseGridStrategy`, `GridStrategyRunner`, `_build_entry_prices()`
+- Entry prices calculés inline dans `_simulate_grid_range()` (pas de modif au code partagé)
+- Fee model aligné : TP = maker_fee (limit), SL = taker_fee + slippage
+
+**Tests** : 40 nouveaux tests (10 signaux, 4 TP/SL, 12 fast engine, 2 viabilité fees, 7 registry/config, 5 parité stratégies existantes)
+
+**Résultat** : 1169 tests, 0 régression. 5 tests de parité (grid_atr, envelope_dca, grid_trend, grid_multi_tf, grid_funding) tous verts.
+
+**Fichiers modifiés** : 12 fichiers (config.py, grid_range_atr.py, factory.py, __init__.py, indicator_cache.py, fast_multi_backtest.py, walk_forward.py, multi_engine.py, strategies.yaml, param_grids.yaml, test_grid_range_atr.py, test_fast_engine_refactor.py)
+
 ### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
@@ -1499,10 +1536,10 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1129 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e**
-- **Phase 6 en cours** — Hotfix 28e (sync portfolio backtests local → serveur) terminé
-- **13 stratégies** : 4 scalp 5m + 3 swing 1h + 6 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_multi_tf, grid_funding, grid_trend)
+- **1169 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a**
+- **Phase 6 en cours** — Sprint 29a (Grid Range ATR, 14e stratégie) terminé
+- **14 stratégies** : 4 scalp 5m + 3 swing 1h + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)

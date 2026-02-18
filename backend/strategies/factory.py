@@ -12,6 +12,7 @@ from backend.strategies.funding import FundingStrategy
 from backend.strategies.grid_atr import GridATRStrategy
 from backend.strategies.grid_funding import GridFundingStrategy
 from backend.strategies.grid_multi_tf import GridMultiTFStrategy
+from backend.strategies.grid_range_atr import GridRangeATRStrategy
 from backend.strategies.grid_trend import GridTrendStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
@@ -33,6 +34,7 @@ def create_strategy(name: str, config: AppConfig) -> BaseStrategy:
         "envelope_dca": (EnvelopeDCAStrategy, strategies_config.envelope_dca),
         "envelope_dca_short": (EnvelopeDCAShortStrategy, strategies_config.envelope_dca_short),
         "grid_atr": (GridATRStrategy, strategies_config.grid_atr),
+        "grid_range_atr": (GridRangeATRStrategy, strategies_config.grid_range_atr),
         "grid_multi_tf": (GridMultiTFStrategy, strategies_config.grid_multi_tf),
         "grid_funding": (GridFundingStrategy, strategies_config.grid_funding),
         "grid_trend": (GridTrendStrategy, strategies_config.grid_trend),
@@ -69,6 +71,8 @@ def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
         strategies.append(EnvelopeDCAShortStrategy(strats.envelope_dca_short))
     if strats.grid_atr.enabled:
         strategies.append(GridATRStrategy(strats.grid_atr))
+    if strats.grid_range_atr.enabled:
+        strategies.append(GridRangeATRStrategy(strats.grid_range_atr))
     if strats.grid_multi_tf.enabled:
         strategies.append(GridMultiTFStrategy(strats.grid_multi_tf))
     if strats.grid_funding.enabled:

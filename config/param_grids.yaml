@@ -125,6 +125,24 @@ grid_atr:
     num_levels: [2, 3, 4]
     sl_percent: [15.0, 20.0, 25.0, 30.0]
 
+# Grid Range ATR : 2160 combos (4×3×5×2×3×3×2)
+grid_range_atr:
+  wfo:
+    is_days: 180
+    oos_days: 60
+    step_days: 60
+  default:
+    ma_period: [14, 20, 30, 50]
+    atr_period: [10, 14, 20]
+    atr_spacing_mult: [0.2, 0.3, 0.4, 0.5, 0.7]
+    num_levels: [2, 3]
+    sl_percent: [8.0, 12.0, 18.0]
+    sides:
+      - ["long", "short"]
+      - ["long"]
+      - ["short"]
+    tp_mode: ["dynamic_sma", "fixed_center"]
+
 # Grid Multi-TF : 384 combos (2×2×2×2×2×2×2×3), ~2 min/asset
 grid_multi_tf:
   wfo:

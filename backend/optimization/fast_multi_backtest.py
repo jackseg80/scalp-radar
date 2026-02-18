@@ -417,6 +417,219 @@ def _simulate_grid_trend(
     )
 
 
+# ─── Grid Range ATR ───────────────────────────────────────────────────────
+
+
+def _simulate_grid_range(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Simulation Grid Range ATR (bidirectional, individual TP/SL).
+
+    LONG et SHORT simultanés. Chaque position a son propre TP (retour à SMA)
+    et SL (% depuis entry). Les positions se ferment indépendamment.
+    """
+    num_levels = params["num_levels"]  # par côté
+    sl_pct = params["sl_percent"] / 100
+    tp_mode = params.get("tp_mode", "dynamic_sma")
+    sides = params.get("sides", ["long", "short"])
+
+    sma_arr = cache.bb_sma[params["ma_period"]]
+    atr_arr = cache.atr_by_period[params["atr_period"]]
+    spacing_mult = params["atr_spacing_mult"]
+
+    capital = bt_config.initial_capital
+    leverage = bt_config.leverage
+    taker_fee = bt_config.taker_fee
+    maker_fee = bt_config.maker_fee
+    slippage_pct = bt_config.slippage_pct
+    n = cache.n_candles
+
+    trade_pnls: list[float] = []
+    trade_returns: list[float] = []
+
+    # Slots : 0..N-1 = LONG, N..2N-1 = SHORT
+    n_long = num_levels if "long" in sides else 0
+    n_short = num_levels if "short" in sides else 0
+    total_slots = n_long + n_short
+    if total_slots == 0:
+        return trade_pnls, trade_returns, capital
+
+    # Positions : (slot_idx, direction, entry_price, qty, entry_fee, entry_sma)
+    positions: list[tuple[int, int, float, float, float, float]] = []
+
+    # Funding settlement mask (00:00, 08:00, 16:00 UTC)
+    funding_rates = cache.funding_rates_1h
+    settlement_mask = np.zeros(n, dtype=bool)
+    if funding_rates is not None and cache.candle_timestamps is not None:
+        hours = ((cache.candle_timestamps / 3600000) % 24).astype(int)
+        settlement_mask = (hours % 8 == 0)
+
+    for i in range(n):
+        cur_sma = sma_arr[i]
+        cur_atr = atr_arr[i]
+        if math.isnan(cur_sma) or math.isnan(cur_atr) or cur_atr <= 0:
+            # Pas d'ouverture mais check exits/funding quand même
+            if not positions:
+                continue
+            # Skip exit checks si pas de SMA valide pour TP
+            # (funding quand même traité plus bas)
+            pass
+        else:
+            pass  # indicateurs valides, tout est bon
+
+        # --- 1. Check TP/SL individuel pour chaque position ---
+        if positions:
+            closed_indices: list[int] = []
+            for pos_idx, (slot, direction, ep, qty, efee, esma) in enumerate(positions):
+                # TP price
+                if tp_mode == "fixed_center":
+                    tp_price = esma
+                else:
+                    tp_price = cur_sma
+
+                # SL price
+                if direction == 1:
+                    sl_price = ep * (1 - sl_pct)
+                else:
+                    sl_price = ep * (1 + sl_pct)
+
+                # Check hits
+                if direction == 1:
+                    tp_hit = (not math.isnan(tp_price)) and cache.highs[i] >= tp_price
+                    sl_hit = cache.lows[i] <= sl_price
+                else:
+                    tp_hit = (not math.isnan(tp_price)) and cache.lows[i] <= tp_price
+                    sl_hit = cache.highs[i] >= sl_price
+
+                # Heuristique OHLC si les deux sont touchés
+                is_green = cache.closes[i] > cache.opens[i]
+                exit_reason = None
+                exit_price = 0.0
+
+                if tp_hit and sl_hit:
+                    if direction == 1:
+                        exit_reason = "tp" if is_green else "sl"
+                    else:
+                        exit_reason = "sl" if is_green else "tp"
+                elif sl_hit:
+                    exit_reason = "sl"
+                elif tp_hit:
+                    exit_reason = "tp"
+
+                if exit_reason == "tp":
+                    exit_price = tp_price
+                elif exit_reason == "sl":
+                    exit_price = sl_price
+
+                if exit_reason is not None:
+                    # Fee model : TP = maker (limit, 0 slippage), SL = taker + slippage
+                    if exit_reason == "tp":
+                        fee = maker_fee
+                        slip = 0.0
+                    else:
+                        fee = taker_fee
+                        slip = slippage_pct
+
+                    # PnL individuel (même pattern que _calc_grid_pnl)
+                    actual_exit = exit_price
+                    slippage_cost = 0.0
+                    if slip > 0:
+                        slippage_cost = qty * exit_price * slip
+                        if direction == 1:
+                            actual_exit = exit_price * (1 - slip)
+                        else:
+                            actual_exit = exit_price * (1 + slip)
+
+                    if direction == 1:
+                        gross = (actual_exit - ep) * qty
+                    else:
+                        gross = (ep - actual_exit) * qty
+
+                    exit_fee = qty * exit_price * fee
+                    net = gross - efee - exit_fee - slippage_cost
+                    trade_pnls.append(net)
+                    if capital > 0:
+                        trade_returns.append(net / capital)
+                    capital += net
+                    closed_indices.append(pos_idx)
+
+            # Retirer les positions fermées (ordre inverse)
+            for idx in reversed(closed_indices):
+                positions.pop(idx)
+
+        # --- 2. Funding costs aux settlements 8h ---
+        if positions and settlement_mask[i] and funding_rates is not None:
+            fr = funding_rates[i]
+            if not math.isnan(fr):
+                for _slot, direction, ep, qty, _efee, _esma in positions:
+                    notional = ep * qty
+                    capital += -fr * notional * direction
+
+        # --- 3. Guard capital épuisé ---
+        if capital <= 0:
+            continue
+
+        # --- 4. Skip ouvertures si indicateurs invalides ---
+        if math.isnan(cur_sma) or math.isnan(cur_atr) or cur_atr <= 0:
+            continue
+
+        # --- 5. Ouvrir de nouvelles positions si niveaux touchés ---
+        if len(positions) < total_slots:
+            filled_slots = {p[0] for p in positions}
+            spacing = cur_atr * spacing_mult
+
+            for lvl in range(num_levels):
+                if len(positions) >= total_slots or capital <= 0:
+                    break
+
+                # LONG slot
+                if "long" in sides and lvl not in filled_slots:
+                    ep = cur_sma - (lvl + 1) * spacing
+                    if ep > 0 and cache.lows[i] <= ep:
+                        notional = capital * (1.0 / total_slots) * leverage
+                        qty = notional / ep
+                        if qty > 0:
+                            entry_fee = qty * ep * taker_fee
+                            positions.append((lvl, 1, ep, qty, entry_fee, cur_sma))
+                            filled_slots.add(lvl)
+
+                # SHORT slot
+                short_slot = num_levels + lvl
+                if "short" in sides and short_slot not in filled_slots:
+                    ep = cur_sma + (lvl + 1) * spacing
+                    if cache.highs[i] >= ep:
+                        notional = capital * (1.0 / total_slots) * leverage
+                        qty = notional / ep
+                        if qty > 0:
+                            entry_fee = qty * ep * taker_fee
+                            positions.append((short_slot, -1, ep, qty, entry_fee, cur_sma))
+                            filled_slots.add(short_slot)
+
+    # Force close fin de données
+    if positions:
+        exit_price = float(cache.closes[n - 1])
+        for _slot, direction, ep, qty, efee, _esma in positions:
+            actual_exit = exit_price
+            slippage_cost = qty * exit_price * slippage_pct
+            if direction == 1:
+                actual_exit = exit_price * (1 - slippage_pct)
+                gross = (actual_exit - ep) * qty
+            else:
+                actual_exit = exit_price * (1 + slippage_pct)
+                gross = (ep - actual_exit) * qty
+
+            exit_fee = qty * exit_price * taker_fee
+            net = gross - efee - exit_fee - slippage_cost
+            trade_pnls.append(net)
+            if capital > 0:
+                trade_returns.append(net / capital)
+            capital += net
+
+    return trade_pnls, trade_returns, capital
+
+
 # ─── Grid Funding ─────────────────────────────────────────────────────────
 
 
@@ -631,6 +844,10 @@ def run_multi_backtest_from_cache(
         )
     elif strategy_name == "grid_trend":
         trade_pnls, trade_returns, final_capital = _simulate_grid_trend(
+            cache, params, bt_config,
+        )
+    elif strategy_name == "grid_range_atr":
+        trade_pnls, trade_returns, final_capital = _simulate_grid_range(
             cache, params, bt_config,
         )
     else:
