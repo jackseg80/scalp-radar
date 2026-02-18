@@ -1703,6 +1703,32 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Tests** : 1309 tests, 0 régression.
 
+### Hotfix 33b — Audit de parité grid_boltrend (3 bugs fast engine) ✅
+
+**But** : Vérifier la fiabilité et la cohérence de la 16e stratégie. 5 vérifications : parité fast engine vs event-driven, look-ahead bias, frais, remplissage multi-niveaux, diagnostic trade log.
+
+**Bugs découverts (divergence PnL +31.73% avant fix)** :
+
+1. **exit_price signal_exit incorrect** (`fast_multi_backtest.py`) — Le fast engine sortait au prix `sma_val` (SMA au moment de la sortie) au lieu du `close_i` réel. Pour un LONG, `sma_val < close` → sortie optimiste → surestimation des profits WFO.
+
+2. **Fees signal_exit incorrectes** (`fast_multi_backtest.py`) — Le fast engine utilisait `maker_fee + 0 slippage` pour les sorties signal_exit. Correct : `taker_fee + slippage_pct` (sortie au marché = taker).
+
+3. **Double-comptage entry_fee** (`multi_engine.py`) — Le moteur event-driven déduisait `capital -= pos.entry_fee` à l'ouverture ET les entry_fees étaient déjà incluses dans `trade.net_pnl` à la clôture via `close_all_positions()`. Double comptage affectant **toutes les stratégies grid**.
+
+**Résultat après fix** : Divergence 31.73% → 2.62% (résiduel structurel dû au compounding légèrement différent entre les deux moteurs).
+
+**Fichiers créés** :
+
+- `tests/test_grid_boltrend_parity.py` : NOUVEAU — 13 tests (parité count/directions/PnL/short, look-ahead ×2, frais ×3, multi-niveaux ×3, diagnostic)
+- `scripts/grid_boltrend_diagnostic.py` : NOUVEAU — trade log instrumenté (entry/exit candle, prix moyen, frais détaillés, exit_reason)
+
+**Fichiers modifiés** :
+
+- `backend/optimization/fast_multi_backtest.py` : exit_price `sma_val` → `close_i`, fees `maker_fee` → `taker_fee + slippage` pour signal_exit
+- `backend/backtesting/multi_engine.py` : suppression du double-comptage `capital -= pos.entry_fee`
+
+**Tests** : 13 nouveaux, 1322 tests au total, 0 régression.
+
 ### Hotfix 34 — Executor P&L basé sur les fills réels Bitget ✅
 
 **But** : Premier jour de live (18 fév 2026) — l'Executor surestimait le P&L de +147% (session_pnl affiché +7.37$ vs Bitget réel +2.98$). Le kill switch était aveugle car basé sur ce P&L faux.
@@ -1841,7 +1867,7 @@ Phase 5: Scaling Stratégies     ✅
 ## ÉTAT ACTUEL (18 février 2026)
 
 - **1339 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 34**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34**
 - **Phase 6 en cours** — Hotfix 34 (Executor P&L fills réels Bitget) terminé
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

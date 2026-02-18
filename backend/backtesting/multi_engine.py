@@ -201,7 +201,8 @@ class MultiPositionEngine:
                         )
                         if pos is not None:
                             positions.append(pos)
-                            capital -= pos.entry_fee
+                            # Ne pas déduire entry_fee ici : elle est déjà incluse
+                            # dans trade.net_pnl via close_all_positions() à la clôture
 
             # c. Funding costs aux settlements 8h (00:00, 08:00, 16:00 UTC)
             if apply_funding and positions and extra:

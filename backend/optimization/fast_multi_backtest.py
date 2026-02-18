@@ -912,24 +912,21 @@ def _simulate_grid_boltrend(
                 if direction == 1:
                     # Bougie verte LONG → signal_exit gagne, rouge → SL
                     exit_reason = "signal_exit" if is_green else "sl_global"
-                    exit_price = sma_val if is_green else sl_price
+                    exit_price = close_i if is_green else sl_price
                 else:
                     exit_reason = "signal_exit" if not is_green else "sl_global"
-                    exit_price = sma_val if not is_green else sl_price
+                    exit_price = close_i if not is_green else sl_price
             elif sl_hit:
                 exit_reason = "sl_global"
                 exit_price = sl_price
             elif tp_hit:
                 exit_reason = "signal_exit"
-                exit_price = sma_val
+                exit_price = close_i  # clôture au prix de marché (close), pas la SMA
 
             if exit_reason is not None:
-                if exit_reason == "signal_exit":
-                    fee = maker_fee
-                    slip = 0.0
-                else:
-                    fee = taker_fee
-                    slip = slippage_pct
+                # signal_exit = clôture marché (taker fee + slippage), cohérent avec event-driven
+                fee = taker_fee
+                slip = slippage_pct
 
                 pnl = _calc_grid_pnl(positions, exit_price, fee, slip, direction)
                 trade_pnls.append(pnl)
