@@ -1650,6 +1650,34 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Fichiers** : 10 modifiés/créés, 1 fichier test mis à jour.
 
+### Sprint 32 — Page Journal de Trading ✅
+
+**But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
+
+**Fonctionnalités** :
+
+- **GET /api/journal/stats** : win rate, profit factor, max drawdown (depuis snapshots), streak, best/worst trade, durée moyenne, trades/jour — filtrable par période (today/7d/30d/all)
+- **Executor order history** : deque FIFO 200 entrées, `_record_order()` après chaque `create_order`, persistence dans state JSON — **GET /api/executor/orders** (sans auth, read-only)
+- **Onglet Journal** : sélecteur de période global, 4 sections collapsibles (Stats KPI, Positions & Trades, Equity Curve annotée avec markers OPEN/CLOSE, Ordres Bitget)
+- **Section Positions** : sous-onglets "Ouvertes" (wsData temps réel, tableau détaillé avec niveaux grid expandables) / "Historique" (API, filtres symbol/stratégie, tri par colonne)
+- **ActivityFeed** : réduit à 5 events + lien "Voir le journal complet →"
+
+**Changements** :
+
+- `database.py` : `get_journal_stats(period)` — calculs Python depuis simulation_trades + portfolio_snapshots
+- `journal_routes.py` : endpoint `GET /api/journal/stats`
+- `executor.py` : `_order_history` deque(200) + `_record_order()` + 8 insertions après create_order + persistence
+- `executor_routes.py` : endpoint `GET /api/executor/orders` (sans auth)
+- `JournalPage.jsx` + `JournalPage.css` : NOUVEAU — page 4 sections
+- `App.jsx` : onglet journal + routing + props onTabChange
+- `ActivityFeed.jsx` : max 5 events + lien journal
+
+**Bug corrigé** : `return` anticipé avant `useMemo` dans `AnnotatedEquityCurve` → violation règle des hooks React ("Rendered more hooks than during the previous render") → page noire. Fix : déplacer le return conditionnel après tous les hooks.
+
+**Tests** : 16 nouveaux (9 stats + 7 orders), 1238 tests au total, 0 régression.
+
+**Fichiers** : 4 modifiés, 4 créés (JournalPage.jsx, JournalPage.css, test_journal_stats.py, test_executor_orders.py).
+
 ### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
@@ -1732,9 +1760,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1261 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b**
-- **Phase 6 en cours** — Sprint 30b (BolTrend) terminé
+- **1238 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32**
+- **Phase 6 en cours** — Sprint 32 (Page Journal de Trading) terminé
 - **15 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j

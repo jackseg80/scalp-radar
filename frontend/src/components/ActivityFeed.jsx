@@ -37,9 +37,9 @@ function formatTime(isoString) {
   return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function ActivityFeed({ wsData }) {
-  const { data } = useApi('/api/simulator/trades?limit=20', 10000)
-  const { data: journalData } = useApi('/api/journal/events?limit=20', 30000)
+export default function ActivityFeed({ wsData, onTabChange }) {
+  const { data } = useApi('/api/simulator/trades?limit=5', 10000)
+  const { data: journalData } = useApi('/api/journal/events?limit=10', 30000)
 
   const trades = data?.trades || []
   const openPositions = wsData?.simulator_positions || []
@@ -58,17 +58,26 @@ export default function ActivityFeed({ wsData }) {
         <OpenPositionCard key={`open-${i}`} pos={pos} wsData={wsData} />
       ))}
 
-      {/* Evenements journal (ouvertures/fermetures DCA) */}
+      {/* Evenements journal (ouvertures/fermetures DCA) — max 5 */}
       {journalEvents.length > 0 && (
         <div style={{ marginTop: openPositions.length > 0 ? 6 : 0 }}>
-          {journalEvents.slice(0, 15).map((event, i) => (
+          {journalEvents.slice(0, 5).map((event, i) => (
             <JournalEventCard key={`journal-${event.id || i}`} event={event} />
           ))}
+          {journalEvents.length > 5 && onTabChange && (
+            <div
+              className="text-xs"
+              style={{ marginTop: 4, cursor: 'pointer', color: 'var(--accent)', textAlign: 'center' }}
+              onClick={() => onTabChange('journal')}
+            >
+              Voir le journal complet &rarr;
+            </div>
+          )}
         </div>
       )}
 
-      {/* Trades fermes */}
-      {trades.map((trade, i) => (
+      {/* Trades fermes — max 3 */}
+      {trades.slice(0, 3).map((trade, i) => (
         <ClosedTradeCard key={`trade-${trade.exit_time}-${i}`} trade={trade} />
       ))}
     </>

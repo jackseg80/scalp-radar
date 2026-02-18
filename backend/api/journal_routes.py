@@ -89,3 +89,20 @@ async def get_summary(request: Request) -> dict:
         "recent_events": events,
         "total_events": len(events),
     }
+
+
+@router.get("/stats")
+async def get_stats(
+    request: Request,
+    period: str = Query("all", description="today, 7d, 30d, all"),
+) -> dict:
+    """Stats agrégées du journal de trading (Sprint 32)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"stats": None}
+
+    if period not in {"today", "7d", "30d", "all"}:
+        period = "all"
+
+    stats = await db.get_journal_stats(period=period)
+    return {"stats": stats}

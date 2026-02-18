@@ -1,0 +1,240 @@
+.journal-page {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.journal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.journal-header h2 {
+  margin: 0;
+  color: #fff;
+  font-size: 22px;
+}
+
+/* Selecteur de periode */
+.period-selector {
+  display: flex;
+  gap: 4px;
+}
+
+.period-btn {
+  padding: 5px 14px;
+  border-radius: 4px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #aaa;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.period-btn:hover {
+  border-color: #555;
+  color: #fff;
+}
+
+.period-btn.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Stats KPI grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.stat-card {
+  background: #0d1117;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.stat-label {
+  font-size: 10px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  color: #fff;
+}
+
+.stat-value.positive { color: var(--accent); }
+.stat-value.negative { color: var(--red); }
+
+.stats-secondary {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #888;
+}
+
+.stats-secondary span {
+  white-space: nowrap;
+}
+
+/* Sub-tabs (Ouvertes / Historique) */
+.sub-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #333;
+  margin-bottom: 12px;
+}
+
+.sub-tab {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  transition: color 0.15s;
+}
+
+.sub-tab:hover { color: #ccc; }
+
+.sub-tab.active {
+  color: #fff;
+  border-bottom-color: var(--accent);
+}
+
+/* Filtres */
+.journal-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.journal-filters select {
+  padding: 4px 8px;
+  background: #0d1117;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 12px;
+}
+
+/* Positions table */
+.journal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.journal-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #333;
+  color: #888;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.journal-table th:hover { color: #ccc; }
+
+.journal-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #1a1a1a;
+  white-space: nowrap;
+}
+
+.journal-table tr.row-positive { background: rgba(0, 230, 138, 0.04); }
+.journal-table tr.row-negative { background: rgba(255, 68, 102, 0.04); }
+
+.journal-table tr:hover { background: rgba(255, 255, 255, 0.03); }
+
+/* Grid detail expandable */
+.grid-expand-row td {
+  padding: 4px 8px 4px 32px;
+  font-size: 11px;
+  color: #888;
+  border-bottom: none;
+}
+
+/* Equity curve annotated */
+.equity-annotated {
+  position: relative;
+}
+
+.equity-annotated svg {
+  width: 100%;
+  height: auto;
+}
+
+.equity-period-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+
+/* Ordres table */
+.order-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.order-badge.entry { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+.order-badge.close { background: rgba(156, 163, 175, 0.2); color: #9ca3af; }
+.order-badge.sl { background: rgba(255, 68, 102, 0.2); color: var(--red); }
+.order-badge.tp { background: rgba(0, 230, 138, 0.2); color: var(--accent); }
+.order-badge.emergency_close { background: rgba(255, 68, 102, 0.3); color: var(--red); font-weight: 700; }
+
+.order-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #666;
+  cursor: pointer;
+}
+
+.order-id:hover { color: #aaa; }
+
+/* Load more */
+.load-more-btn {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  background: transparent;
+  border: 1px dashed #333;
+  border-radius: 4px;
+  color: #888;
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+.load-more-btn:hover {
+  border-color: #555;
+  color: #ccc;
+}

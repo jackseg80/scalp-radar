@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -886,6 +886,155 @@ class Database:
         cursor = await self._conn.execute("DELETE FROM simulation_trades")
         await self._conn.commit()
         return cursor.rowcount
+
+    # ─── JOURNAL STATS (Sprint 32) ──────────────────────────────────────────
+
+    async def get_journal_stats(self, period: str = "all") -> dict:
+        """Stats agregees du journal de trading.
+
+        Calcule win rate, profit factor, drawdown, streak, etc.
+        depuis simulation_trades + portfolio_snapshots.
+        """
+        assert self._conn is not None
+
+        # 1. Calculer le timestamp 'since' selon la periode
+        since: str | None = None
+        now = datetime.now(tz=timezone.utc)
+        period_days = 0
+        if period == "today":
+            since = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            period_days = 1
+        elif period == "7d":
+            since = (now - timedelta(days=7)).isoformat()
+            period_days = 7
+        elif period == "30d":
+            since = (now - timedelta(days=30)).isoformat()
+            period_days = 30
+
+        # 2. Query trades
+        if since:
+            cursor = await self._conn.execute(
+                "SELECT net_pnl, exit_time, entry_time, symbol FROM simulation_trades "
+                "WHERE exit_time >= ? ORDER BY exit_time ASC",
+                [since],
+            )
+        else:
+            cursor = await self._conn.execute(
+                "SELECT net_pnl, exit_time, entry_time, symbol FROM simulation_trades "
+                "ORDER BY exit_time ASC",
+            )
+        rows = await cursor.fetchall()
+
+        total_trades = len(rows)
+        if total_trades == 0:
+            return {
+                "period": period,
+                "total_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "total_pnl": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "profit_factor": 0.0,
+                "best_trade": None,
+                "worst_trade": None,
+                "avg_duration_hours": 0.0,
+                "trades_per_day": 0.0,
+                "current_streak": {"type": "none", "count": 0},
+                "max_drawdown_pct": 0.0,
+            }
+
+        # 3. Calculs
+        pnls = [row["net_pnl"] for row in rows]
+        wins = sum(1 for p in pnls if p > 0)
+        losses = total_trades - wins
+        win_rate = round(wins / total_trades * 100, 1)
+        total_pnl = round(sum(pnls), 2)
+        gross_profit = round(sum(p for p in pnls if p > 0), 2)
+        gross_loss = round(sum(p for p in pnls if p <= 0), 2)
+        profit_factor = round(gross_profit / abs(gross_loss), 2) if gross_loss < 0 else 0.0
+
+        # Best / worst trade
+        best_idx = max(range(total_trades), key=lambda i: pnls[i])
+        worst_idx = min(range(total_trades), key=lambda i: pnls[i])
+        best_trade = {"symbol": rows[best_idx]["symbol"], "pnl": round(pnls[best_idx], 2)}
+        worst_trade = {"symbol": rows[worst_idx]["symbol"], "pnl": round(pnls[worst_idx], 2)}
+
+        # Duree moyenne
+        durations = []
+        for row in rows:
+            try:
+                entry = datetime.fromisoformat(row["entry_time"])
+                exit_ = datetime.fromisoformat(row["exit_time"])
+                durations.append((exit_ - entry).total_seconds() / 3600)
+            except (ValueError, TypeError):
+                pass
+        avg_duration_hours = round(sum(durations) / len(durations), 1) if durations else 0.0
+
+        # Trades par jour
+        if period_days > 0:
+            trades_per_day = round(total_trades / period_days, 1)
+        else:
+            # Calculer depuis le premier au dernier trade
+            try:
+                first = datetime.fromisoformat(rows[0]["exit_time"])
+                last = datetime.fromisoformat(rows[-1]["exit_time"])
+                span_days = max(1, (last - first).days + 1)
+                trades_per_day = round(total_trades / span_days, 1)
+            except (ValueError, TypeError):
+                trades_per_day = 0.0
+
+        # Streak (depuis le plus recent)
+        streak_type = "win" if pnls[-1] > 0 else "loss"
+        streak_count = 0
+        for p in reversed(pnls):
+            if (streak_type == "win" and p > 0) or (streak_type == "loss" and p <= 0):
+                streak_count += 1
+            else:
+                break
+
+        # 4. Drawdown depuis portfolio_snapshots
+        max_drawdown_pct = 0.0
+        if since:
+            snap_cursor = await self._conn.execute(
+                "SELECT equity FROM portfolio_snapshots WHERE timestamp >= ? ORDER BY timestamp ASC",
+                [since],
+            )
+        else:
+            snap_cursor = await self._conn.execute(
+                "SELECT equity FROM portfolio_snapshots ORDER BY timestamp ASC",
+            )
+        snap_rows = await snap_cursor.fetchall()
+        if snap_rows:
+            peak = snap_rows[0]["equity"]
+            for sr in snap_rows:
+                eq = sr["equity"]
+                if eq > peak:
+                    peak = eq
+                if peak > 0:
+                    dd = (peak - eq) / peak * 100
+                    if dd > max_drawdown_pct:
+                        max_drawdown_pct = dd
+            max_drawdown_pct = round(max_drawdown_pct, 1)
+
+        return {
+            "period": period,
+            "total_trades": total_trades,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+            "gross_profit": gross_profit,
+            "gross_loss": gross_loss,
+            "profit_factor": profit_factor,
+            "best_trade": best_trade,
+            "worst_trade": worst_trade,
+            "avg_duration_hours": avg_duration_hours,
+            "trades_per_day": trades_per_day,
+            "current_streak": {"type": streak_type, "count": streak_count},
+            "max_drawdown_pct": max_drawdown_pct,
+        }
 
     # ─── SESSION STATE ──────────────────────────────────────────────────────
 

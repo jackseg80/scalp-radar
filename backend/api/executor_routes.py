@@ -196,6 +196,19 @@ async def test_close(
     }
 
 
+@router.get("/orders")
+async def executor_orders(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Historique des ordres Bitget (read-only, sans auth — Sprint 32)."""
+    executor = getattr(request.app.state, "executor", None)
+    if executor is None:
+        return {"orders": [], "count": 0}
+    orders = list(executor._order_history)[:limit]
+    return {"orders": orders, "count": len(orders)}
+
+
 def _get_current_price(data) -> float | None:
     """Extrait le dernier prix close depuis les buffers du DataEngine."""
     # Chercher dans le timeframe 5m d'abord, puis 1m

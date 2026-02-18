@@ -11,6 +11,7 @@ Règle de sécurité #1 : JAMAIS de position sans SL.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -172,6 +173,7 @@ class Executor:
         self._markets: dict[str, Any] = {}  # Cache load_markets()
         self._exchange_balance: float | None = None  # Hotfix 28a
         self._balance_refresh_interval: int = 300  # 5 minutes
+        self._order_history: deque[dict] = deque(maxlen=200)  # Sprint 32
 
     # ─── Properties ────────────────────────────────────────────────────
 
@@ -205,6 +207,33 @@ class Executor:
         return self._exchange_balance
 
     # Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
+
+    # ─── Order History (Sprint 32) ────────────────────────────────────
+
+    def _record_order(
+        self,
+        order_type: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        order_result: dict,
+        strategy_name: str = "",
+        context: str = "",
+    ) -> None:
+        """Enregistre un ordre reussi dans l'historique (FIFO, max 200)."""
+        self._order_history.appendleft({
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "order_type": order_type,
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "filled": float(order_result.get("filled") or 0),
+            "average_price": float(order_result.get("average") or 0),
+            "order_id": order_result.get("id", ""),
+            "status": order_result.get("status", ""),
+            "strategy_name": strategy_name,
+            "context": context,
+        })
 
     # ─── Lifecycle ─────────────────────────────────────────────────────
 
@@ -453,6 +482,7 @@ class Executor:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
             )
+            self._record_order("entry", futures_sym, side, quantity, entry_order, event.strategy_name, "mono")
         except Exception as e:
             logger.error("Executor: échec ordre d'entrée: {}", e)
             return
@@ -489,10 +519,11 @@ class Executor:
                 futures_sym,
             )
             try:
-                await self._exchange.create_order(
+                emg_order = await self._exchange.create_order(
                     futures_sym, "market", close_side, filled_qty,
                     params={"reduceOnly": True},
                 )
+                self._record_order("emergency_close", futures_sym, close_side, filled_qty, emg_order, event.strategy_name, "sl_failed")
             except Exception as e:
                 logger.critical("Executor: ÉCHEC close market urgence: {}", e)
 
@@ -555,6 +586,7 @@ class Executor:
                     },
                 )
                 sl_id = sl_order.get("id", "")
+                self._record_order("sl", symbol, side, quantity, sl_order, strategy_name, f"retry_{attempt}")
                 logger.info(
                     "Executor: SL placé @ {:.2f} (order={}, tentative {})",
                     sl_price, sl_id, attempt,
@@ -588,6 +620,7 @@ class Executor:
                 },
             )
             tp_id = tp_order.get("id", "")
+            self._record_order("tp", symbol, side, quantity, tp_order)
             logger.info("Executor: TP placé @ {:.2f} (order={})", tp_price, tp_id)
             return tp_id
         except Exception as e:
@@ -665,6 +698,7 @@ class Executor:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
             )
+            self._record_order("entry", futures_sym, side, quantity, entry_order, event.strategy_name, "grid")
         except Exception as e:
             logger.error("Executor: échec grid entry: {}", e)
             return
@@ -774,10 +808,11 @@ class Executor:
         """Fermeture d'urgence si SL impossible. JAMAIS de position sans SL."""
         close_side = "sell" if state.direction == "LONG" else "buy"
         try:
-            await self._exchange.create_order(
+            emg_order = await self._exchange.create_order(
                 futures_sym, "market", close_side, state.total_quantity,
                 params={"reduceOnly": True},
             )
+            self._record_order("emergency_close", futures_sym, close_side, state.total_quantity, emg_order, state.strategy_name, "grid_sl_failed")
         except Exception as e:
             logger.critical("Executor: ÉCHEC close urgence grid: {}", e)
 
@@ -816,6 +851,7 @@ class Executor:
                     futures_sym, "market", close_side, state.total_quantity,
                     params={"reduceOnly": True},
                 )
+                self._record_order("close", futures_sym, close_side, state.total_quantity, close_order, state.strategy_name, "grid_cycle")
                 exit_price = float(
                     close_order.get("average") or event.exit_price or 0,
                 )
@@ -914,6 +950,7 @@ class Executor:
                 futures_sym, "market", close_side, pos.quantity,
                 params={"reduceOnly": True},
             )
+            self._record_order("close", futures_sym, close_side, pos.quantity, close_order, event.strategy_name, f"mono_{event.exit_reason or 'unknown'}")
             exit_price = float(close_order.get("average") or event.exit_price or 0)
         except Exception as e:
             logger.error("Executor: échec close market: {}", e)
@@ -1544,6 +1581,7 @@ class Executor:
             "positions": positions_data,
             "grid_states": grid_states_data,
             "risk_manager": self._risk_manager.get_state(),
+            "order_history": list(self._order_history),
         }
 
     def restore_positions(self, state: dict[str, Any]) -> None:
@@ -1603,6 +1641,12 @@ class Executor:
                 "Executor: grid restaurée — {} {} niveaux",
                 sym, len(self._grid_states[sym].positions),
             )
+
+        # Order history (Sprint 32)
+        order_history = state.get("order_history", [])
+        self._order_history = deque(order_history, maxlen=200)
+        if order_history:
+            logger.info("Executor: {} ordres restaurés dans l'historique", len(order_history))
 
     # ─── Grid helpers ───────────────────────────────────────────────────
 

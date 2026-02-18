@@ -6,6 +6,7 @@ import RiskCalc from './components/RiskCalc'
 import ResearchPage from './components/ResearchPage'
 import ExplorerPage from './components/ExplorerPage'
 import PortfolioPage from './components/PortfolioPage'
+import JournalPage from './components/JournalPage'
 import LogViewer from './components/LogViewer'
 import CollapsibleCard from './components/CollapsibleCard'
 import ExecutorPanel from './components/ExecutorPanel'
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'research', label: 'Recherche' },
   { id: 'explorer', label: 'Explorer' },
   { id: 'portfolio', label: 'Portfolio' },
+  { id: 'journal', label: 'Journal' },
   { id: 'logs', label: 'Logs' },
 ]
 
@@ -44,7 +46,7 @@ function loadSidebarWidth() {
 
 function loadActiveTab() {
   const saved = localStorage.getItem('scalp-radar-active-tab')
-  const validTabs = ['scanner', 'heatmap', 'risk', 'research', 'explorer', 'portfolio', 'logs']
+  const validTabs = ['scanner', 'heatmap', 'risk', 'research', 'explorer', 'portfolio', 'journal', 'logs']
   if (saved && validTabs.includes(saved)) return saved
   return 'scanner'
 }
@@ -151,6 +153,7 @@ export default function App() {
           {activeTab === 'research' && <ResearchPage />}
           {activeTab === 'explorer' && <ExplorerPage wsData={wsData} lastEvent={lastEvent} />}
           {activeTab === 'portfolio' && <PortfolioPage wsData={wsData} lastEvent={lastEvent} />}
+          {activeTab === 'journal' && <JournalPage wsData={wsData} onTabChange={handleTabChange} />}
           {activeTab === 'logs' && <LogViewer />}
         </div>
 
@@ -189,7 +192,7 @@ export default function App() {
             defaultOpen={true}
             storageKey="activity"
           >
-            <ActivityFeed wsData={wsData} />
+            <ActivityFeed wsData={wsData} onTabChange={handleTabChange} />
           </CollapsibleCard>
 
           <CollapsibleCard
