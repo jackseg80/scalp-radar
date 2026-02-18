@@ -531,6 +531,7 @@ class SecretsConfig(BaseSettings):
     live_trading: bool = False  # LIVE_TRADING env var, défaut false = simulation only
     # Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
     selector_bypass_at_boot: bool | None = None  # Override risk.yaml si défini dans .env
+    force_strategies: str | None = None  # FORCE_STRATEGIES, comma-separated (ex: "grid_atr,grid_trend")
 
     # Sync WFO local → serveur
     sync_server_url: str = ""  # SYNC_SERVER_URL, ex: "http://192.168.1.200:8000"
@@ -597,6 +598,18 @@ class AppConfig:
         # Override YAML par env var (.env)
         if self.secrets.selector_bypass_at_boot is not None:
             self.risk.selector_bypass_at_boot = self.secrets.selector_bypass_at_boot
+
+        if self.secrets.force_strategies is not None:
+            strategies = [
+                s.strip()
+                for s in self.secrets.force_strategies.split(",")
+                if s.strip()
+            ]
+            self.risk.adaptive_selector.force_strategies = strategies
+            logger.info(
+                "Config: force_strategies overridé par .env: {}",
+                strategies,
+            )
 
         # Validations croisées
         self._validate_cross_config()

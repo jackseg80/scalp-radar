@@ -24,6 +24,10 @@ echo "========================================"
 # Créer les dossiers persistants si absents
 mkdir -p data logs
 
+# Reset config files to git version — prod overrides go in .env (gitignored)
+echo "[*] Reset config files..."
+git checkout -- config/
+
 # Pull
 echo "[*] Mise à jour du code..."
 git pull origin main

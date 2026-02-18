@@ -91,3 +91,40 @@ class TestConfigValidation:
         """Sans env var, risk.yaml value est utilisée (false)."""
         config = AppConfig(config_dir=config_dir, env_file=None)
         assert config.risk.selector_bypass_at_boot is False
+
+    def test_force_strategies_env_override_single(self, config_dir, tmp_path):
+        """FORCE_STRATEGIES=grid_atr dans .env override risk.yaml ([])."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FORCE_STRATEGIES=grid_atr\n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.risk.adaptive_selector.force_strategies == ["grid_atr"]
+
+    def test_force_strategies_env_override_multiple(self, config_dir, tmp_path):
+        """FORCE_STRATEGIES avec plusieurs stratégies (comma-separated)."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FORCE_STRATEGIES=grid_atr,grid_trend,vwap_rsi\n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.risk.adaptive_selector.force_strategies == [
+            "grid_atr",
+            "grid_trend",
+            "vwap_rsi",
+        ]
+
+    def test_force_strategies_env_whitespace_handling(self, config_dir, tmp_path):
+        """FORCE_STRATEGIES gère les espaces autour des virgules."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FORCE_STRATEGIES= grid_atr , grid_trend , \n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.risk.adaptive_selector.force_strategies == ["grid_atr", "grid_trend"]
+
+    def test_force_strategies_env_not_set(self, config_dir):
+        """Sans env var, risk.yaml value est utilisée ([])."""
+        config = AppConfig(config_dir=config_dir, env_file=None)
+        assert config.risk.adaptive_selector.force_strategies == []
+
+    def test_force_strategies_env_empty_string(self, config_dir, tmp_path):
+        """FORCE_STRATEGIES vide → liste vide."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FORCE_STRATEGIES=\n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.risk.adaptive_selector.force_strategies == []

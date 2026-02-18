@@ -356,6 +356,22 @@ Windows (VSCode)                    Linux Server (192.168.1.200)
 
 - `--clean` / `-c` : kill brutal + supprime state files (fresh start sans perdre la DB)
 
+**Règle critique déploiement (Hotfix 30b) :**
+
+- **JAMAIS éditer les fichiers `config/*.yaml` sur le serveur**
+- `deploy.sh` reset automatiquement `config/` avant `git pull` (ligne 28-30)
+- Tous les overrides prod passent par `.env` (gitignored) :
+  - `LIVE_TRADING=true` : active l'Executor (ordres réels)
+  - `SELECTOR_BYPASS_AT_BOOT=true` : autorise toutes les stratégies au boot (cold start)
+  - `FORCE_STRATEGIES=grid_atr` : bypass net_return/PF checks (comma-separated)
+- Exemple `.env` serveur :
+
+```bash
+LIVE_TRADING=true
+SELECTOR_BYPASS_AT_BOOT=true
+FORCE_STRATEGIES=grid_atr
+```
+
 ## References
 
 - Bitget API docs: <https://www.bitget.com/api-doc/>
