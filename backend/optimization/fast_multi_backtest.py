@@ -809,6 +809,248 @@ def _simulate_grid_funding(
     return trade_pnls, trade_returns, capital
 
 
+# ─── Grid BolTrend ────────────────────────────────────────────────────────
+
+
+def _simulate_grid_boltrend(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Simulation Grid BolTrend (DCA event-driven sur breakout Bollinger).
+
+    State machine :
+    - grid inactif → détection breakout → fixation niveaux DCA → grid actif
+    - grid actif → DCA filling + TP inverse (close < SMA LONG) / SL global
+    - exit → reset → grid inactif
+
+    TP inverse : closes[i] < bb_sma[i] (LONG) / closes[i] > bb_sma[i] (SHORT).
+    Ferme TOUTES les positions d'un coup.
+    """
+    n = cache.n_candles
+    num_levels = params["num_levels"]
+    sl_pct = params["sl_percent"] / 100
+    spacing_mult = params["atr_spacing_mult"]
+    sides = params.get("sides", ["long", "short"])
+    min_bol_spread = params.get("min_bol_spread", 0.0)
+
+    bol_window = params["bol_window"]
+    bol_std = params["bol_std"]
+    long_ma_window = params["long_ma_window"]
+    atr_period = params["atr_period"]
+
+    # Indicateurs pré-calculés depuis le cache
+    bb_sma_key = bol_window
+    bb_band_key = (bol_window, bol_std)
+    bb_sma = cache.bb_sma[bb_sma_key]
+    bb_upper = cache.bb_upper[bb_band_key]
+    bb_lower = cache.bb_lower[bb_band_key]
+    long_ma = cache.bb_sma[long_ma_window]
+    atr_arr = cache.atr_by_period[atr_period]
+
+    closes = cache.closes
+    highs = cache.highs
+    lows = cache.lows
+
+    capital = bt_config.initial_capital
+    leverage = bt_config.leverage
+    taker_fee = bt_config.taker_fee
+    maker_fee = bt_config.maker_fee
+    slippage_pct = bt_config.slippage_pct
+
+    # Funding settlement mask (00:00, 08:00, 16:00 UTC)
+    funding_rates = cache.funding_rates_1h
+    settlement_mask = np.zeros(n, dtype=bool)
+    if funding_rates is not None and cache.candle_timestamps is not None:
+        hours = ((cache.candle_timestamps / 3600000) % 24).astype(int)
+        settlement_mask = (hours % 8 == 0)
+
+    trade_pnls: list[float] = []
+    trade_returns: list[float] = []
+
+    # State machine
+    # positions: list of (level_idx, entry_price, quantity, entry_fee)
+    positions: list[tuple[int, float, float, float]] = []
+    entry_levels: list[float] = []  # prix d'entrée fixés au breakout
+    direction = 0  # 0=inactif, 1=LONG, -1=SHORT
+
+    # Start index : besoin de SMA long terme valide
+    start_idx = max(bol_window, long_ma_window) + 1
+
+    for i in range(start_idx, n):
+        close_i = closes[i]
+        if capital <= 0 or math.isnan(close_i):
+            continue
+
+        # === 1. CHECK EXITS (si positions ouvertes) ===
+        if positions:
+            avg_entry = sum(p[1] * p[2] for p in positions) / sum(p[2] for p in positions)
+
+            # SL global
+            sl_hit = False
+            if direction == 1:
+                sl_price = avg_entry * (1 - sl_pct)
+                sl_hit = lows[i] <= sl_price
+            else:
+                sl_price = avg_entry * (1 + sl_pct)
+                sl_hit = highs[i] >= sl_price
+
+            # TP inverse : close croise la SMA (breakout épuisé)
+            tp_hit = False
+            sma_val = bb_sma[i]
+            if not math.isnan(sma_val):
+                if direction == 1:
+                    tp_hit = closes[i] < sma_val
+                else:
+                    tp_hit = closes[i] > sma_val
+
+            # Résolution si les deux sur même candle
+            exit_reason = None
+            exit_price = close_i
+            if sl_hit and tp_hit:
+                is_green = closes[i] >= cache.opens[i]
+                if direction == 1:
+                    # Bougie verte LONG → signal_exit gagne, rouge → SL
+                    exit_reason = "signal_exit" if is_green else "sl_global"
+                    exit_price = sma_val if is_green else sl_price
+                else:
+                    exit_reason = "signal_exit" if not is_green else "sl_global"
+                    exit_price = sma_val if not is_green else sl_price
+            elif sl_hit:
+                exit_reason = "sl_global"
+                exit_price = sl_price
+            elif tp_hit:
+                exit_reason = "signal_exit"
+                exit_price = sma_val
+
+            if exit_reason is not None:
+                if exit_reason == "signal_exit":
+                    fee = maker_fee
+                    slip = 0.0
+                else:
+                    fee = taker_fee
+                    slip = slippage_pct
+
+                pnl = _calc_grid_pnl(positions, exit_price, fee, slip, direction)
+                trade_pnls.append(pnl)
+                if capital > 0:
+                    trade_returns.append(pnl / capital)
+                capital += pnl
+                positions = []
+                entry_levels = []
+                direction = 0
+                continue
+
+        # === 2. Funding costs aux settlements 8h ===
+        if positions and settlement_mask[i] and funding_rates is not None:
+            fr = funding_rates[i]
+            if not math.isnan(fr):
+                for _lvl, entry_price, quantity, _fee in positions:
+                    notional = entry_price * quantity
+                    capital += -fr * notional * direction
+
+        # === 3. Guard capital épuisé ===
+        if capital <= 0:
+            continue
+
+        # === 4. DCA filling (si grid actif) ===
+        if direction != 0 and entry_levels:
+            filled = {p[0] for p in positions}
+            for lvl in range(num_levels):
+                if lvl in filled or lvl >= len(entry_levels):
+                    continue
+                if len(positions) >= num_levels:
+                    break
+
+                ep = entry_levels[lvl]
+                if math.isnan(ep) or ep <= 0:
+                    continue
+
+                triggered = False
+                if direction == 1:
+                    triggered = lows[i] <= ep
+                else:
+                    triggered = highs[i] >= ep
+
+                if triggered:
+                    notional = capital * (1.0 / num_levels) * leverage
+                    qty = notional / ep
+                    if qty <= 0:
+                        continue
+                    entry_fee = qty * ep * taker_fee
+                    positions.append((lvl, ep, qty, entry_fee))
+
+        # === 5. Breakout detection (si grid inactif) ===
+        if direction == 0 and not positions:
+            prev_close = closes[i - 1]
+            prev_upper = bb_upper[i - 1]
+            prev_lower = bb_lower[i - 1]
+            curr_upper = bb_upper[i]
+            curr_lower = bb_lower[i]
+            long_ma_val = long_ma[i]
+            atr_val = atr_arr[i]
+
+            if any(math.isnan(v) for v in [prev_close, prev_upper, prev_lower, curr_upper, curr_lower, long_ma_val, atr_val]):
+                continue
+
+            # Spread check sur bandes précédentes
+            if prev_lower > 0:
+                prev_spread = (prev_upper - prev_lower) / prev_lower
+            else:
+                continue
+            spread_ok = prev_spread > min_bol_spread
+
+            # Breakout LONG
+            long_bo = (
+                "long" in sides
+                and prev_close < prev_upper
+                and close_i > curr_upper
+                and spread_ok
+                and close_i > long_ma_val
+            )
+
+            # Breakout SHORT
+            short_bo = (
+                "short" in sides
+                and prev_close > prev_lower
+                and close_i < curr_lower
+                and spread_ok
+                and close_i < long_ma_val
+            )
+
+            if long_bo or short_bo:
+                direction = 1 if long_bo else -1
+                spacing = atr_val * spacing_mult
+
+                # Fixer les niveaux d'entrée
+                entry_levels = []
+                for k in range(num_levels):
+                    if direction == 1:
+                        entry_levels.append(close_i - k * spacing)
+                    else:
+                        entry_levels.append(close_i + k * spacing)
+
+                # Level 0 = close → trigger immédiat (lows[i] <= close toujours vrai LONG)
+                ep0 = entry_levels[0]
+                if ep0 > 0 and capital > 0:
+                    notional = capital * (1.0 / num_levels) * leverage
+                    qty = notional / ep0
+                    if qty > 0:
+                        entry_fee = qty * ep0 * taker_fee
+                        positions.append((0, ep0, qty, entry_fee))
+
+    # Force close fin de données
+    if positions:
+        exit_price = float(closes[n - 1])
+        pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
+        trade_pnls.append(pnl)
+        if capital > 0:
+            trade_returns.append(pnl / capital)
+        capital += pnl
+
+    return trade_pnls, trade_returns, capital
+
+
 # ─── Entry point ───────────────────────────────────────────────────────────
 
 
@@ -848,6 +1090,10 @@ def run_multi_backtest_from_cache(
         )
     elif strategy_name == "grid_range_atr":
         trade_pnls, trade_returns, final_capital = _simulate_grid_range(
+            cache, params, bt_config,
+        )
+    elif strategy_name == "grid_boltrend":
+        trade_pnls, trade_returns, final_capital = _simulate_grid_boltrend(
             cache, params, bt_config,
         )
     else:

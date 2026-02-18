@@ -21,7 +21,7 @@ from backend.strategies.base_grid import BaseGridStrategy, GridPosition
 # Stratégies grid qui paient/reçoivent du funding (toutes les grid/DCA)
 _GRID_STRATEGIES_WITH_FUNDING: set[str] = {
     "grid_funding", "grid_atr", "grid_range_atr", "envelope_dca",
-    "envelope_dca_short", "grid_multi_tf", "grid_trend",
+    "envelope_dca_short", "grid_multi_tf", "grid_trend", "grid_boltrend",
 }
 
 

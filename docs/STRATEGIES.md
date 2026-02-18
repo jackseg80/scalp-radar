@@ -1,6 +1,6 @@
 # Trading Strategies — Scalp Radar
 
-Guide complet des 13 stratégies de trading implémentées dans Scalp Radar.
+Guide complet des 16 stratégies de trading implémentées dans Scalp Radar.
 Tout ce qui est documenté ici est extrait du code source réel (`backend/strategies/`).
 
 ---
@@ -13,15 +13,18 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 2 | `grid_trend` | 1h | Grid/DCA | Long + Short | false | Echoue en forward test |
 | 3 | `grid_multi_tf` | 1h + 4h | Grid/DCA | Long + Short | false | WFO terminé |
 | 4 | `grid_funding` | 1h | Grid/DCA | Long only | false | WFO terminé |
-| 5 | `envelope_dca` | 1h | Grid/DCA | Long only | false | Remplacé par grid_atr |
-| 6 | `envelope_dca_short` | 1h | Grid/DCA | Short only | false | Validation en attente |
-| 7 | `vwap_rsi` | 5m + 15m | Scalp | Long + Short | false | Désactivé |
-| 8 | `momentum` | 5m + 15m | Scalp | Long + Short | false | Désactivé |
-| 9 | `funding` | 15m | Scalp | Long + Short | false | Paper only (pas de backtest) |
-| 10 | `liquidation` | 5m | Scalp | Long + Short | false | Paper only (pas de backtest) |
-| 11 | `bollinger_mr` | 1h | Swing | Long + Short | false | Désactivé |
-| 12 | `donchian_breakout` | 1h | Swing | Long + Short | false | Désactivé |
-| 13 | `supertrend` | 1h | Swing | Long + Short | false | Désactivé |
+| 5 | `grid_range_atr` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
+| 6 | `grid_boltrend` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
+| 7 | `envelope_dca` | 1h | Grid/DCA | Long only | false | Remplacé par grid_atr |
+| 8 | `envelope_dca_short` | 1h | Grid/DCA | Short only | false | Validation en attente |
+| 9 | `boltrend` | 1h | Swing | Long + Short | false | Grade C (trop peu de trades) |
+| 10 | `bollinger_mr` | 1h | Swing | Long + Short | false | Désactivé |
+| 11 | `donchian_breakout` | 1h | Swing | Long + Short | false | Désactivé |
+| 12 | `supertrend` | 1h | Swing | Long + Short | false | Désactivé |
+| 13 | `vwap_rsi` | 5m + 15m | Scalp | Long + Short | false | Désactivé |
+| 14 | `momentum` | 5m + 15m | Scalp | Long + Short | false | Désactivé |
+| 15 | `funding` | 15m | Scalp | Long + Short | false | Paper only (pas de backtest) |
+| 16 | `liquidation` | 5m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 
 **Paper trading actif** : `grid_atr` sur 10 assets (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX).
 
@@ -330,6 +333,58 @@ Identique à grid_atr : TP = retour à la SMA, SL = % du prix moyen.
 Réutilise 100% du code de `envelope_dca`. Seuls le nom (`"envelope_dca_short"`) et `sides = ["short"]` changent.
 
 **Statut** : `enabled: false`, validation WFO en attente.
+
+---
+
+### 7. grid_boltrend — DCA Event-Driven sur Breakout Bollinger ✨ NOUVEAU
+
+**Fichier** : `backend/strategies/grid_boltrend.py`
+
+**Concept** : Hybride boltrend (signal de breakout) + grid_atr (exécution DCA multi-niveaux). La grille est OFF par défaut ; elle s'active uniquement sur un breakout Bollinger filtré par tendance long terme, puis ouvre des niveaux DCA dans la direction du breakout. TP inversé : le signal de sortie est le retour du prix sous/sur la SMA Bollinger (prix revient à la valeur fondamentale).
+
+**Logique d'entrée** :
+
+1. Breakout LONG : `prev_close < bb_upper` ET `close > bb_upper` ET spread > `min_bol_spread` ET `close > sma_long`
+2. Breakout SHORT : `prev_close > bb_lower` ET `close < bb_lower` ET spread > `min_bol_spread` ET `close < sma_long`
+3. Level 0 = prix au breakout (entre immédiatement), Level k = `close ∓ k × ATR × atr_spacing_mult`
+
+**Logique de sortie** :
+
+- **TP inverse** : `close < bb_sma` (LONG) ou `close > bb_sma` (SHORT) → `"signal_exit"`
+- **SL global** : prix moyen ± `sl_percent` → `"sl_global"`
+- Si SL et TP simultanés sur même candle : bougie verte = TP, bougie rouge = SL
+
+**Paramètres** :
+
+| Paramètre | Défaut | Rôle |
+|-----------|--------|------|
+| `bol_window` | 100 | Période Bollinger |
+| `bol_std` | 2.0 | Écart-type Bollinger |
+| `long_ma_window` | 200 | SMA filtre tendance |
+| `min_bol_spread` | 0.0 | Spread min bandes (% price) |
+| `atr_period` | 14 | Période ATR (espacement niveaux) |
+| `atr_spacing_mult` | 1.0 | Multiplicateur espacement |
+| `num_levels` | 3 | Nombre de niveaux DCA |
+| `sl_percent` | 15.0 | SL global (%) |
+| `sides` | [long, short] | Côtés actifs |
+
+**WFO** : 1296 combos (2×3×2×2×2×3×3×3), fenêtres 180j IS / 60j OOS.
+
+**Différence vs boltrend** : boltrend = mono-position (4-6 trades/OOS → DSR 0.00 → Grade C max). grid_boltrend = 3-4× plus de trades par grille DCA → DSR > 0 → Grade B possible.
+
+**Différence vs grid_atr** : grid_atr = grille toujours active (mean reversion). grid_boltrend = grille activée uniquement sur signal directionnel (trend following DCA).
+
+**Statut** : `enabled: false`, WFO à lancer.
+
+---
+
+### 8. grid_range_atr — Range Trading Bidirectionnel
+
+**Fichier** : `backend/strategies/grid_range_atr.py`
+
+Range trading LONG + SHORT simultanés, TP/SL individuels par position, spacing ATR.
+
+**Statut** : `enabled: false`, WFO à lancer.
 
 ---
 

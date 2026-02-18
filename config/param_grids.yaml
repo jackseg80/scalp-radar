@@ -99,6 +99,23 @@ boltrend:
     min_bol_spread: [0.0, 0.01, 0.02]
     timeframe: ["1h", "4h"]
 
+# Grid BolTrend : 1296 combos (2×3×2×2×2×3×3×3)
+grid_boltrend:
+  wfo:
+    is_days: 180
+    oos_days: 60
+    step_days: 60
+  default:
+    bol_window: [50, 100]
+    bol_std: [1.5, 2.0, 2.5]
+    long_ma_window: [200, 400]
+    min_bol_spread: [0.0, 0.01]
+    atr_period: [10, 14]
+    num_levels: [2, 3, 4]
+    sl_percent: [10.0, 15.0, 20.0]
+    atr_spacing_mult: [0.5, 1.0, 1.5]
+    timeframe: ["1h"]
+
 # Envelope DCA : 972 combos (3×4×3×5×3×4), coarse LHS 200
 envelope_dca:
   wfo:

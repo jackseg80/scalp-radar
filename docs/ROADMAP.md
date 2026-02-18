@@ -1650,6 +1650,38 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Fichiers** : 10 modifiés/créés, 1 fichier test mis à jour.
 
+### Sprint 33 — Stratégie Grid BolTrend (16e stratégie) ✅
+
+**But** : boltrend (Sprint 30b) obtient Grade C sur 4/5 assets mais seulement 4-6 trades/fenêtre OOS (DSR 0.00 = plafond Grade C). Problème : mono-position = pas assez de trades. Solution : gridifier boltrend pour multiplier les trades par 3-4×.
+
+**Logique hybride** : signal d'activation boltrend (breakout Bollinger) + exécution grid DCA (comme grid_atr) dans la direction du breakout. TP inverse : `close < SMA` (LONG) ou `close > SMA` (SHORT).
+
+**Architecture** :
+
+- **Event-driven** : grille OFF par défaut, s'active uniquement sur breakout Bollinger + filtre SMA long terme
+- **Niveaux fixés au breakout** : `entry_levels[k] = close ∓ k × ATR × atr_spacing_mult` — pas recalculés à chaque candle
+- **Level 0 immédiat** : entre automatiquement au breakout (lows ≤ close toujours vrai)
+- **Fast engine dédié** : `_simulate_grid_boltrend()` (~180 lignes) — TP inversé incompatible avec `_simulate_grid_common()`, zéro modification du code existant
+- **Heuristique SL+TP** : si SL et signal_exit sur même candle → bougie verte = signal_exit, rouge = sl_global
+- **1296 combos WFO** (2×3×2×2×2×3×3×3) : bol_window, bol_std, long_ma_window, min_bol_spread, atr_period, num_levels, sl_percent, atr_spacing_mult
+
+**Fichiers** :
+
+- `backend/core/config.py` : `GridBolTrendConfig` + champ dans `StrategiesConfig`
+- `backend/strategies/grid_boltrend.py` : NOUVEAU — `GridBolTrendStrategy(BaseGridStrategy)`, compute_grid (breakout + DCA levels), should_close_all (TP inverse + SL global)
+- `backend/optimization/fast_multi_backtest.py` : `_simulate_grid_boltrend()` + branche dispatcher
+- `backend/optimization/indicator_cache.py` : section grid_boltrend (BB + long_ma + ATR multi-period + funding)
+- `backend/optimization/walk_forward.py` : `_INDICATOR_PARAMS`
+- `backend/optimization/__init__.py` : STRATEGY_REGISTRY + GRID_STRATEGIES + STRATEGIES_NEED_EXTRA_DATA
+- `backend/strategies/factory.py` : import + mapping + get_enabled
+- `backend/execution/adaptive_selector.py` : `_STRATEGY_CONFIG_ATTR`
+- `backend/backtesting/multi_engine.py` : `_GRID_STRATEGIES_WITH_FUNDING`
+- `config/strategies.yaml` + `config/param_grids.yaml` : config + grille WFO
+- `tests/test_grid_boltrend.py` : NOUVEAU — 32 tests (breakout, TP inverse, fast engine, registry, edge cases)
+- `tests/test_fast_engine_refactor.py` : +1 stratégie dans expected set
+
+**Tests** : 32 nouveaux, 1309 tests au total, 0 régression.
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -1760,10 +1792,10 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1238 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32**
-- **Phase 6 en cours** — Sprint 32 (Page Journal de Trading) terminé
-- **15 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
+- **1309 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33**
+- **Phase 6 en cours** — Sprint 33 (Grid BolTrend, 16e stratégie) terminé
+- **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)

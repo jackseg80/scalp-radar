@@ -646,6 +646,24 @@ grid_trend:
       pull_step: 0.5
       sl_percent: 20
       trail_mult: 1.5
+grid_boltrend:
+  enabled: false
+  live_eligible: false
+  timeframe: 1h
+  bol_window: 100
+  bol_std: 2.0
+  long_ma_window: 200
+  min_bol_spread: 0.0
+  atr_period: 14
+  atr_spacing_mult: 1.0
+  num_levels: 3
+  sl_percent: 15.0
+  sides:
+  - long
+  - short
+  leverage: 6
+  weight: 0.2
+  per_asset: {}
 custom_strategies:
   swing_baseline:
     enabled: false

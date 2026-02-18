@@ -38,6 +38,7 @@ _STRATEGY_CONFIG_ATTR = {
     "grid_multi_tf": "grid_multi_tf",
     "grid_funding": "grid_funding",
     "grid_trend": "grid_trend",
+    "grid_boltrend": "grid_boltrend",
 }
 
 

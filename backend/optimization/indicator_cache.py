@@ -393,9 +393,39 @@ def build_cache(
             if period not in bb_sma_dict:
                 bb_sma_dict[period] = sma(closes, period)
 
+    if strategy_name == "grid_boltrend":
+        bol_windows_gb: set[int] = set()
+        bol_stds_gb: set[float] = set()
+        long_ma_windows_gb: set[int] = set()
+        if "bol_window" in param_grid_values:
+            bol_windows_gb.update(param_grid_values["bol_window"])
+        if "bol_std" in param_grid_values:
+            bol_stds_gb.update(param_grid_values["bol_std"])
+        if "long_ma_window" in param_grid_values:
+            long_ma_windows_gb.update(param_grid_values["long_ma_window"])
+        if not bol_windows_gb:
+            bol_windows_gb.add(100)
+        if not bol_stds_gb:
+            bol_stds_gb.add(2.0)
+        if not long_ma_windows_gb:
+            long_ma_windows_gb.add(200)
+
+        for period in bol_windows_gb:
+            bb_sma_arr_gb, _, _ = bollinger_bands(closes, period, 1.0)
+            bb_sma_dict[period] = bb_sma_arr_gb
+            for std_dev in bol_stds_gb:
+                _, upper, lower = bollinger_bands(closes, period, std_dev)
+                bb_upper_dict[(period, std_dev)] = upper
+                bb_lower_dict[(period, std_dev)] = lower
+
+        # SMA long terme (réutilise bb_sma_dict)
+        for period in long_ma_windows_gb:
+            if period not in bb_sma_dict:
+                bb_sma_dict[period] = sma(closes, period)
+
     # --- ATR multi-period (pour donchian/supertrend/grid_atr/grid_multi_tf) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr"):
+    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr", "grid_boltrend"):
         atr_periods: set[int] = set()
         if "atr_period" in param_grid_values:
             atr_periods.update(param_grid_values["atr_period"])
@@ -421,7 +451,7 @@ def build_cache(
     # --- Funding rates depuis DB (toutes stratégies grid) ---
     _GRID_STRATEGIES_WITH_FUNDING = {
         "grid_funding", "grid_atr", "grid_range_atr", "envelope_dca",
-        "envelope_dca_short", "grid_multi_tf", "grid_trend",
+        "envelope_dca_short", "grid_multi_tf", "grid_trend", "grid_boltrend",
     }
     funding_1h: np.ndarray | None = None
     candle_ts: np.ndarray | None = None
