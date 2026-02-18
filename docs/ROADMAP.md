@@ -1495,6 +1495,39 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Résultat** : 1217 tests passants (+5 depuis Hotfix 30), conflits deploy éliminés.
 
+---
+
+### Sprint 30c — Enrichissement panel Executor + formatage prix adaptatif ✅
+
+**But** : Améliorer la lisibilité du dashboard live — les positions executor affichent levier, marge, notionnel, P&L latent ; les prix crypto sont formatés avec le bon nombre de décimales selon la magnitude.
+
+**Fix 1 — Utilitaire `formatPrice`** :
+
+- Nouveau fichier `frontend/src/utils/format.js` : `formatPrice(price)` et `formatPnl(value)`
+- Logique adaptative : ≥100$ → 2 décimales (BTC, ETH), ≥1$ → 4 (SOL, MATIC), ≥0.01$ → 5, sinon → 6 (SHIB)
+- Importé dans Scanner, ActivePositions, ActivityFeed, ExecutorPanel
+
+**Fix 2 — PositionCard enrichi** (`ExecutorPanel.jsx`) :
+
+- Solde : `executor.exchange_balance ?? rm?.initial_capital` (réel Bitget en priorité)
+- `currentPrice` passé à chaque card depuis `wsData.prices` (conversion `BTC/USDT:USDT` → `BTC/USDT`)
+- Badge levier `x{leverage}` dans le header de la card
+- Nouvelles lignes : **Notionnel**, **Marge** (`notional / leverage`), **P&L latent** en temps réel
+- TP=0 → affiche "**SMA dynamique**" en vert (au lieu de `0.00`)
+
+**Fix 3 — Backend** (`executor.py`) :
+
+- `get_status()` enrichi : `leverage` et `notional` dans chaque position (mono = `default_leverage`, grid = `gs.leverage`)
+- `notional = entry_price × quantity`
+
+**Fix 4 — Prix adaptatifs dans tous les composants** :
+
+- `Scanner.jsx` : colonne prix
+- `ActivePositions.jsx` : avg@ grille, prix niveaux détaillés, PositionRow
+- `ActivityFeed.jsx` : journal events, OpenPositionCard, ClosedTradeCard
+
+**Résultat** : 1217 tests passants (0 régression, pas de nouveaux tests backend nécessaires — frontend pur).
+
 **Différences clés vs grid_atr** :
 
 - **Bidirectionnel** : LONG sous SMA + SHORT au-dessus, simultanément (pas de direction lock)
@@ -1611,8 +1644,8 @@ Phase 5: Scaling Stratégies     ✅
 ## ÉTAT ACTUEL (18 février 2026)
 
 - **1217 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b**
-- **Phase 6 en cours** — Hotfix 30b (Config conflicts deploy) terminé
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c**
+- **Phase 6 en cours** — Sprint 30c (panel Executor enrichi + formatage prix adaptatif) terminé
 - **14 stratégies** : 4 scalp 5m + 3 swing 1h + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j

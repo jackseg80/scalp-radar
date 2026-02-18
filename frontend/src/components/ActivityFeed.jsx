@@ -6,6 +6,7 @@
  * Sprint 25 : événements journal (ouvertures/fermetures DCA) depuis /api/journal/events.
  */
 import { useApi } from '../hooks/useApi'
+import { formatPrice } from '../utils/format'
 
 const EXIT_REASONS = {
   sl: 'SL',
@@ -94,7 +95,7 @@ function JournalEventCard({ event }) {
         {event.strategy_name}
         {event.level != null && ` Lvl ${event.level}`}
         {' '}&middot;{' '}{event.direction}
-        {' '}&middot;{' '}{Number(event.price).toFixed(2)}$
+        {' '}&middot;{' '}{formatPrice(event.price)}$
       </div>
       {!isOpen && meta.net_pnl != null && (
         <div className="text-xs" style={{ marginTop: 1 }}>
@@ -140,8 +141,8 @@ function OpenPositionCard({ pos, wsData }) {
         <span className="text-xs muted">{timeAgo(pos.entry_time)}</span>
       </div>
       <div className="text-xs muted">
-        {pos.strategy} &middot; Entry {Number(pos.entry_price).toFixed(2)}
-        {pos.sl_price ? ` → SL ${Number(pos.sl_price).toFixed(2)}` : ''}
+        {pos.strategy} &middot; Entry {formatPrice(pos.entry_price)}
+        {pos.sl_price ? ` → SL ${formatPrice(pos.sl_price)}` : ''}
       </div>
       <div className="text-xs" style={{ marginTop: 2 }}>
         <span style={{ color: 'var(--blue)' }}>En cours</span>
@@ -169,8 +170,8 @@ function ClosedTradeCard({ trade }) {
         <span className="text-xs muted">{timeAgo(trade.exit_time)}</span>
       </div>
       <div className="text-xs muted">
-        {trade.strategy} &middot; Entry {Number(trade.entry_price).toFixed(2)}
-        {trade.exit_price ? ` → Exit ${Number(trade.exit_price).toFixed(2)}` : ''}
+        {trade.strategy} &middot; Entry {formatPrice(trade.entry_price)}
+        {trade.exit_price ? ` → Exit ${formatPrice(trade.exit_price)}` : ''}
       </div>
       <div className="text-xs" style={{ marginTop: 2 }}>
         <span className={`mono ${trade.net_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>

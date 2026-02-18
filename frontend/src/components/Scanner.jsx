@@ -8,6 +8,7 @@ import { useState, useMemo, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
 import SignalDots from './SignalDots'
 import SignalDetail from './SignalDetail'
+import { formatPrice } from '../utils/format'
 import GridDetail from './GridDetail'
 import Spark from './Spark'
 import Tooltip from './Tooltip'
@@ -203,7 +204,7 @@ export default function Scanner({ wsData }) {
                       </div>
                     </td>
                     <td>
-                      {asset.price != null ? Number(asset.price).toFixed(2) : '--'}
+                      {asset.price != null ? formatPrice(asset.price) : '--'}
                     </td>
                     <td>
                       {changePct != null ? (

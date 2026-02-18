@@ -4,6 +4,7 @@
  * Conçu pour être wrappé par CollapsibleCard dans App.jsx.
  */
 import Tooltip from './Tooltip'
+import { formatPrice } from '../utils/format'
 
 export default function ExecutorPanel({ wsData }) {
   const executor = wsData?.executor
@@ -28,7 +29,8 @@ export default function ExecutorPanel({ wsData }) {
 
   const isLive = enabled
   const sessionPnl = rm?.session_pnl ?? 0
-  const balance = rm?.initial_capital
+  // Solde Bitget réel en priorité, fallback sur capital initial configuré
+  const balance = executor.exchange_balance ?? rm?.initial_capital
 
   return (
     <>
@@ -96,9 +98,12 @@ export default function ExecutorPanel({ wsData }) {
           <div className="text-xs muted">
             {positions.length} position{positions.length > 1 ? 's' : ''} ouverte{positions.length > 1 ? 's' : ''}
           </div>
-          {positions.map((pos, idx) => (
-            <PositionCard key={pos.symbol || idx} position={pos} />
-          ))}
+          {positions.map((pos, idx) => {
+            // Symbole spot pour le prix live : BTC/USDT:USDT → BTC/USDT
+            const spotSymbol = (pos.symbol || '').split(':')[0]
+            const currentPrice = wsData?.prices?.[spotSymbol]?.last
+            return <PositionCard key={pos.symbol || idx} position={pos} currentPrice={currentPrice} />
+          })}
         </div>
       )}
 
@@ -119,7 +124,22 @@ ExecutorPanel.getSummary = function(wsData) {
   return executor.enabled ? 'LIVE' : 'OFF'
 }
 
-function PositionCard({ position }) {
+function PositionCard({ position, currentPrice }) {
+  const isLong = position.direction === 'LONG'
+  const leverage = position.leverage ?? null
+  const notional = position.notional ?? null
+  const margin = (notional != null && leverage != null && leverage > 0)
+    ? notional / leverage
+    : null
+
+  // P&L non réalisé
+  let unrealizedPnl = null
+  if (currentPrice != null && position.entry_price != null && position.quantity != null) {
+    unrealizedPnl = isLong
+      ? (currentPrice - position.entry_price) * position.quantity
+      : (position.entry_price - currentPrice) * position.quantity
+  }
+
   return (
     <div className="executor-position">
       <div className="flex-between" style={{ marginBottom: 6 }}>
@@ -130,21 +150,43 @@ function PositionCard({ position }) {
               {position.strategy_name}
             </span>
           )}
-          <span className={`badge ${position.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>
+          {leverage != null && (
+            <span className="badge" style={{ fontSize: 9, padding: '1px 6px', background: 'var(--surface-2)', color: 'var(--text-dim)' }}>
+              x{leverage}
+            </span>
+          )}
+          <span className={`badge ${isLong ? 'badge-long' : 'badge-short'}`}>
             {position.direction}
           </span>
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <PosRow label="Entrée" value={Number(position.entry_price).toFixed(2)} />
+        <PosRow label="Entrée" value={formatPrice(position.entry_price)} />
         {position.sl_price != null && (
-          <PosRow label="Stop Loss" value={Number(position.sl_price).toFixed(2)} color="var(--red)" />
+          <PosRow label="Stop Loss" value={formatPrice(position.sl_price)} color="var(--red)" />
         )}
         {position.tp_price != null && (
-          <PosRow label="Take Profit" value={Number(position.tp_price).toFixed(2)} color="var(--accent)" />
+          <PosRow
+            label="Take Profit"
+            value={position.tp_price === 0 ? 'SMA dynamique' : formatPrice(position.tp_price)}
+            color="var(--accent)"
+          />
         )}
         {position.quantity != null && (
           <PosRow label="Quantité" value={position.quantity} />
+        )}
+        {notional != null && (
+          <PosRow label="Notionnel" value={`${notional.toFixed(2)} USDT`} />
+        )}
+        {margin != null && (
+          <PosRow label="Marge" value={`${margin.toFixed(2)} USDT`} />
+        )}
+        {unrealizedPnl != null && (
+          <PosRow
+            label="P&L latent"
+            value={`${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}$`}
+            color={unrealizedPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
+          />
         )}
       </div>
     </div>

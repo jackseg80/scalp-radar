@@ -4,6 +4,7 @@
  * Affiche positions grid (agrégées par asset) + positions mono (paper/live).
  */
 import { useState } from 'react'
+import { formatPrice } from '../utils/format'
 
 function formatPnl(value) {
   if (value == null) return null
@@ -98,7 +99,7 @@ function GridSummary({ gridState, expandedGrid, onToggle }) {
             <span className="badge" style={{ fontSize: 9, background: 'var(--surface)', color: 'var(--text-dim)' }}>
               {g.levels_open}/{g.levels_max}
             </span>
-            <span className="mono text-xs">avg@ {Number(g.avg_entry).toFixed(2)}</span>
+            <span className="mono text-xs">avg@ {formatPrice(g.avg_entry)}</span>
             <span className={`mono text-xs ${g.unrealized_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
               {g.unrealized_pnl >= 0 ? '+' : ''}{formatPnl(g.unrealized_pnl)}
               <span className="text-xs muted"> ({g.unrealized_pnl_pct >= 0 ? '+' : ''}{g.unrealized_pnl_pct?.toFixed(1)}%)</span>
@@ -126,7 +127,7 @@ function GridSummary({ gridState, expandedGrid, onToggle }) {
                   <span className="badge" style={{ fontSize: 9, background: 'var(--surface)', color: 'var(--text-dim)' }}>
                     Niv.{p.level + 1}
                   </span>
-                  <span className="mono text-xs">@ {Number(p.entry_price).toFixed(2)}</span>
+                  <span className="mono text-xs">@ {formatPrice(p.entry_price)}</span>
                   <span className="text-xs muted">qty: {p.quantity}</span>
                   <span className="text-xs muted">{new Date(p.entry_time).toLocaleString()}</span>
                 </div>
@@ -159,7 +160,7 @@ function PositionRow({ pos, source, currentPrice }) {
       </span>
       <span style={{ fontWeight: 600 }}>{pos.symbol || '--'}</span>
       <span className="text-xs muted">{pos.strategy_name || pos.strategy || ''}</span>
-      <span className="mono text-xs">@ {Number(pos.entry_price).toFixed(2)}</span>
+      <span className="mono text-xs">@ {formatPrice(pos.entry_price)}</span>
       {unrealizedPnl != null && (
         <span className={`mono text-xs ${unrealizedPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
           {unrealizedPnl >= 0 ? '+' : ''}{formatPnl(unrealizedPnl)}

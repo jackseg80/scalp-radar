@@ -1448,7 +1448,10 @@ class Executor:
         pos_info = None
         positions_list: list[dict[str, Any]] = []
 
+        default_leverage = self._config.risk.position.default_leverage
+
         for pos in self._positions.values():
+            notional = pos.entry_price * pos.quantity
             info = {
                 "symbol": pos.symbol,
                 "direction": pos.direction,
@@ -1457,12 +1460,15 @@ class Executor:
                 "sl_price": pos.sl_price,
                 "tp_price": pos.tp_price,
                 "strategy_name": pos.strategy_name,
+                "leverage": default_leverage,
+                "notional": notional,
             }
             positions_list.append(info)
             if pos_info is None:
                 pos_info = info
 
         for gs in self._grid_states.values():
+            notional = gs.avg_entry_price * gs.total_quantity
             info = {
                 "symbol": gs.symbol,
                 "direction": gs.direction,
@@ -1473,6 +1479,8 @@ class Executor:
                 "strategy_name": gs.strategy_name,
                 "type": "grid",
                 "levels": len(gs.positions),
+                "leverage": gs.leverage,
+                "notional": notional,
             }
             positions_list.append(info)
             if pos_info is None:
