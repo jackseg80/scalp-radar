@@ -1592,6 +1592,30 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Fichiers modifiés** : 12 fichiers (config.py, grid_range_atr.py, factory.py, __init__.py, indicator_cache.py, fast_multi_backtest.py, walk_forward.py, multi_engine.py, strategies.yaml, param_grids.yaml, test_grid_range_atr.py, test_fast_engine_refactor.py)
 
+### Sprint 31 — Log Viewer (mini-feed WS + onglet terminal) ✅
+
+**But** : Rendre les logs backend visibles depuis le dashboard web, sans SSH. Deux vues : mini-feed sidebar temps réel (WARNING/ERROR via WebSocket) et onglet complet "Logs" style terminal Linux (polling HTTP).
+
+**Changements backend** :
+
+- `log_routes.py` : NOUVEAU — endpoint `GET /api/logs` avec lecture inversée par chunks (8KB), filtres `level`/`search`/`module`/`since`, guard 10MB max, retourne JSON structuré
+- `logging_setup.py` : sink loguru `_ws_log_sink()` capture WARNING+ et push vers subscribers WS via `asyncio.Queue.put_nowait()` (thread-safe), buffer circulaire `deque(maxlen=20)`, fonctions `subscribe_logs()`/`unsubscribe_logs()`/`get_log_buffer()`
+- `websocket_routes.py` : boucle WS refactorisée — `asyncio.wait_for(queue.get(), timeout=remaining)` remplace `sleep(3)`, log alerts envoyés instantanément via `{"type": "log_alert", "entry": {...}}`, buffer initial au connect
+- `server.py` : include `log_router`
+
+**Changements frontend** :
+
+- `useWebSocket.js` : dispatch par `data.type` — `lastUpdate` (type=update), `lastEvent` (optimization/portfolio progress), `logAlerts` (array accumulé max 50). **Corrige un bug latent** : les messages non-update écrasaient brièvement `wsData`
+- `App.jsx` : onglet Logs, wiring `logAlerts`/`lastEvent`, compteur `unseenLogErrors` (reset au clic onglet)
+- `Header.jsx` : badge rouge sur l'onglet Logs si erreurs non vues
+- `ExplorerPage.jsx` + `PortfolioPage.jsx` : migration vers `lastEvent` prop
+- `LogMini.jsx` : NOUVEAU — mini-feed sidebar (20 dernières alertes, pastilles couleur, clic → onglet Logs)
+- `LogViewer.jsx` + `LogViewer.css` : NOUVEAU — terminal noir (#0a0a0a), couleurs ANSI par niveau, auto-scroll tail -f, barre filtres (niveaux toggle, grep, module, auto-refresh 5s), expand détail au clic, max 500 lignes
+
+**Tests** : 19 nouveaux (8 endpoint HTTP + 11 sink WS), 1236 tests au total, 0 régression.
+
+**Fichiers** : 5 créés, 7 modifiés, 2 fichiers tests.
+
 ### Sprint 27 (futur) — Monitoring & Alertes V2
 
 **But** : Surveillance avancée et rapports automatiques.
@@ -1674,16 +1698,17 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1198 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30**
-- **Phase 6 en cours** — Sprint 30 (Multi-Timeframe Support) terminé
+- **1236 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31**
+- **Phase 6 en cours** — Sprint 31 (Log Viewer) terminé
 - **14 stratégies** : 4 scalp 5m + 3 swing 1h + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
-- **Frontend complet** : 6 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives) avec persistance localStorage (onglet actif + paramètres de chaque page survivent au refresh)
+- **Frontend complet** : 7 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives, Logs) avec persistance localStorage (onglet actif + paramètres de chaque page survivent au refresh)
+- **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Prochaine étape** : Déploiement live progressif (capital minimal, selector_bypass_at_boot=true)
 

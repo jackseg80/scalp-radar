@@ -22,7 +22,7 @@ const STATUS_COLORS = {
   cancelled: '#6b7280',
 }
 
-export default function ExplorerPage({ wsData }) {
+export default function ExplorerPage({ wsData, lastEvent }) {
   // États persistés (sélections utilisateur)
   const [strategy, setStrategy] = usePersistedState('explorer-strategy', '')
   const [asset, setAsset] = usePersistedState('explorer-asset', '')
@@ -254,27 +254,27 @@ export default function ExplorerPage({ wsData }) {
 
   // Écouter les updates WebSocket pour mettre à jour les jobs en temps réel
   useEffect(() => {
-    if (wsData?.type === 'optimization_progress') {
+    if (lastEvent?.type === 'optimization_progress') {
       setJobs((prev) =>
         prev.map((j) =>
-          j.id === wsData.job_id
+          j.id === lastEvent.job_id
             ? {
                 ...j,
-                status: wsData.status,
-                progress_pct: wsData.progress_pct,
-                current_phase: wsData.current_phase,
+                status: lastEvent.status,
+                progress_pct: lastEvent.progress_pct,
+                current_phase: lastEvent.current_phase,
               }
             : j
         )
       )
 
       // Si le job est completed, recharger les runs + jobs + heatmap
-      if (wsData.status === 'completed') {
+      if (lastEvent.status === 'completed') {
         fetchJobs()
         fetchAvailableRuns()  // Rafraîchir la liste des runs et auto-sélectionner le nouveau
       }
     }
-  }, [wsData])
+  }, [lastEvent])
 
   const fetchJobs = async () => {
     try {

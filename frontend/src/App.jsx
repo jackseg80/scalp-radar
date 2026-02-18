@@ -6,11 +6,13 @@ import RiskCalc from './components/RiskCalc'
 import ResearchPage from './components/ResearchPage'
 import ExplorerPage from './components/ExplorerPage'
 import PortfolioPage from './components/PortfolioPage'
+import LogViewer from './components/LogViewer'
 import CollapsibleCard from './components/CollapsibleCard'
 import ExecutorPanel from './components/ExecutorPanel'
 import SessionStats from './components/SessionStats'
 import EquityCurve from './components/EquityCurve'
 import ActivityFeed from './components/ActivityFeed'
+import LogMini from './components/LogMini'
 import TradeHistory from './components/TradeHistory'
 import ArenaRankingMini from './components/ArenaRankingMini'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -24,6 +26,7 @@ const TABS = [
   { id: 'research', label: 'Recherche' },
   { id: 'explorer', label: 'Explorer' },
   { id: 'portfolio', label: 'Portfolio' },
+  { id: 'logs', label: 'Logs' },
 ]
 
 const SIDEBAR_MIN = 280
@@ -41,22 +44,40 @@ function loadSidebarWidth() {
 
 function loadActiveTab() {
   const saved = localStorage.getItem('scalp-radar-active-tab')
-  const validTabs = ['scanner', 'heatmap', 'risk', 'research', 'explorer', 'portfolio']
+  const validTabs = ['scanner', 'heatmap', 'risk', 'research', 'explorer', 'portfolio', 'logs']
   if (saved && validTabs.includes(saved)) return saved
   return 'scanner'
 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState(loadActiveTab)
-  const { lastMessage, connected } = useWebSocket(wsUrl)
+  const { lastUpdate, lastEvent, logAlerts, connected } = useWebSocket(wsUrl)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
+  const [unseenLogErrors, setUnseenLogErrors] = useState(0)
   const dragging = useRef(false)
   const containerRef = useRef(null)
+  const prevLogCountRef = useRef(0)
 
   // Sauvegarder l'onglet actif dans localStorage
   useEffect(() => {
     localStorage.setItem('scalp-radar-active-tab', activeTab)
   }, [activeTab])
+
+  // Compter les erreurs non vues quand on n'est pas sur l'onglet Logs
+  useEffect(() => {
+    if (logAlerts.length > prevLogCountRef.current && activeTab !== 'logs') {
+      setUnseenLogErrors(prev => prev + (logAlerts.length - prevLogCountRef.current))
+    }
+    prevLogCountRef.current = logAlerts.length
+  }, [logAlerts.length, activeTab])
+
+  // Reset au clic sur l'onglet Logs
+  const handleTabChange = useCallback((tab) => {
+    setActiveTab(tab)
+    if (tab === 'logs') {
+      setUnseenLogErrors(0)
+    }
+  }, [])
 
   // Resize handler
   const onMouseDown = useCallback((e) => {
@@ -99,11 +120,12 @@ export default function App() {
   }, [])
 
   // Summaries pour les sections collapsibles
-  const wsData = lastMessage
+  const wsData = lastUpdate
   const killSwitch = wsData?.kill_switch || false
   const simSummary = SessionStats.getSummary(wsData)
   const execSummary = ExecutorPanel.getSummary(wsData)
   const arenaSummary = ArenaRankingMini.getSummary(wsData)
+  const logSummary = LogMini.getSummary(logAlerts)
   const tradeCount = wsData?.strategies
     ? Object.values(wsData.strategies).reduce((sum, s) => sum + (s.total_trades || 0), 0)
     : 0
@@ -114,7 +136,8 @@ export default function App() {
         wsConnected={connected}
         tabs={TABS}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
+        unseenLogErrors={unseenLogErrors}
       />
       <div
         className="main-grid"
@@ -126,8 +149,9 @@ export default function App() {
           {activeTab === 'heatmap' && <Heatmap />}
           {activeTab === 'risk' && <RiskCalc />}
           {activeTab === 'research' && <ResearchPage />}
-          {activeTab === 'explorer' && <ExplorerPage wsData={wsData} />}
-          {activeTab === 'portfolio' && <PortfolioPage wsData={wsData} />}
+          {activeTab === 'explorer' && <ExplorerPage wsData={wsData} lastEvent={lastEvent} />}
+          {activeTab === 'portfolio' && <PortfolioPage wsData={wsData} lastEvent={lastEvent} />}
+          {activeTab === 'logs' && <LogViewer />}
         </div>
 
         <div className="resize-handle" onMouseDown={onMouseDown} />
@@ -166,6 +190,15 @@ export default function App() {
             storageKey="activity"
           >
             <ActivityFeed wsData={wsData} />
+          </CollapsibleCard>
+
+          <CollapsibleCard
+            title="Log Alerts"
+            summary={logSummary}
+            defaultOpen={true}
+            storageKey="log-alerts"
+          >
+            <LogMini logAlerts={logAlerts} onTabChange={handleTabChange} />
           </CollapsibleCard>
 
           <CollapsibleCard

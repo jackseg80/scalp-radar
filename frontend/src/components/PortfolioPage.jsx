@@ -85,7 +85,7 @@ function AssetTable({ data }) {
 
 // ─── Page principale ────────────────────────────────────────────────────
 
-export default function PortfolioPage({ wsData }) {
+export default function PortfolioPage({ wsData, lastEvent }) {
   // Presets
   const { data: presetsData } = useApi('/api/portfolio/presets')
   const presets = presetsData?.presets || []
@@ -172,26 +172,26 @@ export default function PortfolioPage({ wsData }) {
     return () => { cancelled = true }
   }, [compareIds])
 
-  // WebSocket progress
+  // WebSocket progress (via lastEvent, séparé de wsData type=update)
   useEffect(() => {
-    if (!wsData) return
-    if (wsData.type === 'portfolio_progress') {
+    if (!lastEvent) return
+    if (lastEvent.type === 'portfolio_progress') {
       setIsRunning(true)
-      setProgress(wsData.progress_pct || 0)
-      setProgressPhase(wsData.phase || '')
+      setProgress(lastEvent.progress_pct || 0)
+      setProgressPhase(lastEvent.phase || '')
     }
-    if (wsData.type === 'portfolio_completed') {
+    if (lastEvent.type === 'portfolio_completed') {
       setIsRunning(false)
       setProgress(100)
       fetchBacktests()
       // Auto-sélectionner le nouveau run
-      if (wsData.result_id) setSelectedId(wsData.result_id)
+      if (lastEvent.result_id) setSelectedId(lastEvent.result_id)
     }
-    if (wsData.type === 'portfolio_failed') {
+    if (lastEvent.type === 'portfolio_failed') {
       setIsRunning(false)
       setProgress(0)
     }
-  }, [wsData, fetchBacktests])
+  }, [lastEvent, fetchBacktests])
 
   // Appliquer un preset
   const applyPreset = useCallback((preset) => {

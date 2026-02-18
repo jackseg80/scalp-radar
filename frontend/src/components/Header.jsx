@@ -1,7 +1,7 @@
 import { useApi } from '../hooks/useApi'
 import Tooltip from './Tooltip'
 
-export default function Header({ wsConnected, tabs, activeTab, onTabChange }) {
+export default function Header({ wsConnected, tabs, activeTab, onTabChange, unseenLogErrors = 0 }) {
   const { data } = useApi('/health', 10000)
 
   const engineOk = data?.data_engine?.connected
@@ -20,8 +20,30 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange }) {
               key={t.id}
               className={`tab ${activeTab === t.id ? 'active' : ''}`}
               onClick={() => onTabChange(t.id)}
+              style={{ position: 'relative' }}
             >
               {t.label}
+              {t.id === 'logs' && unseenLogErrors > 0 && (
+                <span style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -4,
+                  minWidth: 14,
+                  height: 14,
+                  borderRadius: 7,
+                  background: 'var(--red)',
+                  color: '#fff',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '0 3px',
+                  lineHeight: 1,
+                }}>
+                  {unseenLogErrors > 99 ? '99+' : unseenLogErrors}
+                </span>
+              )}
             </button>
           ))}
         </div>
