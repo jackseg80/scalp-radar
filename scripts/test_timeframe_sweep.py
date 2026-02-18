@@ -4,6 +4,7 @@ Usage :
   uv run python -m scripts.test_timeframe_sweep --symbol BTC/USDT --days 730
   uv run python -m scripts.test_timeframe_sweep --symbol BTC/USDT --days 730 --strategy envelope_dca
   uv run python -m scripts.test_timeframe_sweep --symbol DOGE/USDT --days 365 --strategy grid_trend
+  uv run python -m scripts.test_timeframe_sweep --symbol BTC/USDT --days 365 --strategy grid_range_atr
 """
 
 from __future__ import annotations
@@ -27,9 +28,10 @@ from backend.optimization.indicator_cache import build_cache, resample_candles
 
 # ─── Stratégies supportées ────────────────────────────────────────────────
 
-# Stratégies compatibles multi-TF (exclues : grid_multi_tf, grid_funding, grid_range_atr)
+# Stratégies compatibles multi-TF (exclues : grid_multi_tf, grid_funding)
 SUPPORTED_STRATEGIES = {
     "grid_atr", "envelope_dca", "envelope_dca_short", "grid_trend",
+    "grid_range_atr",
 }
 
 TIMEFRAMES = ["1h", "4h", "1d"]
@@ -40,6 +42,7 @@ _INDICATOR_KEYS: dict[str, list[str]] = {
     "envelope_dca": ["ma_period"],
     "envelope_dca_short": ["ma_period"],
     "grid_trend": ["ema_fast", "ema_slow", "adx_period", "atr_period"],
+    "grid_range_atr": ["ma_period", "atr_period"],
 }
 
 
@@ -230,6 +233,8 @@ def run(args: argparse.Namespace) -> None:
             trade_pnls, _, _ = fmb._simulate_envelope_dca(cache, params, bt_config, direction=-1)
         elif strategy_name == "grid_trend":
             trade_pnls, _, _ = fmb._simulate_grid_trend(cache, params, bt_config)
+        elif strategy_name == "grid_range_atr":
+            trade_pnls, _, _ = fmb._simulate_grid_range(cache, params, bt_config)
 
         wins = sum(1 for p in trade_pnls if p > 0)
         wr = (wins / len(trade_pnls) * 100) if trade_pnls else 0.0
