@@ -68,6 +68,7 @@ class LivePosition:
     strategy_name: str = ""
     sl_price: float = 0.0
     tp_price: float = 0.0
+    entry_fee: float = 0.0  # Fee réelle Bitget en USDT (Hotfix 34)
 
 
 @dataclass
@@ -79,6 +80,7 @@ class GridLivePosition:
     quantity: float
     entry_order_id: str
     entry_time: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    entry_fee: float = 0.0  # Fee réelle Bitget en USDT (Hotfix 34)
 
 
 @dataclass
@@ -109,6 +111,11 @@ class GridLiveState:
             return 0.0
         total_notional = sum(p.quantity * p.entry_price for p in self.positions)
         return total_notional / self.total_quantity
+
+    @property
+    def total_entry_fees(self) -> float:
+        """Somme des fees d'entrée réelles de tous les niveaux (Hotfix 34)."""
+        return sum(p.entry_fee for p in self.positions)
 
 
 # ─── MAPPING SYMBOLES ─────────────────────────────────────────────────────
@@ -489,11 +496,30 @@ class Executor:
 
         entry_order_id = entry_order.get("id", "")
         filled_qty = float(entry_order.get("filled") or quantity)
-        avg_price = float(entry_order.get("average") or event.entry_price)
+
+        # Hotfix 34 : prix de fill réel Bitget (pas paper)
+        avg_price_raw = entry_order.get("average")
+        entry_fee = 0.0
+        if avg_price_raw and float(avg_price_raw) > 0:
+            avg_price = float(avg_price_raw)
+            fee_info = entry_order.get("fee") or {}
+            entry_fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
+        else:
+            avg_price, fetched_fee = await self._fetch_fill_price(
+                entry_order_id, futures_sym, event.entry_price,
+            )
+            entry_fee = fetched_fee if fetched_fee is not None else 0.0
 
         if filled_qty <= 0:
             logger.error("Executor: ordre d'entrée non rempli")
             return
+
+        if avg_price != event.entry_price and event.entry_price > 0:
+            slippage = (avg_price - event.entry_price) / event.entry_price * 100
+            logger.info(
+                "Executor: entry slippage {} {:.4f}% (paper={:.6f}, real={:.6f})",
+                futures_sym, slippage, event.entry_price, avg_price,
+            )
 
         logger.info(
             "Executor: ENTRY {} {} {:.6f} @ {:.2f} (order={})",
@@ -551,6 +577,7 @@ class Executor:
             strategy_name=event.strategy_name,
             sl_price=sl_price,
             tp_price=tp_price,
+            entry_fee=entry_fee,
         )
 
         self._risk_manager.register_position({
@@ -704,12 +731,31 @@ class Executor:
             return
 
         filled_qty = float(entry_order.get("filled") or quantity)
-        avg_price = float(entry_order.get("average") or event.entry_price)
         order_id = entry_order.get("id", "")
+
+        # Hotfix 34 : prix de fill réel Bitget (pas paper)
+        avg_price_raw = entry_order.get("average")
+        entry_fee = 0.0
+        if avg_price_raw and float(avg_price_raw) > 0:
+            avg_price = float(avg_price_raw)
+            fee_info = entry_order.get("fee") or {}
+            entry_fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
+        else:
+            avg_price, fetched_fee = await self._fetch_fill_price(
+                order_id, futures_sym, event.entry_price,
+            )
+            entry_fee = fetched_fee if fetched_fee is not None else 0.0
 
         if filled_qty <= 0:
             logger.error("Executor: grid entry non remplie")
             return
+
+        if avg_price != event.entry_price and event.entry_price > 0:
+            slippage = (avg_price - event.entry_price) / event.entry_price * 100
+            logger.info(
+                "Executor: grid entry slippage {} {:.4f}% (paper={:.6f}, real={:.6f})",
+                futures_sym, slippage, event.entry_price, avg_price,
+            )
 
         # Créer ou mettre à jour GridLiveState
         if is_first_level:
@@ -737,6 +783,7 @@ class Executor:
             entry_price=avg_price,
             quantity=filled_qty,
             entry_order_id=order_id,
+            entry_fee=entry_fee,
         ))
 
         # Rate limiting (comme _open_position)
@@ -852,9 +899,17 @@ class Executor:
                     params={"reduceOnly": True},
                 )
                 self._record_order("close", futures_sym, close_side, state.total_quantity, close_order, state.strategy_name, "grid_cycle")
-                exit_price = float(
-                    close_order.get("average") or event.exit_price or 0,
-                )
+                # Hotfix 34 : prix de fill réel + fees
+                exit_price_raw = close_order.get("average")
+                exit_fee: float | None = None
+                if exit_price_raw and float(exit_price_raw) > 0:
+                    exit_price = float(exit_price_raw)
+                    fee_info = close_order.get("fee") or {}
+                    exit_fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else None
+                else:
+                    exit_price, exit_fee = await self._fetch_fill_price(
+                        close_order.get("id", ""), futures_sym, event.exit_price or 0,
+                    )
             except Exception as e:
                 logger.error("Executor: échec close grid {}: {}", futures_sym, e)
                 self._risk_manager.unregister_position(futures_sym)
@@ -862,11 +917,18 @@ class Executor:
                 return
         else:
             exit_price = event.exit_price or state.sl_price
+            exit_fee = None  # SL exécuté par exchange, fee gérée par handler
 
-        # 3. P&L net (via méthode existante, inclut fees)
-        net_pnl = self._calculate_pnl(
-            state.direction, state.avg_entry_price, exit_price, state.total_quantity,
-        )
+        # 3. P&L net — fees réelles si disponibles (Hotfix 34)
+        if exit_fee is not None:
+            net_pnl = self._calculate_real_pnl(
+                state.direction, state.avg_entry_price, exit_price,
+                state.total_quantity, state.total_entry_fees, exit_fee,
+            )
+        else:
+            net_pnl = self._calculate_pnl(
+                state.direction, state.avg_entry_price, exit_price, state.total_quantity,
+            )
 
         # 4. RiskManager
         from backend.execution.risk_manager import LiveTradeResult
@@ -900,11 +962,19 @@ class Executor:
 
     async def _handle_grid_sl_executed(
         self, futures_sym: str, state: GridLiveState, exit_price: float,
+        exit_fee: float | None = None,
     ) -> None:
         """Traite l'exécution du SL grid par Bitget (watchOrders ou polling)."""
-        net_pnl = self._calculate_pnl(
-            state.direction, state.avg_entry_price, exit_price, state.total_quantity,
-        )
+        # Hotfix 34 : fees réelles si disponibles
+        if exit_fee is not None:
+            net_pnl = self._calculate_real_pnl(
+                state.direction, state.avg_entry_price, exit_price,
+                state.total_quantity, state.total_entry_fees, exit_fee,
+            )
+        else:
+            net_pnl = self._calculate_pnl(
+                state.direction, state.avg_entry_price, exit_price, state.total_quantity,
+            )
 
         from backend.execution.risk_manager import LiveTradeResult
 
@@ -951,15 +1021,31 @@ class Executor:
                 params={"reduceOnly": True},
             )
             self._record_order("close", futures_sym, close_side, pos.quantity, close_order, event.strategy_name, f"mono_{event.exit_reason or 'unknown'}")
-            exit_price = float(close_order.get("average") or event.exit_price or 0)
+            # Hotfix 34 : prix de fill réel + fees
+            exit_price_raw = close_order.get("average")
+            exit_fee: float | None = None
+            if exit_price_raw and float(exit_price_raw) > 0:
+                exit_price = float(exit_price_raw)
+                fee_info = close_order.get("fee") or {}
+                exit_fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else None
+            else:
+                exit_price, exit_fee = await self._fetch_fill_price(
+                    close_order.get("id", ""), futures_sym, event.exit_price or 0,
+                )
         except Exception as e:
             logger.error("Executor: échec close market: {}", e)
             return
 
-        # 3. Calculer P&L
-        net_pnl = self._calculate_pnl(
-            pos.direction, pos.entry_price, exit_price, pos.quantity,
-        )
+        # 3. Calculer P&L — fees réelles si disponibles (Hotfix 34)
+        if exit_fee is not None:
+            net_pnl = self._calculate_real_pnl(
+                pos.direction, pos.entry_price, exit_price,
+                pos.quantity, pos.entry_fee, exit_fee,
+            )
+        else:
+            net_pnl = self._calculate_pnl(
+                pos.direction, pos.entry_price, exit_price, pos.quantity,
+            )
 
         logger.info(
             "Executor: CLOSE {} {} @ {:.2f} net={:+.2f} ({})",
@@ -1036,6 +1122,14 @@ class Executor:
         if status not in ("closed", "filled"):
             return
 
+        # Hotfix 34 : extraire fee du WS push
+        fee_info = order.get("fee") or {}
+        exit_fee: float | None = (
+            float(fee_info.get("cost") or 0)
+            if fee_info.get("cost") is not None
+            else None
+        )
+
         # Scanner toutes les positions pour matcher l'order_id
         for symbol, pos in list(self._positions.items()):
             exit_reason = ""
@@ -1047,7 +1141,16 @@ class Executor:
                 continue
 
             exit_price = float(order.get("average") or order.get("price") or 0)
-            await self._handle_exchange_close(symbol, exit_price, exit_reason)
+
+            # Si fee absente du WS push (fréquent pour trigger orders Bitget), fetch le fill
+            if exit_fee is None or exit_fee == 0:
+                _, fetched_fee = await self._fetch_fill_price(
+                    order_id, symbol, exit_price,
+                )
+                if fetched_fee is not None:
+                    exit_fee = fetched_fee
+
+            await self._handle_exchange_close(symbol, exit_price, exit_reason, exit_fee)
             return
 
         # Scanner les grid states pour SL match
@@ -1056,7 +1159,18 @@ class Executor:
                 exit_price = float(
                     order.get("average") or order.get("price") or grid_state.sl_price,
                 )
-                await self._handle_grid_sl_executed(futures_sym, grid_state, exit_price)
+
+                # Si fee absente du WS push, fetch le fill
+                if exit_fee is None or exit_fee == 0:
+                    _, fetched_fee = await self._fetch_fill_price(
+                        order_id, futures_sym, exit_price,
+                    )
+                    if fetched_fee is not None:
+                        exit_fee = fetched_fee
+
+                await self._handle_grid_sl_executed(
+                    futures_sym, grid_state, exit_price, exit_fee,
+                )
                 return
 
         # Ordre non matché — log debug (ordres d'autres systèmes sur le sous-compte)
@@ -1083,7 +1197,10 @@ class Executor:
                 logger.warning("Executor: erreur polling: {}", e)
 
     async def _check_position_still_open(self, symbol: str) -> None:
-        """Vérifie si une position est toujours ouverte sur l'exchange."""
+        """Vérifie si une position est toujours ouverte sur l'exchange.
+
+        TODO Hotfix 34 : extraire fees depuis fetch_my_trades dans le polling.
+        """
         pos = self._positions.get(symbol)
         if pos is None:
             return
@@ -1105,7 +1222,10 @@ class Executor:
             await self._handle_exchange_close(symbol, exit_price, exit_reason)
 
     async def _check_grid_still_open(self, symbol: str) -> None:
-        """Vérifie si la position grid est toujours ouverte sur l'exchange."""
+        """Vérifie si la position grid est toujours ouverte sur l'exchange.
+
+        TODO Hotfix 34 : extraire fees depuis fetch_my_trades dans le polling.
+        """
         state = self._grid_states.get(symbol)
         if state is None:
             return
@@ -1122,6 +1242,7 @@ class Executor:
 
     async def _handle_exchange_close(
         self, symbol: str, exit_price: float, exit_reason: str,
+        exit_fee: float | None = None,
     ) -> None:
         """Traite la fermeture d'une position par l'exchange (TP/SL hit)."""
         pos = self._positions.get(symbol)
@@ -1131,9 +1252,16 @@ class Executor:
         # Annuler l'autre ordre (si SL hit, annuler TP et vice-versa)
         await self._cancel_pending_orders(symbol)
 
-        net_pnl = self._calculate_pnl(
-            pos.direction, pos.entry_price, exit_price, pos.quantity,
-        )
+        # Hotfix 34 : fees réelles si disponibles
+        if exit_fee is not None:
+            net_pnl = self._calculate_real_pnl(
+                pos.direction, pos.entry_price, exit_price,
+                pos.quantity, pos.entry_fee, exit_fee,
+            )
+        else:
+            net_pnl = self._calculate_pnl(
+                pos.direction, pos.entry_price, exit_price, pos.quantity,
+            )
 
         logger.info(
             "Executor: EXCHANGE CLOSE {} {} @ {:.2f} net={:+.2f} ({})",
@@ -1396,6 +1524,62 @@ class Executor:
 
         return 0.0
 
+    async def _fetch_fill_price(
+        self,
+        order_id: str,
+        symbol: str,
+        fallback_price: float,
+    ) -> tuple[float, float | None]:
+        """Récupère le prix de fill réel et la fee depuis Bitget (Hotfix 34).
+
+        Stratégie :
+        1. fetch_order(order_id) → order.average + order.fee.cost
+        2. Fallback : fetch_my_trades(symbol) filtré par order_id
+        3. Dernier recours : (fallback_price, None)
+
+        Returns:
+            (avg_price, total_fee) — fee=float si données réelles, None si fallback.
+        """
+        # 1. fetch_order (souvent suffisant après quelques ms)
+        if order_id:
+            try:
+                order = await self._exchange.fetch_order(order_id, symbol)
+                avg = order.get("average")
+                if avg and float(avg) > 0:
+                    fee_info = order.get("fee") or {}
+                    fee_cost = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else None
+                    return float(avg), fee_cost
+            except Exception as e:
+                logger.debug("Executor: fetch_order {} échoué: {}", order_id, e)
+
+        # 2. fetch_my_trades (fallback, laisser le fill se propager)
+        await asyncio.sleep(0.3)
+        if order_id:
+            try:
+                trades = await self._exchange.fetch_my_trades(symbol, limit=10)
+                matched = [t for t in trades if t.get("order") == order_id]
+                if matched:
+                    total_qty = sum(float(t.get("amount", 0)) for t in matched)
+                    total_cost = sum(
+                        float(t.get("price", 0)) * float(t.get("amount", 0))
+                        for t in matched
+                    )
+                    total_fee = sum(
+                        float((t.get("fee") or {}).get("cost") or 0)
+                        for t in matched
+                    )
+                    if total_qty > 0:
+                        return total_cost / total_qty, total_fee
+            except Exception as e:
+                logger.debug("Executor: fetch_my_trades {} échoué: {}", symbol, e)
+
+        # 3. Fallback paper price — fee=None signale l'absence de données réelles
+        logger.warning(
+            "Executor: FALLBACK prix paper pour {} order={} (fill Bitget indisponible)",
+            symbol, order_id,
+        )
+        return fallback_price, None
+
     async def _determine_exit_reason(self, symbol: str) -> str:
         """Détermine la raison de fermeture (SL ou TP) depuis les ordres."""
         pos = self._positions.get(symbol)
@@ -1477,6 +1661,26 @@ class Executor:
         exit_fee = quantity * exit_price * taker_fee
         return gross - entry_fee - exit_fee
 
+    def _calculate_real_pnl(
+        self,
+        direction: str,
+        entry_price: float,
+        exit_price: float,
+        quantity: float,
+        entry_fees: float,
+        exit_fees: float,
+    ) -> float:
+        """P&L net avec fees réelles Bitget (absolues en USDT, Hotfix 34).
+
+        Utilise les fees retournées par fetch_order/fetch_my_trades.
+        Ne remplace PAS _calculate_pnl() qui reste le fallback pour la réconciliation.
+        """
+        if direction == "LONG":
+            gross = (exit_price - entry_price) * quantity
+        else:
+            gross = (entry_price - exit_price) * quantity
+        return gross - entry_fees - exit_fees
+
     # ─── Status ────────────────────────────────────────────────────────
 
     def get_status(self) -> dict[str, Any]:
@@ -1553,6 +1757,7 @@ class Executor:
                 "strategy_name": pos.strategy_name,
                 "sl_price": pos.sl_price,
                 "tp_price": pos.tp_price,
+                "entry_fee": pos.entry_fee,
             }
 
         grid_states_data: dict[str, dict[str, Any]] = {}
@@ -1572,6 +1777,7 @@ class Executor:
                         "quantity": p.quantity,
                         "entry_order_id": p.entry_order_id,
                         "entry_time": p.entry_time.isoformat(),
+                        "entry_fee": p.entry_fee,
                     }
                     for p in gs.positions
                 ],
@@ -1633,6 +1839,7 @@ class Executor:
                         quantity=p["quantity"],
                         entry_order_id=p["entry_order_id"],
                         entry_time=datetime.fromisoformat(p["entry_time"]),
+                        entry_fee=p.get("entry_fee", 0.0),
                     )
                     for p in gs_data.get("positions", [])
                 ],
@@ -1686,4 +1893,5 @@ class Executor:
             strategy_name=pos_data.get("strategy_name", ""),
             sl_price=pos_data.get("sl_price", 0),
             tp_price=pos_data.get("tp_price", 0),
+            entry_fee=pos_data.get("entry_fee", 0.0),
         )

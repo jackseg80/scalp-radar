@@ -1703,6 +1703,33 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Tests** : 1309 tests, 0 régression.
 
+### Hotfix 34 — Executor P&L basé sur les fills réels Bitget ✅
+
+**But** : Premier jour de live (18 fév 2026) — l'Executor surestimait le P&L de +147% (session_pnl affiché +7.37$ vs Bitget réel +2.98$). Le kill switch était aveugle car basé sur ce P&L faux.
+
+**Cause racine (3 bugs)** :
+
+1. **Exit/Entry price fallback paper** — quand Bitget retourne `average=None` (fréquent sur market orders), fallback sur `event.exit_price`/`event.entry_price` = prix du Simulator
+2. **Fees estimées** — `_calculate_pnl()` utilisait `taker_percent` config (0.06%), jamais les fees réelles
+3. **Pas de tracking fees entry** — `LivePosition`/`GridLivePosition` n'avaient pas de champ `entry_fee`
+
+**Fonctionnalités** :
+
+- **`_fetch_fill_price(order_id, symbol, fallback)`** : fetch le vrai fill via `fetch_order()` puis `fetch_my_trades()` comme fallback. Retourne `(avg_price, fee: float | None)` — `None` si tout échoue (fallback paper + WARNING)
+- **`_calculate_real_pnl()`** : P&L avec fees absolues réelles en USDT. Ne remplace PAS `_calculate_pnl()` (conservé pour réconciliation et estimations)
+- **Entries** : `_open_position` et `_open_grid_position` utilisent le vrai fill si `average=None`, log le slippage
+- **Exits** : `_close_grid_cycle` et `_close_position` utilisent le vrai fill + `_calculate_real_pnl()` si fees disponibles
+- **Handlers** : `_handle_grid_sl_executed` et `_handle_exchange_close` reçoivent `exit_fee: float | None = None`. `_process_watched_order` extrait le fee du WS push et appelle `_fetch_fill_price` si absent (fréquent pour trigger orders Bitget)
+- **Persistence** : `entry_fee` ajouté dans `get_state_for_persistence()` et `restore_positions()` (backward compat `.get("entry_fee", 0.0)`)
+- **TODO** : polling (`_check_position_still_open`, `_check_grid_still_open`) conserve `_calculate_pnl()` estimé — amélioration future
+
+**Changements** :
+
+- `executor.py` : `LivePosition.entry_fee`, `GridLivePosition.entry_fee`, `GridLiveState.total_entry_fees` (property), `_fetch_fill_price()`, `_calculate_real_pnl()`, modification de 6 méthodes open/close/SL/exchange_close, persistence round-trip
+- `tests/test_executor_real_pnl.py` : NOUVEAU — 17 tests (fetch_fill_price, real_pnl, entries, exits, watched orders, persistence, dataclasses)
+
+**Tests** : 17 nouveaux, **1339 tests** au total, 0 régression.
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -1813,9 +1840,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1309 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33**
-- **Phase 6 en cours** — Sprint 33 (Grid BolTrend, 16e stratégie) terminé
+- **1339 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 34**
+- **Phase 6 en cours** — Hotfix 34 (Executor P&L fills réels Bitget) terminé
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
