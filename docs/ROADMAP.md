@@ -1789,6 +1789,14 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Tests** : 14 nouveaux, **1353 tests** au total, 0 régression.
 
+### Hotfix UI — Layout 2 colonnes ActivePositions ✅
+
+**But** : Améliorer la lisibilité du bandeau "Positions actives" quand paper trading et live coexistent — les positions PAPER et LIVE s'empilaient dans une seule colonne, impossible de distinguer d'un coup d'œil.
+
+**Changement** : Layout CSS Grid 2 colonnes — colonne gauche **PAPER** (grilles DCA + positions mono simulator), colonne droite **LIVE** (positions executor Bitget). Responsive : ≤900px → 1 colonne. Headers "PAPER" / "LIVE" (en vert) séparent visuellement les deux contextes.
+
+**Fichiers** : `frontend/src/components/ActivePositions.jsx`, `frontend/src/styles.css`.
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -1897,11 +1905,11 @@ Phase 5: Scaling Stratégies     ✅
 
 ---
 
-## ÉTAT ACTUEL (18 février 2026)
+## ÉTAT ACTUEL (19 février 2026)
 
 - **1353 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35**
-- **Phase 6 en cours** — Hotfix 35 (stabilité restart live : cooldown post-warmup, max_live_grids, sauvegarde périodique executor) terminé
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI**
+- **Phase 6 en cours** — Hotfix UI (layout 2 colonnes PAPER/LIVE dans ActivePositions) terminé
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j

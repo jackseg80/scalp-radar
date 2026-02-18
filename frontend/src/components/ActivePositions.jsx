@@ -26,7 +26,9 @@ export default function ActivePositions({ wsData }) {
   const monoSimPositions = simPositions.filter(p => p.type !== 'grid')
 
   const hasGrids = gridState?.summary?.total_positions > 0
-  const hasPositions = monoSimPositions.length > 0 || execPositions.length > 0 || hasGrids
+  const hasPaper = monoSimPositions.length > 0 || hasGrids
+  const hasLive = execPositions.length > 0
+  const hasPositions = hasPaper || hasLive
 
   return (
     <div className="active-positions-banner">
@@ -40,24 +42,36 @@ export default function ActivePositions({ wsData }) {
         </div>
       )}
 
-      {/* Résumé grid DCA */}
-      {hasGrids && (
-        <GridSummary
-          gridState={gridState}
-          expandedGrid={expandedGrid}
-          onToggle={(symbol) => setExpandedGrid(prev => prev === symbol ? null : symbol)}
-        />
+      {hasPositions && (
+        <div className="positions-columns">
+          {/* Colonne PAPER */}
+          {hasPaper && (
+            <div className="positions-col">
+              <div className="positions-col-header">PAPER</div>
+              {hasGrids && (
+                <GridSummary
+                  gridState={gridState}
+                  expandedGrid={expandedGrid}
+                  onToggle={(symbol) => setExpandedGrid(prev => prev === symbol ? null : symbol)}
+                />
+              )}
+              {monoSimPositions.map((pos, i) => (
+                <PositionRow key={`sim-${i}`} pos={pos} source="PAPER" currentPrice={prices[pos.symbol]?.last} />
+              ))}
+            </div>
+          )}
+
+          {/* Colonne LIVE */}
+          {hasLive && (
+            <div className="positions-col">
+              <div className="positions-col-header positions-col-header--live">LIVE</div>
+              {execPositions.map((pos, i) => (
+                <PositionRow key={`live-${i}`} pos={pos} source="LIVE" currentPrice={prices[pos.symbol]?.last} />
+              ))}
+            </div>
+          )}
+        </div>
       )}
-
-      {/* Positions live executor */}
-      {execPositions.map((pos, i) => (
-        <PositionRow key={`live-${i}`} pos={pos} source="LIVE" currentPrice={prices[pos.symbol]?.last} />
-      ))}
-
-      {/* Positions mono simulator */}
-      {monoSimPositions.map((pos, i) => (
-        <PositionRow key={`sim-${i}`} pos={pos} source="PAPER" currentPrice={prices[pos.symbol]?.last} />
-      ))}
     </div>
   )
 }
@@ -82,8 +96,6 @@ function GridSummary({ gridState, expandedGrid, onToggle }) {
         </span>
       </div>
 
-      {/* Grille responsive : 2 colonnes si la place le permet */}
-      <div className="grid-positions-container">
       {grids.map(g => (
         <div key={`${g.strategy}-${g.symbol}`}>
           <div
@@ -137,7 +149,6 @@ function GridSummary({ gridState, expandedGrid, onToggle }) {
           )}
         </div>
       ))}
-      </div>
     </div>
   )
 }

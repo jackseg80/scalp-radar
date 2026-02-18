@@ -776,11 +776,29 @@ tr:last-child td { border-bottom: none; }
   color: var(--text-dim);
 }
 
-/* --- Grid positions 2-column responsive layout --- */
-.grid-positions-container {
+/* --- Positions 2-column layout (PAPER | LIVE) --- */
+.positions-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-  gap: 0 16px;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 20px;
+}
+@media (max-width: 900px) {
+  .positions-columns {
+    grid-template-columns: 1fr;
+  }
+}
+.positions-col-header {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.positions-col-header--live {
+  color: var(--accent);
 }
 
 /* --- Grid summary (ActivePositions) --- */
