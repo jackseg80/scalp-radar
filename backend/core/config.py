@@ -443,6 +443,7 @@ class AdaptiveSelectorConfig(BaseModel):
     min_trades: int = Field(default=3, ge=1)
     min_profit_factor: float = Field(default=1.0, ge=0)
     eval_interval_seconds: int = Field(default=300, ge=30)
+    force_strategies: list[str] = Field(default_factory=list)
 
 
 class RiskConfig(BaseModel):

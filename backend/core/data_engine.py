@@ -420,6 +420,10 @@ class DataEngine:
         if not self.validator.validate_candle(candle):
             return
 
+        # Freshness : tout message WS valide rafraîchit le timestamp
+        # (même si la candle est un doublon = mise à jour de la candle en cours)
+        self._last_update = datetime.now(tz=timezone.utc)
+
         buffer = self._buffers[symbol][timeframe_str]
 
         # Doublon ?
@@ -440,8 +444,6 @@ class DataEngine:
         buffer.append(candle)
         if len(buffer) > MAX_BUFFER_SIZE:
             del buffer[: len(buffer) - MAX_BUFFER_SIZE]
-
-        self._last_update = datetime.now(tz=timezone.utc)
 
         # Ajouter au buffer d'écriture (flush périodique toutes les 5s)
         self._write_buffer.append(candle)

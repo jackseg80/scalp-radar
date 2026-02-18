@@ -33,6 +33,7 @@ _STRATEGY_CONFIG_ATTR = {
     "donchian_breakout": "donchian_breakout",
     "supertrend": "supertrend",
     "grid_atr": "grid_atr",
+    "grid_range_atr": "grid_range_atr",
     "grid_multi_tf": "grid_multi_tf",
     "grid_funding": "grid_funding",
     "grid_trend": "grid_trend",
@@ -85,6 +86,7 @@ class AdaptiveSelector:
         ranking = self._arena.get_ranking()
         new_allowed: set[str] = set()
         min_trades = self._selector_config.min_trades
+        force_set = set(self._selector_config.force_strategies)
 
         # Bypass : collecter les eligible pour vérifier si TOUTES sont prêtes
         bypass_eligible_counts: list[int] = []
@@ -114,12 +116,34 @@ class AdaptiveSelector:
             if effective_trades < min_trades:
                 continue
 
+            # FIX deadlock : session vierge (0 trades Arena) → skip net_return/PF
+            # On ne peut pas évaluer une performance qui n'existe pas
+            if perf.total_trades == 0:
+                new_allowed.add(perf.name)
+                continue
+
             # 4. Rentable (net return > 0)
             if perf.net_return_pct <= 0:
+                # force_strategies : bypass net_return/PF si forcée
+                if perf.name in force_set:
+                    logger.warning(
+                        "AdaptiveSelector: {} forcée malgré net_return={:.1f}%",
+                        perf.name,
+                        perf.net_return_pct,
+                    )
+                    new_allowed.add(perf.name)
                 continue
 
             # 5. Profit factor suffisant
             if perf.profit_factor < self._selector_config.min_profit_factor:
+                # force_strategies : bypass PF si forcée
+                if perf.name in force_set:
+                    logger.warning(
+                        "AdaptiveSelector: {} forcée malgré PF={:.2f}",
+                        perf.name,
+                        perf.profit_factor,
+                    )
+                    new_allowed.add(perf.name)
                 continue
 
             new_allowed.add(perf.name)

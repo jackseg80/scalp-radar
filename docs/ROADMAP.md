@@ -1421,6 +1421,40 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **But** : Monétiser les micro-oscillations quand le prix reste près de la SMA. Contrairement à grid_atr (unidirectionnel), grid_range_atr ouvre des LONG **et** SHORT simultanément avec des TP/SL individuels par position.
 
+**Résultat** : 1169 tests passants (40 nouveaux), stratégie opérationnelle, WFO 2160 combos à lancer.
+
+---
+
+### Hotfix 30 — Deadlock Selector + DATA_STALE spam ✅
+
+**Contexte** : En production LIVE (Bitget 1000 USDT), 0 trades exécutés après restart. Diagnostic : deadlock AdaptiveSelector + spam Telegram DATA_STALE.
+
+**Problème 1 — Deadlock** : Session vierge (0 trades Arena) + bypass désactivé (DB a 59 trades grid_atr >= min_trades) → check `net_return_pct > 0` et `profit_factor >= seuil` échoue (session 0% return) → grid_atr jamais autorisé → deadlock.
+
+**Problème 2 — DATA_STALE** : Timeframe 1h reçoit des mises à jour WS de la candle en cours (même timestamp, OHLCV actualisés) → `is_duplicate()` les filtre → `_last_update` jamais rafraîchi → faux positif DATA_STALE après 5 min → spam Telegram.
+
+**Fix 1 — force_strategies (hotfix immédiat)** :
+
+- `AdaptiveSelectorConfig` : `force_strategies: list[str] = []` (liste de stratégies qui bypasses `net_return`/`PF` checks)
+- `risk.yaml` : `force_strategies: ["grid_atr"]`
+- Garde-fous : `live_eligible` et `is_active` toujours requis (pas de bypass kill switch)
+
+**Fix 2 — Session vierge (fix structurel)** :
+
+- Dans `evaluate()` : si `perf.total_trades == 0` et `effective_trades >= min_trades` (DB a assez de trades), bypass les checks `net_return`/`PF` (on ne peut pas évaluer une performance qui n'existe pas)
+- Résout le deadlock : DB=59 trades + session vierge → autorisé
+
+**Fix 3 — DATA_STALE** :
+
+- `data_engine.py` : `_last_update` mis à jour AVANT le check doublon (ligne 422-425)
+- Tout message WS valide (même doublon = mise à jour candle en cours) rafraîchit le timestamp
+
+**Bonus** : `grid_range_atr` ajouté au mapping `_STRATEGY_CONFIG_ATTR` (manquait depuis Sprint 29a).
+
+**Tests** : 14 nouveaux tests (6 force_strategies, 4 session vierge, 4 data freshness)
+
+**Résultat** : 1212 tests passants (43 nouveaux), déploiement live possible avec `force_strategies: ["grid_atr"]`.
+
 **Différences clés vs grid_atr** :
 
 - **Bidirectionnel** : LONG sous SMA + SHORT au-dessus, simultanément (pas de direction lock)
@@ -1536,9 +1570,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1169 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a**
-- **Phase 6 en cours** — Sprint 29a (Grid Range ATR, 14e stratégie) terminé
+- **1212 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30**
+- **Phase 6 en cours** — Hotfix 30 (Deadlock Selector + DATA_STALE) terminé
 - **14 stratégies** : 4 scalp 5m + 3 swing 1h + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j

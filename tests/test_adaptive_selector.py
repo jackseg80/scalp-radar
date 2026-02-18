@@ -1,4 +1,4 @@
-"""Tests pour l'AdaptiveSelector (Sprint 5b + Hotfix 28a)."""
+"""Tests pour l'AdaptiveSelector (Sprint 5b + Hotfix 28a + Hotfix 30)."""
 
 from __future__ import annotations
 
@@ -415,3 +415,261 @@ class TestExecutorExchangeBalance:
         executor = Executor(config, risk_mgr, notifier)
         executor._exchange_balance = 8500.0
         assert executor.exchange_balance == 8500.0
+
+
+# ─── Tests Hotfix 30 — force_strategies ──────────────────────────────────
+
+
+class TestForceStrategies:
+    """force_strategies bypass net_return/PF pour les stratégies forcées."""
+
+    def test_force_strategy_bypasses_negative_return(self):
+        """force_strategies autorise grid_atr malgré net_return négatif."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=10,
+            net_return_pct=-5.0, profit_factor=0.7,
+        )]
+        config = _make_config(min_trades=3)
+        config.risk.adaptive_selector.force_strategies = ["grid_atr"]
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is True
+
+    def test_force_strategy_bypasses_low_pf(self):
+        """force_strategies autorise malgré PF < seuil."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=10,
+            net_return_pct=2.0, profit_factor=0.3,
+        )]
+        config = _make_config(min_trades=3, min_profit_factor=1.0)
+        config.risk.adaptive_selector.force_strategies = ["grid_atr"]
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is True
+
+    def test_force_strategy_still_requires_live_eligible(self):
+        """force_strategies n'override PAS live_eligible."""
+        ranking = [FakePerformance(
+            name="grid_funding", total_trades=10,
+            net_return_pct=-5.0, profit_factor=0.5,
+        )]
+        config = _make_config()
+        config.risk.adaptive_selector.force_strategies = ["grid_funding"]
+        # grid_funding live_eligible=False dans _make_config
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_funding", "BTC/USDT") is False
+
+    def test_force_strategy_still_requires_active(self):
+        """force_strategies n'override PAS is_active (kill switch)."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=10,
+            net_return_pct=-5.0, profit_factor=0.5,
+            is_active=False,
+        )]
+        config = _make_config()
+        config.risk.adaptive_selector.force_strategies = ["grid_atr"]
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is False
+
+    def test_non_forced_strategy_still_checked_normally(self):
+        """Les stratégies NON forcées passent toujours les checks normaux."""
+        ranking = [
+            FakePerformance(name="grid_atr", total_trades=10, net_return_pct=-5.0, profit_factor=0.5),
+            FakePerformance(name="vwap_rsi", total_trades=10, net_return_pct=-3.0, profit_factor=0.6),
+        ]
+        config = _make_config()
+        config.risk.adaptive_selector.force_strategies = ["grid_atr"]
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is True
+        assert selector.is_allowed("vwap_rsi", "BTC/USDT") is False
+
+    def test_force_strategies_empty_default(self):
+        """force_strategies vide par défaut → aucun bypass."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=10,
+            net_return_pct=-5.0, profit_factor=0.5,
+        )]
+        config = _make_config()
+        config.risk.adaptive_selector.force_strategies = []
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is False
+
+
+# ─── Tests Hotfix 30 — Deadlock session vierge ───────────────────────────
+
+
+class TestSessionViergeDeadlock:
+    """Fix deadlock : session vierge (0 trades Arena) avec DB suffisante."""
+
+    def test_zero_session_trades_allowed_if_db_enough(self):
+        """0 trades session + DB >= min_trades → autorisé (skip net_return/PF)."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=0,
+            net_return_pct=0.0, profit_factor=0.0,
+        )]
+        config = _make_config(min_trades=3)
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector._db_trade_counts = {"grid_atr": 59}
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is True
+
+    def test_zero_session_trades_rejected_if_db_insufficient(self):
+        """0 trades session + DB < min_trades → rejeté."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=0,
+            net_return_pct=0.0, profit_factor=0.0,
+        )]
+        config = _make_config(min_trades=3)
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector._db_trade_counts = {"grid_atr": 1}
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is False
+
+    def test_nonzero_session_trades_still_checked(self):
+        """Session avec des trades → checks net_return/PF normaux."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=5,
+            net_return_pct=-2.0, profit_factor=0.8,
+        )]
+        config = _make_config(min_trades=3)
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector._db_trade_counts = {"grid_atr": 59}
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        # net_return négatif, pas forcé → rejeté
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is False
+
+    def test_deadlock_scenario_full(self):
+        """Scénario complet : bypass désactivé + session vierge + DB OK → autorisé."""
+        ranking = [FakePerformance(
+            name="grid_atr", total_trades=0,
+            net_return_pct=0.0, profit_factor=0.0,
+        )]
+        config = _make_config(min_trades=3)
+        # bypass désactivé (comme après auto-deactivation)
+        config.risk.selector_bypass_at_boot = False
+        config.secrets.live_trading = True
+        arena = _make_arena(ranking)
+
+        selector = AdaptiveSelector(arena, config)
+        selector._db_trade_counts = {"grid_atr": 59}
+        selector.set_active_symbols({"BTC/USDT"})
+        selector.evaluate()
+
+        # Bypass off, 0 trades session, DB=59 >= 3 → autorisé
+        assert selector._bypass_active is False
+        assert selector.is_allowed("grid_atr", "BTC/USDT") is True
+
+
+# ─── Tests Hotfix 30 — DATA_STALE freshness ─────────────────────────────
+
+
+class TestDataStaleFreshness:
+    """Fix DATA_STALE : _last_update mis à jour même sur doublons."""
+
+    def test_last_update_set_on_duplicate_candle(self):
+        """_last_update rafraîchi même si la candle est un doublon."""
+        from datetime import datetime, timezone
+
+        from backend.core.data_engine import DataEngine
+
+        config = MagicMock()
+        config.assets = []
+        db = MagicMock()
+        engine = DataEngine(config, db)
+
+        # Simuler une première candle
+        import asyncio
+        ohlcv = [1700000000000, 100.0, 101.0, 99.0, 100.5, 1000.0]
+
+        asyncio.run(engine._on_candle_received("BTC/USDT", "1h", ohlcv))
+        first_update = engine._last_update
+        assert first_update is not None
+
+        # Envoyer la même candle (doublon = même timestamp, OHLCV mis à jour)
+        ohlcv2 = [1700000000000, 100.0, 102.0, 98.0, 101.0, 1500.0]
+        asyncio.run(engine._on_candle_received("BTC/USDT", "1h", ohlcv2))
+        second_update = engine._last_update
+
+        # _last_update doit être rafraîchi même si la candle est un doublon
+        assert second_update is not None
+        assert second_update >= first_update
+
+    def test_last_update_not_set_on_invalid_candle(self):
+        """_last_update PAS rafraîchi si la candle est invalide (low > high)."""
+        from backend.core.data_engine import DataEngine
+
+        config = MagicMock()
+        config.assets = []
+        db = MagicMock()
+        engine = DataEngine(config, db)
+
+        # Candle invalide : low > high
+        ohlcv = [1700000000000, 100.0, 99.0, 101.0, 100.5, 1000.0]
+        import asyncio
+        asyncio.run(engine._on_candle_received("BTC/USDT", "1h", ohlcv))
+
+        assert engine._last_update is None
+
+    def test_buffer_not_duplicated_on_same_timestamp(self):
+        """Le buffer ne contient PAS deux candles avec le même timestamp."""
+        from backend.core.data_engine import DataEngine
+
+        config = MagicMock()
+        config.assets = []
+        db = MagicMock()
+        engine = DataEngine(config, db)
+
+        ohlcv1 = [1700000000000, 100.0, 101.0, 99.0, 100.5, 1000.0]
+        ohlcv2 = [1700000000000, 100.0, 102.0, 98.0, 101.0, 1500.0]
+
+        import asyncio
+        asyncio.run(engine._on_candle_received("BTC/USDT", "1h", ohlcv1))
+        asyncio.run(engine._on_candle_received("BTC/USDT", "1h", ohlcv2))
+
+        buffer = engine._buffers["BTC/USDT"]["1h"]
+        assert len(buffer) == 1  # doublon filtré
+
+    def test_grid_range_atr_in_strategy_mapping(self):
+        """grid_range_atr est dans _STRATEGY_CONFIG_ATTR."""
+        from backend.execution.adaptive_selector import _STRATEGY_CONFIG_ATTR
+        assert "grid_range_atr" in _STRATEGY_CONFIG_ATTR
