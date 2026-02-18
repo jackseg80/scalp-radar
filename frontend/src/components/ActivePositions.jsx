@@ -82,7 +82,8 @@ function GridSummary({ gridState, expandedGrid, onToggle }) {
         </span>
       </div>
 
-      {/* Ligne par grille (cliquable pour déplier) */}
+      {/* Grille responsive : 2 colonnes si la place le permet */}
+      <div className="grid-positions-container">
       {grids.map(g => (
         <div key={`${g.strategy}-${g.symbol}`}>
           <div
@@ -136,6 +137,7 @@ function GridSummary({ gridState, expandedGrid, onToggle }) {
           )}
         </div>
       ))}
+      </div>
     </div>
   )
 }

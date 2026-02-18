@@ -776,6 +776,13 @@ tr:last-child td { border-bottom: none; }
   color: var(--text-dim);
 }
 
+/* --- Grid positions 2-column responsive layout --- */
+.grid-positions-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 0 16px;
+}
+
 /* --- Grid summary (ActivePositions) --- */
 .grid-summary-banner {
   display: flex;
