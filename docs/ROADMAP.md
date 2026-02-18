@@ -1455,6 +1455,46 @@ Speedup compilation : WARM (1ère compilation) = 0.20s → RUN = 0.03s = **~6x s
 
 **Résultat** : 1212 tests passants (43 nouveaux), déploiement live possible avec `force_strategies: ["grid_atr"]`.
 
+---
+
+### Hotfix 30b — Config conflicts deploy (fix persistance) ✅
+
+**Contexte** : Problème récurrent (3ème occurrence) — `git pull` sur le serveur bloque sur conflits `config/risk.yaml` → intervention SSH manuelle à chaque déploiement.
+
+**Cause racine** : édition directe des fichiers YAML sur le serveur pour config prod (ex: `force_strategies: ["grid_atr"]`).
+
+**Fix 1 — deploy.sh reset config** :
+
+- `deploy.sh` ligne 28-30 : `git checkout -- config/` avant `git pull`
+- Garantit que les fichiers YAML versionnés sont toujours propres
+- Commentaire explicite : "prod overrides go in .env (gitignored)"
+
+**Fix 2 — Override force_strategies via .env** :
+
+- `SecretsConfig` : `force_strategies: str | None = None` (comma-separated, ex: "grid_atr,grid_trend")
+- `AppConfig.__init__` : parsing string → list + override `risk.adaptive_selector.force_strategies`
+- `risk.yaml` : `force_strategies: []` (valeur neutre par défaut dans git)
+- Pattern identique à `SELECTOR_BYPASS_AT_BOOT` (Hotfix 28d)
+
+**Fix 3 — Documentation overrides .env** :
+
+- `.env.example` : section "Adaptive Selector Overrides" avec exemples
+- `CLAUDE.md` : règle critique déploiement, exemple `.env` serveur
+
+**Règle critique** : **JAMAIS éditer les fichiers `config/*.yaml` sur le serveur**. Tous les overrides prod passent par `.env` (gitignored).
+
+**Overrides .env disponibles** :
+
+```bash
+LIVE_TRADING=true                    # Active Executor (ordres réels)
+SELECTOR_BYPASS_AT_BOOT=true         # Autorise toutes stratégies au boot
+FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separated)
+```
+
+**Tests** : 5 nouveaux tests (single, multiple, whitespace, not set, empty)
+
+**Résultat** : 1217 tests passants (+5 depuis Hotfix 30), conflits deploy éliminés.
+
 **Différences clés vs grid_atr** :
 
 - **Bidirectionnel** : LONG sous SMA + SHORT au-dessus, simultanément (pas de direction lock)
@@ -1570,9 +1610,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (18 février 2026)
 
-- **1212 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30**
-- **Phase 6 en cours** — Hotfix 30 (Deadlock Selector + DATA_STALE) terminé
+- **1217 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b**
+- **Phase 6 en cours** — Hotfix 30b (Config conflicts deploy) terminé
 - **14 stratégies** : 4 scalp 5m + 3 swing 1h + 7 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
