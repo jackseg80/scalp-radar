@@ -521,7 +521,7 @@ class GridStrategyRunner:
     """
 
     # Nombre max de candles chargées depuis la DB pour le warm-up indicateurs
-    MAX_WARMUP_CANDLES = 200
+    MAX_WARMUP_CANDLES = 500
     # Seuil d'âge : une candle plus récente que ça = fin du warm-up
     WARMUP_AGE_THRESHOLD = timedelta(hours=2)
     # Hotfix 35 : bougies à attendre après warm-up avant d'émettre vers l'Executor
@@ -566,6 +566,9 @@ class GridStrategyRunner:
 
         # Sprint 25 : queue d'événements pour le journal d'activité
         self._pending_journal_events: list[dict] = []
+
+        # Sprint 34a : signal erreur compute_live_indicators → Telegram via Simulator
+        self._last_indicator_error: tuple[str, str] | None = None
 
         # COMPAT: duck typing pour Simulator/StateManager qui accèdent à ces attributs.
         # Voir self._positions pour le vrai état grid.
@@ -672,7 +675,9 @@ class GridStrategyRunner:
 
     async def _warmup_from_db(self, db: Database, symbol: str) -> None:
         """Pré-charge les bougies historiques depuis la DB pour le warm-up SMA."""
-        needed = min(max(self._ma_period + 20, 50), self.MAX_WARMUP_CANDLES)
+        # Sprint 34a : utiliser strategy.min_candles pour le warm-up dynamique
+        strat_min = self._strategy.min_candles.get(self._strategy_tf, 50)
+        needed = min(max(strat_min, 50), self.MAX_WARMUP_CANDLES)
         candles = await db.get_recent_candles(symbol, self._strategy_tf, needed)
         if not candles:
             logger.info(
@@ -849,11 +854,18 @@ class GridStrategyRunner:
             if isinstance(buffers, dict):
                 candle_buf = buffers.get((symbol, self._strategy_tf), [])
                 if candle_buf:
-                    extra = self._strategy.compute_live_indicators(
-                        list(candle_buf),
-                    )
-                    for tf_key, tf_data in extra.items():
-                        indicators.setdefault(tf_key, {}).update(tf_data)
+                    try:
+                        extra = self._strategy.compute_live_indicators(
+                            list(candle_buf),
+                        )
+                        for tf_key, tf_data in extra.items():
+                            indicators.setdefault(tf_key, {}).update(tf_data)
+                    except Exception as e:
+                        logger.error(
+                            "[{}] compute_live_indicators ERREUR pour {}: {}",
+                            self.name, symbol, e,
+                        )
+                        self._last_indicator_error = (symbol, str(e))
 
         # Détecter le régime (si ADX/ATR disponibles)
         main_ind = indicators.get(self._strategy_tf, {})
@@ -975,6 +987,11 @@ class GridStrategyRunner:
                     pos_per_asset = pos_raw / self._nb_assets
 
                     # Equal allocation sizing (Sprint 20a)
+                    # TODO Sprint Phase 2 : L'ajout de runners grid_boltrend dilue
+                    # l'allocation grid_atr (10 assets → 16 runners = -37% par runner).
+                    # Accepté pour le paper. Options pour le live multi-stratégie :
+                    # 1. Capital séparé par stratégie (config.weight)
+                    # 2. Compter les assets uniques au lieu des runners
                     # Marge fixe par niveau = capital / nb_assets / num_levels
                     # Le SL contrôle le risque en $, PAS la taille de position
                     num_levels = self._strategy.max_positions
@@ -1867,6 +1884,20 @@ class Simulator:
                     "Simulator: erreur runner '{}': {}",
                     runner.name, e,
                 )
+
+            # Sprint 34a : forward erreurs compute_live_indicators → Telegram
+            alert = getattr(runner, '_last_indicator_error', None)
+            if alert and self._notifier:
+                err_symbol, err_msg = alert
+                runner._last_indicator_error = None
+                try:
+                    from backend.alerts.notifier import AnomalyType
+                    await self._notifier.notify_anomaly(
+                        AnomalyType.INDICATOR_ERROR,
+                        f"[{runner.name}] {err_symbol}: {err_msg}",
+                    )
+                except Exception:
+                    pass  # Telegram down ne doit pas bloquer le dispatch
 
             # Sprint 5a : drain pending_events vers l'Executor (swap atomique)
             if self._trade_event_callback and runner._pending_events:

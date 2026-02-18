@@ -1789,6 +1789,23 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Tests** : 14 nouveaux, **1353 tests** au total, 0 régression.
 
+### Sprint 34a — Lancement paper trading grid_boltrend ✅
+
+**But** : Activer grid_boltrend en paper trading sur l'instance existante (aux côtés de grid_atr). Corriger un bug critique qui rendait la stratégie muette pendant ~15 jours après chaque restart.
+
+**Bug corrigé** : `_warmup_from_db()` chargeait 50 candles au lieu de 420 pour grid_boltrend (`long_ma_window=400`). Résultat : `compute_live_indicators()` retournait `{}` pendant ~15 jours. Fix : utiliser `strategy.min_candles` pour dimensionner le warm-up dynamiquement.
+
+**Changements** :
+- **Warm-up dynamique** : `MAX_WARMUP_CANDLES` 200 → 500, `_warmup_from_db()` utilise `strategy.min_candles` (rétrocompatible : grid_atr reste à 50)
+- **Filet de sécurité** : try/except autour de `compute_live_indicators()` — log ERROR + alerte Telegram `INDICATOR_ERROR` avec cooldown 1h
+- **Préfixes Telegram** : `[ATR]`/`[BOLT]` au début des messages grid et live pour identification rapide
+- **Rollback documenté** : section 17 dans COMMANDS.md (avec avertissement `nano` vs `echo >`)
+- **TODO sizing** : commentaire dans le bloc equal allocation (dilution grid_atr quand on ajoute grid_boltrend)
+
+**Fichiers** : `backend/backtesting/simulator.py`, `backend/alerts/notifier.py`, `backend/alerts/telegram.py`, `COMMANDS.md`.
+
+**Tests** : 6 nouveaux (2 warmup, 1 try/except + récupération, 1 Telegram tag, 1 notifier), **1359 tests** au total, 0 régression.
+
 ### Hotfix UI — Layout 2 colonnes ActivePositions ✅
 
 **But** : Améliorer la lisibilité du bandeau "Positions actives" quand paper trading et live coexistent — les positions PAPER et LIVE s'empilaient dans une seule colonne, impossible de distinguer d'un coup d'œil.
@@ -1907,19 +1924,19 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1353 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30c + Sprint 30 + Sprint 31 + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI**
-- **Phase 6 en cours** — Hotfix UI (layout 2 colonnes PAPER/LIVE dans ActivePositions) terminé
+- **1359 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a**
+- **Phase 6 en cours** — Sprint 34a (paper trading grid_boltrend) terminé
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
-- **Paper trading actif** : **grid_atr Top 10 assets** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — sélection basée sur portfolio backtest + forward test 365j
+- **Paper trading actif** : **grid_atr Top 10** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 6 assets** (BTC, ETH, DOGE, DYDX, LINK, SAND) en préparation
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
 - **Frontend complet** : 7 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Positions actives, Logs) avec persistance localStorage (onglet actif + paramètres de chaque page survivent au refresh)
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : Déploiement live progressif (capital minimal, selector_bypass_at_boot=true)
+- **Prochaine étape** : Déployer Sprint 34a en prod + valider compute_live_indicators() grid_boltrend après 1-2h de live
 
 ### Résultats Portfolio Backtest — Validation Finale
 

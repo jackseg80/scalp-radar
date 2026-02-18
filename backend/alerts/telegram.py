@@ -11,6 +11,23 @@ from loguru import logger
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
+# Sprint 34a : mapping stratégie → tag court pour préfixer les messages Telegram
+_STRATEGY_TAGS: dict[str, str] = {
+    "grid_atr": "ATR",
+    "grid_boltrend": "BOLT",
+    "grid_range_atr": "RANGE",
+    "grid_multi_tf": "MTF",
+    "grid_funding": "FUND",
+    "grid_trend": "TREND",
+    "envelope_dca": "DCA",
+    "envelope_dca_short": "DCA-S",
+}
+
+
+def _strategy_tag(strategy: str) -> str:
+    """Retourne le tag court d'une stratégie, ou le nom en majuscules."""
+    return _STRATEGY_TAGS.get(strategy, strategy.upper())
+
 
 class TelegramClient:
     """Client Telegram pour envoyer des messages via l'API Bot."""
@@ -103,8 +120,9 @@ class TelegramClient:
         order_id: str,
     ) -> bool:
         """Alerte ouverture position LIVE."""
+        tag = _strategy_tag(strategy)
         text = (
-            f"<b>LIVE ORDER</b>\n"
+            f"<b>[{tag}] LIVE ORDER</b>\n"
             f"{direction} {symbol}\n"
             f"Stratégie: {strategy}\n"
             f"Entry: {entry_price:.2f}\n"
@@ -125,9 +143,10 @@ class TelegramClient:
         strategy: str,
     ) -> bool:
         """Alerte fermeture position LIVE."""
+        tag = _strategy_tag(strategy)
         pnl_sign = "+" if net_pnl >= 0 else ""
         text = (
-            f"<b>LIVE CLOSE</b>\n"
+            f"<b>[{tag}] LIVE CLOSE</b>\n"
             f"{direction} {symbol}\n"
             f"{entry_price:.2f} → {exit_price:.2f}\n"
             f"Net: <b>{pnl_sign}{net_pnl:.2f}$</b>\n"
@@ -148,8 +167,9 @@ class TelegramClient:
         strategy: str,
     ) -> bool:
         """Alerte ouverture d'un niveau grid."""
+        tag = _strategy_tag(strategy)
         text = (
-            f"<b>GRID ENTRY #{level_num}</b>\n"
+            f"<b>[{tag}] GRID ENTRY #{level_num}</b>\n"
             f"{direction} {symbol}\n"
             f"Strategie: {strategy}\n"
             f"Entry: {entry_price:.2f} (qty: {quantity:.6f})\n"
@@ -170,10 +190,11 @@ class TelegramClient:
         strategy: str,
     ) -> bool:
         """Alerte fermeture d'un cycle grid."""
+        tag = _strategy_tag(strategy)
         status = "WIN" if net_pnl >= 0 else "LOSS"
         pnl_sign = "+" if net_pnl >= 0 else ""
         text = (
-            f"<b>GRID CLOSE — {status}</b>\n"
+            f"<b>[{tag}] GRID CLOSE — {status}</b>\n"
             f"{direction} {symbol}\n"
             f"Positions: {num_positions}\n"
             f"{avg_entry:.2f} -> {exit_price:.2f}\n"

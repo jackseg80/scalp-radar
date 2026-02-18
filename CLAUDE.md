@@ -45,7 +45,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (1353 passants) |
+| Testing            | pytest            | Critical components must have unit tests (1359 passants) |
 
 ## Key Architecture Principles
 
@@ -72,7 +72,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
-├── tests/                        # 1353 tests (pytest)
+├── tests/                        # 1359 tests (pytest)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
 └── docs/plans/                   # Sprint plans 1-33 archivés
 ```
@@ -162,7 +162,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35) : 1353 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Sprint 34a) : 1359 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -246,6 +246,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 33b : Audit parité grid_boltrend — 3 bugs fast engine (exit_price sma_val→close_i, fees maker→taker+slip, double entry_fee dans multi_engine.py), divergence 31.73% → 2.62%, 13 tests parité (1322 tests)
 - Hotfix 34 : Executor P&L réel Bitget — `_fetch_fill_price()` (fetch_order → fetch_my_trades), `entry_fee` dans dataclasses LivePosition/GridLivePosition, `_calculate_real_pnl()` séparée, 17 tests (1339 tests)
 - Hotfix 35 : Stabilité restart live — cooldown post-warmup 3 bougies (`POST_WARMUP_COOLDOWN`) dans GridStrategyRunner, guard `max_live_grids` isinstance-safe, sauvegarde périodique executor via `StateManager._periodic_save_loop()` (60s), 14 tests (1353 tests)
+- Sprint 34a : Lancement paper trading grid_boltrend — warm-up dynamique via `strategy.min_candles` (MAX_WARMUP_CANDLES 200→500), try/except `compute_live_indicators()` + alerte Telegram INDICATOR_ERROR (cooldown 1h), préfixes stratégie `[ATR]`/`[BOLT]` dans Telegram, rollback d'urgence COMMANDS.md section 17, 6 tests (1359 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 
@@ -281,12 +282,13 @@ Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 **Warm-up Compound Overflow (Hotfix) :**
 
 - Au démarrage, `watch_ohlcv()` retourne un gros batch de candles historiques → GridStrategyRunner les traitait avec compound sizing → capital de 10k à 83M$
-- Fix 1 : `_warmup_from_db()` plafonné à `MAX_WARMUP_CANDLES = 200` (était dynamique, ~50)
+- Fix 1 : `_warmup_from_db()` plafonné à `MAX_WARMUP_CANDLES = 500` (Sprint 34a : 200→500 pour couvrir grid_boltrend `long_ma_window=400`)
 - Fix 2 : Flag `_is_warming_up = True` dans GridStrategyRunner, capital fixé à `_initial_capital` (10k) pendant le warm-up
 - Détection auto fin warm-up : candle avec age < `WARMUP_AGE_THRESHOLD` (2h) → `_end_warmup()`
 - `_end_warmup()` : reset capital/realized_pnl/stats, ferme positions, garde trades en historique
 - Pendant warm-up : pas de modification de `_capital`, pas d'événements Executor, trades enregistrés en historique seulement
 - `restore_state()` désactive automatiquement le warm-up (restart = pas besoin de re-warmer)
+- Sprint 34a : `_warmup_from_db()` utilise `strategy.min_candles.get(tf, 50)` (plus `_ma_period + 20`) — dynamique par stratégie, rétrocompatible (grid_atr=50 inchangé, grid_boltrend=420 corrigé)
 
 **Orphan Cleanup & Collision (Hotfix) :**
 - Au boot, `_cleanup_orphan_runners()` détecte les runners dans saved_state non présents dans enabled_names

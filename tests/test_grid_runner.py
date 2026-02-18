@@ -836,6 +836,71 @@ class TestGridRunnerWarmup:
         call_args = db.get_recent_candles.call_args
         limit_arg = call_args[0][2]  # 3ème argument positionnel = limit
         assert limit_arg <= GridStrategyRunner.MAX_WARMUP_CANDLES
+        # Avec le mock strategy (min_candles={"1h": 50}), needed = 50
+        assert limit_arg == 50
+
+    @pytest.mark.asyncio
+    async def test_warmup_uses_strategy_min_candles(self):
+        """_warmup_from_db demande strategy.min_candles bougies (ex: 420 pour boltrend)."""
+        strategy = _make_mock_strategy()
+        strategy.min_candles = {"1h": 420}  # Simule grid_boltrend long_ma_window=400
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = True
+        db = AsyncMock()
+        db.get_recent_candles = AsyncMock(return_value=[])
+
+        await runner._warmup_from_db(db, "BTC/USDT")
+
+        call_args = db.get_recent_candles.call_args
+        limit_arg = call_args[0][2]
+        assert limit_arg == 420  # Utilise min_candles, pas ma_period+20
+        assert limit_arg <= GridStrategyRunner.MAX_WARMUP_CANDLES
+
+    @pytest.mark.asyncio
+    async def test_compute_live_indicators_error_caught(self):
+        """Si compute_live_indicators crashe, on_candle continue et récupère."""
+        strategy = _make_mock_strategy()
+        strategy.compute_grid.return_value = []
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = False
+        _fill_buffer(runner, n=10, base_close=100_000.0)
+
+        # Simuler un buffer dans l'indicator engine pour déclencher compute_live_indicators
+        fake_candles = [_make_candle(close=100_000.0 + i) for i in range(50)]
+        runner._indicator_engine = MagicMock()
+        runner._indicator_engine.get_indicators.return_value = {"1h": {"sma": 100_000.0}}
+        runner._indicator_engine._buffers = {("BTC/USDT", "1h"): fake_candles}
+
+        # 1er candle : compute_live_indicators crash
+        strategy.compute_live_indicators.side_effect = ValueError("boom")
+        candle1 = _make_candle(
+            close=100_000.0,
+            ts=datetime.now(tz=timezone.utc),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle1)
+
+        # Vérifier que le runner a survécu et compute_grid a été appelé
+        strategy.compute_grid.assert_called()
+        # Vérifier que le signal Telegram est set
+        assert runner._last_indicator_error is not None
+        assert runner._last_indicator_error[0] == "BTC/USDT"
+        assert "boom" in runner._last_indicator_error[1]
+
+        # 2e candle : compute_live_indicators fonctionne
+        strategy.compute_live_indicators.side_effect = None
+        strategy.compute_live_indicators.return_value = {"1h": {"bb_sma": 100_000.0}}
+        strategy.compute_grid.reset_mock()
+        candle2 = _make_candle(
+            close=100_100.0,
+            ts=datetime.now(tz=timezone.utc) + timedelta(hours=1),
+        )
+        await runner.on_candle("BTC/USDT", "1h", candle2)
+
+        # Vérifier la récupération
+        strategy.compute_grid.assert_called()
+        strategy.compute_live_indicators.assert_called()
+        # Pas de nouvelle erreur → _last_indicator_error non re-set
+        # (le Simulator l'aurait vidé, ici on vérifie juste pas de crash)
 
     @pytest.mark.asyncio
     async def test_warmup_capital_not_modified(self):

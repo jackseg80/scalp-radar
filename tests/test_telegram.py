@@ -214,3 +214,24 @@ class TestTelegramGrid:
         assert "SHORT" in text
         assert "-8.50$" in text
         assert "sl_global" in text
+
+    @pytest.mark.asyncio
+    async def test_grid_level_opened_has_strategy_tag(self):
+        """Le message grid contient le tag [ATR] ou [BOLT] en préfixe."""
+        client = TelegramClient("fake_token", "fake_chat_id")
+        client.send_message = AsyncMock(return_value=True)
+
+        await client.send_grid_level_opened(
+            symbol="BTC/USDT",
+            direction="LONG",
+            level_num=1,
+            quantity=0.001,
+            entry_price=50_000.0,
+            avg_price=50_000.0,
+            sl_price=45_000.0,
+            strategy="grid_boltrend",
+        )
+
+        text = client.send_message.call_args[0][0]
+        assert "[BOLT]" in text
+        assert "GRID ENTRY #1" in text

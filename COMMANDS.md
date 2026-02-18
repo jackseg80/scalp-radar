@@ -573,3 +573,46 @@ uv run python -m scripts.check_backtests_db
 ```powershell
 uv run python check_journal.py
 ```
+
+---
+
+## 17. Rollback d'urgence (production)
+
+**ATTENTION : ne JAMAIS utiliser `echo "..." > .env`** — ça écrase tout le fichier (clés Bitget, tokens, etc.). Toujours éditer avec `nano`.
+
+### Désactiver une stratégie sans redéployer
+
+```bash
+# Sur le serveur (SSH) — éditer .env manuellement
+ssh jack@192.168.1.200
+cd ~/scalp-radar
+nano .env
+# Modifier la ligne FORCE_STRATEGIES pour retirer grid_boltrend :
+#   FORCE_STRATEGIES=grid_atr
+# Sauvegarder et quitter (Ctrl+O, Ctrl+X)
+docker compose restart backend
+# Vérifier que seul grid_atr tourne :
+docker compose logs backend --tail 20 | grep "runner"
+```
+
+### Rollback git complet
+
+```bash
+cd ~/scalp-radar && docker compose down
+git log --oneline -5       # identifier le commit stable
+git checkout <commit-hash>
+bash deploy.sh
+```
+
+### Purger l'état simulator (fresh start)
+
+```bash
+cd ~/scalp-radar && bash deploy.sh --clean
+```
+
+### Vérifier après rollback
+
+```bash
+docker compose logs backend --tail 20 | grep "runner"
+curl -s http://localhost:8000/health | python3 -m json.tool
+```

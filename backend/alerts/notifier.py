@@ -26,6 +26,7 @@ class AnomalyType(str, Enum):
     EXECUTOR_DISCONNECTED = "executor_disconnected"
     KILL_SWITCH_LIVE = "kill_switch_live"
     SL_PLACEMENT_FAILED = "sl_placement_failed"
+    INDICATOR_ERROR = "indicator_error"
 
 
 # Messages formatés par type d'anomalie
@@ -37,6 +38,7 @@ _ANOMALY_MESSAGES = {
     AnomalyType.EXECUTOR_DISCONNECTED: "Executor live déconnecté",
     AnomalyType.KILL_SWITCH_LIVE: "Kill switch LIVE déclenché",
     AnomalyType.SL_PLACEMENT_FAILED: "Placement SL échoué — close market déclenché",
+    AnomalyType.INDICATOR_ERROR: "Erreur compute_live_indicators",
 }
 
 
@@ -49,6 +51,7 @@ _ANOMALY_COOLDOWNS: dict[AnomalyType, int] = {
     AnomalyType.ALL_STRATEGIES_STOPPED: 3600,    # 1h — état persistant
     AnomalyType.KILL_SWITCH_GLOBAL: 3600,        # 1h
     AnomalyType.KILL_SWITCH_LIVE: 3600,          # 1h
+    AnomalyType.INDICATOR_ERROR: 3600,            # 1h — erreur persistante
 }
 _DEFAULT_COOLDOWN = 600  # 10 min pour tout type non listé
 
