@@ -675,6 +675,9 @@ class GridStrategyRunner:
 
     async def _warmup_from_db(self, db: Database, symbol: str) -> None:
         """Pré-charge les bougies historiques depuis la DB pour le warm-up SMA."""
+        # Skip les symbols hors whitelist per_asset (ex: grid_boltrend = 6 assets sur 22)
+        if self._per_asset_keys and symbol not in self._per_asset_keys:
+            return
         # Sprint 34a : utiliser strategy.min_candles pour le warm-up dynamique
         strat_min = self._strategy.min_candles.get(self._strategy_tf, 50)
         needed = min(max(strat_min, 50), self.MAX_WARMUP_CANDLES)

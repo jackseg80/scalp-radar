@@ -857,6 +857,34 @@ class TestGridRunnerWarmup:
         assert limit_arg <= GridStrategyRunner.MAX_WARMUP_CANDLES
 
     @pytest.mark.asyncio
+    async def test_warmup_skips_non_per_asset_symbols(self):
+        """_warmup_from_db skips les symbols hors per_asset whitelist.
+
+        grid_boltrend a 6 per_asset mais le Simulator passe les 22 symbols.
+        Sans ce fix : 22 DB queries de 420 candles chacune (inutile).
+        Avec le fix : seuls les 6 symbols whitelistés sont chargés.
+        """
+        strategy = _make_mock_strategy()
+        runner = _make_grid_runner(strategy=strategy)
+        runner._is_warming_up = True
+        # Simuler per_asset whitelist (ex: 6 assets boltrend)
+        runner._per_asset_keys = {"BTC/USDT", "ETH/USDT", "DOGE/USDT"}
+        db = AsyncMock()
+        db.get_recent_candles = AsyncMock(return_value=[])
+
+        # Symbol dans la whitelist → DB query lancée
+        await runner._warmup_from_db(db, "BTC/USDT")
+        assert db.get_recent_candles.call_count == 1
+
+        # Symbol hors whitelist → skip immédiat, pas de DB query
+        await runner._warmup_from_db(db, "LINK/USDT")
+        assert db.get_recent_candles.call_count == 1  # toujours 1, pas 2
+
+        # Autre symbol whitelisté → DB query
+        await runner._warmup_from_db(db, "DOGE/USDT")
+        assert db.get_recent_candles.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_compute_live_indicators_error_caught(self):
         """Si compute_live_indicators crashe, on_candle continue et récupère."""
         strategy = _make_mock_strategy()
