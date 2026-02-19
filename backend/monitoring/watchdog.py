@@ -94,6 +94,25 @@ class Watchdog:
                     f"dernière mise à jour il y a {age:.0f}s",
                 )
 
+                # Auto-recovery : relancer les tâches mortes
+                if age > 600:  # 10 min sans données
+                    try:
+                        restarted = await self._data_engine.restart_dead_tasks()
+                        if restarted > 0:
+                            logger.warning(
+                                "Watchdog: {} tâches DataEngine relancées (data stale {:.0f}s)",
+                                restarted,
+                                age,
+                            )
+                        elif age > 1800:  # 30 min et 0 tâches relancées
+                            await self._data_engine.full_reconnect()
+                            logger.critical(
+                                "Watchdog: full reconnect DataEngine (data stale {:.0f}s)",
+                                age,
+                            )
+                    except Exception as e:
+                        logger.error("Watchdog: erreur auto-recovery: {}", e)
+
         # 3. Stratégies actives ?
         if self._simulator.runners:
             all_stopped = all(

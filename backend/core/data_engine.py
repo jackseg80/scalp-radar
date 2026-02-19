@@ -165,8 +165,8 @@ class DataEngine:
     # ─── LIFECYCLE ──────────────────────────────────────────────────────────
 
     # Batching pour éviter le rate limit Bitget (code 30006) lors des souscriptions
-    _SUBSCRIBE_BATCH_SIZE = 10  # symbols par batch
-    _SUBSCRIBE_BATCH_DELAY = 0.5  # secondes entre les batchs
+    _SUBSCRIBE_BATCH_SIZE = 5   # symbols par batch (réduit pour éviter rate limit)
+    _SUBSCRIBE_BATCH_DELAY = 2.0  # secondes entre les batchs (augmenté pour Bitget)
 
     async def start(self) -> None:
         """Démarre les connexions WebSocket avec staggering anti-rate-limit."""
@@ -261,14 +261,104 @@ class DataEngine:
 
         logger.info("DataEngine: arrêté")
 
+    # ─── AUTO-RECOVERY ─────────────────────────────────────────────────────
+
+    async def restart_dead_tasks(self) -> int:
+        """Relance les tâches de watch terminées (mortes).
+
+        Retourne le nombre de tâches relancées.
+        """
+        restarted = 0
+        new_tasks: list[asyncio.Task] = []
+
+        for task in self._tasks:
+            if task.done() and not task.cancelled():
+                task_name = task.get_name()
+                if task_name.startswith("watch_"):
+                    symbol = task_name[6:]  # Retire "watch_"
+                    asset = next(
+                        (a for a in self.config.assets if a.symbol == symbol),
+                        None,
+                    )
+                    if asset:
+                        new_task = asyncio.create_task(
+                            self._watch_symbol(symbol, asset.timeframes),
+                            name=task_name,
+                        )
+                        new_tasks.append(new_task)
+                        restarted += 1
+                        logger.warning(
+                            "DataEngine: tâche {} relancée (était morte)",
+                            task_name,
+                        )
+                    # asset not found → skip (symbol retiré de la config)
+                else:
+                    new_tasks.append(task)
+            else:
+                new_tasks.append(task)
+
+        self._tasks = new_tasks
+        return restarted
+
+    async def full_reconnect(self) -> None:
+        """Recrée l'instance exchange et relance toutes les souscriptions.
+
+        À utiliser quand restart_dead_tasks ne suffit pas (exchange cassé).
+        """
+        logger.warning("DataEngine: full reconnect — recréation exchange")
+
+        # Fermer l'ancien exchange
+        if self._exchange:
+            try:
+                await self._exchange.close()
+            except Exception:
+                pass
+
+        # Recréer
+        self._exchange = ccxtpro.bitget({
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap"},
+        })
+
+        # Annuler toutes les tâches
+        for task in self._tasks:
+            if not task.cancelled():
+                task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+
+        # Relancer toutes les tâches watch
+        assets = self.config.assets
+        for i, asset in enumerate(assets):
+            task = asyncio.create_task(
+                self._watch_symbol(asset.symbol, asset.timeframes),
+                name=f"watch_{asset.symbol}",
+            )
+            self._tasks.append(task)
+
+            if (i + 1) % self._SUBSCRIBE_BATCH_SIZE == 0 and i + 1 < len(assets):
+                await asyncio.sleep(self._SUBSCRIBE_BATCH_DELAY)
+
+        # Re-ajouter les tâches de polling
+        self._tasks.append(
+            asyncio.create_task(self._poll_funding_rates(), name="poll_funding")
+        )
+        self._tasks.append(
+            asyncio.create_task(self._poll_open_interest(), name="poll_oi")
+        )
+
+        self._connected = True
+        logger.warning(
+            "DataEngine: full reconnect terminé ({} tâches)", len(self._tasks)
+        )
+
     # ─── WATCH LOOP ─────────────────────────────────────────────────────────
 
     async def _watch_symbol(
         self, symbol: str, timeframes: list[str]
     ) -> None:
-        """Boucle de watch pour un symbol sur tous ses timeframes."""
+        """Boucle de watch pour un symbol — ne s'arrête JAMAIS sauf cancel ou symbol invalide."""
         reconnect_delay = self.config.exchange.websocket.reconnect_delay
-        max_attempts = self.config.exchange.websocket.max_reconnect_attempts
         attempt = 0
 
         while self._running:
@@ -276,13 +366,15 @@ class DataEngine:
                 attempt += 1
                 if attempt > 1:
                     logger.info(
-                        "DataEngine: reconnexion {} (tentative {}/{})",
+                        "DataEngine: reconnexion {} (tentative {})",
                         symbol,
                         attempt,
-                        max_attempts,
                     )
 
                 await self._subscribe_klines(symbol, timeframes)
+
+                # Connexion réussie → reset le compteur
+                attempt = 0
 
             except asyncio.CancelledError:
                 break
@@ -291,10 +383,9 @@ class DataEngine:
                     break
 
                 err_str = str(e)
-                is_invalid_symbol = "does not have market symbol" in err_str
 
                 # Symbol invalide → abandonner immédiatement
-                if is_invalid_symbol:
+                if "does not have market symbol" in err_str:
                     logger.warning(
                         "DataEngine: {} retiré de la surveillance (non disponible sur bitget)",
                         symbol,
@@ -302,21 +393,19 @@ class DataEngine:
                     break
 
                 logger.error(
-                    "DataEngine: erreur watch {} : {} (tentative {}/{})",
+                    "DataEngine: erreur watch {} : {} (tentative {})",
                     symbol,
                     e,
                     attempt,
-                    max_attempts,
                 )
-                if attempt >= max_attempts:
-                    logger.error(
-                        "DataEngine: max reconnexions atteint pour {}",
-                        symbol,
-                    )
-                    break
-                # Backoff exponentiel
-                delay = reconnect_delay * min(2 ** (attempt - 1), 60)
+
+                # Backoff exponentiel plafonné à 5 min, SANS max_attempts
+                delay = reconnect_delay * min(2 ** (attempt - 1), 300)
                 await asyncio.sleep(delay)
+
+                # Reset après long backoff pour éviter overflow
+                if attempt > 20:
+                    attempt = 10
 
     # Rate limit retry config
     _RATE_LIMIT_DELAY = 2.0  # secondes d'attente sur rate limit

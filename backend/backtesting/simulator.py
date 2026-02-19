@@ -524,8 +524,9 @@ class GridStrategyRunner:
     MAX_WARMUP_CANDLES = 500
     # Seuil d'âge : une candle plus récente que ça = fin du warm-up
     WARMUP_AGE_THRESHOLD = timedelta(hours=2)
-    # Hotfix 35 : bougies à attendre après warm-up avant d'émettre vers l'Executor
-    POST_WARMUP_COOLDOWN = 3
+    # Hotfix 36 : durée en secondes avant d'émettre des events Executor post-warmup
+    # 10800s = 3h = 3 bougies 1h (cohérent avec l'intention du Hotfix 35)
+    POST_WARMUP_COOLDOWN_SECONDS: int = 10800
 
     def __init__(
         self,
@@ -606,9 +607,8 @@ class GridStrategyRunner:
         self._candles_since_warmup: int = 0
         self._grace_period_candles: int = 10  # 10 bougies 1h = ~10h de grâce
 
-        # Hotfix 35 : cooldown post-warmup — supprime les events Executor
-        # pendant les premières bougies (positions paper s'ouvrent normalement)
-        self._post_warmup_candle_count: int = 0
+        # Hotfix 36 : cooldown post-warmup basé sur le temps réel
+        self._warmup_ended_at: datetime | None = None  # set dans _end_warmup()
 
     def _get_sl_percent(self, symbol: str) -> float:
         """Résout le sl_percent pour un symbol (avec override per_asset)."""
@@ -734,8 +734,6 @@ class GridStrategyRunner:
 
         self._is_warming_up = False
         self._warmup_ended_at = datetime.now(tz=timezone.utc)
-        # Hotfix 35 : reset compteur cooldown à chaque fin de warm-up
-        self._post_warmup_candle_count = 0
 
     def _apply_restored_state(self, state: dict) -> None:
         """Applique un état sauvegardé (appelé après le warm-up).
@@ -823,8 +821,6 @@ class GridStrategyRunner:
 
             # Compteur grace period (kill switch runner)
             self._candles_since_warmup += 1
-            # Hotfix 35 : compteur cooldown post-warmup (events Executor)
-            self._post_warmup_candle_count += 1
 
         # Maintenir le buffer de closes + prix courant
         self._last_prices[symbol] = candle.close
@@ -1148,17 +1144,18 @@ class GridStrategyRunner:
         self, symbol: str, level: GridLevel, position: GridPosition
     ) -> None:
         """Crée un TradeEvent OPEN pour un niveau de grille."""
-        # Hotfix 35 : cooldown post-warmup — ne pas envoyer à l'Executor
-        # pendant les premières bougies. Les positions paper s'ouvrent normalement.
-        if self._post_warmup_candle_count < self.POST_WARMUP_COOLDOWN:
-            logger.info(
-                "[{}] COOLDOWN post-warmup ({}/{}) — event OPEN {} supprimé pour Executor",
-                self.name,
-                self._post_warmup_candle_count,
-                self.POST_WARMUP_COOLDOWN,
-                symbol,
-            )
-            return
+        # Hotfix 36 : cooldown post-warmup basé sur le temps réel
+        if self._warmup_ended_at is not None:
+            elapsed = (datetime.now(tz=timezone.utc) - self._warmup_ended_at).total_seconds()
+            if elapsed < self.POST_WARMUP_COOLDOWN_SECONDS:
+                logger.info(
+                    "[{}] COOLDOWN post-warmup ({:.0f}s/{:.0f}s) — event OPEN {} supprimé",
+                    self.name,
+                    elapsed,
+                    self.POST_WARMUP_COOLDOWN_SECONDS,
+                    symbol,
+                )
+                return
 
         from backend.execution.executor import TradeEvent, TradeEventType
 
@@ -1178,16 +1175,18 @@ class GridStrategyRunner:
 
     def _emit_close_event(self, symbol: str, trade: TradeResult) -> None:
         """Crée un TradeEvent CLOSE pour la fermeture grid globale."""
-        # Hotfix 35 : cooldown post-warmup — pas de CLOSE non plus (pas de position live à fermer)
-        if self._post_warmup_candle_count < self.POST_WARMUP_COOLDOWN:
-            logger.info(
-                "[{}] COOLDOWN post-warmup ({}/{}) — event CLOSE {} supprimé pour Executor",
-                self.name,
-                self._post_warmup_candle_count,
-                self.POST_WARMUP_COOLDOWN,
-                symbol,
-            )
-            return
+        # Hotfix 36 : cooldown post-warmup basé sur le temps réel
+        if self._warmup_ended_at is not None:
+            elapsed = (datetime.now(tz=timezone.utc) - self._warmup_ended_at).total_seconds()
+            if elapsed < self.POST_WARMUP_COOLDOWN_SECONDS:
+                logger.info(
+                    "[{}] COOLDOWN post-warmup ({:.0f}s/{:.0f}s) — event CLOSE {} supprimé",
+                    self.name,
+                    elapsed,
+                    self.POST_WARMUP_COOLDOWN_SECONDS,
+                    symbol,
+                )
+                return
 
         from backend.execution.executor import TradeEvent, TradeEventType
 

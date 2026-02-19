@@ -466,8 +466,8 @@ class TestGridRunnerOnCandle:
         ]
         runner = _make_grid_runner(strategy=strategy)
         _fill_buffer(runner, n=10, base_close=100_000.0)
-        # Hotfix 35 : cooldown passé — simuler 3 bougies déjà écoulées
-        runner._post_warmup_candle_count = 3
+        # Hotfix 36 : cooldown passé — simuler warm-up terminé il y a longtemps
+        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(hours=4)
 
         candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
         await runner.on_candle("BTC/USDT", "1h", candle)

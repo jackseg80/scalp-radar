@@ -1838,6 +1838,35 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Fichiers** : `frontend/src/components/ActivePositions.jsx`, `frontend/src/styles.css`.
 
+### Hotfix 36 — Cooldown par temps + DataEngine auto-recovery ✅
+
+**But** : Deux bugs critiques détectés en prod — le bot ouvre des positions incontrôlées à chaque restart et perd sa connexion WebSocket sans jamais la récupérer.
+
+**Bug 1 — Cooldown Hotfix 35 inefficace** : `_post_warmup_candle_count` s'incrémente par (symbol × candle). Avec 22 symbols, 3 bougies = 66 appels `on_candle()` → le cooldown est épuisé en quelques secondes, bien avant que la première bougie live soit traitée.
+
+**Bug 2 — DataEngine meurt définitivement** : `_watch_symbol()` faisait `break` après `max_reconnect_attempts` → la tâche asyncio se termine → ce symbol ne reçoit plus jamais de données. En prod : rate limit à 00:44 → `data_stale` toutes les 30 min pendant 7 heures.
+
+**Fix A — Cooldown par temps réel** :
+- `POST_WARMUP_COOLDOWN = 3` (compteur) → `POST_WARMUP_COOLDOWN_SECONDS = 10800` (3 heures)
+- Guard dans `_emit_open/close_event()` : `elapsed = now - _warmup_ended_at ; elapsed < 10800s → bloqué`
+- `_warmup_ended_at: datetime | None = None` initialisé dans `__init__`
+- `_post_warmup_candle_count` supprimé (compteur obsolète)
+
+**Fix B — DataEngine never give up** :
+- `_watch_symbol()` : retiré `max_reconnect_attempts` + le `break` — boucle infinie sauf symbol invalide
+- Backoff exponentiel plafonné à 5 min (était 60s), reset après `attempt > 20`
+- Stagger : `_SUBSCRIBE_BATCH_SIZE` 10→5, `_SUBSCRIBE_BATCH_DELAY` 0.5→2.0s
+- `restart_dead_tasks()` : relance les tâches asyncio terminées (par symbol)
+- `full_reconnect()` : recrée l'instance ccxt + toutes les souscriptions
+
+**Fix B3 — Watchdog auto-recovery** :
+- `data_stale > 10 min` → `restart_dead_tasks()`
+- `data_stale > 30 min` + 0 tâches relancées → `full_reconnect()`
+
+**Fichiers** : `simulator.py`, `data_engine.py`, `watchdog.py`
+
+**Tests** : 12 nouveaux (`test_hotfix_36.py`), 7 adaptés (`test_hotfix_35.py`), 1 adapté (`test_grid_runner.py`), **1374 tests** au total, 0 régression.
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -1948,9 +1977,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1359 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b**
-- **Phase 6 en cours** — Sprint 34b (dashboard multi-stratégie) terminé
+- **1374 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36**
+- **Phase 6 en cours** — Hotfix 36 (cooldown par temps + DataEngine auto-recovery) terminé
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 6 assets** (BTC, ETH, DOGE, DYDX, LINK, SAND) en préparation
@@ -1960,7 +1989,7 @@ Phase 5: Scaling Stratégies     ✅
 - **Frontend complet** : 7 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : Déployer Sprint 34b en prod + valider visuellement le filtrage par stratégie
+- **Prochaine étape** : Déployer Hotfix 36 en prod + surveiller les logs cooldown/reconnexion
 
 ### Résultats Portfolio Backtest — Validation Finale
 
