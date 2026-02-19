@@ -16,7 +16,10 @@ import ActivityFeed from './components/ActivityFeed'
 import LogMini from './components/LogMini'
 import TradeHistory from './components/TradeHistory'
 import ArenaRankingMini from './components/ArenaRankingMini'
+import OverviewPage from './components/OverviewPage'
 import { useWebSocket } from './hooks/useWebSocket'
+import { StrategyProvider, useStrategyContext } from './contexts/StrategyContext'
+import useFilteredWsData from './hooks/useFilteredWsData'
 
 const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/live`
 
@@ -30,6 +33,9 @@ const TABS = [
   { id: 'journal', label: 'Journal' },
   { id: 'logs', label: 'Logs' },
 ]
+
+// Tabs qui ne sont PAS filtrés par stratégie
+const UNFILTERED_TABS = new Set(['research', 'explorer', 'portfolio', 'journal', 'logs'])
 
 const SIDEBAR_MIN = 280
 const SIDEBAR_MAX_PCT = 0.50
@@ -51,7 +57,7 @@ function loadActiveTab() {
   return 'scanner'
 }
 
-export default function App() {
+function AppContent() {
   const [activeTab, setActiveTab] = useState(loadActiveTab)
   const { lastUpdate, lastEvent, logAlerts, connected } = useWebSocket(wsUrl)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
@@ -59,6 +65,9 @@ export default function App() {
   const dragging = useRef(false)
   const containerRef = useRef(null)
   const prevLogCountRef = useRef(0)
+
+  const { activeStrategy, strategyFilter } = useStrategyContext()
+  const filteredWsData = useFilteredWsData(lastUpdate, strategyFilter)
 
   // Sauvegarder l'onglet actif dans localStorage
   useEffect(() => {
@@ -121,16 +130,22 @@ export default function App() {
     }
   }, [])
 
-  // Summaries pour les sections collapsibles
-  const wsData = lastUpdate
-  const killSwitch = wsData?.kill_switch || false
-  const simSummary = SessionStats.getSummary(wsData)
-  const execSummary = ExecutorPanel.getSummary(wsData)
-  const arenaSummary = ArenaRankingMini.getSummary(wsData)
+  // Données filtrées pour les tabs filtrables, brutes pour les autres
+  const isFilteredTab = !UNFILTERED_TABS.has(activeTab)
+  const wsData = isFilteredTab ? filteredWsData : lastUpdate
+
+  // Summaries pour les sections collapsibles (utilisent les données filtrées)
+  const killSwitch = filteredWsData?.kill_switch || false
+  const simSummary = SessionStats.getSummary(filteredWsData)
+  const execSummary = ExecutorPanel.getSummary(filteredWsData)
+  const arenaSummary = ArenaRankingMini.getSummary(lastUpdate)
   const logSummary = LogMini.getSummary(logAlerts)
-  const tradeCount = wsData?.strategies
-    ? Object.values(wsData.strategies).reduce((sum, s) => sum + (s.total_trades || 0), 0)
+  const tradeCount = filteredWsData?.strategies
+    ? Object.values(filteredWsData.strategies).reduce((sum, s) => sum + (s.total_trades || 0), 0)
     : 0
+
+  // Scanner vs OverviewPage
+  const showOverview = activeTab === 'scanner' && activeStrategy === 'overview'
 
   return (
     <div className="app">
@@ -140,6 +155,7 @@ export default function App() {
         activeTab={activeTab}
         onTabChange={handleTabChange}
         unseenLogErrors={unseenLogErrors}
+        wsData={lastUpdate}
       />
       <div
         className="main-grid"
@@ -147,13 +163,16 @@ export default function App() {
         style={{ gridTemplateColumns: `1fr auto ${sidebarWidth}px` }}
       >
         <div className="content">
-          {activeTab === 'scanner' && <Scanner wsData={wsData} />}
+          {activeTab === 'scanner' && (showOverview
+            ? <OverviewPage wsData={lastUpdate} />
+            : <Scanner wsData={wsData} />
+          )}
           {activeTab === 'heatmap' && <Heatmap />}
           {activeTab === 'risk' && <RiskCalc />}
           {activeTab === 'research' && <ResearchPage />}
-          {activeTab === 'explorer' && <ExplorerPage wsData={wsData} lastEvent={lastEvent} />}
-          {activeTab === 'portfolio' && <PortfolioPage wsData={wsData} lastEvent={lastEvent} />}
-          {activeTab === 'journal' && <JournalPage wsData={wsData} onTabChange={handleTabChange} />}
+          {activeTab === 'explorer' && <ExplorerPage wsData={lastUpdate} lastEvent={lastEvent} />}
+          {activeTab === 'portfolio' && <PortfolioPage wsData={lastUpdate} lastEvent={lastEvent} />}
+          {activeTab === 'journal' && <JournalPage wsData={lastUpdate} onTabChange={handleTabChange} />}
           {activeTab === 'logs' && <LogViewer />}
         </div>
 
@@ -166,7 +185,7 @@ export default function App() {
             defaultOpen={true}
             storageKey="executor"
           >
-            <ExecutorPanel wsData={wsData} />
+            <ExecutorPanel wsData={filteredWsData} />
           </CollapsibleCard>
 
           <CollapsibleCard
@@ -176,7 +195,7 @@ export default function App() {
             storageKey="simulator"
             cardClassName={killSwitch ? 'card--kill-switch' : ''}
           >
-            <SessionStats wsData={wsData} />
+            <SessionStats wsData={filteredWsData} />
           </CollapsibleCard>
 
           <CollapsibleCard
@@ -192,7 +211,7 @@ export default function App() {
             defaultOpen={true}
             storageKey="activity"
           >
-            <ActivityFeed wsData={wsData} onTabChange={handleTabChange} />
+            <ActivityFeed wsData={filteredWsData} onTabChange={handleTabChange} />
           </CollapsibleCard>
 
           <CollapsibleCard
@@ -219,10 +238,18 @@ export default function App() {
             defaultOpen={false}
             storageKey="arena"
           >
-            <ArenaRankingMini wsData={wsData} />
+            <ArenaRankingMini wsData={lastUpdate} />
           </CollapsibleCard>
         </aside>
       </div>
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <StrategyProvider>
+      <AppContent />
+    </StrategyProvider>
   )
 }

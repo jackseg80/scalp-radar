@@ -106,7 +106,7 @@ function GridList({ gridState, expandedGrid, onToggle }) {
           <div
             className="active-position-item"
             style={{ cursor: 'pointer' }}
-            onClick={() => onToggle(g.symbol)}
+            onClick={() => onToggle(`${g.strategy}:${g.symbol}`)}
           >
             <span>{g.direction === 'LONG' ? '\u{1F7E2}' : '\u{1F534}'}</span>
             <span className={`badge ${g.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>
@@ -138,7 +138,7 @@ function GridList({ gridState, expandedGrid, onToggle }) {
           </div>
 
           {/* Détail déplié : positions individuelles */}
-          {expandedGrid === g.symbol && (
+          {expandedGrid === `${g.strategy}:${g.symbol}` && (
             <div className="grid-detail-row">
               {(g.positions || []).map(p => (
                 <div key={p.level} className="active-position-item">

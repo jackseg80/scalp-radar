@@ -1,7 +1,8 @@
 import { useApi } from '../hooks/useApi'
 import Tooltip from './Tooltip'
+import StrategyBar from './StrategyBar'
 
-export default function Header({ wsConnected, tabs, activeTab, onTabChange, unseenLogErrors = 0 }) {
+export default function Header({ wsConnected, tabs, activeTab, onTabChange, unseenLogErrors = 0, wsData }) {
   const { data } = useApi('/health', 10000)
 
   const engineOk = data?.data_engine?.connected
@@ -10,54 +11,54 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange, unse
 
   return (
     <header className="header">
-      <div className="header-left">
+      <div className="header-top">
         <span className="header-logo">SCALP RADAR</span>
-        <span className="header-version">v0.6.0</span>
-
-        <div className="tabs">
-          {tabs.map(t => (
-            <button
-              key={t.id}
-              className={`tab ${activeTab === t.id ? 'active' : ''}`}
-              onClick={() => onTabChange(t.id)}
-              style={{ position: 'relative' }}
-            >
-              {t.label}
-              {t.id === 'logs' && unseenLogErrors > 0 && (
-                <span style={{
-                  position: 'absolute',
-                  top: -2,
-                  right: -4,
-                  minWidth: 14,
-                  height: 14,
-                  borderRadius: 7,
-                  background: 'var(--red)',
-                  color: '#fff',
-                  fontSize: 9,
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '0 3px',
-                  lineHeight: 1,
-                }}>
-                  {unseenLogErrors > 99 ? '99+' : unseenLogErrors}
-                </span>
-              )}
-            </button>
-          ))}
+        <span className="header-version">v0.7.0</span>
+        <StrategyBar wsData={wsData} />
+        <div className="header-right">
+          <StatusDot label="Engine" ok={engineOk} tooltip="DataEngine : connexion WebSocket Bitget" />
+          <StatusDot label="DB" ok={dbOk} tooltip="Base de données SQLite" />
+          <StatusDot label="WS" ok={wsConnected} tooltip="WebSocket frontend ↔ backend (/ws/live)" />
+          <Tooltip content="État de santé global du système">
+            <span className={`status-badge ${status === 'ok' ? 'status-badge--ok' : 'status-badge--error'}`}>
+              {status.toUpperCase()}
+            </span>
+          </Tooltip>
         </div>
       </div>
 
-      <div className="header-right">
-        <StatusDot label="Engine" ok={engineOk} tooltip="DataEngine : connexion WebSocket Bitget" />
-        <StatusDot label="DB" ok={dbOk} tooltip="Base de données SQLite" />
-        <StatusDot label="WS" ok={wsConnected} tooltip="WebSocket frontend ↔ backend (/ws/live)" />
-        <Tooltip content="État de santé global du système">
-          <span className={`status-badge ${status === 'ok' ? 'status-badge--ok' : 'status-badge--error'}`}>
-            {status.toUpperCase()}
-          </span>
-        </Tooltip>
+      <div className="tabs">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            className={`tab ${activeTab === t.id ? 'active' : ''}`}
+            onClick={() => onTabChange(t.id)}
+            style={{ position: 'relative' }}
+          >
+            {t.label}
+            {t.id === 'logs' && unseenLogErrors > 0 && (
+              <span style={{
+                position: 'absolute',
+                top: -2,
+                right: -4,
+                minWidth: 14,
+                height: 14,
+                borderRadius: 7,
+                background: 'var(--red)',
+                color: '#fff',
+                fontSize: 9,
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 3px',
+                lineHeight: 1,
+              }}>
+                {unseenLogErrors > 99 ? '99+' : unseenLogErrors}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
     </header>
   )

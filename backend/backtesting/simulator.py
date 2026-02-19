@@ -2107,7 +2107,7 @@ class Simulator:
                 capital_available += runner._capital
 
         return {
-            "grid_positions": {g["symbol"]: g for g in grids},
+            "grid_positions": {f'{g["strategy"]}:{g["symbol"]}': g for g in grids},
             "summary": {
                 "total_positions": sum(g["levels_open"] for g in grids),
                 "total_assets": len(grids),

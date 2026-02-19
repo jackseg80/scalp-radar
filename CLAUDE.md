@@ -74,7 +74,7 @@ scalp-radar/
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
 ├── tests/                        # 1359 tests (pytest)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
-└── docs/plans/                   # Sprint plans 1-33 archivés
+└── docs/plans/                   # Sprint plans 1-34b archivés
 ```
 
 ## Trading Strategies (16 implémentées)
@@ -162,7 +162,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Sprint 34a) : 1359 tests passants**
+**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Sprint 34a + Sprint 34b) : 1359 tests passants**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -247,6 +247,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Hotfix 34 : Executor P&L réel Bitget — `_fetch_fill_price()` (fetch_order → fetch_my_trades), `entry_fee` dans dataclasses LivePosition/GridLivePosition, `_calculate_real_pnl()` séparée, 17 tests (1339 tests)
 - Hotfix 35 : Stabilité restart live — cooldown post-warmup 3 bougies (`POST_WARMUP_COOLDOWN`) dans GridStrategyRunner, guard `max_live_grids` isinstance-safe, sauvegarde périodique executor via `StateManager._periodic_save_loop()` (60s), 14 tests (1353 tests)
 - Sprint 34a : Lancement paper trading grid_boltrend — warm-up dynamique via `strategy.min_candles` (MAX_WARMUP_CANDLES 200→500), try/except `compute_live_indicators()` + alerte Telegram INDICATOR_ERROR (cooldown 1h), préfixes stratégie `[ATR]`/`[BOLT]` dans Telegram, rollback d'urgence COMMANDS.md section 17, 6 tests (1359 tests)
+- Sprint 34b : Dashboard Multi-Stratégie — barre navigation par stratégie (StrategyBar), filtrage WS côté client (useFilteredWsData), OverviewPage résumé, fix collision grid_positions key `strategy:symbol`, 4 fichiers frontend créés + 6 modifiés + 1 ligne backend (1359 tests)
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

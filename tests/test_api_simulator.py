@@ -222,7 +222,7 @@ async def test_grid_state_with_data(mock_app):
     """GET /api/simulator/grid-state avec une grille active → JSON complet."""
     mock_app.state.simulator.get_grid_state.return_value = {
         "grid_positions": {
-            "BTC/USDT": {
+            "envelope_dca:BTC/USDT": {
                 "symbol": "BTC/USDT",
                 "strategy": "envelope_dca",
                 "direction": "LONG",
@@ -259,8 +259,8 @@ async def test_grid_state_with_data(mock_app):
         resp = await client.get("/api/simulator/grid-state")
     assert resp.status_code == 200
     data = resp.json()
-    assert "BTC/USDT" in data["grid_positions"]
-    grid = data["grid_positions"]["BTC/USDT"]
+    assert "envelope_dca:BTC/USDT" in data["grid_positions"]
+    grid = data["grid_positions"]["envelope_dca:BTC/USDT"]
     assert grid["levels_open"] == 2
     assert grid["levels_max"] == 4
     assert grid["unrealized_pnl"] == 20.0

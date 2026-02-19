@@ -153,8 +153,8 @@ class TestGetGridStateWithPositions:
         sim._runners.append(runner)
 
         result = sim.get_grid_state()
-        assert "BTC/USDT" in result["grid_positions"]
-        g = result["grid_positions"]["BTC/USDT"]
+        assert "envelope_dca:BTC/USDT" in result["grid_positions"]
+        g = result["grid_positions"]["envelope_dca:BTC/USDT"]
 
         assert g["symbol"] == "BTC/USDT"
         assert g["strategy"] == "envelope_dca"
@@ -186,7 +186,7 @@ class TestGetGridStateWithPositions:
         sim._runners.append(runner)
 
         result = sim.get_grid_state()
-        g = result["grid_positions"]["TEST/USDT"]
+        g = result["grid_positions"]["envelope_dca:TEST/USDT"]
 
         # P&L non réalisé : (110 - 100) × 1.0 = +10
         assert g["unrealized_pnl"] == 10.0
@@ -210,7 +210,7 @@ class TestGetGridStateWithPositions:
         sim._runners.append(runner)
 
         result = sim.get_grid_state()
-        g = result["grid_positions"]["TEST/USDT"]
+        g = result["grid_positions"]["envelope_dca_short:TEST/USDT"]
 
         # P&L non réalisé : (100 - 90) × 1.0 = +10
         assert g["unrealized_pnl"] == 10.0
@@ -236,8 +236,8 @@ class TestGetGridStateWithPositions:
 
         result = sim.get_grid_state()
         assert len(result["grid_positions"]) == 2
-        assert "BTC/USDT" in result["grid_positions"]
-        assert "ETH/USDT" in result["grid_positions"]
+        assert "envelope_dca:BTC/USDT" in result["grid_positions"]
+        assert "envelope_dca:ETH/USDT" in result["grid_positions"]
         assert result["summary"]["total_assets"] == 2
 
     def test_price_fallback_no_1m(self):
@@ -267,8 +267,8 @@ class TestGetGridStateWithPositions:
         sim._runners.append(runner)
 
         result = sim.get_grid_state()
-        assert "TEST/USDT" in result["grid_positions"]
-        assert result["grid_positions"]["TEST/USDT"]["current_price"] == 100.0
+        assert "envelope_dca:TEST/USDT" in result["grid_positions"]
+        assert result["grid_positions"]["envelope_dca:TEST/USDT"]["current_price"] == 100.0
 
     def test_tp_sl_none_when_nan(self):
         """Si TP/SL retourne NaN → None dans le JSON."""
@@ -286,7 +286,7 @@ class TestGetGridStateWithPositions:
         sim._runners.append(runner)
 
         result = sim.get_grid_state()
-        g = result["grid_positions"]["TEST/USDT"]
+        g = result["grid_positions"]["envelope_dca:TEST/USDT"]
         assert g["tp_price"] is None
         assert g["sl_price"] is None
         assert g["tp_distance_pct"] is None

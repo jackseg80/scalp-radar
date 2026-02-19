@@ -14,6 +14,8 @@ import Spark from './Spark'
 import Tooltip from './Tooltip'
 import ActivePositions from './ActivePositions'
 import CollapsibleCard from './CollapsibleCard'
+import { buildGridLookupBySymbol } from '../hooks/useFilteredWsData'
+import { useStrategyContext } from '../contexts/StrategyContext'
 
 function getAssetScore(asset) {
   const strats = asset.strategies || {}
@@ -60,6 +62,7 @@ export default function Scanner({ wsData }) {
   const { data, loading } = useApi('/api/simulator/conditions', 10000)
   const { data: gradesData } = useApi('/api/optimization/results?latest_only=true&limit=500', 60000)
   const [selectedAsset, setSelectedAsset] = useState(null)
+  const { strategyFilter } = useStrategyContext()
 
   // Backend renvoie assets comme dict {symbol: data}, convertir en tableau
   const assetsObj = data?.assets || {}
@@ -87,12 +90,36 @@ export default function Scanner({ wsData }) {
     return lookup
   }, [gradesData])
 
-  // Lookup grid state depuis le WebSocket
-  const gridLookup = wsData?.grid_state?.grid_positions || {}
+  // Lookup grid state par symbol (clés backend = strategy:symbol)
+  const gridLookup = useMemo(
+    () => buildGridLookupBySymbol(wsData?.grid_state?.grid_positions),
+    [wsData?.grid_state?.grid_positions],
+  )
+
+  // Symbols actifs pour la stratégie sélectionnée (filtrage assets)
+  const activeSymbols = useMemo(() => {
+    if (!strategyFilter) return null // overview = tout afficher
+    const symbols = new Set()
+    for (const g of Object.values(wsData?.grid_state?.grid_positions || {})) {
+      symbols.add(g.symbol)
+    }
+    // Aussi inclure les symbols des runners (strategies dict)
+    for (const s of Object.values(wsData?.strategies || {})) {
+      if (s.assets_with_positions > 0 || s.open_positions > 0) {
+        // Les symbols sont dans grid_positions, déjà capturés
+      }
+    }
+    return symbols.size > 0 ? symbols : null
+  }, [strategyFilter, wsData?.grid_state?.grid_positions, wsData?.strategies])
+
+  // Filtrer les assets si une stratégie est sélectionnée
+  const filteredAssets = activeSymbols
+    ? enrichedAssets.filter(a => activeSymbols.has(a.symbol))
+    : enrichedAssets
 
   // Détecter quels types de stratégies sont actives
   const hasGridStrategies = Object.keys(gridLookup).length > 0
-  const hasMonoStrategies = enrichedAssets.some(a => {
+  const hasMonoStrategies = filteredAssets.some(a => {
     const strats = a.strategies || {}
     return Object.values(strats).some(s => {
       const conditions = s.conditions || []
@@ -105,7 +132,7 @@ export default function Scanner({ wsData }) {
   const colCount = 7 + (hasMonoStrategies ? 2 : 0) + (hasGridStrategies ? 1 : 0)
 
   // Trier : positions grid ouvertes en premier, puis par grade décroissant
-  const sortedAssets = [...enrichedAssets].sort((a, b) => {
+  const sortedAssets = [...filteredAssets].sort((a, b) => {
     const aHasGrid = gridLookup[a.symbol] ? 1 : 0
     const bHasGrid = gridLookup[b.symbol] ? 1 : 0
     if (aHasGrid !== bHasGrid) return bHasGrid - aHasGrid
