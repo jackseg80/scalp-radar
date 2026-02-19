@@ -307,6 +307,14 @@ tr:last-child td { border-bottom: none; }
 .scanner-row.selected {
   background: rgba(0, 230, 138, 0.04);
 }
+.scanner-row--inactive {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+.scanner-row--inactive:hover {
+  background: transparent;
+}
 .scanner-expand {
   padding: 12px 8px;
   border-bottom: 1px solid var(--border);

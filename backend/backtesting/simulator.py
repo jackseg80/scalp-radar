@@ -1339,6 +1339,7 @@ class GridStrategyRunner:
             "assets_with_positions": assets_with_positions,
             "regime_filter_blocks": self._regime_filter_blocks,
             "funding_cost": round(self._total_funding_cost, 2),
+            "watched_symbols": sorted(self._per_asset_keys) if self._per_asset_keys else [],
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:

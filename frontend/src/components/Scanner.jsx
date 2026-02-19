@@ -96,26 +96,30 @@ export default function Scanner({ wsData }) {
     [wsData?.grid_state?.grid_positions],
   )
 
-  // Symbols actifs pour la stratégie sélectionnée (filtrage assets)
-  const activeSymbols = useMemo(() => {
-    if (!strategyFilter) return null // overview = tout afficher
+  // Symbols qui ont une position grid ouverte
+  const inPositionSymbols = useMemo(() => {
     const symbols = new Set()
     for (const g of Object.values(wsData?.grid_state?.grid_positions || {})) {
       symbols.add(g.symbol)
     }
-    // Aussi inclure les symbols des runners (strategies dict)
-    for (const s of Object.values(wsData?.strategies || {})) {
-      if (s.assets_with_positions > 0 || s.open_positions > 0) {
-        // Les symbols sont dans grid_positions, déjà capturés
-      }
-    }
-    return symbols.size > 0 ? symbols : null
-  }, [strategyFilter, wsData?.grid_state?.grid_positions, wsData?.strategies])
+    return symbols
+  }, [wsData?.grid_state?.grid_positions])
 
-  // Filtrer les assets si une stratégie est sélectionnée
-  const filteredAssets = activeSymbols
-    ? enrichedAssets.filter(a => activeSymbols.has(a.symbol))
-    : enrichedAssets
+  // Symbols surveillés par la stratégie filtrée (whitelist per_asset)
+  const watchedSymbols = useMemo(() => {
+    if (!strategyFilter) return null
+    const ws = wsData?.strategies?.[strategyFilter]?.watched_symbols
+    if (!ws || ws.length === 0) return null
+    return new Set(ws)
+  }, [strategyFilter, wsData?.strategies])
+
+  // Filtrer les assets : watched > in-position > tous
+  const filteredAssets = useMemo(() => {
+    if (!strategyFilter) return enrichedAssets
+    if (watchedSymbols) return enrichedAssets.filter(a => watchedSymbols.has(a.symbol))
+    if (inPositionSymbols.size > 0) return enrichedAssets.filter(a => inPositionSymbols.has(a.symbol))
+    return enrichedAssets
+  }, [enrichedAssets, strategyFilter, watchedSymbols, inPositionSymbols])
 
   // Détecter quels types de stratégies sont actives
   const hasGridStrategies = Object.keys(gridLookup).length > 0
@@ -217,12 +221,14 @@ export default function Scanner({ wsData }) {
               const direction = getDirection(asset.indicators, gridInfo)
               const changePct = asset.change_pct
               const gradeInfo = gradesLookup[asset.symbol]
+              // Asset surveillé par la stratégie mais sans position ouverte
+              const isInactive = !!strategyFilter && !!watchedSymbols && !inPositionSymbols.has(asset.symbol)
 
               return (
                 <Fragment key={asset.symbol}>
                   <tr
-                    className={`scanner-row ${isSelected ? 'selected' : ''}`}
-                    onClick={() => handleRowClick(asset.symbol)}
+                    className={`scanner-row ${isSelected ? 'selected' : ''} ${isInactive ? 'scanner-row--inactive' : ''}`}
+                    onClick={isInactive ? undefined : () => handleRowClick(asset.symbol)}
                   >
                     <td style={{ fontWeight: 700 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
