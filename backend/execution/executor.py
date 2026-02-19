@@ -235,6 +235,7 @@ class Executor:
         order_result: dict,
         strategy_name: str = "",
         context: str = "",
+        paper_price: float = 0.0,
     ) -> None:
         """Enregistre un ordre reussi dans l'historique (FIFO, max 200)."""
         self._order_history.appendleft({
@@ -249,7 +250,28 @@ class Executor:
             "status": order_result.get("status", ""),
             "strategy_name": strategy_name,
             "context": context,
+            "paper_price": paper_price,
         })
+
+    def _update_order_price(
+        self,
+        order_id: str,
+        real_price: float,
+        fee: float | None = None,
+    ) -> None:
+        """Patche le prix reel et la fee dans l'historique pour un order_id donne.
+
+        Appele apres _fetch_fill_price() pour retropropa le prix de fill Bitget
+        dans l'enregistrement cree par _record_order() (qui a souvent average=0).
+        """
+        if not order_id or real_price <= 0:
+            return
+        for record in self._order_history:
+            if record.get("order_id") == order_id:
+                record["average_price"] = real_price
+                if fee is not None:
+                    record["fee"] = fee
+                return
 
     # ─── Lifecycle ─────────────────────────────────────────────────────
 
@@ -676,7 +698,7 @@ class Executor:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
             )
-            self._record_order("entry", futures_sym, side, quantity, entry_order, event.strategy_name, "mono")
+            self._record_order("entry", futures_sym, side, quantity, entry_order, event.strategy_name, "mono", paper_price=event.entry_price)
         except Exception as e:
             logger.error("Executor: échec ordre d'entrée: {}", e)
             return
@@ -696,6 +718,9 @@ class Executor:
                 entry_order_id, futures_sym, event.entry_price,
             )
             entry_fee = fetched_fee if fetched_fee is not None else 0.0
+
+        # Sprint Journal V2 : retropropager le prix reel dans l'historique
+        self._update_order_price(entry_order_id, avg_price, entry_fee if entry_fee > 0 else None)
 
         if filled_qty <= 0:
             logger.error("Executor: ordre d'entrée non rempli")
@@ -943,7 +968,7 @@ class Executor:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
             )
-            self._record_order("entry", futures_sym, side, quantity, entry_order, event.strategy_name, "grid")
+            self._record_order("entry", futures_sym, side, quantity, entry_order, event.strategy_name, "grid", paper_price=event.entry_price)
         except Exception as e:
             logger.error("Executor: échec grid entry: {}", e)
             return
@@ -963,6 +988,9 @@ class Executor:
                 order_id, futures_sym, event.entry_price,
             )
             entry_fee = fetched_fee if fetched_fee is not None else 0.0
+
+        # Sprint Journal V2 : retropropager le prix reel dans l'historique
+        self._update_order_price(order_id, avg_price, entry_fee if entry_fee > 0 else None)
 
         if filled_qty <= 0:
             logger.error("Executor: grid entry non remplie")
@@ -1116,7 +1144,7 @@ class Executor:
                     futures_sym, "market", close_side, state.total_quantity,
                     params={"reduceOnly": True},
                 )
-                self._record_order("close", futures_sym, close_side, state.total_quantity, close_order, state.strategy_name, "grid_cycle")
+                self._record_order("close", futures_sym, close_side, state.total_quantity, close_order, state.strategy_name, "grid_cycle", paper_price=event.exit_price or 0.0)
                 # Hotfix 34 : prix de fill réel + fees
                 exit_price_raw = close_order.get("average")
                 exit_fee: float | None = None
@@ -1128,6 +1156,8 @@ class Executor:
                     exit_price, exit_fee = await self._fetch_fill_price(
                         close_order.get("id", ""), futures_sym, event.exit_price or 0,
                     )
+                # Sprint Journal V2 : retropropager le prix reel dans l'historique
+                self._update_order_price(close_order.get("id", ""), exit_price, exit_fee)
             except Exception as e:
                 logger.error("Executor: échec close grid {}: {}", futures_sym, e)
                 self._risk_manager.unregister_position(futures_sym)
@@ -1238,7 +1268,7 @@ class Executor:
                 futures_sym, "market", close_side, pos.quantity,
                 params={"reduceOnly": True},
             )
-            self._record_order("close", futures_sym, close_side, pos.quantity, close_order, event.strategy_name, f"mono_{event.exit_reason or 'unknown'}")
+            self._record_order("close", futures_sym, close_side, pos.quantity, close_order, event.strategy_name, f"mono_{event.exit_reason or 'unknown'}", paper_price=event.exit_price or 0.0)
             # Hotfix 34 : prix de fill réel + fees
             exit_price_raw = close_order.get("average")
             exit_fee: float | None = None
@@ -1250,6 +1280,8 @@ class Executor:
                 exit_price, exit_fee = await self._fetch_fill_price(
                     close_order.get("id", ""), futures_sym, event.exit_price or 0,
                 )
+            # Sprint Journal V2 : retropropager le prix reel dans l'historique
+            self._update_order_price(close_order.get("id", ""), exit_price, exit_fee)
         except Exception as e:
             logger.error("Executor: échec close market: {}", e)
             return
@@ -1360,6 +1392,13 @@ class Executor:
 
             exit_price = float(order.get("average") or order.get("price") or 0)
 
+            # Sprint Journal V2 : enregistrer le SL/TP fill dans l'historique
+            close_side = "sell" if pos.direction == "LONG" else "buy"
+            self._record_order(
+                exit_reason, symbol, close_side, pos.quantity,
+                order, pos.strategy_name, f"watched_{exit_reason}",
+            )
+
             # Si fee absente du WS push (fréquent pour trigger orders Bitget), fetch le fill
             if exit_fee is None or exit_fee == 0:
                 _, fetched_fee = await self._fetch_fill_price(
@@ -1376,6 +1415,13 @@ class Executor:
             if order_id == grid_state.sl_order_id:
                 exit_price = float(
                     order.get("average") or order.get("price") or grid_state.sl_price,
+                )
+
+                # Sprint Journal V2 : enregistrer le SL grid fill dans l'historique
+                close_side = "sell" if grid_state.direction == "LONG" else "buy"
+                self._record_order(
+                    "sl", futures_sym, close_side, grid_state.total_quantity,
+                    order, grid_state.strategy_name, "watched_grid_sl",
                 )
 
                 # Si fee absente du WS push, fetch le fill
@@ -1921,6 +1967,7 @@ class Executor:
                 "strategy_name": pos.strategy_name,
                 "leverage": default_leverage,
                 "notional": notional,
+                "entry_time": pos.entry_time.isoformat(),
             }
             positions_list.append(info)
             if pos_info is None:
@@ -1938,8 +1985,19 @@ class Executor:
                 "strategy_name": gs.strategy_name,
                 "type": "grid",
                 "levels": len(gs.positions),
+                "levels_max": self._get_grid_num_levels(gs.strategy_name),
                 "leverage": gs.leverage,
                 "notional": notional,
+                "entry_time": gs.opened_at.isoformat(),
+                "positions": [
+                    {
+                        "level": p.level,
+                        "entry_price": p.entry_price,
+                        "quantity": p.quantity,
+                        "entry_time": p.entry_time.isoformat(),
+                    }
+                    for p in gs.positions
+                ],
             }
             positions_list.append(info)
             if pos_info is None:
@@ -2095,6 +2153,13 @@ class Executor:
         if strat_config and hasattr(strat_config, "leverage"):
             return strat_config.leverage
         return 6
+
+    def _get_grid_num_levels(self, strategy_name: str) -> int:
+        """Récupère le num_levels depuis la config stratégie."""
+        strat_config = getattr(self._config.strategies, strategy_name, None)
+        if strat_config and hasattr(strat_config, "num_levels"):
+            return strat_config.num_levels
+        return 4
 
     @staticmethod
     def _restore_single_position(pos_data: dict[str, Any]) -> LivePosition:

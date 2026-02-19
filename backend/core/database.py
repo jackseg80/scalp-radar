@@ -1036,6 +1036,64 @@ class Database:
             "max_drawdown_pct": max_drawdown_pct,
         }
 
+    # ─── PER-ASSET STATS (Sprint Journal V2) ────────────────────────────────
+
+    async def get_journal_per_asset_stats(self, period: str = "all") -> list[dict]:
+        """Stats par asset depuis simulation_trades (paper trades only)."""
+        assert self._conn is not None
+
+        since: str | None = None
+        now = datetime.now(tz=timezone.utc)
+        if period == "today":
+            since = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        elif period == "7d":
+            since = (now - timedelta(days=7)).isoformat()
+        elif period == "30d":
+            since = (now - timedelta(days=30)).isoformat()
+
+        if since:
+            cursor = await self._conn.execute(
+                """SELECT symbol,
+                          COUNT(*) as total_trades,
+                          SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) as wins,
+                          SUM(CASE WHEN net_pnl <= 0 THEN 1 ELSE 0 END) as losses,
+                          ROUND(SUM(net_pnl), 2) as total_pnl,
+                          ROUND(AVG(net_pnl), 2) as avg_pnl
+                   FROM simulation_trades
+                   WHERE exit_time >= ?
+                   GROUP BY symbol
+                   ORDER BY total_pnl DESC""",
+                [since],
+            )
+        else:
+            cursor = await self._conn.execute(
+                """SELECT symbol,
+                          COUNT(*) as total_trades,
+                          SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) as wins,
+                          SUM(CASE WHEN net_pnl <= 0 THEN 1 ELSE 0 END) as losses,
+                          ROUND(SUM(net_pnl), 2) as total_pnl,
+                          ROUND(AVG(net_pnl), 2) as avg_pnl
+                   FROM simulation_trades
+                   GROUP BY symbol
+                   ORDER BY total_pnl DESC""",
+            )
+
+        rows = await cursor.fetchall()
+        result = []
+        for row in rows:
+            total = row["total_trades"]
+            wins = row["wins"]
+            result.append({
+                "symbol": row["symbol"],
+                "total_trades": total,
+                "wins": wins,
+                "losses": row["losses"],
+                "win_rate": round(wins / total * 100, 1) if total > 0 else 0.0,
+                "total_pnl": row["total_pnl"],
+                "avg_pnl": row["avg_pnl"],
+            })
+        return result
+
     # ─── SESSION STATE ──────────────────────────────────────────────────────
 
     async def save_session_state(self, state: SessionState) -> None:

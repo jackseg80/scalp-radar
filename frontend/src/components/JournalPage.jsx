@@ -72,7 +72,7 @@ export default function JournalPage({ wsData, onTabChange }) {
       </div>
 
       <CollapsibleCard title="Stats" defaultOpen={true} storageKey="journal-stats">
-        <StatsOverview period={period} />
+        <StatsOverview period={period} wsData={wsData} />
       </CollapsibleCard>
 
       <CollapsibleCard title="Positions & Trades" defaultOpen={true} storageKey="journal-positions">
@@ -86,6 +86,10 @@ export default function JournalPage({ wsData, onTabChange }) {
       <CollapsibleCard title="Ordres Bitget" defaultOpen={true} storageKey="journal-orders">
         <BitgetOrders />
       </CollapsibleCard>
+
+      <CollapsibleCard title="Performance par Asset" defaultOpen={false} storageKey="journal-per-asset">
+        <PerAssetSummary period={period} />
+      </CollapsibleCard>
     </div>
   )
 }
@@ -94,9 +98,13 @@ export default function JournalPage({ wsData, onTabChange }) {
  * Section 1 — Stats Overview
  * ──────────────────────────────────────────────────────────────────────── */
 
-function StatsOverview({ period }) {
+function StatsOverview({ period, wsData }) {
   const { data, loading } = useApi(`/api/journal/stats?period=${period}`, 30000)
   const stats = data?.stats
+
+  // Funding costs depuis les strategies WS
+  const totalFunding = Object.values(wsData?.strategies || {})
+    .reduce((sum, s) => sum + (s.funding_cost || 0), 0)
 
   if (loading && !stats) {
     return <div className="empty-state">Chargement des stats...</div>
@@ -159,6 +167,9 @@ function StatsOverview({ period }) {
         <span>Duree moy. : {stats.avg_duration_hours}h</span>
         <span>Trades/jour : {stats.trades_per_day}</span>
         <span>W/L : {stats.wins}/{stats.losses}</span>
+        {totalFunding !== 0 && (
+          <span>Funding : <span className={totalFunding >= 0 ? 'pnl-pos' : 'pnl-neg'}>{totalFunding >= 0 ? '+' : ''}{totalFunding.toFixed(2)}$</span></span>
+        )}
       </div>
     </div>
   )
@@ -192,20 +203,26 @@ function OpenPositions({ wsData }) {
   const [expandedSymbol, setExpandedSymbol] = useState(null)
   const simPositions = wsData?.simulator_positions || []
   const execPositions = wsData?.executor?.positions || (wsData?.executor?.position ? [wsData.executor.position] : [])
+  const execGrids = wsData?.executor?.grid_states || {}
   const gridState = wsData?.grid_state || null
   const prices = wsData?.prices || {}
 
   const grids = gridState?.grid_positions ? Object.values(gridState.grid_positions) : []
+  // LIVE grids depuis executor get_status()
+  const liveGrids = Object.values(execGrids).map(gs => ({ ...gs, _source: 'LIVE', _type: 'grid' }))
   const monoSim = simPositions.filter(p => p.type !== 'grid')
-  const hasPositions = grids.length > 0 || monoSim.length > 0 || execPositions.length > 0
+  // Filtrer les exec mono (exclure ceux qui sont dans les grids LIVE)
+  const monoExec = execPositions.filter(p => p.type !== 'grid')
+  const hasPositions = grids.length > 0 || monoSim.length > 0 || execPositions.length > 0 || liveGrids.length > 0
 
   if (!hasPositions) {
     return <div className="empty-state">Aucune position ouverte</div>
   }
 
   const allPositions = [
+    ...liveGrids,
     ...grids.map(g => ({ ...g, _source: 'PAPER', _type: 'grid' })),
-    ...execPositions.map(p => ({ ...p, _source: 'LIVE', _type: 'mono' })),
+    ...monoExec.map(p => ({ ...p, _source: 'LIVE', _type: 'mono' })),
     ...monoSim.map(p => ({ ...p, _source: 'PAPER', _type: 'mono' })),
   ]
 
@@ -222,6 +239,7 @@ function OpenPositions({ wsData }) {
             <th>Qty</th>
             <th>Notionnel</th>
             <th>P&L latent</th>
+            <th>P&L %</th>
             <th>Duree</th>
             <th>Niveaux</th>
           </tr>
@@ -239,8 +257,9 @@ function OpenPositions({ wsData }) {
               : pos.quantity
             const notional = entryPrice && qty ? (entryPrice * qty).toFixed(0) : '--'
             const strategy = isGrid ? pos.strategy : (pos.strategy_name || pos.strategy || '')
-            // opened_at absent du grid_state → utiliser le premier niveau
-            const entryTime = isGrid ? pos.positions?.[0]?.entry_time : pos.entry_time
+            const entryTime = isGrid
+              ? (pos.entry_time || pos.positions?.[0]?.entry_time)
+              : pos.entry_time
 
             // Prix courant : les prix WS sont en format spot (BTC/USDT),
             // mais les positions live sont en format futures (BTC/USDT:USDT)
@@ -256,6 +275,12 @@ function OpenPositions({ wsData }) {
                   : (entryPrice - currentPrice) * qty
               }
             }
+
+            // P&L % — leverage depuis la position ou config par defaut (3)
+            const leverage = pos.leverage || 3
+            const margin = entryPrice && qty && leverage ? (entryPrice * qty / leverage) : 0
+            const pnlPct = pnl != null && margin > 0 ? (pnl / margin * 100) : null
+
             const pnlClass = pnl != null ? (pnl >= 0 ? 'row-positive' : 'row-negative') : ''
             const levelsStr = isGrid ? `${pos.levels_open || 0}/${pos.levels_max || '?'}` : '--'
             const expanded = expandedSymbol === `${pos._source}-${symbol}-${i}`
@@ -280,6 +305,9 @@ function OpenPositions({ wsData }) {
                 <td className={`mono text-xs ${pnl != null ? (pnl >= 0 ? 'pnl-pos' : 'pnl-neg') : ''}`}>
                   {pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}$` : '--'}
                 </td>
+                <td className={`mono text-xs ${pnlPct != null ? (pnlPct >= 0 ? 'pnl-pos' : 'pnl-neg') : ''}`}>
+                  {pnlPct != null ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : '--'}
+                </td>
                 <td className="text-xs muted">{timeAgo(entryTime)}</td>
                 <td className="text-xs">{levelsStr}</td>
               </tr>,
@@ -289,7 +317,7 @@ function OpenPositions({ wsData }) {
                   <td className="text-xs muted">Niv.{lv.level + 1}</td>
                   <td className="mono text-xs">{formatPrice(lv.entry_price)}</td>
                   <td className="mono text-xs">{Number(lv.quantity).toFixed(4)}</td>
-                  <td colSpan={4} className="text-xs muted">{lv.entry_time ? new Date(lv.entry_time).toLocaleString('fr-FR') : ''}</td>
+                  <td colSpan={5} className="text-xs muted">{lv.entry_time ? new Date(lv.entry_time).toLocaleString('fr-FR') : ''}</td>
                 </tr>
               )) : []),
             ]
@@ -594,7 +622,9 @@ function getPeriodSince(period) {
 
 function BitgetOrders() {
   const { data, loading } = useApi('/api/executor/orders?limit=50', 15000)
+  const { data: slippageData } = useApi('/api/journal/slippage', 30000)
   const orders = data?.orders || []
+  const slipSummary = slippageData?.slippage
 
   if (loading && !data) return <div className="empty-state">Chargement...</div>
   if (orders.length === 0) {
@@ -602,47 +632,152 @@ function BitgetOrders() {
   }
 
   return (
+    <div>
+      {slipSummary && slipSummary.orders_analyzed > 0 && (
+        <div className="stats-secondary" style={{ marginBottom: 8 }}>
+          <span>Slippage moyen : <span className={slipSummary.avg_slippage_pct > 0 ? 'pnl-neg' : 'pnl-pos'}>
+            {slipSummary.avg_slippage_pct > 0 ? '+' : ''}{slipSummary.avg_slippage_pct.toFixed(3)}%
+          </span></span>
+          <span>Cout total : <span className={slipSummary.total_slippage_cost > 0 ? 'pnl-neg' : 'pnl-pos'}>
+            {slipSummary.total_slippage_cost > 0 ? '+' : ''}{slipSummary.total_slippage_cost.toFixed(2)}$
+          </span></span>
+          <span className="text-xs muted">({slipSummary.orders_analyzed} ordres analyses)</span>
+        </div>
+      )}
+
+      <div style={{ overflowX: 'auto' }}>
+        <table className="journal-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Type</th>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th>Qty</th>
+              <th>Prix moyen</th>
+              <th>Slippage</th>
+              <th>Order ID</th>
+              <th>Strategie</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map((o, i) => {
+              const avgP = o.average_price || 0
+              const paperP = o.paper_price || 0
+              const hasSlip = avgP > 0 && paperP > 0
+              const slipPct = hasSlip ? ((avgP - paperP) / paperP * 100) : null
+              const slipClass = slipPct != null
+                ? (slipPct > 0.01 ? 'pnl-neg' : slipPct < -0.01 ? 'pnl-pos' : 'muted')
+                : ''
+
+              return (
+                <tr key={i}>
+                  <td className="text-xs muted">
+                    {o.timestamp ? new Date(o.timestamp).toLocaleString('fr-FR') : '--'}
+                  </td>
+                  <td>
+                    <span className={`order-badge ${o.order_type || ''}`}>
+                      {o.order_type || '--'}
+                    </span>
+                  </td>
+                  <td style={{ fontWeight: 600, fontSize: 11 }}>{o.symbol || '--'}</td>
+                  <td>
+                    <span className={`badge ${o.side === 'buy' ? 'badge-long' : 'badge-short'}`}>
+                      {o.side === 'buy' ? 'BUY' : 'SELL'}
+                    </span>
+                  </td>
+                  <td className="mono text-xs">{o.filled || o.quantity || '--'}</td>
+                  <td className="mono text-xs">{avgP > 0 ? formatPrice(avgP) : '--'}</td>
+                  <td className={`mono text-xs ${slipClass}`}>
+                    {slipPct != null ? `${slipPct >= 0 ? '+' : ''}${slipPct.toFixed(3)}%` : '--'}
+                  </td>
+                  <td>
+                    <span className="order-id" title={o.order_id || ''} onClick={() => {
+                      if (o.order_id) navigator.clipboard?.writeText(o.order_id)
+                    }}>
+                      {o.order_id ? o.order_id.slice(0, 12) + '...' : '--'}
+                    </span>
+                  </td>
+                  <td className="text-xs">{o.strategy_name || '--'}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Section 5 — Performance par Asset
+ * ──────────────────────────────────────────────────────────────────────── */
+
+function PerAssetSummary({ period }) {
+  const { data, loading } = useApi(`/api/journal/per-asset?period=${period}`, 30000)
+  const [sortBy, setSortBy] = useState('total_pnl')
+  const [sortAsc, setSortAsc] = useState(false)
+
+  const assets = data?.per_asset || []
+
+  const sorted = useMemo(() => {
+    return [...assets].sort((a, b) => {
+      const va = a[sortBy] ?? 0
+      const vb = b[sortBy] ?? 0
+      return sortAsc ? va - vb : vb - va
+    })
+  }, [assets, sortBy, sortAsc])
+
+  const handleSort = (col) => {
+    if (sortBy === col) setSortAsc(!sortAsc)
+    else { setSortBy(col); setSortAsc(false) }
+  }
+
+  if (loading && !data) return <div className="empty-state">Chargement...</div>
+  if (assets.length === 0) return <div className="empty-state">Aucun trade (paper)</div>
+
+  return (
     <div style={{ overflowX: 'auto' }}>
+      <div className="text-xs muted" style={{ marginBottom: 4 }}>
+        Donnees paper trading (simulation_trades)
+      </div>
       <table className="journal-table">
         <thead>
           <tr>
-            <th>Timestamp</th>
-            <th>Type</th>
-            <th>Symbol</th>
-            <th>Side</th>
-            <th>Qty</th>
-            <th>Prix moyen</th>
-            <th>Order ID</th>
-            <th>Strategie</th>
+            <th onClick={() => handleSort('symbol')} style={{ cursor: 'pointer' }}>
+              Symbol {sortBy === 'symbol' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('total_trades')} style={{ cursor: 'pointer' }}>
+              Trades {sortBy === 'total_trades' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('win_rate')} style={{ cursor: 'pointer' }}>
+              Win Rate {sortBy === 'win_rate' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('total_pnl')} style={{ cursor: 'pointer' }}>
+              P&L Net {sortBy === 'total_pnl' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('avg_pnl')} style={{ cursor: 'pointer' }}>
+              P&L Moyen {sortBy === 'avg_pnl' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th>W/L</th>
           </tr>
         </thead>
         <tbody>
-          {orders.map((o, i) => (
-            <tr key={i}>
-              <td className="text-xs muted">
-                {o.timestamp ? new Date(o.timestamp).toLocaleString('fr-FR') : '--'}
+          {sorted.map((a) => (
+            <tr key={a.symbol} className={a.total_pnl >= 0 ? 'row-positive' : 'row-negative'}>
+              <td style={{ fontWeight: 600 }}>{a.symbol}</td>
+              <td className="mono text-xs">{a.total_trades}</td>
+              <td className={`mono text-xs ${a.win_rate >= 50 ? 'pnl-pos' : 'pnl-neg'}`}>
+                {a.win_rate}%
               </td>
-              <td>
-                <span className={`order-badge ${o.order_type || ''}`}>
-                  {o.order_type || '--'}
-                </span>
+              <td className={`mono ${a.total_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
+                {a.total_pnl >= 0 ? '+' : ''}{a.total_pnl.toFixed(2)}$
               </td>
-              <td style={{ fontWeight: 600, fontSize: 11 }}>{o.symbol || '--'}</td>
-              <td>
-                <span className={`badge ${o.side === 'buy' ? 'badge-long' : 'badge-short'}`}>
-                  {o.side === 'buy' ? 'BUY' : 'SELL'}
-                </span>
+              <td className={`mono text-xs ${a.avg_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                {a.avg_pnl >= 0 ? '+' : ''}{a.avg_pnl.toFixed(2)}$
               </td>
-              <td className="mono text-xs">{o.filled || o.quantity || '--'}</td>
-              <td className="mono text-xs">{o.average_price ? formatPrice(o.average_price) : '--'}</td>
-              <td>
-                <span className="order-id" title={o.order_id || ''} onClick={() => {
-                  if (o.order_id) navigator.clipboard?.writeText(o.order_id)
-                }}>
-                  {o.order_id ? o.order_id.slice(0, 12) + '...' : '--'}
-                </span>
-              </td>
-              <td className="text-xs">{o.strategy_name || '--'}</td>
+              <td className="text-xs">{a.wins}/{a.losses}</td>
             </tr>
           ))}
         </tbody>

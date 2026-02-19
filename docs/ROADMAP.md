@@ -2097,8 +2097,8 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1452 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35**
+- **1445 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2**
 - **Phase 6 en cours** — leverage optimal en cours de validation via Sprint 35 stress test
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
@@ -2110,6 +2110,7 @@ Phase 5: Scaling Stratégies     ✅
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Sprint 35** : `scripts/stress_test_leverage.py` — 20 backtests (2 stratégies × 4 leverages × 2-3 fenêtres), KS désactivé (99%), analyse KS a posteriori à 30%/45%/60%, Calmar ratio, recommandation automatique, CSV `data/stress_test_results.csv`. Pas de tests unitaires (script de benchmark).
+- **Sprint Journal V2** : Fix prix moyen "--" Bitget (`_update_order_price()` rétroactif + `paper_price`), enregistrement SL/TP fills watchOrders dans `_order_history`, endpoint slippage paper vs live (`GET /api/journal/slippage`), perf par asset (`GET /api/journal/per-asset`), `get_status()` enrichi (entry_time, positions detail, levels_max), frontend : colonne P&L %, LIVE grids expandables, colonne Slippage + bandeau, section per-asset triable, funding costs dans Stats. 18 tests (1445 total).
 - **Prochaine étape** : Lancer le stress test complet (20 runs ~30 min), choisir le leverage optimal grid_boltrend (actuellement 6x arbitraire), déployer grid_boltrend en paper trading
 
 ### Résultats Portfolio Backtest — Validation Finale
