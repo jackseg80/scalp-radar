@@ -2351,23 +2351,26 @@ class Simulator:
 
         return {"matrix": matrix}
 
-    def get_equity_curve(self, since: str | None = None) -> dict:
-        """Courbe d'equity depuis les trades. Cache invalidé quand un trade est enregistré."""
-        total_trades = sum(len(r.get_trades()) for r in self._runners)
+    def get_equity_curve(self, since: str | None = None, strategy: str | None = None) -> dict:
+        """Courbe d'equity depuis les trades.
 
-        # Cache valide ?
-        if self._equity_cache is not None and self._trade_count_at_cache == total_trades:
-            equity = self._equity_cache
-        else:
-            # Recalculer
+        strategy : si spécifié, filtre sur un seul runner. Cache non utilisé dans ce cas.
+        """
+        default_capital = self._config.risk.initial_capital
+
+        # Sélectionner les runners concernés
+        runners = [r for r in self._runners if r.name == strategy] if strategy else self._runners
+
+        if strategy:
+            # Calcul direct sans cache (requête filtrée — rare, pas besoin d'optimiser)
             all_trades: list[TradeResult] = []
-            for runner in self._runners:
+            for runner in runners:
                 for _sym, trade in runner.get_trades():
                     all_trades.append(trade)
             all_trades.sort(key=lambda t: t.exit_time)
 
-            capital = self._config.risk.initial_capital
-            equity = []
+            capital = sum(r._initial_capital for r in runners) if runners else default_capital
+            equity: list[dict] = []
             for trade in all_trades:
                 capital += trade.net_pnl
                 equity.append({
@@ -2375,26 +2378,43 @@ class Simulator:
                     "capital": round(capital, 2),
                     "trade_pnl": round(trade.net_pnl, 2),
                 })
+        else:
+            # Calcul global avec cache
+            total_trades = sum(len(r.get_trades()) for r in self._runners)
+            if self._equity_cache is not None and self._trade_count_at_cache == total_trades:
+                equity = self._equity_cache
+            else:
+                all_trades = []
+                for runner in self._runners:
+                    for _sym, trade in runner.get_trades():
+                        all_trades.append(trade)
+                all_trades.sort(key=lambda t: t.exit_time)
 
-            self._equity_cache = equity
-            self._trade_count_at_cache = total_trades
+                capital = self._config.risk.initial_capital
+                equity = []
+                for trade in all_trades:
+                    capital += trade.net_pnl
+                    equity.append({
+                        "timestamp": trade.exit_time.isoformat(),
+                        "capital": round(capital, 2),
+                        "trade_pnl": round(trade.net_pnl, 2),
+                    })
+
+                self._equity_cache = equity
+                self._trade_count_at_cache = total_trades
 
         # Filtre since
         if since:
             equity = [p for p in equity if p["timestamp"] > since]
 
-        # Capital courant (somme de tous les runners)
-        default_capital = self._config.risk.initial_capital
-        current_capital = sum(r._capital for r in self._runners) if self._runners else default_capital
-        # Si un seul runner, capital initial = config. Si multiple, somme.
-        initial_capital = sum(r._initial_capital for r in self._runners) if self._runners else default_capital
-
-        # Equity courante depuis get_status() (inclut capital + margin + unrealized)
+        # Métriques courantes sur les runners sélectionnés
+        current_capital = sum(r._capital for r in runners) if runners else default_capital
+        initial_capital = sum(r._initial_capital for r in runners) if runners else default_capital
         current_equity = sum(
-            r.get_status().get("equity", r._capital) for r in self._runners
+            r.get_status().get("equity", r._capital) for r in runners
         )
 
-        # Ajouter un point "now" avec l'equity courante (inclut non réalisé)
+        # Point "now" avec l'equity courante (inclut non réalisé)
         now_iso = datetime.now(tz=timezone.utc).isoformat()
         equity_with_now = list(equity)
         equity_with_now.append({

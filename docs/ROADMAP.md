@@ -2128,10 +2128,40 @@ Phase 5: Scaling Stratégies     ✅
 
 ---
 
+### Hotfix Dashboard — Isolation sidebar par stratégie ✅
+
+**Problème** : En naviguant vers `grid_boltrend` (paper-only) dans la StrategyBar, la sidebar affichait les données globales de l'executor (`LIVE` au lieu de `SIMULATION ONLY`) et l'EquityCurve montrait la courbe agrégée de toutes les stratégies.
+
+**Root cause** :
+- `useFilteredWsData.js` filtrait `executor.positions` mais laissait `executor.enabled` (global → toujours LIVE), `kill_switch` et `EquityCurve` non filtrés
+- `EquityCurve` ne recevait aucun prop et appelait les endpoints sans filtre stratégie
+- `/api/simulator/equity` et `get_equity_curve_from_trades()` n'avaient pas de paramètre stratégie
+
+**Approche** :
+- Si stratégie sélectionnée **non** dans `selector.allowed_strategies` → `executor = { enabled: false, mode: 'paper', positions: [], ... }` (objet minimal safe, pas null)
+- `kill_switch` pris depuis `strategies[filter].kill_switch` (runner individuel) au lieu du global
+- `EquityCurve` reçoit `strategyFilter`, appelle `/api/simulator/equity?strategy=X`, skip les journal snapshots (globaux)
+- Backend : `get_equity_curve(strategy=)` filtre les runners ; `get_equity_curve_from_trades(strategy=)` ajoute WHERE sur `strategy_name` (colonne déjà indexée)
+
+**Changements** :
+
+| Fichier | Changement |
+|---------|-----------|
+| `frontend/src/hooks/useFilteredWsData.js` | executor paper-safe, kill_switch par runner |
+| `frontend/src/components/EquityCurve.jsx` | prop strategyFilter, skip journal si filtré |
+| `frontend/src/App.jsx` | passe strategyFilter à EquityCurve |
+| `backend/backtesting/simulator.py` | `get_equity_curve(strategy=)` |
+| `backend/core/database.py` | `get_equity_curve_from_trades(strategy=)` |
+| `backend/api/conditions_routes.py` | query param `?strategy=` |
+
+**Tests** : 1445 passants (inchangé — zéro régression)
+
+---
+
 ## ÉTAT ACTUEL (19 février 2026)
 
 - **1445 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation**
 - **Phase 6 en cours** — leverage optimal en cours de validation via Sprint 35 stress test
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
@@ -2139,12 +2169,13 @@ Phase 5: Scaling Stratégies     ✅
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
-- **Frontend complet** : 7 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage
+- **Frontend complet** : 7 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve)
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Sprint 35** : `scripts/stress_test_leverage.py` — 20 backtests (2 stratégies × 4 leverages × 2-3 fenêtres), KS désactivé (99%), analyse KS a posteriori à 30%/45%/60%, Calmar ratio, recommandation automatique, CSV `data/stress_test_results.csv`. Pas de tests unitaires (script de benchmark).
 - **Sprint Journal V2** : Fix prix moyen "--" Bitget (`_update_order_price()` rétroactif + `paper_price`), enregistrement SL/TP fills watchOrders dans `_order_history`, endpoint slippage paper vs live (`GET /api/journal/slippage`), perf par asset (`GET /api/journal/per-asset`), `get_status()` enrichi (entry_time, positions detail, levels_max), frontend : colonne P&L %, LIVE grids expandables, colonne Slippage + bandeau, section per-asset triable, funding costs dans Stats. 18 tests (1445 total).
 - **Hotfix Dashboard Leverage/Bug43** : leverage affiché dans ActivePositions/ExecutorPanel/Scanner, bug per_asset num_levels corrigé (`_get_num_levels()` + patch temp config), unrealized_pnl temps réel (1m au lieu de 1h)
+- **Hotfix Sidebar Isolation** : ExecutorPanel affiche "SIMULATION ONLY" pour les stratégies paper, EquityCurve isolée par stratégie (`?strategy=X`), kill_switch par runner
 - **Prochaine étape** : Lancer le stress test complet (20 runs ~30 min), choisir le leverage optimal grid_boltrend (actuellement 6x arbitraire), déployer grid_boltrend en paper trading
 
 ### Résultats Portfolio Backtest — Validation Finale

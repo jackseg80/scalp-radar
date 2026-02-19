@@ -37,24 +37,26 @@ async def get_signal_matrix(request: Request) -> dict:
 async def get_equity_curve(
     request: Request,
     since: str | None = Query(default=None, description="ISO8601 timestamp filter"),
+    strategy: str | None = Query(default=None, description="Filtrer par stratégie"),
 ) -> dict:
     """Courbe d'equity calculée depuis les trades.
 
     Priorité : mémoire (temps réel). Fallback : DB (robuste aux restarts).
     ?since= pour ne retourner que les nouveaux points (polling incrémental).
+    ?strategy= pour isoler une stratégie (ex: grid_atr, grid_boltrend).
     """
     simulator = getattr(request.app.state, "simulator", None)
     if simulator is None:
         default_capital = get_config().risk.initial_capital
         return {"equity": [], "current_capital": default_capital, "initial_capital": default_capital}
 
-    result = simulator.get_equity_curve(since=since)
+    result = simulator.get_equity_curve(since=since, strategy=strategy)
 
     # Fallback DB si la mémoire est vide (après restart)
     if not result.get("equity"):
         db = getattr(request.app.state, "db", None)
         if db is not None:
-            equity = await db.get_equity_curve_from_trades(since=since)
+            equity = await db.get_equity_curve_from_trades(since=since, strategy=strategy)
             if equity:
                 result["equity"] = equity
 

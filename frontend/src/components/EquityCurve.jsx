@@ -12,12 +12,16 @@ const SVG_W = 400
 const SVG_H = 140
 const PADDING = { top: 10, right: 10, bottom: 20, left: 10 }
 
-export default function EquityCurve() {
-  const { data: equityData, loading: eqLoading } = useApi('/api/simulator/equity', 30000)
+export default function EquityCurve({ strategyFilter = null }) {
+  const equityUrl = strategyFilter
+    ? `/api/simulator/equity?strategy=${encodeURIComponent(strategyFilter)}`
+    : '/api/simulator/equity'
+  const { data: equityData, loading: eqLoading } = useApi(equityUrl, 30000)
+  // Journal snapshots = agrégat global — ignorés quand une stratégie est filtrée
   const { data: journalData } = useApi('/api/journal/snapshots?limit=500', 60000)
 
   const snapshots = journalData?.snapshots || []
-  const useJournal = snapshots.length >= 2
+  const useJournal = !strategyFilter && snapshots.length >= 2
 
   // Source journal : equity incluant le non réalisé
   const journalPoints = useJournal

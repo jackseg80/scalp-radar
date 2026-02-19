@@ -35,16 +35,27 @@ export default function useFilteredWsData(wsData, strategyFilter) {
       }
     }
 
-    // 3. Filtrer executor.positions par strategy_name
-    const filteredExecutor = wsData.executor ? {
-      ...wsData.executor,
-      positions: (wsData.executor.positions || [])
-        .filter(p => p.strategy_name === strategyFilter),
-    } : wsData.executor
+    // 3. Filtrer executor par stratégie
+    const filteredPositions = (wsData.executor?.positions || [])
+      .filter(p => p.strategy_name === strategyFilter)
+
+    // Déterminer si la stratégie sélectionnée est réellement live
+    const isStrategyLive = wsData.executor?.enabled &&
+      (wsData.executor?.selector?.allowed_strategies || []).includes(strategyFilter)
+
+    const filteredExecutor = isStrategyLive
+      // Stratégie live : garder l'executor mais filtrer les positions
+      ? { ...wsData.executor, positions: filteredPositions }
+      // Stratégie paper : objet minimal safe (évite les TypeError dans les composants)
+      : { enabled: false, mode: 'paper', positions: [], connected: false, selector: { allowed_strategies: [] } }
 
     // 4. Filtrer simulator_positions par strategy
     const filteredSimPositions = (wsData.simulator_positions || [])
       .filter(p => (p.strategy_name || p.strategy) === strategyFilter)
+
+    // 5. kill_switch : utiliser celui du runner individuel si disponible
+    const stratRunner = filteredStrategies[strategyFilter]
+    const filteredKillSwitch = stratRunner?.kill_switch ?? wsData.kill_switch ?? false
 
     return {
       ...wsData,
@@ -52,6 +63,7 @@ export default function useFilteredWsData(wsData, strategyFilter) {
       strategies: filteredStrategies,
       executor: filteredExecutor,
       simulator_positions: filteredSimPositions,
+      kill_switch: filteredKillSwitch,
     }
   }, [wsData, strategyFilter])
 }

@@ -203,7 +203,7 @@ function AppContent() {
             defaultOpen={true}
             storageKey="equity"
           >
-            <EquityCurve />
+            <EquityCurve strategyFilter={strategyFilter} />
           </CollapsibleCard>
 
           <CollapsibleCard

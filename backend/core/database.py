@@ -844,28 +844,43 @@ class Database:
                 continue
         return profiles
 
-    async def get_equity_curve_from_trades(self, since: str | None = None) -> list[dict]:
+    async def get_equity_curve_from_trades(
+        self, since: str | None = None, strategy: str | None = None
+    ) -> list[dict]:
         """Calcule l'equity curve depuis les trades en DB (robuste aux restarts).
 
+        strategy : si spécifié, filtre sur une seule stratégie.
         Retourne une liste de points {timestamp, capital, trade_pnl}.
         """
         assert self._conn is not None
-        query = "SELECT net_pnl, exit_time FROM simulation_trades"
+
+        conditions: list[str] = []
         params: list[object] = []
         if since:
-            query += " WHERE exit_time > ?"
+            conditions.append("exit_time > ?")
             params.append(since)
-        query += " ORDER BY exit_time ASC"
+        if strategy:
+            conditions.append("strategy_name = ?")
+            params.append(strategy)
+
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        query = f"SELECT net_pnl, exit_time FROM simulation_trades{where} ORDER BY exit_time ASC"
 
         cursor = await self._conn.execute(query, params)
         rows = await cursor.fetchall()
 
         capital = 10_000.0
-        # Si on filtre par since, on doit d'abord calculer le capital de base
+        # Calculer le capital de base avant le filtre since
         if since and rows:
+            base_conditions = ["exit_time <= ?"]
+            base_params: list[object] = [since]
+            if strategy:
+                base_conditions.append("strategy_name = ?")
+                base_params.append(strategy)
+            base_where = " WHERE " + " AND ".join(base_conditions)
             base_cursor = await self._conn.execute(
-                "SELECT COALESCE(SUM(net_pnl), 0) FROM simulation_trades WHERE exit_time <= ?",
-                [since],
+                f"SELECT COALESCE(SUM(net_pnl), 0) FROM simulation_trades{base_where}",
+                base_params,
             )
             base_row = await base_cursor.fetchone()
             capital += base_row[0]
