@@ -1987,6 +1987,53 @@ Exit monitor: check 4 positions (['FET/USDT:USDT', 'GALA/USDT:USDT', ...])
 
 **Piège** : Si `_grid_states` est déjà peuplé (state file intact), `_populate_grid_states_from_exchange()` n'est pas appelé — les états existants sont conservés tels quels.
 
+### Hotfix ma_period per_asset — Exit monitor utilise le bon SMA period ✅
+
+**But** : Corriger un bug silencieux où le TP (SMA crossing) n'était jamais détecté après un restart, pour les assets ayant un `ma_period` per_asset différent du défaut top-level.
+
+**Problème** : Dans `_check_grid_exit()`, le fallback SMA était calculé avec `getattr(strategy._config, "ma_period", 7)` — soit le default de l'instance de stratégie (config top-level, ex: 14). Mais chaque asset peut avoir un `ma_period` différent via per_asset (ex: DYDX → 7). Après un restart, le buffer DataEngine ne contient que quelques candles :
+
+- `ma_period=14` (top-level) : pas assez de candles → SMA jamais calculée → TP jamais déclenché
+- `ma_period=7` (per_asset DYDX) : assez de candles → SMA calculée → TP détecté correctement
+
+**Impact prod observé** : après restart, les positions grid_atr sur DYDX et autres assets avec per_asset restaient ouvertes indéfiniment même lorsque `close < SMA` (condition TP). L'exit monitor tournait mais `should_close_all()` recevait `indicators` sans clé `"sma"`.
+
+**Fix** (`backend/execution/executor.py`) :
+
+- Résoudre `ma_period` via `strat_cfg.get_params_for_symbol(spot_sym)` (per_asset) au lieu de `strategy._config.ma_period` (top-level)
+- Guard MagicMock-safe : `isinstance(raw, (int, float))` + try/except `AttributeError, TypeError`
+- Fallback ultime à 7 si tout échoue
+
+```python
+# Avant (bug)
+ma_period = getattr(strategy._config, "ma_period", 7)  # toujours le top-level
+
+# Après (fix)
+strat_cfg = getattr(self._config.strategies, state.strategy_name, None)
+if strat_cfg is not None:
+    try:
+        asset_params = strat_cfg.get_params_for_symbol(spot_sym)
+        raw = asset_params.get("ma_period", 7)
+        if isinstance(raw, (int, float)):
+            ma_period = int(raw)
+    except (AttributeError, TypeError):
+        raw = getattr(strategy._config, "ma_period", 7)
+        if isinstance(raw, (int, float)):
+            ma_period = int(raw)
+```
+
+**Tests** (`tests/test_executor_autonomous.py`) :
+
+- `test_exit_uses_per_asset_ma_period` : buffer 8 candles, default `ma_period=14` (top-level, pas assez), per_asset `ma_period=7` (assez) → SMA calculée + `get_params_for_symbol("DYDX/USDT")` vérifié
+
+**Fichiers** : `backend/execution/executor.py`, `tests/test_executor_autonomous.py`
+
+**Tests** : 1 nouveau, **1446 tests** au total, 0 régression.
+
+**Piège** : `hasattr(MagicMock, "x")` retourne toujours True (pièges MagicMock docs memory). Utiliser `isinstance(raw, (int, float))` pour valider la valeur retournée.
+
+---
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -2160,7 +2207,7 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1445 tests**, 0 régression
+- **1446 tests**, 0 régression
 - **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation**
 - **Phase 6 en cours** — leverage optimal en cours de validation via Sprint 35 stress test
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)

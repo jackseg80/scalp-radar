@@ -543,7 +543,19 @@ class Executor:
 
         # SMA fallback si pas fourni par compute_live_indicators
         if "sma" not in tf_indicators:
-            ma_period = getattr(strategy._config, "ma_period", 7)
+            # Résoudre ma_period per_asset (pas le default top-level)
+            ma_period = 7  # fallback ultime
+            strat_cfg = getattr(self._config.strategies, state.strategy_name, None)
+            if strat_cfg is not None:
+                try:
+                    asset_params = strat_cfg.get_params_for_symbol(spot_sym)
+                    raw = asset_params.get("ma_period", 7)
+                    if isinstance(raw, (int, float)):
+                        ma_period = int(raw)
+                except (AttributeError, TypeError):
+                    raw = getattr(strategy._config, "ma_period", 7)
+                    if isinstance(raw, (int, float)):
+                        ma_period = int(raw)
             if len(candles_tf) >= ma_period:
                 closes = [c.close for c in candles_tf[-ma_period:]]
                 tf_indicators["sma"] = sum(closes) / len(closes)

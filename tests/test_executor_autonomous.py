@@ -344,6 +344,53 @@ class TestExitAutonomous:
         assert len(gs.positions) == 2
 
     @pytest.mark.asyncio
+    async def test_exit_uses_per_asset_ma_period(self):
+        """Exit monitor utilise le ma_period per_asset, pas le default."""
+        config = _make_config()
+        # Default ma_period=14 (top-level) → pas assez de candles (8)
+        config.strategies.grid_atr.ma_period = 14
+        # Per_asset DYDX/USDT → ma_period=7 → assez de candles (8)
+        config.strategies.grid_atr.get_params_for_symbol = MagicMock(
+            return_value={"ma_period": 7, "timeframe": "1h", "sl_percent": 20.0},
+        )
+
+        executor = _make_executor(config=config)
+        executor._grid_states["DYDX/USDT:USDT"] = _make_grid_state(
+            symbol="DYDX/USDT:USDT", entry_price=1.0,
+        )
+        # Seulement 8 candles — assez pour ma_period=7, pas pour ma_period=14
+        closes = [1.0] * 8
+        executor._data_engine = _make_data_engine(
+            symbol="DYDX/USDT", closes=closes,
+        )
+
+        captured = {}
+
+        def capture(ctx, grid_state):
+            captured["ctx"] = ctx
+            return None
+
+        strategy = _make_strategy()
+        # compute_live_indicators retourne {} → SMA fallback activé
+        strategy.compute_live_indicators = MagicMock(return_value={})
+        strategy.should_close_all = capture
+        executor._strategies = {"grid_atr": strategy}
+
+        await executor._check_grid_exit("DYDX/USDT:USDT")
+
+        # SMA doit être calculée (per_asset ma_period=7 ≤ 8 candles)
+        ctx = captured["ctx"]
+        assert "sma" in ctx.indicators["1h"], (
+            "SMA absente — ma_period per_asset ignoré, default trop grand"
+        )
+        assert ctx.indicators["1h"]["sma"] == pytest.approx(1.0)
+
+        # Vérifier que get_params_for_symbol a été appelé avec le bon symbol
+        config.strategies.grid_atr.get_params_for_symbol.assert_called_once_with(
+            "DYDX/USDT",
+        )
+
+    @pytest.mark.asyncio
     async def test_exit_idempotent(self):
         """Double appel close → le 2ème est no-op (state supprimé)."""
         executor = _make_executor()
