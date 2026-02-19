@@ -661,7 +661,7 @@ grid_boltrend:
   sides:
   - long
   - short
-  leverage: 6
+  leverage: 8
   weight: 0.2
   per_asset:
     BTC/USDT:
