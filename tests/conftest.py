@@ -1,5 +1,8 @@
 """Fixtures pytest partagées."""
 
+import os
+os.environ["PYTHON_JIT"] = "0"
+
 import numpy as np
 import pytest
 
