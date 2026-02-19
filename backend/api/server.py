@@ -147,6 +147,15 @@ async def lifespan(app: FastAPI):
 
         await selector.start()
         simulator.set_trade_event_callback(executor.handle_event)
+
+        # Exit monitor autonome : sync live→paper + surveillance TP/SL indépendante
+        executor.set_data_engine(engine)
+        executor.set_strategies(simulator.get_strategy_instances())
+
+        from backend.execution.sync import sync_live_to_paper
+        await sync_live_to_paper(executor, simulator)
+        await executor.start_exit_monitor()
+
         # Hotfix 35 : enregistrer executor dans StateManager pour sauvegarde périodique
         if state_manager is not None:
             state_manager.set_executor(executor, risk_mgr)

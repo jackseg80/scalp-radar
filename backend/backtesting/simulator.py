@@ -2369,6 +2369,14 @@ class Simulator:
             "initial_capital": round(initial_capital, 2),
         }
 
+    def get_strategy_instances(self) -> dict[str, BaseGridStrategy]:
+        """Retourne les instances de stratégie grid par nom (pour l'Executor autonome)."""
+        return {
+            runner.name: runner._strategy
+            for runner in self._runners
+            if isinstance(runner, GridStrategyRunner)
+        }
+
     @property
     def runners(self) -> list[LiveStrategyRunner | GridStrategyRunner]:
         return self._runners

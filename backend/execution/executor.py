@@ -19,11 +19,15 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from backend.core.models import Direction
+
 if TYPE_CHECKING:
     from backend.alerts.notifier import Notifier
     from backend.core.config import AppConfig
+    from backend.core.data_engine import DataEngine
     from backend.execution.adaptive_selector import AdaptiveSelector
     from backend.execution.risk_manager import LiveRiskManager
+    from backend.strategies.base_grid import BaseGridStrategy
 
 
 # ─── TYPES ─────────────────────────────────────────────────────────────────
@@ -182,6 +186,11 @@ class Executor:
         self._balance_refresh_interval: int = 300  # 5 minutes
         self._order_history: deque[dict] = deque(maxlen=200)  # Sprint 32
 
+        # Exit monitor autonome (Sprint Executor Autonome)
+        self._data_engine: DataEngine | None = None
+        self._strategies: dict[str, BaseGridStrategy] = {}
+        self._exit_check_task: asyncio.Task[None] | None = None
+
     # ─── Properties ────────────────────────────────────────────────────
 
     @property
@@ -315,7 +324,7 @@ class Executor:
         """Arrête la surveillance. NE ferme PAS les positions (TP/SL restent)."""
         self._running = False
 
-        for task in (self._watch_task, self._poll_task, self._balance_task):
+        for task in (self._watch_task, self._poll_task, self._balance_task, self._exit_check_task):
             if task and not task.done():
                 task.cancel()
                 try:
@@ -415,6 +424,178 @@ class Executor:
         except Exception as e:
             # Bitget renvoie une erreur si le mode est déjà celui demandé
             logger.debug("Executor: set_margin_mode: {}", e)
+
+    # ─── Exit monitor autonome ─────────────────────────────────────────
+
+    _EXIT_CHECK_INTERVAL = 60  # secondes
+
+    def set_data_engine(self, data_engine: DataEngine) -> None:
+        """Enregistre le DataEngine pour les checks TP/SL autonomes."""
+        self._data_engine = data_engine
+
+    def set_strategies(self, strategies: dict[str, BaseGridStrategy]) -> None:
+        """Enregistre les instances de stratégie pour should_close_all()."""
+        self._strategies = strategies
+        logger.info("Executor: {} stratégies enregistrées pour exit autonome", len(strategies))
+
+    async def start_exit_monitor(self) -> None:
+        """Démarre la boucle de vérification autonome des TP/SL."""
+        if self._data_engine is None:
+            logger.warning("Executor: pas de DataEngine, exit monitor désactivé")
+            return
+        if not self._strategies:
+            logger.warning("Executor: pas de stratégies, exit monitor désactivé")
+            return
+        self._exit_check_task = asyncio.create_task(
+            self._exit_monitor_loop(), name="executor_exit_monitor",
+        )
+        logger.info("Executor: exit monitor autonome démarré")
+
+    async def _exit_monitor_loop(self) -> None:
+        """Vérifie périodiquement si les positions live doivent être fermées."""
+        while self._running:
+            try:
+                await asyncio.sleep(self._EXIT_CHECK_INTERVAL)
+                if not self._running or not self._connected:
+                    continue
+                await self._check_all_live_exits()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Executor: erreur exit monitor: {}", e)
+
+    async def _check_all_live_exits(self) -> None:
+        """Vérifie les conditions de sortie pour TOUTES les positions grid live."""
+        for futures_sym in list(self._grid_states.keys()):
+            try:
+                await self._check_grid_exit(futures_sym)
+            except Exception as e:
+                logger.error("Executor: erreur check exit {}: {}", futures_sym, e)
+
+    async def _check_grid_exit(self, futures_sym: str) -> None:
+        """Vérifie si un cycle grid doit être fermé.
+
+        Construit un StrategyContext depuis le DataEngine et appelle
+        strategy.should_close_all() — même logique que le paper.
+        """
+        state = self._grid_states.get(futures_sym)
+        if state is None or not state.positions:
+            return
+
+        strategy = self._strategies.get(state.strategy_name)
+        if strategy is None:
+            return
+
+        if self._data_engine is None:
+            return
+
+        # Convertir futures_sym ("BTC/USDT:USDT") → spot_sym ("BTC/USDT")
+        spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+
+        # Récupérer les candles depuis le DataEngine
+        buffers = self._data_engine._buffers.get(spot_sym, {})
+        strategy_tf = getattr(strategy._config, "timeframe", "1h")
+        candles_tf = buffers.get(strategy_tf, [])
+
+        if not candles_tf:
+            return
+
+        current_close = candles_tf[-1].close
+
+        # Calculer les indicateurs via la stratégie elle-même
+        indicators: dict = {}
+        try:
+            indicators = strategy.compute_live_indicators(list(candles_tf))
+        except Exception as e:
+            logger.debug("Executor: compute_live_indicators échoué pour {}: {}", futures_sym, e)
+
+        # S'assurer que le timeframe principal a les données de base
+        tf_indicators = indicators.get(strategy_tf, {})
+        tf_indicators["close"] = current_close
+
+        # SMA fallback si pas fourni par compute_live_indicators
+        if "sma" not in tf_indicators:
+            ma_period = getattr(strategy._config, "ma_period", 7)
+            if len(candles_tf) >= ma_period:
+                closes = [c.close for c in candles_tf[-ma_period:]]
+                tf_indicators["sma"] = sum(closes) / len(closes)
+
+        indicators[strategy_tf] = tf_indicators
+
+        # Construire le GridState
+        from backend.strategies.base_grid import GridPosition, GridState
+
+        grid_positions = [
+            GridPosition(
+                level=p.level,
+                direction=Direction(state.direction),
+                entry_price=p.entry_price,
+                quantity=p.quantity,
+                entry_time=p.entry_time,
+                entry_fee=getattr(p, "entry_fee", 0.0),
+            )
+            for p in state.positions
+        ]
+
+        total_qty = state.total_quantity
+        avg_entry = state.avg_entry_price
+        total_notional = avg_entry * total_qty
+        # Unrealized P&L approximatif
+        direction = Direction(state.direction)
+        if direction == Direction.LONG:
+            unrealized = (current_close - avg_entry) * total_qty
+        else:
+            unrealized = (avg_entry - current_close) * total_qty
+
+        grid_state = GridState(
+            positions=grid_positions,
+            avg_entry_price=avg_entry,
+            total_quantity=total_qty,
+            total_notional=total_notional,
+            unrealized_pnl=unrealized,
+        )
+
+        # Construire le StrategyContext
+        from backend.strategies.base import StrategyContext
+
+        ctx = StrategyContext(
+            symbol=spot_sym,
+            timestamp=candles_tf[-1].timestamp,
+            candles={},
+            indicators=indicators,
+            current_position=None,
+            capital=0.0,
+            config=None,
+        )
+
+        # APPELER LA STRATÉGIE — même logique que le paper
+        exit_reason = strategy.should_close_all(ctx, grid_state)
+
+        if exit_reason is None:
+            return
+
+        logger.info(
+            "Executor: EXIT AUTONOME {} {} — raison={}, close={:.6f}, avg_entry={:.6f}",
+            state.direction, futures_sym, exit_reason, current_close, avg_entry,
+        )
+
+        # Réutiliser _close_grid_cycle avec un TradeEvent synthétique
+        synthetic_event = TradeEvent(
+            event_type=TradeEventType.CLOSE,
+            strategy_name=state.strategy_name,
+            symbol=spot_sym,
+            direction=state.direction,
+            entry_price=avg_entry,
+            quantity=total_qty,
+            tp_price=0.0,
+            sl_price=0.0,
+            score=0.0,
+            timestamp=datetime.now(tz=timezone.utc),
+            market_regime="unknown",
+            exit_reason=exit_reason,
+            exit_price=current_close,
+        )
+        await self._close_grid_cycle(synthetic_event)
 
     # ─── Event Handler (callback du Simulator) ─────────────────────────
 
@@ -676,6 +857,23 @@ class Executor:
 
         state = self._grid_states.get(futures_sym)
         is_first_level = state is None
+
+        # Guard : si c'est un nouveau cycle, vérifier qu'il n'y a pas déjà
+        # une position sur Bitget (évite les doublons après desync)
+        if is_first_level:
+            try:
+                positions = await self._fetch_positions_safe(futures_sym)
+                has_exchange_position = any(
+                    float(p.get("contracts", 0)) > 0 for p in positions
+                )
+                if has_exchange_position:
+                    logger.warning(
+                        "Executor: position {} déjà sur exchange mais pas dans grid_states — OPEN ignoré",
+                        futures_sym,
+                    )
+                    return
+            except Exception as e:
+                logger.warning("Executor: échec vérification position exchange {}: {}", futures_sym, e)
 
         # Hotfix 35 : limiter le nombre de NOUVEAUX cycles grid simultanés
         if is_first_level:
