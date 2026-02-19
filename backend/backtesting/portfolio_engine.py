@@ -29,6 +29,8 @@ from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.core.models import Candle, MarketRegime
 from backend.core.position_manager import PositionManagerConfig, TradeResult
+from pydantic import BaseModel
+
 from backend.optimization import create_strategy_with_params
 
 
@@ -101,6 +103,9 @@ class PortfolioResult:
 
     # Funding costs (agrégé de tous les runners, 0.0 si non calculé)
     funding_paid_total: float = 0.0
+
+    # Leverage utilisé (extrait du premier runner, 6 par défaut)
+    leverage: int = 6
 
     # Cross-margin risk
     was_liquidated: bool = False
@@ -323,12 +328,17 @@ class PortfolioBacktester:
 
         for strat_name, symbols in multi_strategies:
             strat_config = getattr(self._config.strategies, strat_name, None)
-            per_asset_overrides = (
-                getattr(strat_config, "per_asset", {}) if strat_config else {}
-            )
 
             for symbol in symbols:
-                params = per_asset_overrides.get(symbol, {})
+                # Utilise get_params_for_symbol() pour merger top-level + per_asset.
+                # Sans ça, create_strategy_with_params repart des defaults Pydantic
+                # et ignore les valeurs top-level du YAML (ex: leverage: 3).
+                # Guard isinstance(BaseModel) → compatibilité MagicMock dans les tests.
+                if isinstance(strat_config, BaseModel) and hasattr(strat_config, "get_params_for_symbol"):
+                    params = strat_config.get_params_for_symbol(symbol)
+                else:
+                    raw_pa = getattr(strat_config, "per_asset", {}) if strat_config else {}
+                    params = raw_pa.get(symbol, {}) if isinstance(raw_pa, dict) else {}
                 strategy = create_strategy_with_params(strat_name, params)
                 strategies_list.append(strategy)
                 runner_key = f"{strat_name}:{symbol}"
@@ -886,6 +896,10 @@ class PortfolioBacktester:
             getattr(r, "_total_funding_cost", 0.0) for r in runners.values()
         )
 
+        # Leverage : extrait du premier runner (tous les runners de la même strat ont le même)
+        first_runner = next(iter(runners.values()), None)
+        leverage = first_runner._leverage if first_runner is not None else 6
+
         return PortfolioResult(
             initial_capital=self._initial_capital,
             n_assets=len(runner_keys),
@@ -913,6 +927,7 @@ class PortfolioBacktester:
             liquidation_event=liquidation_event,
             min_liquidation_distance_pct=round(min_liq, 2),
             worst_case_sl_loss_pct=round(max_worst_case, 2),
+            leverage=leverage,
         )
 
 
@@ -939,6 +954,7 @@ def format_portfolio_report(result: PortfolioResult) -> str:
     lines.append(f"  P&L réalisé (TP/SL) : {result.realized_pnl:>+10,.2f} $")
     lines.append(f"  P&L force-closed    : {result.force_closed_pnl:>+10,.2f} $")
     lines.append(f"  Période             : {result.period_days} jours, {result.n_assets} assets")
+    lines.append(f"  Leverage            : {result.leverage}x")
     lines.append("")
 
     # Trades

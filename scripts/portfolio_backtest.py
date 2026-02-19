@@ -27,7 +27,77 @@ from backend.backtesting.portfolio_engine import (
     format_portfolio_report,
 )
 from backend.core.config import get_config
+from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
+
+
+async def _detect_max_days(
+    config,
+    strategy_name: str,
+    exchange: str,
+    db_path: str,
+    multi_strategies: list[tuple[str, list[str]]] | None = None,
+) -> tuple[int, dict[str, int]]:
+    """Détecte le nombre de jours max couverts par tous les assets.
+
+    Scanne la DB pour trouver la première candle 1h de chaque asset.
+    Retourne la couverture commune (= asset le plus récent = goulot).
+
+    Returns:
+        (common_days, per_asset_days) — jours communs et détail par asset.
+    """
+    # Collecter tous les assets depuis per_asset ou multi_strategies
+    all_assets: set[str] = set()
+
+    if multi_strategies:
+        for _, symbols in multi_strategies:
+            all_assets.update(symbols)
+    else:
+        strat_config = getattr(config.strategies, strategy_name, None)
+        per_asset = getattr(strat_config, "per_asset", {}) if strat_config else {}
+        all_assets.update(per_asset.keys())
+
+    if not all_assets:
+        return 90, {}
+
+    db = Database(db_path)
+    await db.init()
+
+    per_asset_days: dict[str, int] = {}
+    latest_start: datetime | None = None  # la date de début la plus récente
+
+    exchanges_to_try = [exchange]
+    if exchange == "binance":
+        exchanges_to_try.append("bitget")
+    elif exchange == "bitget":
+        exchanges_to_try.append("binance")
+
+    for symbol in sorted(all_assets):
+        candles = None
+        for ex in exchanges_to_try:
+            candles = await db.get_candles(symbol, "1h", exchange=ex, limit=1)
+            if candles:
+                break
+
+        if candles:
+            first_ts = candles[0].timestamp
+            days = (datetime.now(timezone.utc) - first_ts).days
+            per_asset_days[symbol] = days
+            if latest_start is None or first_ts > latest_start:
+                latest_start = first_ts
+        else:
+            per_asset_days[symbol] = 0
+
+    await db.close()
+
+    if latest_start is None:
+        return 90, per_asset_days
+
+    common_days = (datetime.now(timezone.utc) - latest_start).days
+    # Soustraire le warm-up (~50 candles 1h ≈ 2 jours)
+    common_days = max(common_days - 3, 30)
+
+    return common_days, per_asset_days
 
 
 def _result_to_dict(result: PortfolioResult) -> dict:
@@ -122,6 +192,43 @@ async def main(args: argparse.Namespace) -> None:
 
     assets = args.assets.split(",") if args.assets else None
 
+    # Override leverage dans la config (sans toucher au YAML)
+    if args.leverage is not None:
+        # Détermine les noms de stratégies impliquées
+        if multi_strategies:
+            strat_names = list({s for s, _ in multi_strategies})
+        else:
+            strat_names = [args.strategy]
+        for sname in strat_names:
+            strat_cfg = getattr(config.strategies, sname, None)
+            if strat_cfg is not None and hasattr(strat_cfg, "leverage"):
+                strat_cfg.leverage = args.leverage
+        print(f"  Leverage override   : {args.leverage}x")
+
+    # Résoudre --days : "auto" ou nombre
+    if args.days == "auto":
+        common_days, detail = await _detect_max_days(
+            config,
+            args.strategy,
+            args.exchange,
+            args.db,
+            multi_strategies=multi_strategies,
+        )
+        if detail:
+            min_days = min(detail.values()) if detail else 0
+            print("\n  Auto-détection historique :")
+            for sym, d in sorted(detail.items(), key=lambda x: x[1]):
+                marker = " ← goulot" if d == min_days and d > 0 else ""
+                if d == 0:
+                    marker = " ← ABSENT"
+                print(f"    {sym:15s} : {d:5d} jours{marker}")
+            print(f"  → Période commune : {common_days} jours\n")
+        else:
+            print(f"\n  Aucun per_asset trouvé, fallback {common_days} jours\n")
+        days = common_days
+    else:
+        days = int(args.days)
+
     backtester = PortfolioBacktester(
         config=config,
         initial_capital=args.capital,
@@ -134,7 +241,7 @@ async def main(args: argparse.Namespace) -> None:
     )
 
     end = datetime.now(timezone.utc)
-    start = end - timedelta(days=args.days)
+    start = end - timedelta(days=days)
 
     t0 = time.monotonic()
     result = await backtester.run(start, end, db_path=args.db)
@@ -191,7 +298,10 @@ if __name__ == "__main__":
         description="Portfolio backtest multi-asset (capital partagé)"
     )
     parser.add_argument(
-        "--days", type=int, default=90, help="Période de backtest (jours)"
+        "--days",
+        type=str,
+        default="auto",
+        help="Période de backtest en jours (défaut: 'auto' = max historique commun)",
     )
     parser.add_argument(
         "--capital", type=float, default=10_000, help="Capital initial ($)"
@@ -254,6 +364,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Preset multi-stratégie (ex: 'combined' = grid_atr + grid_trend per_asset)",
+    )
+    parser.add_argument(
+        "--leverage",
+        type=int,
+        default=None,
+        help="Override leverage pour tous les runners (défaut: depuis strategies.yaml)",
     )
 
     args = parser.parse_args()

@@ -409,6 +409,9 @@ uv run python -m scripts.run_backtest --strategy grid_atr --symbol BTC/USDT --ou
 Simule N assets avec capital partagé (même code que la prod). Voir section 2 pour les exemples WFO.
 
 ```powershell
+# Auto-détection historique (défaut) — affiche le goulot par asset
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --capital 10000
+
 # grid_atr sur les Top 10 assets paper, 365 jours
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,ETH/USDT,DOGE/USDT,DYDX/USDT,ENJ/USDT,FET/USDT,GALA/USDT,ICP/USDT,NEAR/USDT,AVAX/USDT --days 365 --capital 10000
 
@@ -420,6 +423,11 @@ uv run python -m scripts.portfolio_backtest --strategy grid_boltrend --assets BT
 
 # Multi-stratégie (grid_atr + grid_boltrend)
 uv run python -m scripts.portfolio_backtest --strategies "grid_atr:BTC/USDT,ETH/USDT+grid_boltrend:DOGE/USDT,LINK/USDT" --capital 10000 --days 365
+
+# Comparaison de leverages sans toucher au YAML
+uv run python -m scripts.portfolio_backtest --capital 1000 --leverage 3
+uv run python -m scripts.portfolio_backtest --capital 1000 --leverage 5
+uv run python -m scripts.portfolio_backtest --capital 1000 --leverage 6
 
 # Sortie JSON avec sauvegarde en DB
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 90 --json --save --label "q1_2025"
@@ -433,9 +441,10 @@ uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 90 --json
 | `--strategies` | — | Multi-stratégie : `strat1:sym1,sym2+strat2:sym3` |
 | `--preset` | — | Preset prédéfini (ex: `combined`) |
 | `--assets` | tous per_asset | Assets séparés par virgule |
-| `--days` | `90` | Période de backtest (jours) |
+| `--days` | `auto` | Période (jours ou `auto` = max historique commun) |
 | `--capital` | `10000` | Capital initial ($) |
 | `--exchange` | `binance` | Source des candles |
+| `--leverage` | depuis strategies.yaml | Override leverage de tous les runners |
 | `--kill-switch-pct` | `30.0` | Seuil kill switch (%) |
 | `--kill-switch-window` | `24` | Fenêtre kill switch (heures) |
 | `--json` | false | Sortie JSON |

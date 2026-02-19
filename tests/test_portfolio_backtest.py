@@ -26,7 +26,7 @@ from backend.backtesting.portfolio_engine import (
     format_portfolio_report,
 )
 from backend.backtesting.simulator import GridStrategyRunner, RunnerStats
-from backend.core.config import GridATRConfig
+from backend.core.config import GridATRConfig, GridBolTrendConfig
 from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.core.models import Candle, Direction, MarketRegime, TimeFrame
@@ -1105,6 +1105,72 @@ class TestMultiStrategyCapitalSplit:
             assert r._initial_capital == 2500.0
 
 
+class TestLeverageFromTopLevelConfig:
+    """Bug : le leverage top-level du YAML était ignoré — les per_asset n'ont pas
+    de leverage donc create_strategy_with_params repartait du default Pydantic (6)."""
+
+    def test_leverage_top_level_transmitted(self):
+        """Quand grid_atr.leverage=3 dans strategies.yaml, les runners doivent
+        utiliser leverage=3, pas le default Pydantic 6."""
+        config = _make_mock_config(n_assets=1)
+        # Utilise un vrai GridATRConfig (pas un MagicMock) avec leverage=3
+        real_strat_config = GridATRConfig(
+            leverage=3,
+            ma_period=14,
+            atr_period=14,
+            atr_multiplier_start=2.0,
+            atr_multiplier_step=1.0,
+            num_levels=3,
+            sl_percent=20.0,
+            per_asset={},
+        )
+        config.strategies.grid_atr = real_strat_config
+
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            multi_strategies=[("grid_atr", ["AAA/USDT"])],
+        )
+        runners, _ = backtester._create_runners(backtester._multi_strategies, 5000.0)
+
+        runner = runners["grid_atr:AAA/USDT"]
+        assert runner._strategy._config.leverage == 3, (
+            f"leverage={runner._strategy._config.leverage}, attendu 3 "
+            "(le top-level YAML doit prendre priorité sur le default Pydantic)"
+        )
+        assert runner._leverage == 3, (
+            f"runner._leverage={runner._leverage}, attendu 3 "
+            "(le GridPositionManager doit recevoir leverage=3)"
+        )
+
+    def test_leverage_per_asset_overrides_top_level(self):
+        """Si un per_asset contient leverage (ne devrait pas arriver après fix
+        apply_to_yaml, mais par précaution), le per_asset prend priorité."""
+        config = _make_mock_config(n_assets=1)
+        real_strat_config = GridATRConfig(
+            leverage=3,
+            ma_period=14,
+            atr_period=14,
+            atr_multiplier_start=2.0,
+            atr_multiplier_step=1.0,
+            num_levels=3,
+            sl_percent=20.0,
+            per_asset={"AAA/USDT": {"leverage": 5}},
+        )
+        config.strategies.grid_atr = real_strat_config
+
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            multi_strategies=[("grid_atr", ["AAA/USDT"])],
+        )
+        runners, _ = backtester._create_runners(backtester._multi_strategies, 5000.0)
+
+        runner = runners["grid_atr:AAA/USDT"]
+        # per_asset leverage=5 override top-level leverage=3
+        assert runner._strategy._config.leverage == 5
+
+
 class TestSingleStrategyBackwardCompatible:
     """multi_strategies=None + strategy_name='grid_atr' → rétro-compatible."""
 
@@ -1133,3 +1199,347 @@ class TestSingleStrategyBackwardCompatible:
         assert len(runners) == 2
         assert "grid_atr:AAA/USDT" in runners
         assert "grid_atr:BBB/USDT" in runners
+
+
+# ─── Tests Auto-détection --days auto ────────────────────────────────────
+
+
+class TestDetectMaxDays:
+    """Tests pour _detect_max_days() (auto-détection historique)."""
+
+    @pytest.mark.asyncio
+    async def test_detect_returns_common_days(self, tmp_path):
+        """2 assets avec historiques différents → prend le goulot."""
+        import aiosqlite
+
+        db_path = str(tmp_path / "test.db")
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                """CREATE TABLE candles (
+                    exchange TEXT NOT NULL DEFAULT 'binance',
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    open REAL, high REAL, low REAL, close REAL, volume REAL,
+                    vwap REAL, mark_price REAL,
+                    PRIMARY KEY (exchange, symbol, timeframe, timestamp)
+                )"""
+            )
+            # AAA : historique 500 jours
+            ts_aaa = datetime.now(timezone.utc) - timedelta(days=500)
+            await conn.execute(
+                "INSERT INTO candles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("binance", "AAA/USDT", "1h", ts_aaa.isoformat(),
+                 100, 101, 99, 100, 1000, None, None),
+            )
+            # BBB : historique 200 jours (= goulot)
+            ts_bbb = datetime.now(timezone.utc) - timedelta(days=200)
+            await conn.execute(
+                "INSERT INTO candles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("binance", "BBB/USDT", "1h", ts_bbb.isoformat(),
+                 200, 201, 199, 200, 1000, None, None),
+            )
+            await conn.commit()
+
+        config = _make_mock_config(n_assets=2)
+        config.strategies.grid_atr = MagicMock()
+        config.strategies.grid_atr.per_asset = {
+            "AAA/USDT": {},
+            "BBB/USDT": {},
+        }
+
+        from scripts.portfolio_backtest import _detect_max_days
+
+        days, detail = await _detect_max_days(
+            config, "grid_atr", "binance", db_path
+        )
+
+        # Le goulot est BBB (200j) → common_days ≈ 200 - 3 = 197
+        assert 190 <= days <= 200
+        assert detail["AAA/USDT"] > detail["BBB/USDT"]
+        assert detail["BBB/USDT"] >= 199  # ~200 jours
+
+    @pytest.mark.asyncio
+    async def test_detect_no_per_asset_fallback(self, tmp_path):
+        """Aucun per_asset → fallback 90 jours."""
+        db_path = str(tmp_path / "test.db")
+
+        config = _make_mock_config(n_assets=0)
+        config.strategies.grid_atr = MagicMock()
+        config.strategies.grid_atr.per_asset = {}
+
+        from scripts.portfolio_backtest import _detect_max_days
+
+        days, detail = await _detect_max_days(
+            config, "grid_atr", "binance", db_path
+        )
+
+        assert days == 90
+        assert detail == {}
+
+    @pytest.mark.asyncio
+    async def test_detect_multi_strategies(self, tmp_path):
+        """multi_strategies collecte les assets de toutes les stratégies."""
+        import aiosqlite
+
+        db_path = str(tmp_path / "test.db")
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                """CREATE TABLE candles (
+                    exchange TEXT NOT NULL DEFAULT 'binance',
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    open REAL, high REAL, low REAL, close REAL, volume REAL,
+                    vwap REAL, mark_price REAL,
+                    PRIMARY KEY (exchange, symbol, timeframe, timestamp)
+                )"""
+            )
+            ts = datetime.now(timezone.utc) - timedelta(days=300)
+            for sym in ["AAA/USDT", "BBB/USDT", "CCC/USDT"]:
+                await conn.execute(
+                    "INSERT INTO candles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    ("binance", sym, "1h", ts.isoformat(),
+                     100, 101, 99, 100, 1000, None, None),
+                )
+            await conn.commit()
+
+        config = _make_mock_config(n_assets=3)
+
+        from scripts.portfolio_backtest import _detect_max_days
+
+        multi = [
+            ("grid_atr", ["AAA/USDT", "BBB/USDT"]),
+            ("grid_boltrend", ["BBB/USDT", "CCC/USDT"]),
+        ]
+        days, detail = await _detect_max_days(
+            config, "grid_atr", "binance", db_path,
+            multi_strategies=multi,
+        )
+
+        # 3 assets uniques (AAA, BBB, CCC)
+        assert len(detail) == 3
+        assert "AAA/USDT" in detail
+        assert "CCC/USDT" in detail
+        assert 290 <= days <= 300
+
+    @pytest.mark.asyncio
+    async def test_detect_fallback_exchange(self, tmp_path):
+        """Si binance n'a pas l'asset, tombe sur bitget."""
+        import aiosqlite
+
+        db_path = str(tmp_path / "test.db")
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                """CREATE TABLE candles (
+                    exchange TEXT NOT NULL DEFAULT 'binance',
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    open REAL, high REAL, low REAL, close REAL, volume REAL,
+                    vwap REAL, mark_price REAL,
+                    PRIMARY KEY (exchange, symbol, timeframe, timestamp)
+                )"""
+            )
+            ts = datetime.now(timezone.utc) - timedelta(days=400)
+            # Seulement sur bitget, pas binance
+            await conn.execute(
+                "INSERT INTO candles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("bitget", "AAA/USDT", "1h", ts.isoformat(),
+                 100, 101, 99, 100, 1000, None, None),
+            )
+            await conn.commit()
+
+        config = _make_mock_config(n_assets=1)
+        config.strategies.grid_atr = MagicMock()
+        config.strategies.grid_atr.per_asset = {"AAA/USDT": {}}
+
+        from scripts.portfolio_backtest import _detect_max_days
+
+        days, detail = await _detect_max_days(
+            config, "grid_atr", "binance", db_path
+        )
+
+        # Trouvé via fallback bitget
+        assert detail["AAA/USDT"] >= 399
+        assert days >= 390
+
+    @pytest.mark.asyncio
+    async def test_detect_missing_asset_zero_days(self, tmp_path):
+        """Asset absent de la DB → 0 jours, ne crash pas."""
+        import aiosqlite
+
+        db_path = str(tmp_path / "test.db")
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                """CREATE TABLE candles (
+                    exchange TEXT NOT NULL DEFAULT 'binance',
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    open REAL, high REAL, low REAL, close REAL, volume REAL,
+                    vwap REAL, mark_price REAL,
+                    PRIMARY KEY (exchange, symbol, timeframe, timestamp)
+                )"""
+            )
+            # AAA présent, BBB absent
+            ts = datetime.now(timezone.utc) - timedelta(days=300)
+            await conn.execute(
+                "INSERT INTO candles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("binance", "AAA/USDT", "1h", ts.isoformat(),
+                 100, 101, 99, 100, 1000, None, None),
+            )
+            await conn.commit()
+
+        config = _make_mock_config(n_assets=2)
+        config.strategies.grid_atr = MagicMock()
+        config.strategies.grid_atr.per_asset = {
+            "AAA/USDT": {},
+            "BBB/USDT": {},
+        }
+
+        from scripts.portfolio_backtest import _detect_max_days
+
+        days, detail = await _detect_max_days(
+            config, "grid_atr", "binance", db_path
+        )
+
+        assert detail["AAA/USDT"] >= 299
+        assert detail["BBB/USDT"] == 0
+
+
+# ─── Tests --leverage override ────────────────────────────────────────────
+
+
+class TestLeverageOverride:
+    """Tests pour l'override --leverage dans portfolio_backtest.py."""
+
+    def test_leverage_field_in_result(self):
+        """PortfolioResult expose le champ leverage avec défaut 6."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["A/USDT"],
+            final_equity=10_500.0,
+            total_return_pct=5.0,
+            total_trades=5,
+            win_rate=60.0,
+            realized_pnl=500.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-3.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.2,
+            peak_open_positions=3,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+        )
+        assert result.leverage == 6  # défaut
+
+    def test_leverage_field_explicit(self):
+        """PortfolioResult avec leverage=3 explicite."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["A/USDT"],
+            final_equity=10_200.0,
+            total_return_pct=2.0,
+            total_trades=3,
+            win_rate=66.7,
+            realized_pnl=200.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-1.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.15,
+            peak_open_positions=2,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+            leverage=3,
+        )
+        assert result.leverage == 3
+
+    def test_leverage_in_report(self):
+        """format_portfolio_report() affiche le leverage."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["A/USDT"],
+            final_equity=10_500.0,
+            total_return_pct=5.0,
+            total_trades=5,
+            win_rate=60.0,
+            realized_pnl=500.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-3.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.2,
+            peak_open_positions=3,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+            leverage=3,
+        )
+        report = format_portfolio_report(result)
+        assert "Leverage" in report
+        assert "3x" in report
+
+    def test_leverage_extracted_from_runner_in_build_result(self):
+        """_build_result() extrait le leverage du premier runner."""
+        config = _make_mock_config(n_assets=1)
+
+        # Créer un runner avec leverage=3 explicitement
+        strategy = create_strategy_with_params("grid_atr", {
+            "ma_period": 14,
+            "atr_period": 14,
+            "atr_multiplier_start": 2.0,
+            "atr_multiplier_step": 1.0,
+            "num_levels": 3,
+            "sl_percent": 20.0,
+            "sides": ["long"],
+            "leverage": 3,
+        })
+        engine = IncrementalIndicatorEngine([strategy])
+        gpm = GridPositionManager(PositionManagerConfig(
+            leverage=3, maker_fee=0.0006, taker_fee=0.0006, slippage_pct=0.0005,
+        ))
+        runner = GridStrategyRunner(
+            strategy=strategy, config=config,
+            indicator_engine=engine,
+            grid_position_manager=gpm,
+            data_engine=None,  # type: ignore[arg-type]
+            db_path=None,
+        )
+        runner._nb_assets = 1
+        runner._capital = 10_000.0
+        runner._initial_capital = 10_000.0
+        runner._is_warming_up = False
+        runner._stats = RunnerStats(capital=10_000.0, initial_capital=10_000.0)
+
+        backtester = PortfolioBacktester.__new__(PortfolioBacktester)
+        backtester._initial_capital = 10_000.0
+        backtester._kill_switch_pct = 30.0
+        backtester._kill_switch_window_hours = 24
+
+        result = backtester._build_result(
+            runners={"grid_atr:AAA/USDT": runner},
+            snapshots=[],
+            realized_trades=[],
+            force_closed_trades=[],
+            runner_keys=["grid_atr:AAA/USDT"],
+            period_days=90,
+        )
+
+        assert result.leverage == 3
