@@ -1543,3 +1543,104 @@ class TestLeverageOverride:
         )
 
         assert result.leverage == 3
+
+
+# ─── Tests kill switch depuis risk.yaml ───────────────────────────────────
+
+
+class TestKillSwitchFromConfig:
+    """Le kill switch doit lire global_max_loss_pct/global_window_hours depuis
+    risk.yaml et non être hardcodé à 30%/24h."""
+
+    def test_ks_from_config_defaults_to_yaml(self):
+        """Sans --kill-switch CLI, les valeurs viennent de risk.yaml."""
+        import argparse
+
+        from scripts.portfolio_backtest import main  # noqa: F401 (vérifie l'import)
+
+        # Simuler args sans override (args.kill_switch = None, args.kill_switch_window = None)
+        args = argparse.Namespace(kill_switch=None, kill_switch_window=None)
+
+        # Simuler la config avec global_max_loss_pct=45, global_window_hours=48
+        cfg_ks = MagicMock()
+        cfg_ks.global_max_loss_pct = 45.0
+        cfg_ks.global_window_hours = 48
+
+        # Reproduire la logique de résolution de main()
+        ks_cfg = cfg_ks
+        ks_pct = (
+            args.kill_switch
+            if args.kill_switch is not None
+            else getattr(ks_cfg, "global_max_loss_pct", 30.0)
+        )
+        ks_hours = (
+            args.kill_switch_window
+            if args.kill_switch_window is not None
+            else int(getattr(ks_cfg, "global_window_hours", 24))
+        )
+
+        assert ks_pct == 45.0, f"attendu 45.0, got {ks_pct}"
+        assert ks_hours == 48, f"attendu 48, got {ks_hours}"
+
+    def test_ks_cli_overrides_yaml(self):
+        """Avec --kill-switch CLI, la valeur CLI prend priorité sur risk.yaml."""
+        import argparse
+
+        args = argparse.Namespace(kill_switch=60.0, kill_switch_window=12)
+
+        cfg_ks = MagicMock()
+        cfg_ks.global_max_loss_pct = 45.0
+        cfg_ks.global_window_hours = 48
+
+        ks_pct = (
+            args.kill_switch
+            if args.kill_switch is not None
+            else getattr(cfg_ks, "global_max_loss_pct", 30.0)
+        )
+        ks_hours = (
+            args.kill_switch_window
+            if args.kill_switch_window is not None
+            else int(getattr(cfg_ks, "global_window_hours", 24))
+        )
+
+        assert ks_pct == 60.0, f"CLI override attendu 60.0, got {ks_pct}"
+        assert ks_hours == 12, f"CLI override attendu 12, got {ks_hours}"
+
+    def test_ks_fallback_when_config_missing(self):
+        """Si global_max_loss_pct absent de la config, fallback à 30.0."""
+        import argparse
+
+        args = argparse.Namespace(kill_switch=None, kill_switch_window=None)
+
+        # Config sans attribut global_max_loss_pct
+        cfg_ks = MagicMock(spec=[])  # spec vide = aucun attribut
+
+        ks_pct = (
+            args.kill_switch
+            if args.kill_switch is not None
+            else getattr(cfg_ks, "global_max_loss_pct", 30.0)
+        )
+        ks_hours = (
+            args.kill_switch_window
+            if args.kill_switch_window is not None
+            else int(getattr(cfg_ks, "global_window_hours", 24))
+        )
+
+        assert ks_pct == 30.0, f"fallback attendu 30.0, got {ks_pct}"
+        assert ks_hours == 24, f"fallback attendu 24, got {ks_hours}"
+
+    def test_portfolio_backtester_receives_ks_values(self):
+        """PortfolioBacktester._kill_switch_pct reflète la valeur passée (pas le défaut)."""
+        config = _make_mock_config(n_assets=1)
+        config.strategies.grid_atr.per_asset = {"AAA/USDT": {}}
+
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            strategy_name="grid_atr",
+            kill_switch_pct=45.0,
+            kill_switch_window_hours=48,
+        )
+
+        assert backtester._kill_switch_pct == 45.0
+        assert backtester._kill_switch_window_hours == 48

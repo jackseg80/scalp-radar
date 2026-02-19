@@ -179,6 +179,19 @@ async def main(args: argparse.Namespace) -> None:
     setup_logging(level="INFO")
     config = get_config()
 
+    # Résoudre les valeurs kill switch : CLI override > risk.yaml > fallback
+    ks_cfg = getattr(config.risk, "kill_switch", None)
+    ks_pct: float = (
+        args.kill_switch
+        if args.kill_switch is not None
+        else getattr(ks_cfg, "global_max_loss_pct", 30.0)
+    )
+    ks_hours: int = (
+        args.kill_switch_window
+        if args.kill_switch_window is not None
+        else int(getattr(ks_cfg, "global_window_hours", 24))
+    )
+
     # Résoudre multi_strategies
     multi_strategies = None
     strategy_label = args.strategy
@@ -229,14 +242,16 @@ async def main(args: argparse.Namespace) -> None:
     else:
         days = int(args.days)
 
+    print(f"  Kill switch         : {ks_pct:.0f}% / {ks_hours}h")
+
     backtester = PortfolioBacktester(
         config=config,
         initial_capital=args.capital,
         strategy_name=args.strategy,
         assets=assets,
         exchange=args.exchange,
-        kill_switch_pct=args.kill_switch_pct,
-        kill_switch_window_hours=args.kill_switch_window,
+        kill_switch_pct=ks_pct,
+        kill_switch_window_hours=ks_hours,
         multi_strategies=multi_strategies,
     )
 
@@ -256,8 +271,8 @@ async def main(args: argparse.Namespace) -> None:
             result=result,
             strategy_name=strategy_label,
             exchange=args.exchange,
-            kill_switch_pct=args.kill_switch_pct,
-            kill_switch_window_hours=args.kill_switch_window,
+            kill_switch_pct=ks_pct,
+            kill_switch_window_hours=ks_hours,
             duration_seconds=round(duration, 1),
             label=args.label,
         )
@@ -331,16 +346,16 @@ if __name__ == "__main__":
         "--output", type=str, default=None, help="Écrire dans un fichier"
     )
     parser.add_argument(
-        "--kill-switch-pct",
+        "--kill-switch",
         type=float,
-        default=30.0,
-        help="Seuil kill switch (%%)",
+        default=None,
+        help="Override seuil kill switch %% (défaut: global_max_loss_pct depuis risk.yaml)",
     )
     parser.add_argument(
         "--kill-switch-window",
         type=int,
-        default=24,
-        help="Fenêtre kill switch (heures)",
+        default=None,
+        help="Override fenêtre kill switch en heures (défaut: global_window_hours depuis risk.yaml)",
     )
     parser.add_argument(
         "--save",

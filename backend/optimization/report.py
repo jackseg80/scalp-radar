@@ -602,12 +602,18 @@ def apply_to_yaml(
                     )
 
         # Paramètres divergents → per_asset
+        # Certains params sont des décisions de risk management globales : ne jamais
+        # les écrire dans per_asset (sinon ils écrasent le top-level lors du merge).
+        _EXCLUDED_FROM_PER_ASSET = {"leverage", "enabled", "live_eligible", "weight", "timeframe"}
+
         per_asset = strat_data.get("per_asset", {})
         for report in strat_reports:
             symbol = report.symbol
             asset_overrides = per_asset.get(symbol, {})
 
             for param_name in report.recommended_params:
+                if param_name in _EXCLUDED_FROM_PER_ASSET:
+                    continue
                 if param_name in divergent_params or len(strat_reports) == 1:
                     old_val = asset_overrides.get(param_name)
                     new_val = report.recommended_params[param_name]
