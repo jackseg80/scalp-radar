@@ -41,7 +41,13 @@ class GridBolTrendStrategy(BaseGridStrategy):
 
     @property
     def min_candles(self) -> dict[str, int]:
-        min_needed = max(self._config.bol_window, self._config.long_ma_window) + 20
+        # Prendre le max sur tous les per_asset overrides (ex: DOGE long_ma_window=400)
+        max_bol = self._config.bol_window
+        max_ma = self._config.long_ma_window
+        for overrides in getattr(self._config, "per_asset", {}).values():
+            max_bol = max(max_bol, overrides.get("bol_window", 0))
+            max_ma = max(max_ma, overrides.get("long_ma_window", 0))
+        min_needed = max(max_bol, max_ma) + 20
         return {self._config.timeframe: max(min_needed, 50)}
 
     def compute_indicators(

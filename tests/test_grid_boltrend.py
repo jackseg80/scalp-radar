@@ -739,6 +739,32 @@ class TestRegistryConfig:
         from backend.optimization import is_grid_strategy
         assert is_grid_strategy("grid_boltrend") is True
 
+    def test_min_candles_uses_per_asset_max(self):
+        """min_candles utilise le max long_ma_window de tous les per_asset overrides.
+
+        Reproduit le bug DOGE/USDT : long_ma_window=400 en per_asset mais
+        le global est 200 → min_candles retournait 220 au lieu de 420.
+        """
+        config = GridBolTrendConfig(
+            bol_window=100,
+            long_ma_window=200,  # global default
+            per_asset={
+                "DOGE/USDT": {"long_ma_window": 400, "bol_window": 100},
+                "BTC/USDT": {"long_ma_window": 200, "bol_window": 50},
+            },
+        )
+        strategy = GridBolTrendStrategy(config)
+        result = strategy.min_candles
+        # max(100, 400) + 20 = 420 (pas 220 = max(100, 200) + 20)
+        assert result == {"1h": 420}, f"Attendu 420, obtenu {result}"
+
+    def test_min_candles_global_when_no_per_asset(self):
+        """Sans per_asset overrides, min_candles utilise les valeurs globales."""
+        strategy = _make_strategy(bol_window=100, long_ma_window=200)
+        result = strategy.min_candles
+        # max(100, 200) + 20 = 220
+        assert result == {"1h": 220}
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Section 5 : Edge cases
