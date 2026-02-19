@@ -635,7 +635,7 @@ class TestSimulation:
         )
 
         merged = PortfolioBacktester._merge_candles({"AAA/USDT": candles})
-        snapshots, realized = await backtester._simulate(
+        snapshots, realized, _liq_event = await backtester._simulate(
             runners, engine, merged, warmup_ends
         )
 
@@ -1057,7 +1057,7 @@ class TestMultiStrategySameSymbolDispatched:
 
         # Simulate
         merged = PortfolioBacktester._merge_candles({"AAA/USDT": candles})
-        snapshots, trades = await backtester._simulate(
+        snapshots, trades, _liq_event = await backtester._simulate(
             runners, engine, merged, warmup_ends
         )
 

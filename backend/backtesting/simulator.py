@@ -610,6 +610,9 @@ class GridStrategyRunner:
         # Hotfix 36 : cooldown post-warmup basé sur le temps réel
         self._warmup_ended_at: datetime | None = None  # set dans _end_warmup()
 
+        # Funding costs tracking (approximation 0.01% par settlement)
+        self._total_funding_cost: float = 0.0
+
     def _get_sl_percent(self, symbol: str) -> float:
         """Résout le sl_percent pour un symbol (avec override per_asset)."""
         config = self._strategy._config
@@ -893,6 +896,19 @@ class GridStrategyRunner:
 
         # Récupérer les positions de ce symbol uniquement
         positions = self._positions.get(symbol, [])
+
+        # Funding cost (settlement toutes les 8h : 00:00, 08:00, 16:00 UTC)
+        # Appliqué AVANT TP/SL : si position ouverte au settlement, on paie le funding
+        if not self._is_warming_up and positions and candle.timestamp.hour in (0, 8, 16):
+            funding_rate = 0.0001  # 0.01% par session (approximation conservative)
+            for pos in positions:
+                notional = pos.entry_price * pos.quantity
+                if pos.direction == Direction.LONG:
+                    cost = notional * funding_rate   # LONG paie
+                else:
+                    cost = -notional * funding_rate  # SHORT reçoit
+                self._capital -= cost
+                self._total_funding_cost += cost
 
         # Construire le GridState
         grid_state = self._gpm.compute_grid_state(positions, candle.close)
@@ -1322,6 +1338,7 @@ class GridStrategyRunner:
             "initial_capital": self._initial_capital,
             "assets_with_positions": assets_with_positions,
             "regime_filter_blocks": self._regime_filter_blocks,
+            "funding_cost": round(self._total_funding_cost, 2),
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:

@@ -50,6 +50,12 @@ class PortfolioSnapshot:
     margin_ratio: float  # margin / initial_capital
     n_open_positions: int
     n_assets_with_positions: int
+    # Cross-margin risk metrics
+    total_notional: float = 0.0           # Somme entry_price × quantity (toutes positions)
+    maintenance_margin: float = 0.0       # 0.4% du notional (Bitget USDT-M tier 1)
+    liquidation_distance_pct: float = 0.0 # (equity - maintenance) / equity × 100
+    is_liquidated: bool = False
+    worst_case_sl_loss_pct: float = 0.0   # Perte (% capital) si tous SL touchent
 
 
 @dataclass
@@ -95,6 +101,12 @@ class PortfolioResult:
 
     # Funding costs (agrégé de tous les runners, 0.0 si non calculé)
     funding_paid_total: float = 0.0
+
+    # Cross-margin risk
+    was_liquidated: bool = False
+    liquidation_event: dict | None = None
+    min_liquidation_distance_pct: float = 100.0
+    worst_case_sl_loss_pct: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -242,11 +254,11 @@ class PortfolioBacktester:
 
         # 4. Merge et simulate
         merged = self._merge_candles(valid_symbols)
-        snapshots, realized_trades = await self._simulate(
+        snapshots, realized_trades, liquidation_event = await self._simulate(
             runners, indicator_engine, merged, warmup_ends, progress_callback
         )
 
-        # 5. Force-close positions restantes
+        # 5. Force-close positions restantes (skip si liquidé — tout est déjà à 0)
         force_closed_trades = self._force_close_all(runners)
 
         # 6. Build result
@@ -259,6 +271,7 @@ class PortfolioBacktester:
             force_closed_trades,
             runner_keys,
             period_days,
+            liquidation_event=liquidation_event,
         )
 
     # ------------------------------------------------------------------
@@ -460,10 +473,15 @@ class PortfolioBacktester:
         merged_candles: list[Candle],
         warmup_ends: dict[str, int],
         progress_callback: Callable[[float, str], None] | None = None,
-    ) -> tuple[list[PortfolioSnapshot], list[tuple[str, TradeResult]]]:
-        """Boucle de simulation principale."""
+    ) -> tuple[list[PortfolioSnapshot], list[tuple[str, TradeResult]], dict | None]:
+        """Boucle de simulation principale.
+
+        Returns:
+            (snapshots, trades, liquidation_event or None)
+        """
         snapshots: list[PortfolioSnapshot] = []
         all_trades: list[tuple[str, TradeResult]] = []
+        liquidation_event: dict | None = None
 
         # Mapping symbol → [runner_keys] pour dispatcher une candle à tous les runners du symbol
         symbol_to_runners: dict[str, list[str]] = {}
@@ -516,6 +534,26 @@ class PortfolioBacktester:
                 snap = self._take_snapshot(runners, candle.timestamp, last_closes)
                 snapshots.append(snap)
 
+                # Cross-margin liquidation check
+                if snap.is_liquidated:
+                    logger.critical(
+                        "LIQUIDATION à {} — equity={:.2f}, maintenance={:.2f}, notional={:.2f}",
+                        candle.timestamp, snap.total_equity,
+                        snap.maintenance_margin, snap.total_notional,
+                    )
+                    for r in runners.values():
+                        r._capital = 0.0
+                        r._positions = {}
+                        r._kill_switch_triggered = True
+                    liquidation_event = {
+                        "timestamp": candle.timestamp.isoformat(),
+                        "equity": snap.total_equity,
+                        "maintenance_margin": snap.maintenance_margin,
+                        "notional": snap.total_notional,
+                        "n_positions": snap.n_open_positions,
+                    }
+                    break
+
                 # Kill switch temps réel (Sprint 24a)
                 if len(snapshots) >= 2:
                     window_hours = self._kill_switch_window_hours
@@ -552,7 +590,10 @@ class PortfolioBacktester:
                 if progress_callback:
                     progress_callback(round(pct, 1), f"Simulation {pct:.0f}%")
 
-        return snapshots, all_trades
+        return snapshots, all_trades, liquidation_event
+
+    # Bitget USDT-M tier 1 maintenance margin rate
+    MAINTENANCE_MARGIN_RATE = 0.004  # 0.4%
 
     def _take_snapshot(
         self,
@@ -565,8 +606,12 @@ class PortfolioBacktester:
         total_realized = 0.0
         total_unrealized = 0.0
         total_margin = 0.0
+        total_notional = 0.0
         n_positions = 0
         n_assets_active = 0
+
+        # Worst-case SL : perte si TOUS les SL touchent en même temps
+        worst_case_sl_loss = 0.0
 
         for runner_key, runner in runners.items():
             symbol = self._symbol_from_key(runner_key)
@@ -575,21 +620,36 @@ class PortfolioBacktester:
 
             close_price = last_closes.get(symbol, 0.0)
             leverage = runner._leverage
+            sl_pct = runner._get_sl_percent(symbol) / 100  # ex: 20% → 0.20
 
             for pos_symbol, positions in runner._positions.items():
                 if not positions:
                     continue
                 upnl = runner._gpm.unrealized_pnl(positions, close_price)
                 total_unrealized += upnl
-                margin = sum(
-                    p.entry_price * p.quantity / leverage for p in positions
-                )
-                total_margin += margin
+                for p in positions:
+                    notional_p = p.entry_price * p.quantity
+                    total_notional += notional_p
+                    total_margin += notional_p / leverage
+                    worst_case_sl_loss += notional_p * sl_pct
                 n_positions += len(positions)
                 n_assets_active += 1
 
         total_equity = total_capital + total_unrealized
         margin_ratio = total_margin / self._initial_capital if self._initial_capital > 0 else 0.0
+
+        # Cross-margin liquidation check
+        maintenance_margin = total_notional * self.MAINTENANCE_MARGIN_RATE
+        liquidation_distance_pct = (
+            ((total_equity - maintenance_margin) / total_equity * 100)
+            if total_equity > 0 else -100.0
+        )
+        is_liquidated = total_equity <= maintenance_margin and total_notional > 0
+
+        worst_case_sl_loss_pct = (
+            (worst_case_sl_loss / self._initial_capital * 100)
+            if self._initial_capital > 0 else 0.0
+        )
 
         return PortfolioSnapshot(
             timestamp=timestamp,
@@ -601,6 +661,11 @@ class PortfolioBacktester:
             margin_ratio=margin_ratio,
             n_open_positions=n_positions,
             n_assets_with_positions=n_assets_active,
+            total_notional=total_notional,
+            maintenance_margin=maintenance_margin,
+            liquidation_distance_pct=liquidation_distance_pct,
+            is_liquidated=is_liquidated,
+            worst_case_sl_loss_pct=worst_case_sl_loss_pct,
         )
 
     # ------------------------------------------------------------------
@@ -745,6 +810,7 @@ class PortfolioBacktester:
         force_closed_trades: list[tuple[str, TradeResult]],
         runner_keys: list[str],
         period_days: int,
+        liquidation_event: dict | None = None,
     ) -> PortfolioResult:
         """Construit le PortfolioResult final."""
         # P&L
@@ -805,6 +871,21 @@ class PortfolioBacktester:
         # Assets uniques pour le result
         unique_assets = sorted(set(self._symbol_from_key(k) for k in runner_keys))
 
+        # Cross-margin risk metrics
+        notional_snaps = [s for s in snapshots if s.total_notional > 0]
+        min_liq = min(
+            (s.liquidation_distance_pct for s in notional_snaps), default=100.0
+        )
+        max_worst_case = max(
+            (s.worst_case_sl_loss_pct for s in snapshots if s.n_open_positions > 0),
+            default=0.0,
+        )
+
+        # Funding costs agrégé de tous les runners
+        total_funding = sum(
+            getattr(r, "_total_funding_cost", 0.0) for r in runners.values()
+        )
+
         return PortfolioResult(
             initial_capital=self._initial_capital,
             n_assets=len(runner_keys),
@@ -827,6 +908,11 @@ class PortfolioBacktester:
             snapshots=snapshots,
             per_asset_results=per_asset,
             all_trades=all_trades,
+            funding_paid_total=round(total_funding, 2),
+            was_liquidated=liquidation_event is not None,
+            liquidation_event=liquidation_event,
+            min_liquidation_distance_pct=round(min_liq, 2),
+            worst_case_sl_loss_pct=round(max_worst_case, 2),
         )
 
 
@@ -881,6 +967,20 @@ def format_portfolio_report(result: PortfolioResult) -> str:
     lines.append(f"  Déclenchements      : {result.kill_switch_triggers}")
     for evt in result.kill_switch_events[:5]:
         lines.append(f"    {evt['timestamp'][:19]}  DD={evt['drawdown_pct']:.1f}%  equity={evt['equity']:.0f}$")
+    lines.append("")
+
+    # Cross-Margin Risk
+    lines.append("  --- Cross-Margin Risk ---")
+    lines.append(f"  Min liquidation dist  : {result.min_liquidation_distance_pct:.1f}%")
+    lines.append(f"  Worst-case SL loss    : {result.worst_case_sl_loss_pct:.1f}% du capital")
+    lines.append(f"  Funding costs total   : {result.funding_paid_total:+.2f}$")
+    if result.was_liquidated and result.liquidation_event:
+        evt = result.liquidation_event
+        lines.append(f"  LIQUIDE a {evt['timestamp']}")
+        lines.append(
+            f"     Equity={evt['equity']:.2f}, "
+            f"Maintenance={evt['maintenance_margin']:.2f}"
+        )
     lines.append("")
 
     # Per-asset (trié par P&L)

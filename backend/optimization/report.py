@@ -634,6 +634,43 @@ def apply_to_yaml(
     return True
 
 
+# ─── Leverage validation ──────────────────────────────────────────────────
+
+
+def _validate_leverage_sl(strategy_name: str, params: dict) -> list[str]:
+    """Valide que la combinaison SL × leverage est viable en cross margin."""
+    from backend.optimization import STRATEGY_REGISTRY
+
+    warnings: list[str] = []
+
+    sl_pct = params.get("sl_percent")
+    if sl_pct is None:
+        return warnings
+
+    entry = STRATEGY_REGISTRY.get(strategy_name)
+    if entry is None:
+        return warnings
+
+    config_cls, _ = entry
+    default_cfg = config_cls()
+    leverage = getattr(default_cfg, "leverage", 6)
+
+    loss_per_margin = sl_pct * leverage / 100
+
+    if loss_per_margin > 1.0:
+        warnings.append(
+            f"SL {sl_pct}% x leverage {leverage}x = {loss_per_margin:.0%} de la marge "
+            f"(depasse 100% — chaque SL coute plus que sa marge en cross margin)"
+        )
+    elif loss_per_margin > 0.8:
+        warnings.append(
+            f"SL {sl_pct}% x leverage {leverage}x = {loss_per_margin:.0%} de la marge "
+            f"(risque, peu de marge de securite)"
+        )
+
+    return warnings
+
+
 # ─── Build FinalReport ─────────────────────────────────────────────────────
 
 
@@ -747,6 +784,10 @@ def build_final_report(
                 f"Volume modéré — moyenne de {avg_trades:.1f} trades/fenêtre OOS. "
                 f"Résultats à confirmer avec plus de données"
             )
+
+    # Validation leverage × SL en cross margin
+    leverage_warnings = _validate_leverage_sl(wfo.strategy_name, wfo.recommended_params)
+    warnings.extend(leverage_warnings)
 
     return FinalReport(
         strategy_name=wfo.strategy_name,

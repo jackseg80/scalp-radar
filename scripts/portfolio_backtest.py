@@ -54,6 +54,12 @@ def _result_to_dict(result: PortfolioResult) -> dict:
         "kill_switch_triggers": result.kill_switch_triggers,
         "kill_switch_events": result.kill_switch_events,
         "per_asset_results": result.per_asset_results,
+        # Cross-margin risk
+        "was_liquidated": result.was_liquidated,
+        "liquidation_event": result.liquidation_event,
+        "min_liquidation_distance_pct": result.min_liquidation_distance_pct,
+        "worst_case_sl_loss_pct": result.worst_case_sl_loss_pct,
+        "funding_paid_total": result.funding_paid_total,
     }
     # Equity curve résumée (pas tous les snapshots)
     d["equity_curve"] = [

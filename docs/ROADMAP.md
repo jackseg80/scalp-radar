@@ -1906,6 +1906,46 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 - `datetime(2024, 1, 1, i)` invalide si `i > 23` (heure) → utiliser `base_ts + timedelta(hours=i)`
 - Early return dans sync bloque le cleanup paper quand `_grid_states` vide → ne pas retourner tôt
 
+### Sprint Backtest Réalisme — Liquidation, Funding, Leverage Validation ✅
+
+**But** : Rendre les portfolio backtests plus réalistes pour le trading cross margin sur Bitget.
+
+**Problèmes résolus** :
+1. **Pas de simulation de liquidation** — un portfolio pouvait afficher -50% DD alors qu'il aurait été liquidé en cross margin
+2. **Pas de funding costs** dans le GridStrategyRunner — le fast engine WFO les gère (Sprint 26) mais pas le runner event-driven paper/portfolio
+3. **Pas de validation leverage × SL** — `sl_percent=20 × leverage=6 = 120%` de la marge, chaque SL coûte plus que la marge allouée
+
+**Fix 1 — Simulation liquidation cross margin** (`portfolio_engine.py`) :
+- `PortfolioSnapshot` +5 champs : `total_notional`, `maintenance_margin`, `liquidation_distance_pct`, `is_liquidated`, `worst_case_sl_loss_pct`
+- `_take_snapshot()` calcule le notional total, la marge de maintenance (0.4% du notional, Bitget USDT-M tier 1), la distance de liquidation et le worst-case SL à chaque snapshot
+- `_simulate()` brise la boucle si `is_liquidated=True` → capital = 0, positions vidées, event loggé
+- `PortfolioResult` +4 champs : `was_liquidated`, `liquidation_event`, `min_liquidation_distance_pct`, `worst_case_sl_loss_pct`
+- Worst-case SL calculé au **peak positions** (max sur tous les snapshots), pas juste à la fin
+- `format_portfolio_report()` : section "Cross-Margin Risk" (min liquidation distance, worst-case SL, funding total)
+
+**Fix 2 — Funding costs dans GridStrategyRunner** (`simulator.py`) :
+- `_total_funding_cost: float = 0.0` dans `__init__`
+- Settlement toutes les 8h (00:00, 08:00, 16:00 UTC), taux fixe 0.01% (approximation conservative — les vrais taux sont dans la DB et utilisés par le fast engine WFO)
+- Placé **AVANT** le check TP/SL (si position ouverte au moment du settlement, on paie même si elle ferme ensuite)
+- `get_status()` expose `funding_cost`
+- `_build_result()` agrège `_total_funding_cost` de tous les runners → `funding_paid_total`
+
+**Fix 3 — Validation leverage × SL dans WFO** (`report.py`) :
+- `_validate_leverage_sl(strategy_name, params)` : warning si `sl_pct × leverage / 100 > 1.0` ("dépasse 100%") ou `> 0.8` ("risqué")
+- Intégré dans `build_final_report()` → apparaît dans `FinalReport.warnings`
+
+**Fix 4 — Report enrichi** (`scripts/portfolio_backtest.py`) :
+- `_result_to_dict()` : +5 champs (`was_liquidated`, `liquidation_event`, `min_liquidation_distance_pct`, `worst_case_sl_loss_pct`, `funding_paid_total`)
+
+**Fichiers** : `backend/backtesting/portfolio_engine.py`, `backend/backtesting/simulator.py`, `backend/optimization/report.py`, `scripts/portfolio_backtest.py`, `tests/test_backtest_realism.py` (NOUVEAU), `tests/test_portfolio_backtest.py` (2 unpacks mis à jour)
+
+**Tests** : 17 nouveaux (`test_backtest_realism.py`), **1411 tests** au total, 0 régression.
+
+**Pièges** :
+- `_simulate()` retourne maintenant un 3-tuple → les tests existants qui décompactaient 2 valeurs nécessitent `snapshots, realized, _liq = await backtester._simulate(...)`
+- Timestamps dans les tests `on_candle()` doivent être timezone-aware (`tzinfo=timezone.utc`), sinon `TypeError: can't subtract offset-naive and offset-aware datetimes`
+- Worst-case SL au peak positions : calculer à chaque snapshot et garder le max (pas juste à la fin où il peut n'y avoir aucune position)
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -2016,9 +2056,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1394 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome**
-- **Phase 6 en cours** — Sprint Executor Autonome (TP/SL indépendant + sync boot + leverage 3x) terminé
+- **1411 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme**
+- **Phase 6 en cours** — Sprint Backtest Réalisme (liquidation cross margin, funding costs, leverage validation) terminé
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 6 assets** (BTC, ETH, DOGE, DYDX, LINK, SAND) en préparation
@@ -2028,7 +2068,7 @@ Phase 5: Scaling Stratégies     ✅
 - **Frontend complet** : 7 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : Déployer Sprint Executor Autonome en prod + surveiller sync boot + exit monitor
+- **Prochaine étape** : Déployer Sprint Executor Autonome en prod + surveiller sync boot + exit monitor. Lancer un portfolio backtest avec les nouvelles métriques de liquidation et funding
 
 ### Résultats Portfolio Backtest — Validation Finale
 
@@ -2173,7 +2213,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 1016 passants, 0 régression
+- **Tests** : 1411 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
