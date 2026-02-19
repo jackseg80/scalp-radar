@@ -188,6 +188,7 @@ class Executor:
 
         # Exit monitor autonome (Sprint Executor Autonome)
         self._data_engine: DataEngine | None = None
+        self._db: Any = None  # Database — warm-up SMA depuis historique DB
         self._strategies: dict[str, BaseGridStrategy] = {}
         self._exit_check_task: asyncio.Task[None] | None = None
 
@@ -455,6 +456,10 @@ class Executor:
         """Enregistre le DataEngine pour les checks TP/SL autonomes."""
         self._data_engine = data_engine
 
+    def set_db(self, db: Any) -> None:
+        """Enregistre la DB pour le warm-up SMA quand le buffer WS est trop court."""
+        self._db = db
+
     def set_strategies(self, strategies: dict[str, BaseGridStrategy]) -> None:
         """Enregistre les instances de stratégie pour should_close_all()."""
         self._strategies = strategies
@@ -523,12 +528,53 @@ class Executor:
         # Récupérer les candles depuis le DataEngine
         buffers = self._data_engine._buffers.get(spot_sym, {})
         strategy_tf = getattr(strategy._config, "timeframe", "1h")
-        candles_tf = buffers.get(strategy_tf, [])
+        candles_tf = list(buffers.get(strategy_tf, []))
 
         if not candles_tf:
             return
 
         current_close = candles_tf[-1].close
+
+        # ── Résoudre ma_period per_asset avant tout (Hotfix ma_period per_asset) ──
+        ma_period = 7  # fallback ultime
+        strat_cfg = getattr(self._config.strategies, state.strategy_name, None)
+        if strat_cfg is not None:
+            try:
+                asset_params = strat_cfg.get_params_for_symbol(spot_sym)
+                raw = asset_params.get("ma_period", 7)
+                if isinstance(raw, (int, float)):
+                    ma_period = int(raw)
+            except (AttributeError, TypeError):
+                raw = getattr(strategy._config, "ma_period", 7)
+                if isinstance(raw, (int, float)):
+                    ma_period = int(raw)
+
+        # ── Warm-up depuis la DB si buffer WS insuffisant (Hotfix buffer incomplet) ──
+        if len(candles_tf) < ma_period and self._db is not None:
+            try:
+                db_candles = await self._db.get_candles(
+                    symbol=spot_sym,
+                    timeframe=strategy_tf,
+                    limit=ma_period + 10,
+                )
+                if len(db_candles) >= ma_period:
+                    live_timestamps = {c.timestamp for c in candles_tf}
+                    live_only = [c for c in candles_tf if c.timestamp not in live_timestamps]
+                    candles_tf = db_candles + live_only
+                    logger.debug(
+                        "Exit monitor: warm-up DB pour {} — {} candles DB + {} live = {} total",
+                        futures_sym, len(db_candles), len(live_only), len(candles_tf),
+                    )
+            except Exception as e:
+                logger.warning("Exit monitor: warm-up DB échoué pour {}: {}", futures_sym, e)
+
+        # Si toujours pas assez de candles → skip (mieux vaut ne pas décider que faux TP)
+        if len(candles_tf) < ma_period:
+            logger.debug(
+                "Exit monitor: buffer insuffisant pour {} ({}/{} candles), skip",
+                futures_sym, len(candles_tf), ma_period,
+            )
+            return
 
         # Calculer les indicateurs via la stratégie elle-même
         indicators: dict = {}
@@ -543,22 +589,8 @@ class Executor:
 
         # SMA fallback si pas fourni par compute_live_indicators
         if "sma" not in tf_indicators:
-            # Résoudre ma_period per_asset (pas le default top-level)
-            ma_period = 7  # fallback ultime
-            strat_cfg = getattr(self._config.strategies, state.strategy_name, None)
-            if strat_cfg is not None:
-                try:
-                    asset_params = strat_cfg.get_params_for_symbol(spot_sym)
-                    raw = asset_params.get("ma_period", 7)
-                    if isinstance(raw, (int, float)):
-                        ma_period = int(raw)
-                except (AttributeError, TypeError):
-                    raw = getattr(strategy._config, "ma_period", 7)
-                    if isinstance(raw, (int, float)):
-                        ma_period = int(raw)
-            if len(candles_tf) >= ma_period:
-                closes = [c.close for c in candles_tf[-ma_period:]]
-                tf_indicators["sma"] = sum(closes) / len(closes)
+            closes = [c.close for c in candles_tf[-ma_period:]]
+            tf_indicators["sma"] = sum(closes) / len(closes)
 
         indicators[strategy_tf] = tf_indicators
 

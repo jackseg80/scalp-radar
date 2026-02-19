@@ -792,3 +792,108 @@ class TestHardeningOpen:
 
         # L'ordre d'entrée doit être passé (DCA level)
         executor._exchange.create_order.assert_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Bloc 4 — Warm-up DB buffer insuffisant
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestExitDbWarmup:
+
+    @pytest.mark.asyncio
+    async def test_exit_skips_when_insufficient_candles_no_db(self):
+        """Buffer insuffisant ET pas de DB → skip, should_close_all jamais appelé."""
+        config = _make_config()
+        config.strategies.grid_atr.ma_period = 7
+        config.strategies.grid_atr.get_params_for_symbol = MagicMock(
+            return_value={"ma_period": 7},
+        )
+
+        executor = _make_executor(config=config)
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
+        # Seulement 5 candles — insuffisant pour ma_period=7
+        executor._data_engine = _make_data_engine(closes=[50000.0] * 5)
+        executor._db = None  # pas de DB
+
+        strategy = _make_strategy(should_close_result="tp_global")
+        executor._strategies = {"grid_atr": strategy}
+        executor._close_grid_cycle = AsyncMock()
+
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        # Pas assez de candles + pas de DB → skip complet, pas de close
+        strategy.should_close_all.assert_not_called()
+        executor._close_grid_cycle.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_exit_uses_db_warmup_for_sma(self):
+        """Buffer insuffisant → complète depuis DB → SMA correcte, should_close_all appelé."""
+        from datetime import timedelta
+
+        config = _make_config()
+        config.strategies.grid_atr.ma_period = 7
+        config.strategies.grid_atr.get_params_for_symbol = MagicMock(
+            return_value={"ma_period": 7},
+        )
+
+        executor = _make_executor(config=config)
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
+
+        # Seulement 3 candles live — insuffisant pour ma_period=7
+        base_ts = datetime(2024, 1, 11, tzinfo=timezone.utc)
+        live_candles = [
+            FakeCandle(
+                timestamp=base_ts + timedelta(hours=i),
+                open=100.0, high=105.0, low=95.0, close=100.0,
+            )
+            for i in range(3)
+        ]
+        from collections import defaultdict
+        buffers = defaultdict(lambda: defaultdict(list))
+        buffers["BTC/USDT"]["1h"] = live_candles
+        engine = MagicMock()
+        engine._buffers = buffers
+        executor._data_engine = engine
+
+        # DB retourne 10 candles historiques (timestamps avant les live)
+        db_ts_base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        db_candles = [
+            FakeCandle(
+                timestamp=db_ts_base + timedelta(hours=i),
+                open=100.0, high=105.0, low=95.0, close=100.0,
+            )
+            for i in range(10)
+        ]
+        mock_db = AsyncMock()
+        mock_db.get_candles = AsyncMock(return_value=db_candles)
+        executor._db = mock_db
+
+        # Capturer l'appel à should_close_all
+        captured = {}
+
+        def capture(ctx, grid_state):
+            captured["ctx"] = ctx
+            return None
+
+        strategy = _make_strategy()
+        strategy.compute_live_indicators = MagicMock(return_value={})
+        strategy.should_close_all = capture
+        executor._strategies = {"grid_atr": strategy}
+
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        # should_close_all doit avoir été appelé (assez de candles après warm-up DB)
+        assert "ctx" in captured, "should_close_all n'a pas été appelé après warm-up DB"
+        ctx = captured["ctx"]
+
+        # SMA calculée sur les candles DB + live (toutes à 100.0)
+        assert "sma" in ctx.indicators["1h"]
+        assert ctx.indicators["1h"]["sma"] == pytest.approx(100.0)
+
+        # Vérifier que get_candles a été appelé avec les bons paramètres
+        mock_db.get_candles.assert_called_once_with(
+            symbol="BTC/USDT",
+            timeframe="1h",
+            limit=17,  # ma_period(7) + 10
+        )

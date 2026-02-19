@@ -1987,6 +1987,32 @@ Exit monitor: check 4 positions (['FET/USDT:USDT', 'GALA/USDT:USDT', ...])
 
 **Piège** : Si `_grid_states` est déjà peuplé (state file intact), `_populate_grid_states_from_exchange()` n'est pas appelé — les états existants sont conservés tels quels.
 
+### Hotfix buffer incomplet — Warm-up DB pour SMA exit monitor ✅
+
+**But** : Corriger les faux TP (-83$) causés par une SMA calculée sur un buffer WS trop court après restart.
+
+**Problème** : `_check_grid_exit()` calculait la SMA depuis `self._data_engine._buffers` — uniquement les candles reçues via WebSocket depuis le dernier restart. Avec 7-8 candles post-restart toutes en baisse, la SMA était artificiellement basse → `close ≥ sma` → faux `tp_global` → 4 positions fermées en perte (-83.51$).
+
+Le paper (Simulator) utilise `IncrementalIndicatorEngine` avec warm-up DB (50+ candles) → SMA correcte → divergence paper/live.
+
+**Fix** (`backend/execution/executor.py`) :
+
+1. `set_db(db)` : nouvelle méthode pour enregistrer la référence DB
+2. Warm-up DB : si `len(buffer) < ma_period` → `get_candles(symbol, tf, limit=ma_period+10)` → merge timestamps
+3. Guard skip : si toujours insuffisant après DB → `return` (pas de faux TP). Le SL Bitget server-side protège.
+
+**Fix** (`backend/api/server.py`) : `executor.set_db(db)` au lifespan.
+
+**Tests** : `test_exit_skips_when_insufficient_candles_no_db` (5 candles, pas de DB → skip), `test_exit_uses_db_warmup_for_sma` (3 live + 10 DB → SMA correcte).
+
+**Fichiers** : `backend/execution/executor.py`, `backend/api/server.py`, `tests/test_executor_autonomous.py`
+
+**Tests** : 2 nouveaux, **1448 tests** au total, 0 régression.
+
+**Piège** : merge par timestamp pour éviter les doublons. `db_candles + live_only` garantit l'ordre chronologique (DB retourne ASC).
+
+---
+
 ### Hotfix ma_period per_asset — Exit monitor utilise le bon SMA period ✅
 
 **But** : Corriger un bug silencieux où le TP (SMA crossing) n'était jamais détecté après un restart, pour les assets ayant un `ma_period` per_asset différent du défaut top-level.
@@ -2207,7 +2233,7 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1446 tests**, 0 régression
+- **1448 tests**, 0 régression
 - **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation**
 - **Phase 6 en cours** — leverage optimal en cours de validation via Sprint 35 stress test
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)

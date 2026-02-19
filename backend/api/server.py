@@ -150,6 +150,7 @@ async def lifespan(app: FastAPI):
 
         # Exit monitor autonome : sync live→paper + surveillance TP/SL indépendante
         executor.set_data_engine(engine)
+        executor.set_db(db)
         executor.set_strategies(simulator.get_strategy_instances())
 
         from backend.execution.sync import sync_live_to_paper
