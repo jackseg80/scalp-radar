@@ -12,6 +12,73 @@ Attention aux quotes : utiliser `"` pour les strings Python, créer un fichier .
 
 ---
 
+## 🚨 COMMANDES D'URGENCE LIVE
+
+> Toutes les commandes suivantes s'exécutent **sur le serveur** (`ssh jack@192.168.1.200`, dans `~/scalp-radar`).
+> Pour le rollback git, la purge état et la désactivation stratégie → voir **§ 18. Rollback d'urgence**.
+
+### Reset Kill Switch Live
+
+```bash
+curl -X POST http://localhost:8000/api/executor/kill-switch/reset \
+  -H "X-API-Key: $(grep SYNC_API_KEY .env | cut -d= -f2)"
+```
+
+### Status Executor (JSON formaté)
+
+```bash
+curl -s http://localhost:8000/api/executor/status \
+  -H "X-API-Key: $(grep SYNC_API_KEY .env | cut -d= -f2)" | python3 -m json.tool
+```
+
+### Vérifier Kill Switch dans les logs
+
+```bash
+docker compose logs backend --since 5m | grep -i "kill_switch"
+```
+
+### Vérifier Exit Monitor
+
+```bash
+docker compose logs backend --since 10m | grep -E "(Exit monitor|EXIT AUTONOME|no exit)"
+```
+
+### Logs positions ouvertes/fermées + erreurs
+
+```bash
+# Activité grids récente
+docker compose logs backend --since 1h | grep -E "(GRID CLOSE|GRID ENTRY|EXIT AUTONOME)" | tail -20
+# Erreurs critiques
+docker compose logs backend --since 1h | grep -E "(ERROR|CRITICAL)" | tail -20
+# Boot sync
+docker compose logs backend --since 5m | grep -i "sync\|restore\|warm-up"
+```
+
+### Reset d'urgence de l'état executor (DERNIER RECOURS)
+
+> ⚠️ Utiliser uniquement si le bot est arrêté et que l'état JSON est corrompu.
+> Fermer toutes les positions sur Bitget manuellement AVANT.
+
+```bash
+docker compose stop backend
+python3 -c "
+import json
+with open('data/executor_state.json') as f:
+    state = json.load(f)
+state.setdefault('executor', {}).update({
+    'risk_manager': {'kill_switch': False, 'session_pnl': 0.0},
+    'grid_states': {},
+    'positions': {},
+})
+with open('data/executor_state.json', 'w') as f:
+    json.dump(state, f, indent=2)
+print('State reset OK')
+"
+docker compose start backend
+```
+
+---
+
 ## 1. Résultats WFO / Grades
 
 ### Voir tous les grades (toutes stratégies, derniers résultats)
