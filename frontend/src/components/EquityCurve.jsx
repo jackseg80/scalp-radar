@@ -45,7 +45,7 @@ export default function EquityCurve({ strategyFilter = null }) {
     return <JournalEquityChart points={journalPoints} initialCapital={initialCapital} />
   }
 
-  if (fallbackPoints.length === 0) {
+  if (fallbackPoints.length < 2) {
     return (
       <svg className="equity-svg" viewBox={`0 0 ${SVG_W} ${SVG_H}`} preserveAspectRatio="none">
         <line
