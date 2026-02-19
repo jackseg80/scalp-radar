@@ -118,7 +118,7 @@ async def lifespan(app: FastAPI):
     risk_mgr: LiveRiskManager | None = None
     selector: AdaptiveSelector | None = None
     if config.secrets.live_trading and engine and simulator:
-        risk_mgr = LiveRiskManager(config)
+        risk_mgr = LiveRiskManager(config, notifier=notifier)
         arena = app.state.arena
         selector = AdaptiveSelector(arena, config, db=db)
         executor = Executor(config, risk_mgr, notifier, selector=selector)
@@ -164,6 +164,7 @@ async def lifespan(app: FastAPI):
         logger.warning("LIVE_TRADING=true mais DataEngine/Simulator absents — executor non créé")
 
     app.state.executor = executor
+    app.state.risk_mgr = risk_mgr
     app.state.selector = selector
 
     # 5. Watchdog + Heartbeat (dépendances explicites)

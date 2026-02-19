@@ -3,17 +3,28 @@
 Séparé de l'Executor pour clarifier les responsabilités.
 Double kill switch : le Simulator a le sien (virtuel),
 le RiskManager a le sien (argent réel).
+
+Audit 2026-02-19 — 3 P0 + 3 P1 fixes :
+- P0: seuil grid_max_session_loss_percent pour stratégies grid
+- P0: endpoint reset kill switch live (dans executor_routes.py)
+- P0: guard kill switch DCA niveaux 2+ (dans executor.py)
+- P1: alerte Telegram quand kill switch live déclenché
+- P1: reset quotidien session_pnl à minuit UTC
+- P1: kill switch global live (drawdown 45% fenêtre glissante)
 """
 
 from __future__ import annotations
 
+import asyncio
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 if TYPE_CHECKING:
+    from backend.alerts.notifier import Notifier
     from backend.core.config import AppConfig
 
 
@@ -26,6 +37,7 @@ class LiveTradeResult:
     symbol: str
     direction: str
     exit_reason: str
+    strategy_name: str = ""  # Audit P0 : nécessaire pour grid_max_session_loss_percent
 
 
 class LiveRiskManager:
@@ -35,14 +47,19 @@ class LiveRiskManager:
     Il ne touche pas au kill switch du Simulator (virtuel, par runner).
     """
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, notifier: Notifier | None = None) -> None:
         self._config = config
+        self._notifier = notifier  # P1 : alerte Telegram
         self._initial_capital: float = 0.0
         self._session_pnl: float = 0.0
         self._kill_switch_triggered: bool = False
         self._open_positions: list[dict[str, Any]] = []
         self._trade_history: list[LiveTradeResult] = []
         self._total_orders: int = 0
+        # P1 : reset quotidien session_pnl
+        self._session_start_date: date = datetime.now(tz=timezone.utc).date()
+        # P1 : kill switch global (drawdown fenêtre glissante)
+        self._balance_snapshots: deque[tuple[datetime, float]] = deque(maxlen=288)  # 24h @ 5min
 
     def set_initial_capital(self, capital: float) -> None:
         """Définit le capital initial (appelé par Executor après fetch_balance)."""
@@ -130,7 +147,22 @@ class LiveRiskManager:
     # ─── Kill switch live ──────────────────────────────────────────────
 
     def record_trade_result(self, result: LiveTradeResult) -> None:
-        """Enregistre un résultat et vérifie le kill switch live."""
+        """Enregistre un résultat et vérifie le kill switch live.
+
+        P0 fix : utilise grid_max_session_loss_percent pour les stratégies grid.
+        P1 fix : reset quotidien à minuit UTC.
+        P1 fix : alerte Telegram si kill switch déclenché.
+        """
+        # P1 : auto-reset quotidien (minuit UTC)
+        today = datetime.now(tz=timezone.utc).date()
+        if today != self._session_start_date:
+            logger.info(
+                "RiskManager: reset session_pnl quotidien ({:+.2f} → 0.0)",
+                self._session_pnl,
+            )
+            self._session_pnl = 0.0
+            self._session_start_date = today
+
         self._session_pnl += result.net_pnl
         self._trade_history.append(result)
 
@@ -138,18 +170,96 @@ class LiveRiskManager:
             return
 
         loss_pct = abs(min(0, self._session_pnl)) / self._initial_capital * 100
-        max_loss = self._config.risk.kill_switch.max_session_loss_percent
+
+        # P0 : seuil adapté au type de stratégie (grid vs mono)
+        ks_config = self._config.risk.kill_switch
+        from backend.optimization import is_grid_strategy
+
+        if is_grid_strategy(result.strategy_name):
+            max_loss = getattr(ks_config, "grid_max_session_loss_percent", None) or 25.0
+        else:
+            max_loss = ks_config.max_session_loss_percent
 
         if loss_pct >= max_loss:
             self._kill_switch_triggered = True
             logger.warning(
-                "KILL SWITCH LIVE: perte session {:.1f}% >= {:.1f}%",
-                loss_pct, max_loss,
+                "KILL SWITCH LIVE: perte session {:.1f}% >= {:.1f}% (stratégie={})",
+                loss_pct, max_loss, result.strategy_name or "unknown",
             )
+
+            # P1 : alerte Telegram
+            if self._notifier:
+                try:
+                    from backend.alerts.notifier import AnomalyType
+                    asyncio.get_event_loop().create_task(
+                        self._notifier.notify_anomaly(
+                            AnomalyType.KILL_SWITCH_GLOBAL,
+                            f"KILL SWITCH LIVE déclenché ! perte={loss_pct:.1f}% "
+                            f"/ seuil={max_loss:.1f}% (stratégie={result.strategy_name})",
+                        )
+                    )
+                except Exception as e:
+                    logger.error("RiskManager: erreur envoi alerte Telegram: {}", e)
 
     @property
     def is_kill_switch_triggered(self) -> bool:
         return self._kill_switch_triggered
+
+    # ─── Kill switch global live (P1 — drawdown fenêtre glissante) ────
+
+    def record_balance_snapshot(self, balance: float) -> None:
+        """Enregistre un snapshot de balance et vérifie le drawdown global.
+
+        Appelé par Executor._balance_refresh_loop() après chaque fetch (5 min).
+        """
+        self._balance_snapshots.append((datetime.now(tz=timezone.utc), balance))
+        self._check_global_kill_switch(balance)
+
+    def _check_global_kill_switch(self, current_balance: float) -> None:
+        """Vérifie le drawdown global sur la fenêtre glissante (parité paper)."""
+        if self._kill_switch_triggered:
+            return
+        if len(self._balance_snapshots) < 2:
+            return
+
+        ks = self._config.risk.kill_switch
+        threshold = getattr(ks, "global_max_loss_pct", None)
+        window_hours = getattr(ks, "global_window_hours", None)
+        if not isinstance(threshold, (int, float)) or not isinstance(window_hours, (int, float)):
+            return
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=window_hours)
+        recent = [b for ts, b in self._balance_snapshots if ts >= cutoff]
+        if not recent:
+            return
+
+        peak = max(recent)
+        if peak <= 0:
+            return
+
+        drawdown_pct = (peak - current_balance) / peak * 100
+        if drawdown_pct >= threshold:
+            self._kill_switch_triggered = True
+            logger.critical(
+                "KILL SWITCH LIVE GLOBAL: drawdown {:.1f}% >= {:.1f}% "
+                "(peak={:.2f}, now={:.2f})",
+                drawdown_pct, threshold, peak, current_balance,
+            )
+
+            # Alerte Telegram
+            if self._notifier:
+                try:
+                    from backend.alerts.notifier import AnomalyType
+                    asyncio.get_event_loop().create_task(
+                        self._notifier.notify_anomaly(
+                            AnomalyType.KILL_SWITCH_GLOBAL,
+                            f"KILL SWITCH LIVE GLOBAL ! drawdown={drawdown_pct:.1f}% "
+                            f"/ seuil={threshold:.0f}% "
+                            f"(peak={peak:.2f}$, now={current_balance:.2f}$)",
+                        )
+                    )
+                except Exception as e:
+                    logger.error("RiskManager: erreur envoi alerte Telegram global: {}", e)
 
     # ─── State persistence ─────────────────────────────────────────────
 
@@ -161,6 +271,7 @@ class LiveRiskManager:
             "total_orders": self._total_orders,
             "initial_capital": self._initial_capital,
             "positions": list(self._open_positions),
+            "session_start_date": self._session_start_date.isoformat(),
             "trade_history": [
                 {
                     "net_pnl": t.net_pnl,
@@ -168,6 +279,7 @@ class LiveRiskManager:
                     "symbol": t.symbol,
                     "direction": t.direction,
                     "exit_reason": t.exit_reason,
+                    "strategy_name": t.strategy_name,
                 }
                 for t in self._trade_history
             ],
@@ -179,6 +291,13 @@ class LiveRiskManager:
         self._kill_switch_triggered = state.get("kill_switch", False)
         self._total_orders = state.get("total_orders", 0)
         self._initial_capital = state.get("initial_capital", 0.0)
+        # P1 : restaurer session_start_date (si absent, la date courante)
+        ssd = state.get("session_start_date")
+        if ssd:
+            try:
+                self._session_start_date = date.fromisoformat(ssd)
+            except (ValueError, TypeError):
+                self._session_start_date = datetime.now(tz=timezone.utc).date()
         # Les positions seront réconciliées par Executor._reconcile_on_boot()
         # On ne restaure pas _open_positions ici (source de vérité = exchange)
 
@@ -188,8 +307,6 @@ class LiveRiskManager:
             self._kill_switch_triggered,
             self._total_orders,
         )
-
-    # ─── Status ────────────────────────────────────────────────────────
 
     # ─── Correlation groups ─────────────────────────────────────────────
 
@@ -220,4 +337,5 @@ class LiveRiskManager:
             "open_positions_count": len(self._open_positions),
             "total_orders": self._total_orders,
             "initial_capital": self._initial_capital,
+            "session_start_date": self._session_start_date.isoformat(),
         }

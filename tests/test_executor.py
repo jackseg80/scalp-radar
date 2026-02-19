@@ -34,6 +34,7 @@ def _make_config() -> MagicMock:
     config.risk.fees.taker_percent = 0.06
     config.risk.fees.maker_percent = 0.02
     config.risk.kill_switch.max_session_loss_percent = 5.0
+    config.risk.kill_switch.grid_max_session_loss_percent = 25.0
     config.assets = [
         MagicMock(symbol="BTC/USDT", min_order_size=0.001, tick_size=0.1, correlation_group=None),
         MagicMock(symbol="ETH/USDT", min_order_size=0.01, tick_size=0.01, correlation_group=None),

@@ -86,6 +86,7 @@ def _make_notifier():
 def _make_risk_manager():
     rm = MagicMock()
     rm.pre_trade_check = MagicMock(return_value=(True, ""))
+    rm.is_kill_switch_triggered = False  # Audit P0 : guard DCA niveaux 2+
     rm.register_position = MagicMock()
     rm.unregister_position = MagicMock()
     rm.record_trade_result = MagicMock()

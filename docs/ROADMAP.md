@@ -2017,6 +2017,40 @@ Deux hotfixes incrémentaux (per_asset ma_period + DB warmup) ont été appliqu�
 
 ---
 
+### Audit Live Trading 2026-02-19 — Fixes Sécurité P0 + P1 ✅
+
+**But** : Suite aux -83$ de pertes dues à des bugs en cascade (faux TP exit monitor, kill switch trop restrictif, impossible à réinitialiser), auditer l'ensemble du code live trading et corriger tous les bugs P0 + P1.
+
+**Bugs identifiés** : 3 P0 bloquants + 7 P1 importants + 3 P2.
+
+**Causes des -83$** : exit monitor sans données correctes → fermeture de positions → accumulation de pertes → kill switch déclenché à 5% (seuil mono appliqué à grid) → bot bloqué définitivement (aucun endpoint de reset).
+
+**Fixes P0 implémentés** :
+
+1. **`grid_max_session_loss_percent` (25%) maintenant utilisé pour les stratégies grid** : `record_trade_result()` appelle `is_grid_strategy(strategy_name)` pour sélectionner le bon seuil. Avant : toutes les stratégies utilisaient le seuil mono (5%) — un seul SL hit à 3x leverage = 6% de session = kill switch immédiat.
+2. **Endpoint `POST /api/executor/kill-switch/reset`** : Reset kill switch live + session_pnl + sauvegarde état + notification Telegram. Sans ça, seul moyen = édition manuelle de `executor_state.json` + redémarrage.
+3. **Guard kill switch aux niveaux DCA 2+** : `_open_grid_position()` vérifie `is_kill_switch_triggered` même pour les niveaux 2, 3, etc. Avant : seul le niveau 1 était protégé.
+
+**Fixes P1 implémentés** :
+
+1. **Alerte Telegram quand kill switch live déclenché** : `LiveRiskManager.__init__` accepte `notifier=notifier` (passé depuis server.py). `record_trade_result()` crée une task asyncio si kill switch déclenché.
+2. **Reset automatique `session_pnl` à minuit UTC** : `_session_start_date` comparé à `datetime.now(tz=timezone.utc).date()` à chaque `record_trade_result()`.
+3. **Kill switch global live (drawdown 45% / 24h)** : `record_balance_snapshot()` appelé dans `_balance_refresh_loop()` toutes les 5 min. `_check_global_kill_switch()` vérifie le drawdown peak-to-trough sur la fenêtre glissante — parité avec le Simulator paper.
+
+**Changements** :
+
+- `backend/execution/risk_manager.py` : `strategy_name` sur `LiveTradeResult`, seuil adaptatif grid/mono, notifier param, reset quotidien, kill switch global
+- `backend/execution/executor.py` : guard kill switch DCA niveaux 2+, `strategy_name=` sur 6 appels `LiveTradeResult()`, `record_balance_snapshot()` dans `_balance_refresh_loop()`
+- `backend/api/executor_routes.py` : endpoint `POST /kill-switch/reset`
+- `backend/api/server.py` : `LiveRiskManager(config, notifier=notifier)`, `app.state.risk_mgr = risk_mgr`
+- Tests : 47 nouveaux tests (risk_manager + executor_routes), 3 mock configs corrigés
+
+**Rapport complet** : `docs/audit/audit-live-trading-20260219.md`
+
+**Tests** : **1469 tests**, 0 régression (+47).
+
+---
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -2188,11 +2222,11 @@ Phase 5: Scaling Stratégies     ✅
 
 ---
 
-## ÉTAT ACTUEL (19 février 2026)
+## ÉTAT ACTUEL (20 février 2026)
 
-- **1447 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique**
-- **Phase 6 en cours** — leverage optimal en cours de validation via Sprint 35 stress test
+- **1469 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19**
+- **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 6 assets** (BTC, ETH, DOGE, DYDX, LINK, SAND) en préparation
@@ -2206,7 +2240,8 @@ Phase 5: Scaling Stratégies     ✅
 - **Sprint Journal V2** : Fix prix moyen "--" Bitget (`_update_order_price()` rétroactif + `paper_price`), enregistrement SL/TP fills watchOrders dans `_order_history`, endpoint slippage paper vs live (`GET /api/journal/slippage`), perf par asset (`GET /api/journal/per-asset`), `get_status()` enrichi (entry_time, positions detail, levels_max), frontend : colonne P&L %, LIVE grids expandables, colonne Slippage + bandeau, section per-asset triable, funding costs dans Stats. 18 tests (1445 total).
 - **Hotfix Dashboard Leverage/Bug43** : leverage affiché dans ActivePositions/ExecutorPanel/Scanner, bug per_asset num_levels corrigé (`_get_num_levels()` + patch temp config), unrealized_pnl temps réel (1m au lieu de 1h)
 - **Hotfix Sidebar Isolation** : ExecutorPanel affiche "SIMULATION ONLY" pour les stratégies paper, EquityCurve isolée par stratégie (`?strategy=X`), kill_switch par runner
-- **Prochaine étape** : Lancer le stress test complet (20 runs ~30 min), choisir le leverage optimal grid_boltrend (actuellement 6x arbitraire), déployer grid_boltrend en paper trading
+- **Kill switch live** : seuil 25% pour grid (était 5%), endpoint reset `/api/executor/kill-switch/reset`, alerte Telegram, reset quotidien minuit UTC, kill switch global drawdown 45%/24h
+- **Prochaine étape** : Déployer les fixes P0+P1 sur le serveur, valider le comportement live, puis choisir le leverage optimal grid_boltrend et déployer en paper trading
 
 ### Résultats Portfolio Backtest — Validation Finale
 

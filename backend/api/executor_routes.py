@@ -1,8 +1,9 @@
-"""Routes de test pour l'Executor.
+"""Routes de l'Executor.
 
 POST /api/executor/test-trade — injecte un TradeEvent OPEN directement
 POST /api/executor/test-close — ferme la position ouverte
 GET  /api/executor/status — statut détaillé de l'executor
+POST /api/executor/kill-switch/reset — reset le kill switch live (Audit P0)
 """
 
 from __future__ import annotations
@@ -193,6 +194,58 @@ async def test_close(
     return {
         "status": "ok",
         "message": f"Position {symbol} fermée (market close)",
+    }
+
+
+@router.post("/kill-switch/reset", dependencies=[Depends(verify_executor_key)])
+async def reset_live_kill_switch(request: Request) -> dict:
+    """Reset le kill switch live et réactive le trading.
+
+    Audit P0 : sans cet endpoint, le seul moyen de reset était d'éditer
+    executor_state.json manuellement puis de redémarrer.
+    """
+    executor = getattr(request.app.state, "executor", None)
+    if executor is None:
+        raise HTTPException(status_code=400, detail="Executor non actif")
+
+    risk_mgr = getattr(request.app.state, "risk_mgr", None)
+    if risk_mgr is None:
+        raise HTTPException(status_code=400, detail="RiskManager non disponible")
+
+    if not risk_mgr.is_kill_switch_triggered:
+        return {"status": "not_triggered", "message": "Kill switch live non actif"}
+
+    old_pnl = risk_mgr._session_pnl
+
+    # Reset kill switch + session P&L
+    risk_mgr._kill_switch_triggered = False
+    risk_mgr._session_pnl = 0.0
+
+    # Sauvegarder l'état immédiatement
+    state_manager = getattr(request.app.state, "state_manager", None)
+    if state_manager:
+        await state_manager.save_executor_state(executor, risk_mgr)
+
+    # Notification Telegram
+    notifier = getattr(request.app.state, "notifier", None)
+    if notifier:
+        from backend.alerts.notifier import AnomalyType
+
+        await notifier.notify_anomaly(
+            AnomalyType.KILL_SWITCH_LIVE,
+            f"Kill switch LIVE reset manuellement (session_pnl était {old_pnl:+.2f}$) "
+            "— trading réactivé",
+        )
+
+    logger.info(
+        "Kill switch live reset via API (session_pnl {:.2f} → 0.0)",
+        old_pnl,
+    )
+
+    return {
+        "status": "reset",
+        "message": "Kill switch live réinitialisé, trading réactivé",
+        "previous_session_pnl": old_pnl,
     }
 
 

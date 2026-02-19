@@ -284,6 +284,7 @@ class TestMaxLiveGrids:
 
         risk_mgr = MagicMock()
         risk_mgr.pre_trade_check.return_value = (True, "ok")
+        risk_mgr.is_kill_switch_triggered = False  # Audit P0 : guard DCA niveaux 2+
 
         notifier = MagicMock()
         notifier.notify_grid_level_opened = AsyncMock()

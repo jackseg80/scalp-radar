@@ -399,7 +399,10 @@ class Executor:
             await asyncio.sleep(self._balance_refresh_interval)
             if not self._running:
                 break
-            await self.refresh_balance()
+            new_balance = await self.refresh_balance()
+            # P1 Audit : snapshot pour kill switch global live (drawdown 24h)
+            if new_balance is not None:
+                self._risk_manager.record_balance_snapshot(new_balance)
 
     # ─── Setup ─────────────────────────────────────────────────────────
 
@@ -945,6 +948,13 @@ class Executor:
                 logger.warning("Executor: grid trade rejeté — {}", reason)
                 return
         else:
+            # P0 Audit : vérifier le kill switch même aux niveaux 2+
+            if self._risk_manager.is_kill_switch_triggered:
+                logger.warning(
+                    "Executor: kill switch live actif, niveau grid {} ignoré pour {}",
+                    len(state.positions) + 1, futures_sym,
+                )
+                return
             quantity = self._round_quantity(event.quantity, futures_sym)
             if quantity <= 0:
                 logger.warning("Executor: grid quantité arrondie à 0, trade ignoré")
@@ -1175,6 +1185,7 @@ class Executor:
             symbol=futures_sym,
             direction=state.direction,
             exit_reason=event.exit_reason or "unknown",
+            strategy_name=state.strategy_name,
         ))
         self._risk_manager.unregister_position(futures_sym)
 
@@ -1220,6 +1231,7 @@ class Executor:
             symbol=futures_sym,
             direction=state.direction,
             exit_reason="sl_global",
+            strategy_name=state.strategy_name,
         ))
         self._risk_manager.unregister_position(futures_sym)
 
@@ -1300,6 +1312,7 @@ class Executor:
             symbol=futures_sym,
             direction=pos.direction,
             exit_reason=event.exit_reason or "signal_exit",
+            strategy_name=pos.strategy_name,
         ))
         self._risk_manager.unregister_position(futures_sym)
 
@@ -1528,6 +1541,7 @@ class Executor:
             symbol=symbol,
             direction=pos.direction,
             exit_reason=exit_reason,
+            strategy_name=pos.strategy_name,
         ))
         self._risk_manager.unregister_position(symbol)
 
@@ -1609,6 +1623,7 @@ class Executor:
                 symbol=pos.symbol,
                 direction=pos.direction,
                 exit_reason="closed_during_downtime",
+                strategy_name=pos.strategy_name,
             ))
             self._risk_manager.unregister_position(pos.symbol)
 
@@ -1686,6 +1701,7 @@ class Executor:
                 symbol=futures_sym,
                 direction=state.direction,
                 exit_reason="closed_during_downtime",
+                strategy_name=state.strategy_name,
             ))
             await self._notifier.notify_reconciliation(
                 f"Cycle grid {futures_sym} fermé pendant downtime. "
