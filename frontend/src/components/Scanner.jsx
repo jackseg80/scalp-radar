@@ -178,6 +178,15 @@ export default function Scanner({ wsData }) {
 
       <div className="card">
         <h2>Scanner</h2>
+        {strategyFilter && (
+          <div className="text-xs muted" style={{ marginTop: -4, marginBottom: 8 }}>
+            {strategyFilter}
+            {wsData?.strategies?.[strategyFilter]?.leverage && (
+              <> — x{wsData.strategies[strategyFilter].leverage}</>
+            )}
+            {watchedSymbols && <> — {watchedSymbols.size} assets</>}
+          </div>
+        )}
 
       {loading && assets.length === 0 && (
         <div className="empty-state">

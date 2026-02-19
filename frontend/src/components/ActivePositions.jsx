@@ -114,6 +114,11 @@ function GridList({ gridState, expandedGrid, onToggle }) {
             </span>
             <span style={{ fontWeight: 600 }}>{g.symbol}</span>
             <span className="text-xs muted">{g.strategy}</span>
+            {g.leverage && (
+              <span className="badge" style={{ fontSize: 9, background: 'var(--surface-2)', color: 'var(--text-dim)' }}>
+                x{g.leverage}
+              </span>
+            )}
             <span className="badge" style={{ fontSize: 9, background: 'var(--surface)', color: 'var(--text-dim)' }}>
               {g.levels_open}/{g.levels_max}
             </span>

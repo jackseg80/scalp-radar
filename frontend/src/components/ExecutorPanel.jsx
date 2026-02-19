@@ -67,6 +67,11 @@ export default function ExecutorPanel({ wsData }) {
             value={`${Number(balance).toFixed(2)} USDT`}
           />
         )}
+        {(() => {
+          const grids = Object.values(wsData?.grid_state?.grid_positions || {})
+          const lev = grids.length > 0 ? grids[0].leverage : null
+          return lev != null ? <StatusRow label="Leverage" value={`x${lev}`} /> : null
+        })()}
         <StatusRow
           label="P&L Session"
           value={`${sessionPnl >= 0 ? '+' : ''}${Number(sessionPnl).toFixed(2)}$`}

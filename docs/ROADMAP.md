@@ -2095,10 +2095,43 @@ Phase 5: Scaling Stratégies     ✅
 
 ---
 
+### Hotfix Dashboard — Leverage, Bug 4/3, unrealized_pnl ✅
+
+**Problèmes** :
+1. Le leverage n'était affiché nulle part dans le dashboard (ActivePositions, sidebar Executor, Scanner)
+2. Bug "4/3" : FET et DYDX montraient 4 niveaux ouverts sur max=3 — le `num_levels` per_asset WFO était **dead config** (jamais lu par la stratégie ni par le runner guard)
+3. `unrealized_pnl` toujours `+0.00$` dans SessionStats sidebar (alors que ActivePositions montrait les vraies pertes)
+
+**Root cause bug 4/3** :
+- `strategies.yaml` : `grid_atr.per_asset.FET/USDT.num_levels = 4`, mais top-level = 3
+- `max_positions` et `compute_grid()` lisaient uniquement le top-level → 3 niveaux générés max
+- Les 4 positions venaient d'un état restauré depuis un snapshot antérieur (quand top-level était 4)
+- Fix : `_get_num_levels(symbol)` résout per_asset + patch temporaire de `_config.num_levels` avant `compute_grid()` (Pydantic non-frozen, event loop single-threaded → safe)
+
+**Root cause unrealized_pnl = 0** :
+- `GridStrategyRunner.get_status()` calculait le P&L depuis `_last_prices`
+- `_last_prices` n'était mis à jour que sur les candles 1h (timeframe stratégie)
+- Entre deux candles 1h, le prix dans `_last_prices` = dernier close 1h ≈ prix d'entrée → P&L ≈ 0
+- `get_grid_state()` utilisait `_get_current_price()` (candles 1m fraîches) → cohérent avec ActivePositions
+- Fix : déplacer `_last_prices[symbol] = candle.close` AVANT le filtre timeframe → mis à jour à chaque candle 1m
+
+**Changements** :
+
+| Fichier | Changement |
+|---------|-----------|
+| `backend/backtesting/simulator.py` | `_get_num_levels()`, patch config temp, fix `_last_prices` timing, `leverage` dans `get_status()` |
+| `frontend/src/components/ActivePositions.jsx` | Badge `x{leverage}` sur chaque grid row |
+| `frontend/src/components/ExecutorPanel.jsx` | Ligne "Leverage" en sidebar (depuis grid_positions) |
+| `frontend/src/components/Scanner.jsx` | Sous-titre "grid_atr — x6 — 10 assets" quand stratégie filtrée |
+
+**Tests** : 1445 passants (inchangé — zéro régression)
+
+---
+
 ## ÉTAT ACTUEL (19 février 2026)
 
 - **1445 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43**
 - **Phase 6 en cours** — leverage optimal en cours de validation via Sprint 35 stress test
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
@@ -2111,6 +2144,7 @@ Phase 5: Scaling Stratégies     ✅
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Sprint 35** : `scripts/stress_test_leverage.py` — 20 backtests (2 stratégies × 4 leverages × 2-3 fenêtres), KS désactivé (99%), analyse KS a posteriori à 30%/45%/60%, Calmar ratio, recommandation automatique, CSV `data/stress_test_results.csv`. Pas de tests unitaires (script de benchmark).
 - **Sprint Journal V2** : Fix prix moyen "--" Bitget (`_update_order_price()` rétroactif + `paper_price`), enregistrement SL/TP fills watchOrders dans `_order_history`, endpoint slippage paper vs live (`GET /api/journal/slippage`), perf par asset (`GET /api/journal/per-asset`), `get_status()` enrichi (entry_time, positions detail, levels_max), frontend : colonne P&L %, LIVE grids expandables, colonne Slippage + bandeau, section per-asset triable, funding costs dans Stats. 18 tests (1445 total).
+- **Hotfix Dashboard Leverage/Bug43** : leverage affiché dans ActivePositions/ExecutorPanel/Scanner, bug per_asset num_levels corrigé (`_get_num_levels()` + patch temp config), unrealized_pnl temps réel (1m au lieu de 1h)
 - **Prochaine étape** : Lancer le stress test complet (20 runs ~30 min), choisir le leverage optimal grid_boltrend (actuellement 6x arbitraire), déployer grid_boltrend en paper trading
 
 ### Résultats Portfolio Backtest — Validation Finale

@@ -624,6 +624,17 @@ class GridStrategyRunner:
                 return float(overrides["sl_percent"])
         return float(default_sl) if isinstance(default_sl, (int, float)) else 25.0
 
+    def _get_num_levels(self, symbol: str) -> int:
+        """Résout num_levels pour un symbol (avec override per_asset)."""
+        config = self._strategy._config
+        default = self._strategy.max_positions
+        per_asset = getattr(config, "per_asset", {})
+        if isinstance(per_asset, dict):
+            overrides = per_asset.get(symbol, {})
+            if isinstance(overrides, dict) and "num_levels" in overrides:
+                return int(overrides["num_levels"])
+        return default
+
     def _should_allow_new_grid(self, symbol: str) -> bool:
         """Sprint 27 : Filtre Darwinien — bloque si régime WFO défavorable.
 
@@ -792,12 +803,16 @@ class GridStrategyRunner:
         if self._kill_switch_triggered:
             return
 
-        # Filtre strict : seul le timeframe de la stratégie est traité
-        if timeframe != self._strategy_tf:
-            return
-
         # Filtre per_asset : skip si symbol n'est pas dans la whitelist
         if self._per_asset_keys and symbol not in self._per_asset_keys:
+            return
+
+        # Rafraîchir le prix courant pour TOUTES les timeframes
+        # (P&L temps réel dans get_status(), mis à jour chaque 1m au lieu de 1h)
+        self._last_prices[symbol] = candle.close
+
+        # Filtre strict : seul le timeframe de la stratégie est traité
+        if timeframe != self._strategy_tf:
             return
 
         # Détection fin warm-up : candle récente = données live
@@ -825,8 +840,7 @@ class GridStrategyRunner:
             # Compteur grace period (kill switch runner)
             self._candles_since_warmup += 1
 
-        # Maintenir le buffer de closes + prix courant
-        self._last_prices[symbol] = candle.close
+        # Maintenir le buffer de closes
         if symbol not in self._close_buffer:
             self._close_buffer[symbol] = deque(
                 maxlen=max(self._ma_period + 20, 50)
@@ -978,8 +992,16 @@ class GridStrategyRunner:
             return
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
-        if len(positions) < self._strategy.max_positions:
-            levels = self._strategy.compute_grid(ctx, grid_state)
+        effective_max = self._get_num_levels(symbol)
+        if len(positions) < effective_max:
+            # Patcher temporairement num_levels pour que compute_grid()
+            # génère le bon nombre de niveaux (per_asset override)
+            original_num_levels = self._strategy._config.num_levels
+            self._strategy._config.num_levels = effective_max
+            try:
+                levels = self._strategy.compute_grid(ctx, grid_state)
+            finally:
+                self._strategy._config.num_levels = original_num_levels
 
             for level in levels:
                 if level.index in {p.level for p in positions}:
@@ -1009,7 +1031,7 @@ class GridStrategyRunner:
                     # 2. Compter les assets uniques au lieu des runners
                     # Marge fixe par niveau = capital / nb_assets / num_levels
                     # Le SL contrôle le risque en $, PAS la taille de position
-                    num_levels = self._strategy.max_positions
+                    num_levels = effective_max
                     margin_per_level = pos_per_asset / num_levels
 
                     # Cap de sécurité : jamais plus de 25% du capital sur un seul asset
@@ -1046,7 +1068,7 @@ class GridStrategyRunner:
                     position = self._gpm.open_grid_position(
                         level, candle.timestamp,
                         pos_capital,
-                        self._strategy.max_positions,
+                        effective_max,
                     )
                     if position:
                         # Réserver la marge (les fees sont dans net_pnl à la fermeture)
@@ -1072,7 +1094,7 @@ class GridStrategyRunner:
                             level.entry_price,
                             symbol,
                             len(self._positions[symbol]),
-                            self._strategy.max_positions,
+                            effective_max,
                             margin_used,
                             self._capital,
                         )
@@ -1092,7 +1114,7 @@ class GridStrategyRunner:
                                 ),
                                 "metadata": {
                                     "levels_open": len(self._positions.get(symbol, [])),
-                                    "levels_max": self._strategy.max_positions,
+                                    "levels_max": effective_max,
                                 },
                             })
 
@@ -1340,6 +1362,7 @@ class GridStrategyRunner:
             "regime_filter_blocks": self._regime_filter_blocks,
             "funding_cost": round(self._total_funding_cost, 2),
             "watched_symbols": sorted(self._per_asset_keys) if self._per_asset_keys else [],
+            "leverage": self._leverage,
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:
@@ -2083,7 +2106,7 @@ class Simulator:
                     "strategy": runner.name,
                     "direction": positions[0].direction.value,
                     "levels_open": len(positions),
-                    "levels_max": runner._strategy.max_positions,
+                    "levels_max": runner._get_num_levels(symbol),
                     "avg_entry": round(grid_state.avg_entry_price, 6),
                     "current_price": current_price,
                     "unrealized_pnl": round(grid_state.unrealized_pnl, 2),
