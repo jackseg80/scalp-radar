@@ -1987,76 +1987,33 @@ Exit monitor: check 4 positions (['FET/USDT:USDT', 'GALA/USDT:USDT', ...])
 
 **Piège** : Si `_grid_states` est déjà peuplé (state file intact), `_populate_grid_states_from_exchange()` n'est pas appelé — les états existants sont conservés tels quels.
 
-### Hotfix buffer incomplet — Warm-up DB pour SMA exit monitor ✅
+### Hotfix Exit Monitor Source Unique — Indicateurs lus depuis le runner paper ✅
 
-**But** : Corriger les faux TP (-83$) causés par une SMA calculée sur un buffer WS trop court après restart.
+**But** : Éliminer la divergence entre l'exit monitor (Executor) et le paper (Simulator) en supprimant tout calcul d'indicateurs dans l'exit monitor. Lire les indicateurs directement depuis `GridStrategyRunner.build_context(symbol)`.
 
-**Problème** : `_check_grid_exit()` calculait la SMA depuis `self._data_engine._buffers` — uniquement les candles reçues via WebSocket depuis le dernier restart. Avec 7-8 candles post-restart toutes en baisse, la SMA était artificiellement basse → `close ≥ sma` → faux `tp_global` → 4 positions fermées en perte (-83.51$).
+**Problème** : L'exit monitor dans `_check_grid_exit()` recalculait la SMA indépendamment du paper. Après un restart, le buffer WS contenait ~7 candles récentes (toutes en baisse) → SMA artificiellement basse → `close >= sma` → faux `tp_global` → 4 positions fermées à perte (-83.51$). Le paper (Simulator) utilise `IncrementalIndicatorEngine` + warm-up DB (50+ candles) → SMA correcte. Les deux divergeaient.
 
-Le paper (Simulator) utilise `IncrementalIndicatorEngine` avec warm-up DB (50+ candles) → SMA correcte → divergence paper/live.
+Deux hotfixes incrémentaux (per_asset ma_period + DB warmup) ont été appliqués puis **supersédés** par cette réécriture architecturale.
 
-**Fix** (`backend/execution/executor.py`) :
+**Solution** : source unique de vérité — l'exit monitor lit les indicateurs du runner paper via `Simulator.get_runner_context(strategy_name, symbol)` → `GridStrategyRunner.build_context(symbol)`.
 
-1. `set_db(db)` : nouvelle méthode pour enregistrer la référence DB
-2. Warm-up DB : si `len(buffer) < ma_period` → `get_candles(symbol, tf, limit=ma_period+10)` → merge timestamps
-3. Guard skip : si toujours insuffisant après DB → `return` (pas de faux TP). Le SL Bitget server-side protège.
+**Changements** :
 
-**Fix** (`backend/api/server.py`) : `executor.set_db(db)` au lifespan.
+1. `backend/backtesting/simulator.py` : +`get_runner_context(strategy_name, symbol)` (~5 lignes) — expose le `StrategyContext` du runner paper
+2. `backend/execution/executor.py` :
+   - Remplacement de `self._db` par `self._simulator` dans `__init__`
+   - `set_strategies(strategies, simulator=None)` — accepte la référence Simulator
+   - Suppression de `set_db()` (plus nécessaire)
+   - Réécriture complète de `_check_grid_exit()` — plus aucun calcul SMA/indicateurs, lecture directe depuis `ctx = self._simulator.get_runner_context()`
+   - Log debug à chaque check (même quand `exit_reason is None`)
+3. `backend/api/server.py` : `set_strategies(..., simulator=simulator)`, suppression `set_db(db)`
+4. `tests/test_executor_autonomous.py` : helper `_make_simulator_ctx()`, adaptation Bloc 1 (mock simulator au lieu de data_engine), suppression Bloc 4 (DB warmup), 2 nouveaux tests (`test_exit_skips_when_sma_missing`, `test_exit_uses_simulator_context_not_buffer`)
 
-**Tests** : `test_exit_skips_when_insufficient_candles_no_db` (5 candles, pas de DB → skip), `test_exit_uses_db_warmup_for_sma` (3 live + 10 DB → SMA correcte).
+**Fichiers** : `backend/backtesting/simulator.py`, `backend/execution/executor.py`, `backend/api/server.py`, `tests/test_executor_autonomous.py`
 
-**Fichiers** : `backend/execution/executor.py`, `backend/api/server.py`, `tests/test_executor_autonomous.py`
+**Tests** : 24 tests exit monitor, **1447 tests** au total, 0 régression.
 
-**Tests** : 2 nouveaux, **1448 tests** au total, 0 régression.
-
-**Piège** : merge par timestamp pour éviter les doublons. `db_candles + live_only` garantit l'ordre chronologique (DB retourne ASC).
-
----
-
-### Hotfix ma_period per_asset — Exit monitor utilise le bon SMA period ✅
-
-**But** : Corriger un bug silencieux où le TP (SMA crossing) n'était jamais détecté après un restart, pour les assets ayant un `ma_period` per_asset différent du défaut top-level.
-
-**Problème** : Dans `_check_grid_exit()`, le fallback SMA était calculé avec `getattr(strategy._config, "ma_period", 7)` — soit le default de l'instance de stratégie (config top-level, ex: 14). Mais chaque asset peut avoir un `ma_period` différent via per_asset (ex: DYDX → 7). Après un restart, le buffer DataEngine ne contient que quelques candles :
-
-- `ma_period=14` (top-level) : pas assez de candles → SMA jamais calculée → TP jamais déclenché
-- `ma_period=7` (per_asset DYDX) : assez de candles → SMA calculée → TP détecté correctement
-
-**Impact prod observé** : après restart, les positions grid_atr sur DYDX et autres assets avec per_asset restaient ouvertes indéfiniment même lorsque `close < SMA` (condition TP). L'exit monitor tournait mais `should_close_all()` recevait `indicators` sans clé `"sma"`.
-
-**Fix** (`backend/execution/executor.py`) :
-
-- Résoudre `ma_period` via `strat_cfg.get_params_for_symbol(spot_sym)` (per_asset) au lieu de `strategy._config.ma_period` (top-level)
-- Guard MagicMock-safe : `isinstance(raw, (int, float))` + try/except `AttributeError, TypeError`
-- Fallback ultime à 7 si tout échoue
-
-```python
-# Avant (bug)
-ma_period = getattr(strategy._config, "ma_period", 7)  # toujours le top-level
-
-# Après (fix)
-strat_cfg = getattr(self._config.strategies, state.strategy_name, None)
-if strat_cfg is not None:
-    try:
-        asset_params = strat_cfg.get_params_for_symbol(spot_sym)
-        raw = asset_params.get("ma_period", 7)
-        if isinstance(raw, (int, float)):
-            ma_period = int(raw)
-    except (AttributeError, TypeError):
-        raw = getattr(strategy._config, "ma_period", 7)
-        if isinstance(raw, (int, float)):
-            ma_period = int(raw)
-```
-
-**Tests** (`tests/test_executor_autonomous.py`) :
-
-- `test_exit_uses_per_asset_ma_period` : buffer 8 candles, default `ma_period=14` (top-level, pas assez), per_asset `ma_period=7` (assez) → SMA calculée + `get_params_for_symbol("DYDX/USDT")` vérifié
-
-**Fichiers** : `backend/execution/executor.py`, `tests/test_executor_autonomous.py`
-
-**Tests** : 1 nouveau, **1446 tests** au total, 0 régression.
-
-**Piège** : `hasattr(MagicMock, "x")` retourne toujours True (pièges MagicMock docs memory). Utiliser `isinstance(raw, (int, float))` pour valider la valeur retournée.
+**Avantage** : après restart, si le runner paper est encore en warm-up (indicateurs pas prêts), `get_runner_context()` retourne un contexte sans SMA → exit monitor skip → pas de faux TP. Le SL server-side Bitget protège.
 
 ---
 
@@ -2233,8 +2190,8 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1448 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation**
+- **1447 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique**
 - **Phase 6 en cours** — leverage optimal en cours de validation via Sprint 35 stress test
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

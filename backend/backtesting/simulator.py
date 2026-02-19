@@ -2438,6 +2438,15 @@ class Simulator:
             if isinstance(runner, GridStrategyRunner)
         }
 
+    def get_runner_context(
+        self, strategy_name: str, symbol: str,
+    ) -> StrategyContext | None:
+        """Retourne le StrategyContext du runner paper (source unique de vérité pour l'exit monitor)."""
+        for runner in self._runners:
+            if runner.name == strategy_name:
+                return runner.build_context(symbol)
+        return None
+
     @property
     def runners(self) -> list[LiveStrategyRunner | GridStrategyRunner]:
         return self._runners

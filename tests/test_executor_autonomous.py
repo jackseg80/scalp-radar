@@ -137,55 +137,40 @@ def _make_grid_state(
     )
 
 
-@dataclass
-class FakeCandle:
-    """Candle minimale pour les tests."""
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float = 100.0
-
-
-def _make_data_engine(symbol="BTC/USDT", timeframe="1h", closes=None):
-    """Crée un DataEngine mock avec un buffer de candles."""
-    if closes is None:
-        closes = [50000.0 + i * 100 for i in range(50)]
-
-    from datetime import timedelta
-
-    base_ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    candles = [
-        FakeCandle(
-            timestamp=base_ts + timedelta(hours=i),
-            open=c - 10, high=c + 50, low=c - 50, close=c,
-        )
-        for i, c in enumerate(closes)
-    ]
-
-    buffers = defaultdict(lambda: defaultdict(list))
-    buffers[symbol][timeframe] = candles
-
-    engine = MagicMock()
-    engine._buffers = buffers
-    return engine
-
-
-def _make_strategy(should_close_result=None, compute_indicators_result=None):
+def _make_strategy(should_close_result=None):
     """Crée une stratégie mock avec should_close_all configurable."""
     strategy = MagicMock()
     strategy.should_close_all = MagicMock(return_value=should_close_result)
     strategy._config = MagicMock()
     strategy._config.timeframe = "1h"
     strategy._config.ma_period = 7
-
-    if compute_indicators_result is not None:
-        strategy.compute_live_indicators = MagicMock(return_value=compute_indicators_result)
-    else:
-        strategy.compute_live_indicators = MagicMock(return_value={})
-
     return strategy
+
+
+def _make_simulator_ctx(
+    symbol="BTC/USDT",
+    close=100.0,
+    sma=100.0,
+    indicators=None,
+):
+    """Mock Simulator dont get_runner_context retourne un StrategyContext."""
+    from backend.strategies.base import StrategyContext
+
+    if indicators is None:
+        indicators = {"1h": {"close": close, "sma": sma}}
+
+    ctx = StrategyContext(
+        symbol=symbol,
+        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        candles={},
+        indicators=indicators,
+        current_position=None,
+        capital=0.0,
+        config=None,
+    )
+    sim = MagicMock()
+    sim.get_runner_context = MagicMock(return_value=ctx)
+    return sim
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -200,10 +185,9 @@ class TestExitAutonomous:
         """should_close_all retourne 'tp_global' → _close_grid_cycle appelé."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        executor._data_engine = _make_data_engine()
+        executor._simulator = _make_simulator_ctx()
         executor._strategies = {"grid_atr": _make_strategy(should_close_result="tp_global")}
 
-        # Mock _close_grid_cycle pour vérifier l'appel
         executor._close_grid_cycle = AsyncMock()
 
         await executor._check_grid_exit("BTC/USDT:USDT")
@@ -218,7 +202,7 @@ class TestExitAutonomous:
         """should_close_all retourne None → pas de close."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        executor._data_engine = _make_data_engine()
+        executor._simulator = _make_simulator_ctx()
         executor._strategies = {"grid_atr": _make_strategy(should_close_result=None)}
 
         executor._close_grid_cycle = AsyncMock()
@@ -232,7 +216,7 @@ class TestExitAutonomous:
         """should_close_all retourne 'sl_global' → close."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        executor._data_engine = _make_data_engine()
+        executor._simulator = _make_simulator_ctx()
         executor._strategies = {"grid_atr": _make_strategy(should_close_result="sl_global")}
 
         executor._close_grid_cycle = AsyncMock()
@@ -244,11 +228,11 @@ class TestExitAutonomous:
         assert event.exit_reason == "sl_global"
 
     @pytest.mark.asyncio
-    async def test_exit_no_data_engine(self):
-        """data_engine=None → skip silencieux."""
+    async def test_exit_no_simulator(self):
+        """simulator=None → skip silencieux."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        executor._data_engine = None
+        executor._simulator = None
         executor._strategies = {"grid_atr": _make_strategy(should_close_result="tp_global")}
 
         executor._close_grid_cycle = AsyncMock()
@@ -262,7 +246,7 @@ class TestExitAutonomous:
         """Stratégie introuvable → skip."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        executor._data_engine = _make_data_engine()
+        executor._simulator = _make_simulator_ctx()
         executor._strategies = {}  # Pas de stratégie enregistrée
 
         executor._close_grid_cycle = AsyncMock()
@@ -272,14 +256,13 @@ class TestExitAutonomous:
         executor._close_grid_cycle.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_exit_empty_buffer(self):
-        """Pas de candles dans le buffer → skip."""
+    async def test_exit_no_context(self):
+        """get_runner_context retourne None → skip."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        # Buffer vide
-        engine = MagicMock()
-        engine._buffers = defaultdict(lambda: defaultdict(list))
-        executor._data_engine = engine
+        sim = MagicMock()
+        sim.get_runner_context = MagicMock(return_value=None)
+        executor._simulator = sim
         executor._strategies = {"grid_atr": _make_strategy(should_close_result="tp_global")}
 
         executor._close_grid_cycle = AsyncMock()
@@ -289,16 +272,12 @@ class TestExitAutonomous:
         executor._close_grid_cycle.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_exit_builds_correct_context(self):
-        """Vérifier que ctx.indicators contient close et sma."""
+    async def test_exit_context_passed_to_should_close_all(self):
+        """Vérifier que ctx vient du simulator avec close et sma."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
+        executor._simulator = _make_simulator_ctx(close=55000.0, sma=54000.0)
 
-        # Buffer avec prix connus
-        closes = [100.0] * 10
-        executor._data_engine = _make_data_engine(closes=closes)
-
-        # Capturer l'appel à should_close_all
         captured_args = {}
 
         def capture_should_close(ctx, grid_state):
@@ -313,8 +292,8 @@ class TestExitAutonomous:
         await executor._check_grid_exit("BTC/USDT:USDT")
 
         ctx = captured_args["ctx"]
-        assert ctx.indicators["1h"]["close"] == 100.0
-        assert ctx.indicators["1h"]["sma"] == pytest.approx(100.0, rel=1e-6)
+        assert ctx.indicators["1h"]["close"] == 55000.0
+        assert ctx.indicators["1h"]["sma"] == 54000.0
         assert ctx.symbol == "BTC/USDT"
 
     @pytest.mark.asyncio
@@ -323,8 +302,7 @@ class TestExitAutonomous:
         executor = _make_executor()
         live_state = _make_grid_state(entry_price=50000.0, levels=2)
         executor._grid_states["BTC/USDT:USDT"] = live_state
-
-        executor._data_engine = _make_data_engine()
+        executor._simulator = _make_simulator_ctx()
 
         captured = {}
 
@@ -344,25 +322,30 @@ class TestExitAutonomous:
         assert len(gs.positions) == 2
 
     @pytest.mark.asyncio
-    async def test_exit_uses_per_asset_ma_period(self):
-        """Exit monitor utilise le ma_period per_asset, pas le default."""
-        config = _make_config()
-        # Default ma_period=14 (top-level) → pas assez de candles (8)
-        config.strategies.grid_atr.ma_period = 14
-        # Per_asset DYDX/USDT → ma_period=7 → assez de candles (8)
-        config.strategies.grid_atr.get_params_for_symbol = MagicMock(
-            return_value={"ma_period": 7, "timeframe": "1h", "sl_percent": 20.0},
+    async def test_exit_skips_when_sma_missing(self):
+        """ctx sans sma → skip (indicateurs incomplets)."""
+        executor = _make_executor()
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
+        # ctx avec close mais SANS sma
+        executor._simulator = _make_simulator_ctx(
+            indicators={"1h": {"close": 50000.0}},
         )
+        executor._strategies = {"grid_atr": _make_strategy(should_close_result="tp_global")}
 
-        executor = _make_executor(config=config)
-        executor._grid_states["DYDX/USDT:USDT"] = _make_grid_state(
-            symbol="DYDX/USDT:USDT", entry_price=1.0,
-        )
-        # Seulement 8 candles — assez pour ma_period=7, pas pour ma_period=14
-        closes = [1.0] * 8
-        executor._data_engine = _make_data_engine(
-            symbol="DYDX/USDT", closes=closes,
-        )
+        executor._close_grid_cycle = AsyncMock()
+
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        executor._close_grid_cycle.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_exit_uses_simulator_context_not_buffer(self):
+        """Vérifie que get_runner_context est appelé (pas le buffer DataEngine)."""
+        executor = _make_executor()
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
+
+        sim = _make_simulator_ctx(close=42000.0, sma=41000.0)
+        executor._simulator = sim
 
         captured = {}
 
@@ -371,31 +354,25 @@ class TestExitAutonomous:
             return None
 
         strategy = _make_strategy()
-        # compute_live_indicators retourne {} → SMA fallback activé
-        strategy.compute_live_indicators = MagicMock(return_value={})
         strategy.should_close_all = capture
         executor._strategies = {"grid_atr": strategy}
 
-        await executor._check_grid_exit("DYDX/USDT:USDT")
+        await executor._check_grid_exit("BTC/USDT:USDT")
 
-        # SMA doit être calculée (per_asset ma_period=7 ≤ 8 candles)
+        # get_runner_context doit être appelé avec le bon strategy_name et symbol
+        sim.get_runner_context.assert_called_once_with("grid_atr", "BTC/USDT")
+
+        # Les indicateurs viennent du simulator, pas d'un buffer
         ctx = captured["ctx"]
-        assert "sma" in ctx.indicators["1h"], (
-            "SMA absente — ma_period per_asset ignoré, default trop grand"
-        )
-        assert ctx.indicators["1h"]["sma"] == pytest.approx(1.0)
-
-        # Vérifier que get_params_for_symbol a été appelé avec le bon symbol
-        config.strategies.grid_atr.get_params_for_symbol.assert_called_once_with(
-            "DYDX/USDT",
-        )
+        assert ctx.indicators["1h"]["close"] == 42000.0
+        assert ctx.indicators["1h"]["sma"] == 41000.0
 
     @pytest.mark.asyncio
     async def test_exit_idempotent(self):
         """Double appel close → le 2ème est no-op (state supprimé)."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        executor._data_engine = _make_data_engine()
+        executor._simulator = _make_simulator_ctx()
         executor._strategies = {"grid_atr": _make_strategy(should_close_result="tp_global")}
 
         call_count = 0
@@ -792,108 +769,3 @@ class TestHardeningOpen:
 
         # L'ordre d'entrée doit être passé (DCA level)
         executor._exchange.create_order.assert_called()
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Bloc 4 — Warm-up DB buffer insuffisant
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestExitDbWarmup:
-
-    @pytest.mark.asyncio
-    async def test_exit_skips_when_insufficient_candles_no_db(self):
-        """Buffer insuffisant ET pas de DB → skip, should_close_all jamais appelé."""
-        config = _make_config()
-        config.strategies.grid_atr.ma_period = 7
-        config.strategies.grid_atr.get_params_for_symbol = MagicMock(
-            return_value={"ma_period": 7},
-        )
-
-        executor = _make_executor(config=config)
-        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-        # Seulement 5 candles — insuffisant pour ma_period=7
-        executor._data_engine = _make_data_engine(closes=[50000.0] * 5)
-        executor._db = None  # pas de DB
-
-        strategy = _make_strategy(should_close_result="tp_global")
-        executor._strategies = {"grid_atr": strategy}
-        executor._close_grid_cycle = AsyncMock()
-
-        await executor._check_grid_exit("BTC/USDT:USDT")
-
-        # Pas assez de candles + pas de DB → skip complet, pas de close
-        strategy.should_close_all.assert_not_called()
-        executor._close_grid_cycle.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_exit_uses_db_warmup_for_sma(self):
-        """Buffer insuffisant → complète depuis DB → SMA correcte, should_close_all appelé."""
-        from datetime import timedelta
-
-        config = _make_config()
-        config.strategies.grid_atr.ma_period = 7
-        config.strategies.grid_atr.get_params_for_symbol = MagicMock(
-            return_value={"ma_period": 7},
-        )
-
-        executor = _make_executor(config=config)
-        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
-
-        # Seulement 3 candles live — insuffisant pour ma_period=7
-        base_ts = datetime(2024, 1, 11, tzinfo=timezone.utc)
-        live_candles = [
-            FakeCandle(
-                timestamp=base_ts + timedelta(hours=i),
-                open=100.0, high=105.0, low=95.0, close=100.0,
-            )
-            for i in range(3)
-        ]
-        from collections import defaultdict
-        buffers = defaultdict(lambda: defaultdict(list))
-        buffers["BTC/USDT"]["1h"] = live_candles
-        engine = MagicMock()
-        engine._buffers = buffers
-        executor._data_engine = engine
-
-        # DB retourne 10 candles historiques (timestamps avant les live)
-        db_ts_base = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        db_candles = [
-            FakeCandle(
-                timestamp=db_ts_base + timedelta(hours=i),
-                open=100.0, high=105.0, low=95.0, close=100.0,
-            )
-            for i in range(10)
-        ]
-        mock_db = AsyncMock()
-        mock_db.get_candles = AsyncMock(return_value=db_candles)
-        executor._db = mock_db
-
-        # Capturer l'appel à should_close_all
-        captured = {}
-
-        def capture(ctx, grid_state):
-            captured["ctx"] = ctx
-            return None
-
-        strategy = _make_strategy()
-        strategy.compute_live_indicators = MagicMock(return_value={})
-        strategy.should_close_all = capture
-        executor._strategies = {"grid_atr": strategy}
-
-        await executor._check_grid_exit("BTC/USDT:USDT")
-
-        # should_close_all doit avoir été appelé (assez de candles après warm-up DB)
-        assert "ctx" in captured, "should_close_all n'a pas été appelé après warm-up DB"
-        ctx = captured["ctx"]
-
-        # SMA calculée sur les candles DB + live (toutes à 100.0)
-        assert "sma" in ctx.indicators["1h"]
-        assert ctx.indicators["1h"]["sma"] == pytest.approx(100.0)
-
-        # Vérifier que get_candles a été appelé avec les bons paramètres
-        mock_db.get_candles.assert_called_once_with(
-            symbol="BTC/USDT",
-            timeframe="1h",
-            limit=17,  # ma_period(7) + 10
-        )

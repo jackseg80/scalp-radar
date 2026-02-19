@@ -188,7 +188,7 @@ class Executor:
 
         # Exit monitor autonome (Sprint Executor Autonome)
         self._data_engine: DataEngine | None = None
-        self._db: Any = None  # Database — warm-up SMA depuis historique DB
+        self._simulator: Any = None  # Simulator — source unique indicateurs
         self._strategies: dict[str, BaseGridStrategy] = {}
         self._exit_check_task: asyncio.Task[None] | None = None
 
@@ -456,13 +456,14 @@ class Executor:
         """Enregistre le DataEngine pour les checks TP/SL autonomes."""
         self._data_engine = data_engine
 
-    def set_db(self, db: Any) -> None:
-        """Enregistre la DB pour le warm-up SMA quand le buffer WS est trop court."""
-        self._db = db
-
-    def set_strategies(self, strategies: dict[str, BaseGridStrategy]) -> None:
-        """Enregistre les instances de stratégie pour should_close_all()."""
+    def set_strategies(
+        self,
+        strategies: dict[str, BaseGridStrategy],
+        simulator: Any = None,
+    ) -> None:
+        """Enregistre les instances de stratégie et le Simulator (source indicateurs)."""
         self._strategies = strategies
+        self._simulator = simulator
         logger.info("Executor: {} stratégies enregistrées pour exit autonome", len(strategies))
 
     async def start_exit_monitor(self) -> None:
@@ -508,8 +509,8 @@ class Executor:
     async def _check_grid_exit(self, futures_sym: str) -> None:
         """Vérifie si un cycle grid doit être fermé.
 
-        Construit un StrategyContext depuis le DataEngine et appelle
-        strategy.should_close_all() — même logique que le paper.
+        Lit les indicateurs depuis le runner paper (source unique de vérité)
+        et appelle strategy.should_close_all() — même SMA que le dashboard.
         """
         state = self._grid_states.get(futures_sym)
         if state is None or not state.positions:
@@ -519,80 +520,31 @@ class Executor:
         if strategy is None:
             return
 
-        if self._data_engine is None:
-            return
-
         # Convertir futures_sym ("BTC/USDT:USDT") → spot_sym ("BTC/USDT")
         spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
 
-        # Récupérer les candles depuis le DataEngine
-        buffers = self._data_engine._buffers.get(spot_sym, {})
-        strategy_tf = getattr(strategy._config, "timeframe", "1h")
-        candles_tf = list(buffers.get(strategy_tf, []))
+        # ── SOURCE UNIQUE : lire les indicateurs du runner paper ──
+        ctx = None
+        if self._simulator is not None:
+            ctx = self._simulator.get_runner_context(state.strategy_name, spot_sym)
 
-        if not candles_tf:
-            return
-
-        current_close = candles_tf[-1].close
-
-        # ── Résoudre ma_period per_asset avant tout (Hotfix ma_period per_asset) ──
-        ma_period = 7  # fallback ultime
-        strat_cfg = getattr(self._config.strategies, state.strategy_name, None)
-        if strat_cfg is not None:
-            try:
-                asset_params = strat_cfg.get_params_for_symbol(spot_sym)
-                raw = asset_params.get("ma_period", 7)
-                if isinstance(raw, (int, float)):
-                    ma_period = int(raw)
-            except (AttributeError, TypeError):
-                raw = getattr(strategy._config, "ma_period", 7)
-                if isinstance(raw, (int, float)):
-                    ma_period = int(raw)
-
-        # ── Warm-up depuis la DB si buffer WS insuffisant (Hotfix buffer incomplet) ──
-        if len(candles_tf) < ma_period and self._db is not None:
-            try:
-                db_candles = await self._db.get_candles(
-                    symbol=spot_sym,
-                    timeframe=strategy_tf,
-                    limit=ma_period + 10,
-                )
-                if len(db_candles) >= ma_period:
-                    live_timestamps = {c.timestamp for c in candles_tf}
-                    live_only = [c for c in candles_tf if c.timestamp not in live_timestamps]
-                    candles_tf = db_candles + live_only
-                    logger.debug(
-                        "Exit monitor: warm-up DB pour {} — {} candles DB + {} live = {} total",
-                        futures_sym, len(db_candles), len(live_only), len(candles_tf),
-                    )
-            except Exception as e:
-                logger.warning("Exit monitor: warm-up DB échoué pour {}: {}", futures_sym, e)
-
-        # Si toujours pas assez de candles → skip (mieux vaut ne pas décider que faux TP)
-        if len(candles_tf) < ma_period:
+        if ctx is None:
             logger.debug(
-                "Exit monitor: buffer insuffisant pour {} ({}/{} candles), skip",
-                futures_sym, len(candles_tf), ma_period,
+                "Exit monitor: pas de contexte runner pour {} {}, skip",
+                state.strategy_name, spot_sym,
             )
             return
 
-        # Calculer les indicateurs via la stratégie elle-même
-        indicators: dict = {}
-        try:
-            indicators = strategy.compute_live_indicators(list(candles_tf))
-        except Exception as e:
-            logger.debug("Executor: compute_live_indicators échoué pour {}: {}", futures_sym, e)
+        strategy_tf = getattr(strategy._config, "timeframe", "1h")
+        tf_indicators = ctx.indicators.get(strategy_tf, {})
+        if "sma" not in tf_indicators or "close" not in tf_indicators:
+            logger.debug(
+                "Exit monitor: indicateurs incomplets pour {} (sma={}, close={}), skip",
+                futures_sym, tf_indicators.get("sma"), tf_indicators.get("close"),
+            )
+            return
 
-        # S'assurer que le timeframe principal a les données de base
-        tf_indicators = indicators.get(strategy_tf, {})
-        tf_indicators["close"] = current_close
-
-        # SMA fallback si pas fourni par compute_live_indicators
-        if "sma" not in tf_indicators:
-            closes = [c.close for c in candles_tf[-ma_period:]]
-            tf_indicators["sma"] = sum(closes) / len(closes)
-
-        indicators[strategy_tf] = tf_indicators
+        current_close = tf_indicators["close"]
 
         # Construire le GridState
         from backend.strategies.base_grid import GridPosition, GridState
@@ -612,7 +564,6 @@ class Executor:
         total_qty = state.total_quantity
         avg_entry = state.avg_entry_price
         total_notional = avg_entry * total_qty
-        # Unrealized P&L approximatif
         direction = Direction(state.direction)
         if direction == Direction.LONG:
             unrealized = (current_close - avg_entry) * total_qty
@@ -627,28 +578,21 @@ class Executor:
             unrealized_pnl=unrealized,
         )
 
-        # Construire le StrategyContext
-        from backend.strategies.base import StrategyContext
-
-        ctx = StrategyContext(
-            symbol=spot_sym,
-            timestamp=candles_tf[-1].timestamp,
-            candles={},
-            indicators=indicators,
-            current_position=None,
-            capital=0.0,
-            config=None,
-        )
-
         # APPELER LA STRATÉGIE — même logique que le paper
         exit_reason = strategy.should_close_all(ctx, grid_state)
 
         if exit_reason is None:
+            sma_val = tf_indicators.get("sma", 0.0)
+            logger.debug(
+                "Exit monitor: {} — close={:.6f}, sma={:.6f}, no exit",
+                futures_sym, current_close, sma_val,
+            )
             return
 
         logger.info(
-            "Executor: EXIT AUTONOME {} {} — raison={}, close={:.6f}, avg_entry={:.6f}",
-            state.direction, futures_sym, exit_reason, current_close, avg_entry,
+            "Executor: EXIT AUTONOME {} {} — raison={}, close={:.6f}, sma={:.6f}, avg_entry={:.6f}",
+            state.direction, futures_sym, exit_reason,
+            current_close, tf_indicators.get("sma", 0.0), avg_entry,
         )
 
         # Réutiliser _close_grid_cycle avec un TradeEvent synthétique
