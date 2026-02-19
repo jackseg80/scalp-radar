@@ -458,6 +458,12 @@ class Executor:
                 await asyncio.sleep(self._EXIT_CHECK_INTERVAL)
                 if not self._running or not self._connected:
                     continue
+                if self._grid_states:
+                    logger.debug(
+                        "Exit monitor: check {} positions ({})",
+                        len(self._grid_states),
+                        list(self._grid_states.keys()),
+                    )
                 await self._check_all_live_exits()
             except asyncio.CancelledError:
                 break

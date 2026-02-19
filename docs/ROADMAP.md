@@ -1946,6 +1946,47 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 - Timestamps dans les tests `on_candle()` doivent être timezone-aware (`tzinfo=timezone.utc`), sinon `TypeError: can't subtract offset-naive and offset-aware datetimes`
 - Worst-case SL au peak positions : calculer à chaque snapshot et garder le max (pas juste à la fin où il peut n'y avoir aucune position)
 
+### Hotfix Sync — executor._grid_states peuplé depuis Bitget au boot ✅
+
+**But** : L'exit monitor autonome restait inopérant après un restart car `executor._grid_states` était vide.
+
+**Problème** : `sync_live_to_paper()` itérait sur `executor._grid_states` pour injecter les positions dans le paper. Si le state file était absent ou corrompu, `_grid_states` était vide → la boucle ne s'exécutait pas → les 4 positions live Bitget n'étaient pas injectées → l'exit monitor n'avait rien à checker.
+
+Séquence observée en prod :
+
+```text
+13:03:44 | Sync: terminé — 4 symbols live synchronisés  ← FAUX (0 injectés)
+13:03:44 | exit monitor autonome démarré
+→ AUCUN log de check pendant 10+ minutes
+→ executor_state.json : grid_states = []
+```
+
+**Fix** (`backend/execution/sync.py`) :
+
+- Au début de `sync_live_to_paper()` : si `executor._grid_states` est vide, appel à `_populate_grid_states_from_exchange()`
+- `_populate_grid_states_from_exchange()` : `fetch_positions()` sans filtre → crée un `GridLiveState` par position ouverte (`contracts > 0` et `entryPrice > 0`)
+  - Stratégie détectée via les runners paper (`symbol_to_strategy`), fallback `"grid_atr"`
+  - Leverage depuis `config.strategies.{name}.leverage`, fallback 3
+  - `GridLivePosition(level=0, entry_order_id="restored-from-sync")` — position agrégée (Bitget retourne le total consolidé)
+  - `sl_price=0.0` — sera recalculé par l'exit monitor via `should_close_all()`
+
+**Fix** (`backend/execution/executor.py`) :
+
+- `_exit_monitor_loop()` : log `DEBUG` avant chaque check — `"Exit monitor: check N positions ([sym1, sym2, ...])"` — confirme que la boucle tourne
+
+**Résultat attendu après deploy** :
+
+```text
+Sync: grid_state créé pour FET/USDT:USDT (grid_atr, 3812 contracts @ 0.1667)
+Sync: grid_state créé pour GALA/USDT:USDT (grid_atr, 124476 contracts @ 0.003919)
+Sync: 4 grid_states créés depuis l'exchange
+Exit monitor: check 4 positions (['FET/USDT:USDT', 'GALA/USDT:USDT', ...])
+```
+
+**Tests** : 2 nouveaux (`test_sync_creates_grid_states_from_exchange`, `test_sync_grid_states_not_overwritten_when_populated`), **1424 tests** au total, 0 régression.
+
+**Piège** : Si `_grid_states` est déjà peuplé (state file intact), `_populate_grid_states_from_exchange()` n'est pas appelé — les états existants sont conservés tels quels.
+
 ### Sprint 32 — Page Journal de Trading ✅
 
 **But** : L'ActivityFeed sidebar étant trop compact, créer un onglet "Journal" dédié avec 4 sections collapsibles, statistiques agrégées, historique d'ordres Executor, et réduction de la sidebar.
@@ -2056,9 +2097,9 @@ Phase 5: Scaling Stratégies     ✅
 
 ## ÉTAT ACTUEL (19 février 2026)
 
-- **1411 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme**
-- **Phase 6 en cours** — Sprint Backtest Réalisme (liquidation cross margin, funding costs, leverage validation) terminé
+- **1424 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states**
+- **Phase 6 en cours** — Hotfix Sync grid_states (exit monitor opérant après restart sans state file)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
 - **Paper trading actif** : **grid_atr Top 10** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 6 assets** (BTC, ETH, DOGE, DYDX, LINK, SAND) en préparation
@@ -2068,7 +2109,7 @@ Phase 5: Scaling Stratégies     ✅
 - **Frontend complet** : 7 pages (Scanner, Heatmap, Explorer, Recherche, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
-- **Prochaine étape** : Déployer Sprint Executor Autonome en prod + surveiller sync boot + exit monitor. Lancer un portfolio backtest avec les nouvelles métriques de liquidation et funding
+- **Prochaine étape** : Déployer Hotfix Sync grid_states en prod + valider que l'exit monitor checke les 4 positions toutes les 60s
 
 ### Résultats Portfolio Backtest — Validation Finale
 
@@ -2213,7 +2254,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 1411 passants, 0 régression
+- **Tests** : 1424 passants, 0 régression
 - **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

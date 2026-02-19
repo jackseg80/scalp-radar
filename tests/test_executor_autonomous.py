@@ -583,6 +583,81 @@ class TestSyncBoot:
         # Rien ne change
         assert runner._positions == {"BTC/USDT": []}
 
+    @pytest.mark.asyncio
+    async def test_sync_creates_grid_states_from_exchange(self):
+        """Si executor._grid_states est vide, fetch Bitget et crée les GridLiveState."""
+        from backend.execution.sync import sync_live_to_paper
+
+        runner = _make_mock_runner(name="grid_atr", capital=1000.0, positions={})
+        simulator = _make_mock_simulator(runners=[runner])
+
+        exchange = _make_exchange()
+        exchange.fetch_positions = AsyncMock(return_value=[
+            {
+                "symbol": "FET/USDT:USDT",
+                "contracts": 3812.0,
+                "entryPrice": 0.1667,
+                "side": "long",
+            },
+            {
+                "symbol": "GALA/USDT:USDT",
+                "contracts": 124476.0,
+                "entryPrice": 0.003919,
+                "side": "long",
+            },
+            {
+                "symbol": "ZERO/USDT:USDT",
+                "contracts": 0.0,
+                "entryPrice": 1.0,
+                "side": "long",
+            },
+        ])
+
+        executor = _make_executor(exchange=exchange)
+        assert len(executor._grid_states) == 0
+
+        await sync_live_to_paper(executor, simulator)
+
+        # 2 positions valides créées (la 3e avec contracts=0 ignorée)
+        assert "FET/USDT:USDT" in executor._grid_states
+        assert "GALA/USDT:USDT" in executor._grid_states
+        assert "ZERO/USDT:USDT" not in executor._grid_states
+
+        fet = executor._grid_states["FET/USDT:USDT"]
+        assert fet.strategy_name == "grid_atr"
+        assert fet.direction == "LONG"
+        assert len(fet.positions) == 1
+        assert fet.positions[0].quantity == pytest.approx(3812.0)
+        assert fet.positions[0].entry_price == pytest.approx(0.1667)
+        assert fet.positions[0].entry_order_id == "restored-from-sync"
+
+        gala = executor._grid_states["GALA/USDT:USDT"]
+        assert gala.positions[0].quantity == pytest.approx(124476.0)
+
+    @pytest.mark.asyncio
+    async def test_sync_grid_states_not_overwritten_when_populated(self):
+        """Si executor._grid_states est déjà peuplé, fetch_positions n'est pas appelé."""
+        from backend.execution.sync import sync_live_to_paper
+
+        runner = _make_mock_runner(name="grid_atr", capital=1000.0, positions={})
+        simulator = _make_mock_simulator(runners=[runner])
+
+        exchange = _make_exchange()
+        exchange.fetch_positions = AsyncMock(return_value=[])
+
+        executor = _make_executor(exchange=exchange)
+        # Pré-peupler _grid_states
+        existing_state = _make_grid_state(symbol="BTC/USDT:USDT")
+        executor._grid_states["BTC/USDT:USDT"] = existing_state
+
+        await sync_live_to_paper(executor, simulator)
+
+        # fetch_positions appelé 1x (pour _reconcile via la branche paper)
+        # mais PAS pour _populate (car _grid_states n'était pas vide)
+        # La position existante est toujours là
+        assert "BTC/USDT:USDT" in executor._grid_states
+        assert executor._grid_states["BTC/USDT:USDT"] is existing_state
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Bloc 3 — Hardening OPEN
