@@ -1,37 +1,32 @@
 """Indicateurs incrémentaux pour le Simulator (paper trading live).
 
-Maintient des buffers numpy rolling par (symbol, timeframe).
+Maintient des buffers rolling par (symbol, timeframe).
 Recalcule les indicateurs sur la fenêtre complète à chaque nouvelle candle.
 Sur 300-500 floats, c'est < 1ms — pas besoin de variantes incrémentales.
 
-Réutilise les mêmes fonctions que le backtest (backend/core/indicators.py).
+IMPORTANT : Toutes les fonctions d'indicateurs sont en **pur Python** (zéro
+allocation numpy) pour éviter les segfaults liés à la corruption heap sur
+CPython 3.13 + numpy 2.3.5 + Windows. Sur des backtests longs (>100K appels),
+les millions d'allocations/libérations numpy finissent par corrompre le heap
+→ access violation aléatoire dans les boucles Wilder.
+Pur Python sur 500 éléments ≈ même performance (<1ms) sans aucun risque.
 """
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import Any
 
-import numpy as np
-
-from backend.core.indicators import (
-    adx,
-    atr,
-    detect_market_regime,
-    rsi,
-    sma,
-    volume_sma,
-    vwap_rolling,
-)
-from backend.core.models import Candle
+from backend.core.models import Candle, MarketRegime
 from backend.strategies.base import BaseStrategy
 
 
 class IncrementalIndicatorEngine:
-    """Buffers numpy rolling par (symbol, timeframe).
+    """Buffers rolling par (symbol, timeframe).
 
     Recalcule les indicateurs sur la fenêtre complète à chaque update.
-    Utilisé par le Simulator pour le paper trading live.
+    Utilisé par le Simulator (paper trading live) et le Portfolio Backtest.
     """
 
     def __init__(self, strategies: list[BaseStrategy], max_buffer: int = 500) -> None:
@@ -89,51 +84,34 @@ class IncrementalIndicatorEngine:
 
         return result
 
+    # ------------------------------------------------------------------
+    # Calcul des indicateurs — pur Python, zéro numpy
+    # ------------------------------------------------------------------
+
     def _compute_latest(
-        self, candles: list[Candle], timeframe: str
+        self,
+        candles: list[Candle],
+        timeframe: str = "",
+        _key: tuple[str, str] | None = None,
     ) -> dict[str, Any] | None:
-        """Calcule les indicateurs sur le buffer complet, retourne le dernier point."""
+        """Calcule les indicateurs sur le buffer complet, retourne le dernier point.
+
+        Pur Python — aucune allocation numpy. Les paramètres ``timeframe``
+        et ``_key`` sont conservés pour compatibilité API mais ignorés.
+        """
         n = len(candles)
         if n < 2:
             return None
 
-        closes = np.array([c.close for c in candles], dtype=float)
-        highs = np.array([c.high for c in candles], dtype=float)
-        lows = np.array([c.low for c in candles], dtype=float)
-        volumes = np.array([c.volume for c in candles], dtype=float)
+        rsi_val = self._rsi_last(candles)
+        adx_val, di_plus_val, di_minus_val = self._adx_last(candles)
+        atr_val, atr_sma_val = self._atr_last(candles)
+        vwap_val = self._vwap_last(candles)
+        vol_sma_val = self._vol_sma_last(candles)
 
-        # RSI
-        rsi_arr = rsi(closes)
-        rsi_val = float(rsi_arr[-1]) if not np.isnan(rsi_arr[-1]) else float("nan")
-
-        # ADX + DI
-        adx_arr, di_plus_arr, di_minus_arr = adx(highs, lows, closes)
-        adx_val = float(adx_arr[-1]) if not np.isnan(adx_arr[-1]) else float("nan")
-        di_plus_val = float(di_plus_arr[-1]) if not np.isnan(di_plus_arr[-1]) else float("nan")
-        di_minus_val = float(di_minus_arr[-1]) if not np.isnan(di_minus_arr[-1]) else float("nan")
-
-        # ATR + ATR SMA
-        atr_arr = atr(highs, lows, closes)
-        atr_val = float(atr_arr[-1]) if not np.isnan(atr_arr[-1]) else float("nan")
-
-        # ATR SMA aligné
-        valid_atr = atr_arr[~np.isnan(atr_arr)]
-        atr_sma_val = float("nan")
-        if len(valid_atr) >= 20:
-            atr_sma_arr = sma(valid_atr, 20)
-            if not np.isnan(atr_sma_arr[-1]):
-                atr_sma_val = float(atr_sma_arr[-1])
-
-        # VWAP rolling
-        vwap_arr = vwap_rolling(highs, lows, closes, volumes)
-        vwap_val = float(vwap_arr[-1]) if not np.isnan(vwap_arr[-1]) else float("nan")
-
-        # Volume SMA
-        vol_sma_arr = volume_sma(volumes)
-        vol_sma_val = float(vol_sma_arr[-1]) if not np.isnan(vol_sma_arr[-1]) else float("nan")
-
-        # Régime
-        regime = detect_market_regime(adx_val, di_plus_val, di_minus_val, atr_val, atr_sma_val)
+        regime = _detect_regime(
+            adx_val, di_plus_val, di_minus_val, atr_val, atr_sma_val
+        )
 
         return {
             "rsi": rsi_val,
@@ -143,12 +121,218 @@ class IncrementalIndicatorEngine:
             "di_minus": di_minus_val,
             "atr": atr_val,
             "atr_sma": atr_sma_val,
-            "volume": float(volumes[-1]),
+            "volume": candles[-1].volume,
             "volume_sma": vol_sma_val,
-            "close": float(closes[-1]),
+            "close": candles[-1].close,
             "regime": regime,
         }
+
+    # ── RSI (Wilder smoothing) ────────────────────────────────────────
+
+    @staticmethod
+    def _rsi_last(candles: list[Candle], period: int = 14) -> float:
+        """RSI avec lissage de Wilder — retourne uniquement la dernière valeur."""
+        n = len(candles)
+        if n < period + 2:
+            return float("nan")
+
+        # Deltas, gains, losses
+        avg_gain = 0.0
+        avg_loss = 0.0
+        for i in range(1, period + 1):
+            delta = candles[i].close - candles[i - 1].close
+            if delta > 0:
+                avg_gain += delta
+            else:
+                avg_loss -= delta
+        avg_gain /= period
+        avg_loss /= period
+
+        # Wilder smoothing
+        for i in range(period + 1, n):
+            delta = candles[i].close - candles[i - 1].close
+            avg_gain = (avg_gain * (period - 1) + max(delta, 0.0)) / period
+            avg_loss = (avg_loss * (period - 1) + max(-delta, 0.0)) / period
+
+        if avg_loss == 0.0:
+            return 100.0 if avg_gain > 0 else 50.0
+        rs = avg_gain / avg_loss
+        return 100.0 - 100.0 / (1.0 + rs)
+
+    # ── ATR (Wilder smoothing) + ATR SMA ──────────────────────────────
+
+    @staticmethod
+    def _atr_last(
+        candles: list[Candle], period: int = 14, sma_period: int = 20
+    ) -> tuple[float, float]:
+        """ATR Wilder + SMA de l'ATR — retourne (atr, atr_sma)."""
+        n = len(candles)
+        if n < period + 2:
+            return float("nan"), float("nan")
+
+        # True Range (depuis index 1)
+        tr_list: list[float] = []
+        for i in range(1, n):
+            h = candles[i].high
+            l_val = candles[i].low
+            pc = candles[i - 1].close
+            tr = max(h - l_val, abs(h - pc), abs(l_val - pc))
+            tr_list.append(tr)
+
+        m = len(tr_list)
+        if m < period:
+            return float("nan"), float("nan")
+
+        # Seed : moyenne simple des period premiers TRs
+        atr_val = sum(tr_list[:period]) / period
+        atr_history: list[float] = [atr_val]
+
+        # Wilder smoothing
+        for i in range(period, m):
+            atr_val = (atr_val * (period - 1) + tr_list[i]) / period
+            atr_history.append(atr_val)
+
+        # ATR SMA sur les dernières valeurs ATR valides
+        atr_sma_val = float("nan")
+        if len(atr_history) >= sma_period:
+            atr_sma_val = sum(atr_history[-sma_period:]) / sma_period
+
+        return atr_val, atr_sma_val
+
+    # ── ADX + DI+/DI- (Wilder smoothing) ─────────────────────────────
+
+    @staticmethod
+    def _adx_last(candles: list[Candle], period: int = 14) -> tuple[float, float, float]:
+        """ADX + DI+/DI- Wilder — retourne (adx, di_plus, di_minus)."""
+        n = len(candles)
+        if n < 2 * period + 2:
+            return float("nan"), float("nan"), float("nan")
+
+        # DM+, DM-, TR (index 0 = placeholder)
+        dm_plus: list[float] = [0.0]
+        dm_minus: list[float] = [0.0]
+        tr_list: list[float] = [candles[0].high - candles[0].low]
+
+        for i in range(1, n):
+            h = candles[i].high
+            l_val = candles[i].low
+            ph = candles[i - 1].high
+            pl = candles[i - 1].low
+            pc = candles[i - 1].close
+
+            up = h - ph
+            down = pl - l_val
+
+            dm_plus.append(up if (up > down and up > 0) else 0.0)
+            dm_minus.append(down if (down > up and down > 0) else 0.0)
+            tr_list.append(max(h - l_val, abs(h - pc), abs(l_val - pc)))
+
+        # Seeds : somme des period premières valeurs (indices 1..period)
+        sm_tr = 0.0
+        sm_plus = 0.0
+        sm_minus = 0.0
+        for j in range(1, period + 1):
+            sm_tr += tr_list[j]
+            sm_plus += dm_plus[j]
+            sm_minus += dm_minus[j]
+
+        # DI+/DI- au premier index
+        di_plus = 100.0 * sm_plus / sm_tr if sm_tr > 0 else 0.0
+        di_minus = 100.0 * sm_minus / sm_tr if sm_tr > 0 else 0.0
+        di_sum = di_plus + di_minus
+        dx_values: list[float] = [
+            100.0 * abs(di_plus - di_minus) / di_sum if di_sum > 0 else 0.0
+        ]
+
+        # Wilder smoothing DI+/DI- et accumulation DX
+        for i in range(period + 1, n):
+            sm_tr = sm_tr - sm_tr / period + tr_list[i]
+            sm_plus = sm_plus - sm_plus / period + dm_plus[i]
+            sm_minus = sm_minus - sm_minus / period + dm_minus[i]
+
+            di_plus = 100.0 * sm_plus / sm_tr if sm_tr > 0 else 0.0
+            di_minus = 100.0 * sm_minus / sm_tr if sm_tr > 0 else 0.0
+
+            di_sum = di_plus + di_minus
+            dx = 100.0 * abs(di_plus - di_minus) / di_sum if di_sum > 0 else 0.0
+            dx_values.append(dx)
+
+        # ADX = Wilder smoothed DX
+        if len(dx_values) < period:
+            return float("nan"), di_plus, di_minus
+
+        adx_val = sum(dx_values[:period]) / period
+        for i in range(period, len(dx_values)):
+            adx_val = (adx_val * (period - 1) + dx_values[i]) / period
+
+        return adx_val, di_plus, di_minus
+
+    # ── VWAP Rolling ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _vwap_last(candles: list[Candle], window: int = 288) -> float:
+        """VWAP rolling — retourne uniquement la dernière valeur."""
+        n = len(candles)
+        if n < window:
+            return float("nan")
+
+        tp_vol_sum = 0.0
+        vol_sum = 0.0
+        for i in range(n - window, n):
+            c = candles[i]
+            tp = (c.high + c.low + c.close) / 3.0
+            tp_vol_sum += tp * c.volume
+            vol_sum += c.volume
+
+        if vol_sum > 0:
+            return tp_vol_sum / vol_sum
+        return (candles[-1].high + candles[-1].low + candles[-1].close) / 3.0
+
+    # ── Volume SMA ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _vol_sma_last(candles: list[Candle], period: int = 20) -> float:
+        """Volume SMA — retourne uniquement la dernière valeur."""
+        n = len(candles)
+        if n < period:
+            return float("nan")
+        return sum(candles[i].volume for i in range(n - period, n)) / period
+
+    # ── Utilitaires ───────────────────────────────────────────────────
 
     def get_buffer_sizes(self) -> dict[tuple[str, str], int]:
         """Retourne la taille de chaque buffer (debug/monitoring)."""
         return {key: len(buf) for key, buf in self._buffers.items()}
+
+
+# ─── Détection de régime de marché (pur Python) ──────────────────────────
+
+
+def _detect_regime(
+    adx_val: float,
+    di_plus: float,
+    di_minus: float,
+    atr_val: float,
+    atr_sma: float,
+) -> MarketRegime:
+    """Détecte le régime de marché à partir des valeurs scalaires.
+
+    Pur Python — utilise math.isnan au lieu de np.isnan.
+    Même logique que indicators.detect_market_regime().
+    """
+    for v in (adx_val, di_plus, di_minus, atr_val, atr_sma):
+        if math.isnan(v):
+            return MarketRegime.RANGING
+
+    if atr_sma > 0:
+        if atr_val > 2.0 * atr_sma:
+            return MarketRegime.HIGH_VOLATILITY
+        if atr_val < 0.5 * atr_sma:
+            return MarketRegime.LOW_VOLATILITY
+
+    if adx_val > 25:
+        if di_plus > di_minus:
+            return MarketRegime.TRENDING_UP
+        return MarketRegime.TRENDING_DOWN
+
+    return MarketRegime.RANGING

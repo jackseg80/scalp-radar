@@ -10,19 +10,24 @@ import numpy as np
 
 from backend.core.models import MarketRegime
 
-# Numba JIT (optionnel) — fallback transparent si non installé
+# Numba JIT DÉSACTIVÉ pour indicators.py — segfault aléatoire sur Python 3.13
+# (access violation dans _rsi_wilder_loop / _adx_wilder_loop).
+# Le vrai speedup JIT est dans fast_backtest.py (boucle trades), pas ici.
+# Ces boucles tournent sur des arrays de 500 éléments max (IncrementalIndicatorEngine)
+# → la différence Python pur vs JIT est négligeable.
 try:
-    from numba import njit
+    from numba import njit as _njit_real  # noqa: F401 — gardé pour fast_backtest.py
 
     NUMBA_AVAILABLE = True
 except ImportError:  # pragma: no cover
-
-    def njit(*args, **kwargs):  # type: ignore[misc]
-        if args and callable(args[0]):
-            return args[0]
-        return lambda func: func
-
     NUMBA_AVAILABLE = False
+
+
+def njit(*args, **kwargs):  # type: ignore[misc]
+    """No-op decorator — remplace @njit pour éviter les segfaults Numba/Py3.13."""
+    if args and callable(args[0]):
+        return args[0]
+    return lambda func: func
 
 
 # ─── MOYENNES ────────────────────────────────────────────────────────────────
@@ -38,7 +43,7 @@ def sma(values: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-@njit(cache=True)
+@njit(cache=False)
 def _ema_loop(values, result, period, multiplier):
     for i in range(period, len(values)):
         result[i] = values[i] * multiplier + result[i - 1] * (1 - multiplier)
@@ -49,7 +54,8 @@ def ema(values: np.ndarray, period: int) -> np.ndarray:
     """Exponential Moving Average. Les period-1 premières valeurs sont NaN."""
     if len(values) < period:
         return np.full_like(values, np.nan, dtype=float)
-    result = np.full_like(values, np.nan, dtype=float)
+    values = np.ascontiguousarray(values, dtype=np.float64)
+    result = np.full_like(values, np.nan, dtype=np.float64)
     multiplier = 2.0 / (period + 1)
     # Seed : SMA des period premières valeurs
     result[period - 1] = np.mean(values[:period])
@@ -60,7 +66,7 @@ def ema(values: np.ndarray, period: int) -> np.ndarray:
 # ─── RSI (Wilder smoothing) ─────────────────────────────────────────────────
 
 
-@njit(cache=True)
+@njit(cache=False)
 def _rsi_wilder_loop(gains, losses, result, period, avg_gain, avg_loss):
     for i in range(period, len(gains)):
         avg_gain = (avg_gain * (period - 1) + gains[i]) / period
@@ -82,11 +88,14 @@ def rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
     if len(closes) < period + 1:
         return np.full_like(closes, np.nan, dtype=float)
 
-    deltas = np.diff(closes)
-    gains = np.where(deltas > 0, deltas, 0.0)
-    losses = np.where(deltas < 0, -deltas, 0.0)
+    # Garantir contiguïté + dtype pour JIT (évite segfault Numba)
+    closes = np.ascontiguousarray(closes, dtype=np.float64)
 
-    result = np.full(len(closes), np.nan, dtype=float)
+    deltas = np.diff(closes)
+    gains = np.ascontiguousarray(np.where(deltas > 0, deltas, 0.0), dtype=np.float64)
+    losses = np.ascontiguousarray(np.where(deltas < 0, -deltas, 0.0), dtype=np.float64)
+
+    result = np.full(len(closes), np.nan, dtype=np.float64)
 
     # Seed : moyenne simple des period premières variations
     avg_gain = float(np.mean(gains[:period]))
@@ -146,7 +155,7 @@ def vwap_rolling(
 # ─── ATR (Wilder smoothing) ─────────────────────────────────────────────────
 
 
-@njit(cache=True)
+@njit(cache=False)
 def _wilder_smooth(data, result, period, seed_val, start_idx):
     val = seed_val
     for i in range(start_idx, len(data)):
@@ -169,10 +178,15 @@ def atr(
     if len(closes) < period + 1:
         return np.full_like(closes, np.nan, dtype=float)
 
-    result = np.full(len(closes), np.nan, dtype=float)
+    # Garantir contiguïté + dtype pour JIT
+    highs = np.ascontiguousarray(highs, dtype=np.float64)
+    lows = np.ascontiguousarray(lows, dtype=np.float64)
+    closes = np.ascontiguousarray(closes, dtype=np.float64)
+
+    result = np.full(len(closes), np.nan, dtype=np.float64)
 
     # True Range (vectorisé)
-    tr = np.empty(len(closes))
+    tr = np.empty(len(closes), dtype=np.float64)
     tr[0] = highs[0] - lows[0]
     tr[1:] = np.maximum(
         highs[1:] - lows[1:],
@@ -191,7 +205,7 @@ def atr(
 # ─── ADX + DI+/DI- ──────────────────────────────────────────────────────────
 
 
-@njit(cache=True)
+@njit(cache=False)
 def _adx_wilder_loop(tr, plus_dm, minus_dm, period, n, adx_arr, di_plus_arr, di_minus_arr):
     # Seeds : somme des period premières valeurs (= mean × period)
     sm_tr = 0.0
@@ -265,17 +279,22 @@ def adx(
     """
     n = len(closes)
     if n < 2 * period + 1:
-        nan_arr = np.full(n, np.nan, dtype=float)
+        nan_arr = np.full(n, np.nan, dtype=np.float64)
         return nan_arr.copy(), nan_arr.copy(), nan_arr.copy()
 
-    adx_arr = np.full(n, np.nan, dtype=float)
-    di_plus_arr = np.full(n, np.nan, dtype=float)
-    di_minus_arr = np.full(n, np.nan, dtype=float)
+    # Garantir contiguïté + dtype pour JIT
+    highs = np.ascontiguousarray(highs, dtype=np.float64)
+    lows = np.ascontiguousarray(lows, dtype=np.float64)
+    closes = np.ascontiguousarray(closes, dtype=np.float64)
+
+    adx_arr = np.full(n, np.nan, dtype=np.float64)
+    di_plus_arr = np.full(n, np.nan, dtype=np.float64)
+    di_minus_arr = np.full(n, np.nan, dtype=np.float64)
 
     # +DM, -DM et TR (vectorisé)
-    plus_dm = np.zeros(n)
-    minus_dm = np.zeros(n)
-    tr = np.zeros(n)
+    plus_dm = np.zeros(n, dtype=np.float64)
+    minus_dm = np.zeros(n, dtype=np.float64)
+    tr = np.zeros(n, dtype=np.float64)
 
     tr[0] = highs[0] - lows[0]
     tr[1:] = np.maximum(
@@ -378,7 +397,7 @@ def bollinger_bands(
 # ─── SuperTrend ──────────────────────────────────────────────────────────────
 
 
-@njit(cache=True)
+@njit(cache=False)
 def _supertrend_loop(highs, lows, closes, atr_arr, multiplier, st_values, direction):
     n = len(closes)
 
@@ -461,7 +480,12 @@ def supertrend(
     NaN tant que l'ATR n'est pas disponible.
     """
     n = len(closes)
-    st_values = np.full(n, np.nan, dtype=float)
-    direction = np.full(n, np.nan, dtype=float)
+    # Garantir contiguïté + dtype pour JIT
+    highs = np.ascontiguousarray(highs, dtype=np.float64)
+    lows = np.ascontiguousarray(lows, dtype=np.float64)
+    closes = np.ascontiguousarray(closes, dtype=np.float64)
+    atr_arr = np.ascontiguousarray(atr_arr, dtype=np.float64)
+    st_values = np.full(n, np.nan, dtype=np.float64)
+    direction = np.full(n, np.nan, dtype=np.float64)
     _supertrend_loop(highs, lows, closes, atr_arr, multiplier, st_values, direction)
     return st_values, direction

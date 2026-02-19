@@ -20,15 +20,23 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import faulthandler
+import gc
+import json
 import math
+import os
+import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+# Activer faulthandler pour capter les segfaults (traceback Python même sur SIGSEGV)
+faulthandler.enable()
+
 from loguru import logger
 
-from backend.backtesting.portfolio_engine import PortfolioBacktester, PortfolioResult
 from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
@@ -203,8 +211,90 @@ async def _detect_auto_days(
 # ---------------------------------------------------------------------------
 
 
-async def _run_single(
-    config,
+_SUBPROCESS_SCRIPT = r'''
+"""Subprocess worker : lance un seul portfolio backtest et retourne les résultats en JSON."""
+import asyncio, gc, json, os, sys, faulthandler
+faulthandler.enable()
+sys.path.insert(0, os.getcwd())
+
+from backend.backtesting.portfolio_engine import PortfolioBacktester
+from backend.core.config import get_config
+from backend.core.logging_setup import setup_logging
+from datetime import datetime, timezone
+
+setup_logging(level="WARNING")
+config = get_config()
+
+strategy_name = sys.argv[1]
+leverage = int(sys.argv[2])
+start_iso = sys.argv[3]
+end_iso = sys.argv[4]
+capital = float(sys.argv[5])
+db_path = sys.argv[6]
+exchange = sys.argv[7]
+ks_window_hours = int(sys.argv[8])
+
+start_dt = datetime.fromisoformat(start_iso)
+end_dt = datetime.fromisoformat(end_iso)
+
+# Override leverage
+strat_cfg = getattr(config.strategies, strategy_name, None)
+if strat_cfg is not None and hasattr(strat_cfg, "leverage"):
+    strat_cfg.leverage = leverage
+
+# Override KS runner à 99% (voir le vrai DD sans interruption)
+ks_cfg = getattr(config.risk, "kill_switch", None)
+if ks_cfg is not None:
+    if hasattr(ks_cfg, "grid_max_session_loss_percent"):
+        ks_cfg.grid_max_session_loss_percent = 99.0
+    if hasattr(ks_cfg, "max_session_loss_percent"):
+        ks_cfg.max_session_loss_percent = 99.0
+
+async def _run():
+    backtester = PortfolioBacktester(
+        config=config,
+        initial_capital=capital,
+        strategy_name=strategy_name,
+        exchange=exchange,
+        kill_switch_pct=99.0,
+        kill_switch_window_hours=ks_window_hours,
+    )
+    gc.disable()
+    try:
+        result = await backtester.run(start=start_dt, end=end_dt, db_path=db_path)
+    finally:
+        gc.enable()
+    return result
+
+result = asyncio.run(_run())
+
+# Calculs métriques
+from scripts.stress_test_leverage import _compute_calmar, _compute_sharpe, _count_ks_triggers, KS_THRESHOLDS
+
+calmar = _compute_calmar(result.total_return_pct, result.max_drawdown_pct)
+sharpe = _compute_sharpe(result.snapshots)
+ks_counts = {thr: _count_ks_triggers(result.snapshots, thr, ks_window_hours) for thr in KS_THRESHOLDS}
+
+row = {
+    "total_return_pct": round(result.total_return_pct, 1),
+    "max_drawdown_pct": round(result.max_drawdown_pct, 1),
+    "calmar": calmar if calmar != float("inf") else 999.0,
+    "ks_30": ks_counts[30], "ks_45": ks_counts[45], "ks_60": ks_counts[60],
+    "worst_case_sl_pct": round(result.worst_case_sl_loss_pct, 1),
+    "min_liq_dist_pct": round(result.min_liquidation_distance_pct, 1),
+    "was_liquidated": result.was_liquidated,
+    "funding_total": round(result.funding_paid_total, 2),
+    "total_trades": result.total_trades,
+    "win_rate": round(result.win_rate, 1),
+    "sharpe": sharpe,
+}
+print("__RESULT_JSON__" + json.dumps(row))
+'''
+
+MAX_RETRIES = 3
+
+
+def _run_single(
     strategy_name: str,
     leverage: int,
     resolved_days: int,
@@ -214,69 +304,82 @@ async def _run_single(
     db_path: str,
     exchange: str,
 ) -> dict | None:
-    """Lance un portfolio backtest et retourne les métriques sous forme de dict."""
-    strat_cfg = getattr(config.strategies, strategy_name, None)
-    original_leverage = getattr(strat_cfg, "leverage", None)
+    """Lance un portfolio backtest dans un subprocess isolé.
 
-    # Override leverage (sans toucher au YAML)
-    if strat_cfg is not None and hasattr(strat_cfg, "leverage"):
-        strat_cfg.leverage = leverage
+    Chaque run tourne dans un process Python séparé pour survivre aux
+    segfaults aléatoires (numpy + CPython 3.13 heap corruption).
+    Retry automatique jusqu'à MAX_RETRIES tentatives.
+    """
+    args = [
+        sys.executable, "-c", _SUBPROCESS_SCRIPT,
+        strategy_name,
+        str(leverage),
+        start_dt.isoformat(),
+        end_dt.isoformat(),
+        str(capital),
+        db_path,
+        exchange,
+        str(KS_WINDOW_HOURS),
+    ]
 
-    try:
-        backtester = PortfolioBacktester(
-            config=config,
-            initial_capital=capital,
-            strategy_name=strategy_name,
-            exchange=exchange,
-            kill_switch_pct=99.0,   # Désactivé pour voir le vrai DD
-            kill_switch_window_hours=KS_WINDOW_HOURS,
-        )
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=1200,  # 20 min max par run
+                cwd=os.getcwd(),
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Timeout {}@{}x / {}j (tentative {}/{})",
+                strategy_name, leverage, resolved_days, attempt, MAX_RETRIES,
+            )
+            continue
 
-        result: PortfolioResult = await backtester.run(
-            start=start_dt,
-            end=end_dt,
-            db_path=db_path,
-        )
+        if proc.returncode == 0:
+            # Chercher la ligne JSON dans stdout
+            for line in proc.stdout.splitlines():
+                if line.startswith("__RESULT_JSON__"):
+                    raw = json.loads(line[len("__RESULT_JSON__"):])
+                    raw["strategy"] = strategy_name
+                    raw["leverage"] = leverage
+                    raw["days"] = resolved_days
+                    raw["window_start"] = start_dt.date().isoformat()
+                    raw["window_end"] = end_dt.date().isoformat()
+                    return raw
 
-        calmar = _compute_calmar(result.total_return_pct, result.max_drawdown_pct)
-        sharpe = _compute_sharpe(result.snapshots)
+            # Pas de JSON trouvé
+            logger.error(
+                "Pas de résultat JSON pour {}@{}x / {}j",
+                strategy_name, leverage, resolved_days,
+            )
+            return None
 
-        # KS a posteriori à plusieurs seuils
-        ks_counts = {
-            thr: _count_ks_triggers(result.snapshots, thr, KS_WINDOW_HOURS)
-            for thr in KS_THRESHOLDS
-        }
+        # Crash (segfault, etc.)
+        suffix = f" (tentative {attempt}/{MAX_RETRIES})"
+        if proc.stderr:
+            # Afficher les dernières lignes de stderr (traceback faulthandler)
+            stderr_lines = proc.stderr.strip().splitlines()
+            for line in stderr_lines[-10:]:
+                print(f"         | {line}")
+        if attempt < MAX_RETRIES:
+            logger.warning(
+                "Crash {}@{}x / {}j (exit {}){} -> retry dans 3s",
+                strategy_name, leverage, resolved_days,
+                proc.returncode, suffix,
+            )
+            print(f"         -> CRASH (exit {proc.returncode}), retry {attempt + 1}/{MAX_RETRIES}...")
+            time.sleep(3)  # Cooldown avant retry
+        else:
+            logger.error(
+                "Échec définitif {}@{}x / {}j après {} tentatives (exit {})",
+                strategy_name, leverage, resolved_days,
+                MAX_RETRIES, proc.returncode,
+            )
 
-        return {
-            "strategy": strategy_name,
-            "leverage": leverage,
-            "days": resolved_days,
-            "window_start": start_dt.date().isoformat(),
-            "window_end": end_dt.date().isoformat(),
-            "total_return_pct": round(result.total_return_pct, 1),
-            "max_drawdown_pct": round(result.max_drawdown_pct, 1),
-            "calmar": calmar if calmar != float("inf") else 999.0,
-            **{f"ks_{thr}": ks_counts[thr] for thr in KS_THRESHOLDS},
-            "worst_case_sl_pct": round(result.worst_case_sl_loss_pct, 1),
-            "min_liq_dist_pct": round(result.min_liquidation_distance_pct, 1),
-            "was_liquidated": result.was_liquidated,
-            "funding_total": round(result.funding_paid_total, 2),
-            "total_trades": result.total_trades,
-            "win_rate": round(result.win_rate, 1),
-            "sharpe": sharpe,
-        }
-
-    except Exception as e:
-        logger.error(
-            "Échec run {}@{}x / {}j : {}",
-            strategy_name, leverage, resolved_days, e,
-        )
-        return None
-
-    finally:
-        # Restaurer le leverage original pour le prochain run
-        if strat_cfg is not None and original_leverage is not None:
-            strat_cfg.leverage = original_leverage
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -355,18 +458,64 @@ def _print_table(rows: list[dict], title: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _save_csv(all_rows: list[dict], path: str) -> None:
-    if not all_rows:
+def _save_csv(rows: list[dict], path: str, append: bool = False) -> None:
+    """Sauvegarde les résultats en CSV.
+
+    En mode append (--append), écrit à la suite du fichier existant sans
+    réécrire le header. En mode normal, écrase le fichier.
+    """
+    if not rows:
         return
 
-    fieldnames = list(all_rows[0].keys())
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    mode = "a" if append and os.path.exists(path) else "w"
+    write_header = mode == "w"
+    fieldnames = list(rows[0].keys())
+
+    with open(path, mode, newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in all_rows:
+        if write_header:
+            writer.writeheader()
+        for r in rows:
             writer.writerow(r)
 
-    print(f"\n  CSV sauvegardé : {path}")
+    action = "Ajouté au" if mode == "a" else "Sauvegardé dans"
+    print(f"\n  CSV {action} : {path} ({len(rows)} lignes)")
+
+
+def _load_csv(path: str) -> list[dict]:
+    """Charge toutes les lignes d'un CSV de résultats existant.
+
+    Utilisé en mode --append pour construire le rapport complet depuis
+    plusieurs lots de runs.
+    """
+    if not os.path.exists(path):
+        return []
+
+    rows = []
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                row["leverage"] = int(row["leverage"])
+                row["days"] = int(row["days"])
+                row["total_return_pct"] = float(row["total_return_pct"])
+                row["max_drawdown_pct"] = float(row["max_drawdown_pct"])
+                row["calmar"] = float(row["calmar"])
+                row["ks_30"] = int(row["ks_30"])
+                row["ks_45"] = int(row["ks_45"])
+                row["ks_60"] = int(row["ks_60"])
+                row["worst_case_sl_pct"] = float(row["worst_case_sl_pct"])
+                row["min_liq_dist_pct"] = float(row["min_liq_dist_pct"])
+                row["was_liquidated"] = row["was_liquidated"].lower() in ("true", "1", "yes")
+                row["funding_total"] = float(row["funding_total"])
+                row["total_trades"] = int(row["total_trades"])
+                row["win_rate"] = float(row["win_rate"])
+                row["sharpe"] = float(row["sharpe"])
+                rows.append(row)
+            except (KeyError, ValueError):
+                pass  # Ligne corrompue, on ignore
+
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +641,15 @@ def _recommend(
 
 
 async def main() -> None:
+    try:
+        await _main_inner()
+    except Exception as e:
+        print(f"\nERREUR FATALE: {e}", file=sys.stderr)
+        traceback.print_exc()
+        sys.exit(1)
+
+
+async def _main_inner() -> None:
     parser = argparse.ArgumentParser(
         description="Stress test leverage multi-fenêtre (portfolio backtest)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -545,6 +703,20 @@ Exemples :
         type=str,
         default="data/stress_test_results.csv",
         help="Fichier CSV de sortie (défaut: data/stress_test_results.csv)",
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help=(
+            "Ajouter au CSV existant au lieu de l'écraser. "
+            "Le rapport final est généré depuis l'intégralité du CSV "
+            "(lots précédents + lot actuel)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Sauter les runs déjà présents dans le CSV (auto-resume après crash).",
     )
 
     args = parser.parse_args()
@@ -626,22 +798,39 @@ Exemples :
         start_dt = end_dt - timedelta(days=resolved)
         run_specs.append((strat_name, lev, resolved, start_dt, end_dt))
 
+    # --- Charger les runs existants si --skip-existing ---
+    existing_keys: set[tuple[str, int, int]] = set()
+    if args.skip_existing:
+        existing_rows = _load_csv(args.output)
+        existing_keys = {(r["strategy"], r["leverage"], r["days"]) for r in existing_rows}
+        if existing_keys:
+            print(f"\n  --skip-existing : {len(existing_keys)} runs déjà en CSV")
+
     # --- Afficher le plan ---
-    print(f"\n  {total_runs} runs planifies | capital={args.capital:,.0f}$ | KS=DESACTIVE(99%)")
+    skippable = sum(1 for s, l, d, _, _ in run_specs if (s, l, d) in existing_keys)
+    actual_runs = total_runs - skippable
+    print(f"\n  {total_runs} runs planifies | {actual_runs} à lancer | capital={args.capital:,.0f}$ | KS=DESACTIVE(99%)")
+    print(f"  Mode subprocess isolé (retry auto {MAX_RETRIES}x par run)")
     print()
 
     # --- Exécution ---
     all_rows: list[dict] = []
     t_global = time.monotonic()
+    completed = 0
 
     for run_idx, (strat_name, lev, resolved_days, start_dt, end_dt_run) in enumerate(
         run_specs, 1
     ):
+        # Skip si déjà dans le CSV
+        if (strat_name, lev, resolved_days) in existing_keys:
+            print(f"  [{run_idx:2d}/{total_runs}] {strat_name} @ {lev}x / {resolved_days}j  SKIP (déjà en CSV)")
+            continue
+
         # Calcul ETA
         elapsed = time.monotonic() - t_global
-        if run_idx > 1 and elapsed > 0:
-            avg = elapsed / (run_idx - 1)
-            remaining = avg * (total_runs - run_idx + 1)
+        if completed > 0 and elapsed > 0:
+            avg = elapsed / completed
+            remaining = avg * (actual_runs - completed)
             eta_str = f" - ETA ~{remaining:.0f}s"
         else:
             eta_str = ""
@@ -653,8 +842,7 @@ Exemples :
             flush=True,
         )
 
-        row = await _run_single(
-            config=config,
+        row = _run_single(
             strategy_name=strat_name,
             leverage=lev,
             resolved_days=resolved_days,
@@ -664,6 +852,8 @@ Exemples :
             db_path=args.db,
             exchange=args.exchange,
         )
+
+        completed += 1
 
         if row is not None:
             all_rows.append(row)
@@ -676,7 +866,7 @@ Exemples :
                 f"Trades={row['total_trades']}"
             )
         else:
-            print("         -> ERREUR (run ignore)")
+            print(f"         -> ERREUR (run ignore apres {MAX_RETRIES} tentatives)")
 
     total_elapsed = time.monotonic() - t_global
     print(f"\n  Terminé en {total_elapsed:.0f}s ({total_runs} runs)")
@@ -686,19 +876,42 @@ Exemples :
         print("  Commande : uv run python -m scripts.fetch_history")
         return
 
+    # --- Sauvegarde CSV (avant le rapport, pour ne pas perdre les données) ---
+    _save_csv(all_rows, args.output, append=args.append)
+
+    # --- En mode --append : charger l'intégralité du CSV pour le rapport ---
+    if args.append:
+        report_rows = _load_csv(args.output)
+        if not report_rows:
+            report_rows = all_rows
+        report_strategies = sorted(set(r["strategy"] for r in report_rows))
+        # Compléter auto_days pour les stratégies des lots précédents
+        for strat in report_strategies:
+            if strat not in auto_days:
+                # Utiliser la fenêtre la plus longue trouvée dans le CSV comme référence
+                auto_days[strat] = max(
+                    (r["days"] for r in report_rows if r["strategy"] == strat),
+                    default=0,
+                )
+        batch_note = f" | Lot actuel : {len(all_rows)} runs  |  Total CSV : {len(report_rows)} runs"
+    else:
+        report_rows = all_rows
+        report_strategies = list(matrix.keys())
+        batch_note = ""
+
     # --- Rapport comparatif ---
     print("\n\n" + "=" * 70)
     print("  STRESS TEST LEVERAGE — RAPPORT COMPARATIF")
     print("=" * 70)
-    print(f"  Capital : {args.capital:,.0f}$  |  Kill switch : DESACTIVE (analyse a posteriori)")
+    print(f"  Capital : {args.capital:,.0f}$  |  Kill switch : DESACTIVE (analyse a posteriori){batch_note}")
     print(f"  Seuils KS analysés : {', '.join(str(t) + '%' for t in KS_THRESHOLDS)}")
 
-    for strat_name in matrix:
-        strat_rows = [r for r in all_rows if r["strategy"] == strat_name]
+    for strat_name in report_strategies:
+        strat_rows = [r for r in report_rows if r["strategy"] == strat_name]
         if not strat_rows:
             continue
 
-        # Trier les fenêtres : auto (longue) en premier, puis décroissant
+        # Trier les fenêtres : longue en premier, puis décroissant
         windows_in_data = sorted(set(r["days"] for r in strat_rows), reverse=True)
 
         for window_days in windows_in_data:
@@ -716,9 +929,7 @@ Exemples :
 
             _print_table(win_rows, title)
 
-    _save_csv(all_rows, args.output)
-
-    _recommend(all_rows, list(matrix.keys()), auto_days)
+    _recommend(report_rows, report_strategies, auto_days)
 
 
 if __name__ == "__main__":

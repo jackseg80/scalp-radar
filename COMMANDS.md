@@ -559,7 +559,42 @@ uv run python -m scripts.benchmark_fast_engine --runs 6
 
 ---
 
-## 16. Maintenance / Migration
+## 16. Stress Test Leverage
+
+Compare les performances d'une stratégie à différents leverages sur plusieurs fenêtres temporelles. Kill switch désactivé pour voir le vrai max drawdown.
+
+```powershell
+# Lancer tous les tests (20 runs par défaut)
+uv run python -m scripts.stress_test_leverage
+
+# Une seule stratégie
+uv run python -m scripts.stress_test_leverage --strategy grid_boltrend
+
+# Leverages custom (pour affiner entre deux valeurs)
+uv run python -m scripts.stress_test_leverage --leverages 5,7
+
+# Une seule fenêtre
+uv run python -m scripts.stress_test_leverage --days 180
+
+# Combiné
+uv run python -m scripts.stress_test_leverage --strategy grid_boltrend --leverages 3,5 --days 90
+
+# Ajouter des résultats à un CSV existant
+uv run python -m scripts.stress_test_leverage --strategy grid_atr --leverages 6,8 --append
+```
+
+**IMPORTANT :** Sur Windows avec Python 3.13, Numba segfault sur les fenêtres longues. Désactiver le JIT :
+
+```powershell
+$env:NUMBA_DISABLE_JIT=1
+uv run python -m scripts.stress_test_leverage
+```
+
+Résultats CSV sauvegardés dans `data/stress_test_results.csv`
+
+---
+
+## 17. Maintenance / Migration
 
 ### Migrer les JSON WFO vers la DB (Sprint 13 — one-shot)
 
@@ -585,7 +620,7 @@ uv run python check_journal.py
 
 ---
 
-## 17. Rollback d'urgence (production)
+## 18. Rollback d'urgence (production)
 
 **ATTENTION : ne JAMAIS utiliser `echo "..." > .env`** — ça écrase tout le fichier (clés Bitget, tokens, etc.). Toujours éditer avec `nano`.
 
