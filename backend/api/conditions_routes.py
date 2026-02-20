@@ -23,16 +23,6 @@ async def get_conditions(request: Request) -> dict:
     return simulator.get_conditions()
 
 
-@router.get("/api/signals/matrix")
-async def get_signal_matrix(request: Request) -> dict:
-    """Matrice simplifiée pour la Heatmap : dernier score par (stratégie, asset)."""
-    simulator = getattr(request.app.state, "simulator", None)
-    if simulator is None:
-        return {"matrix": {}}
-
-    return simulator.get_signal_matrix()
-
-
 @router.get("/api/simulator/equity")
 async def get_equity_curve(
     request: Request,

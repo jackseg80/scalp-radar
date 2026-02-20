@@ -1,8 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import Header from './components/Header'
 import Scanner from './components/Scanner'
-import Heatmap from './components/Heatmap'
-import RiskCalc from './components/RiskCalc'
 import ResearchPage from './components/ResearchPage'
 import ExplorerPage from './components/ExplorerPage'
 import PortfolioPage from './components/PortfolioPage'
@@ -25,8 +23,6 @@ const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${windo
 
 const TABS = [
   { id: 'scanner', label: 'Scanner' },
-  { id: 'heatmap', label: 'Heatmap' },
-  { id: 'risk', label: 'Risque' },
   { id: 'research', label: 'Recherche' },
   { id: 'explorer', label: 'Explorer' },
   { id: 'portfolio', label: 'Portfolio' },
@@ -52,7 +48,7 @@ function loadSidebarWidth() {
 
 function loadActiveTab() {
   const saved = localStorage.getItem('scalp-radar-active-tab')
-  const validTabs = ['scanner', 'heatmap', 'risk', 'research', 'explorer', 'portfolio', 'journal', 'logs']
+  const validTabs = ['scanner', 'research', 'explorer', 'portfolio', 'journal', 'logs']
   if (saved && validTabs.includes(saved)) return saved
   return 'scanner'
 }
@@ -167,8 +163,6 @@ function AppContent() {
             ? <OverviewPage wsData={lastUpdate} />
             : <Scanner wsData={wsData} />
           )}
-          {activeTab === 'heatmap' && <Heatmap />}
-          {activeTab === 'risk' && <RiskCalc />}
           {activeTab === 'research' && <ResearchPage />}
           {activeTab === 'explorer' && <ExplorerPage wsData={lastUpdate} lastEvent={lastEvent} />}
           {activeTab === 'portfolio' && <PortfolioPage wsData={lastUpdate} lastEvent={lastEvent} />}
