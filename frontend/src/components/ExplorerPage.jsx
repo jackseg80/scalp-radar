@@ -48,6 +48,16 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
   useEffect(() => {
     if (evalStrategy && evalStrategy !== strategy) {
       setStrategy(evalStrategy)
+      // Reset état dépendant (même logique que le onChange)
+      setSelectedRunId(null)
+      setSelectedAssets([])
+      setParamsOverride({})
+      setActiveParamsArray([])
+      setAxisX('')
+      setAxisY('')
+      setAvailableRuns([])
+      setHeatmapData(null)
+      setComboResults(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evalStrategy])
@@ -530,7 +540,20 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
             <label>Stratégie</label>
             <select
               value={strategy}
-              onChange={(e) => setStrategy(e.target.value)}
+              onChange={(e) => {
+                const newVal = e.target.value
+                setStrategy(newVal)
+                // Reset tout l'état dépendant pour éviter données croisées entre stratégies
+                setSelectedRunId(null)
+                setSelectedAssets([])
+                setParamsOverride({})
+                setActiveParamsArray([])
+                setAxisX('')
+                setAxisY('')
+                setAvailableRuns([])
+                setHeatmapData(null)
+                setComboResults(null)
+              }}
               className="select-input"
             >
               <option value="">Sélectionner...</option>
