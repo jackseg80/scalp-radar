@@ -398,10 +398,17 @@ async def get_optimization_heatmap(
     if target_result_id:
         combos = await get_combo_results_async(db_path, target_result_id)
 
+    def _to_coord_val(v):
+        """Convertit une valeur de paramètre en float si possible, sinon string."""
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return str(v)
+
     if combos:
         # Mode dense : construire la heatmap depuis combo_results
         # Accumuler toutes les valeurs par coordonnée (x, y)
-        accumulator: dict[tuple[float, float], list[float]] = {}  # (x, y) → [values]
+        accumulator: dict = {}  # (x, y) → [values]
 
         for combo in combos:
             params = combo["params"]
@@ -416,7 +423,7 @@ async def get_optimization_heatmap(
             if metric_value is None:
                 continue  # Skip les combos sans valeur pour cette métrique
 
-            coord = (float(x_val), float(y_val))
+            coord = (_to_coord_val(x_val), _to_coord_val(y_val))
 
             if coord not in accumulator:
                 accumulator[coord] = []
@@ -424,7 +431,7 @@ async def get_optimization_heatmap(
 
         # Agréger (moyenne) par coordonnée
         import numpy as np
-        points: dict[tuple[float, float], dict] = {}
+        points: dict = {}
         for coord, values in accumulator.items():
             avg_value = float(np.mean(values))
             points[coord] = {
@@ -501,7 +508,7 @@ async def get_optimization_heatmap(
         if metric_value is None and metric == "total_score":
             metric_value = row_dict["total_score"]
 
-        coord = (float(x_val), float(y_val))
+        coord = (_to_coord_val(x_val), _to_coord_val(y_val))
         # Garder le résultat le plus récent pour chaque (x, y)
         if coord not in points:
             points[coord] = {
