@@ -717,6 +717,23 @@ def apply_from_db(
     }
 
 
+def _get_done_assets(strategy_name: str, db_path: str = "data/scalp_radar.db") -> set[str]:
+    """Retourne les assets qui ont déjà un résultat is_latest=1 pour cette stratégie."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute(
+            "SELECT DISTINCT asset FROM optimization_results "
+            "WHERE strategy_name = ? AND is_latest = 1",
+            (strategy_name,),
+        )
+        done = {row[0] for row in cursor.fetchall()}
+        conn.close()
+        return done
+    except Exception:
+        return set()
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Optimisation des paramètres de stratégies")
     parser.add_argument("--strategy", type=str, help="Stratégie à optimiser (ex: vwap_rsi)")
@@ -727,6 +744,8 @@ async def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Afficher le plan sans exécuter")
     parser.add_argument("--apply", action="store_true",
                         help="Appliquer les paramètres grade A/B dans strategies.yaml (depuis la DB)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skipper les assets déjà optimisés en DB (is_latest=1) pour cette stratégie")
     parser.add_argument("-v", "--verbose", action="store_true", help="Affichage détaillé")
     parser.add_argument("--config-dir", type=str, default="config", help="Répertoire de config")
     parser.add_argument("--exchange", type=str, default=None, help="Exchange source des candles (défaut: binance)")
@@ -787,16 +806,32 @@ async def main() -> None:
         grids = _load_param_grids(f"{args.config_dir}/param_grids.yaml")
         print("\nPlan d'optimisation (dry-run)")
         print("-" * 50)
+
+        # --resume : calculer quels assets sont déjà faits par stratégie
+        done_by_strat: dict[str, set[str]] = {}
+        if args.resume:
+            db_url = config.secrets.database_url
+            db_path_resume = db_url[10:] if db_url.startswith("sqlite:///") else "data/scalp_radar.db"
+            for strat in strategies:
+                done_by_strat[strat] = _get_done_assets(strat, db_path_resume)
+
         total_combos = 0
+        n_skipped = 0
         for strat in strategies:
             strat_grids = grids.get(strat, {})
+            done = done_by_strat.get(strat, set())
             for sym in target_symbols:
+                if sym in done:
+                    print(f"  {strat} x {sym} : déjà en DB (skippé)")
+                    n_skipped += 1
+                    continue
                 grid = _build_grid(strat_grids, sym)
                 n = len(grid)
                 total_combos += n
                 coarse = min(n, 500)
                 print(f"  {strat} x {sym} : {n} combos (coarse: {coarse})")
-        print(f"\n  Total : {total_combos} combinaisons")
+        n_total = len(strategies) * len(target_symbols)
+        print(f"\n  Total : {total_combos} combinaisons ({n_total - n_skipped} assets à faire, {n_skipped} skippés)")
         print(f"  Workers : {__import__('os').cpu_count()}")
         print()
         return
@@ -804,11 +839,32 @@ async def main() -> None:
     # Exécution
     all_reports: list[FinalReport] = []
 
+    # Résoudre db_path une seule fois pour --resume
+    _db_path_for_resume: str | None = None
+    if args.resume:
+        db_url = config.secrets.database_url
+        _db_path_for_resume = db_url[10:] if db_url.startswith("sqlite:///") else "data/scalp_radar.db"
+
     for strat in strategies:
         # Collecter les résultats par symbole pour convergence cross-asset
         symbol_results: dict[str, dict] = {}
 
-        for sym in target_symbols:
+        # --resume : filtrer les assets déjà terminés en DB (is_latest=1)
+        run_symbols = target_symbols
+        if args.resume:
+            done = _get_done_assets(strat, _db_path_for_resume or "data/scalp_radar.db")
+            skipped = [s for s in target_symbols if s in done]
+            run_symbols = [s for s in target_symbols if s not in done]
+            if skipped:
+                print(f"\n  --resume : {len(skipped)} assets déjà en DB pour {strat}, skippés :")
+                for s in skipped:
+                    print(f"    v {s}")
+                print(f"  Restants : {len(run_symbols)} assets\n")
+            if not run_symbols:
+                print(f"  Tous les assets sont déjà terminés pour {strat}. Rien à faire.\n")
+                continue
+
+        for sym in run_symbols:
             logger.info("Optimisation {} × {} ...", strat, sym)
             try:
                 report, result_id = await run_optimization(

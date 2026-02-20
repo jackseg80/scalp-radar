@@ -164,6 +164,24 @@ foreach ($s in @("ADA/USDT","APE/USDT","AR/USDT","AVAX/USDT","CRV/USDT","DYDX/US
 uv run python -m scripts.optimize --all --apply
 ```
 
+### Reprendre un WFO interrompu (--resume)
+
+Skippe les assets déjà en DB (`is_latest=1`) — utile après un crash OOM/segfault.
+
+```powershell
+# Reprendre grid_range_atr après crash (ex: planté à UNI/USDT)
+uv run python -m scripts.optimize --strategy grid_range_atr --all-symbols --resume
+
+# Voir quels assets sont déjà faits avant de lancer
+uv run python -m scripts.optimize --strategy grid_range_atr --all-symbols --resume --dry-run
+```
+
+| Argument   | Défaut | Description                                          |
+|------------|--------|------------------------------------------------------|
+| `--resume` | false  | Skipper les assets déjà en DB (reprend après crash)  |
+
+---
+
 ### Optimiser grid_boltrend (source binance)
 
 ```powershell
@@ -498,6 +516,11 @@ uv run python -m scripts.portfolio_backtest --capital 1000 --leverage 6
 
 # Sortie JSON avec sauvegarde en DB
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 90 --json --save --label "q1_2025"
+
+# A/B test d'un paramètre (params WFO existants, un seul changement)
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --save --label "grid_atr_baseline_hold0"
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --save --label "grid_atr_test_hold48" --params "max_hold_candles=48"
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --save --label "grid_atr_test_hold96" --params "max_hold_candles=96"
 ```
 
 **Arguments disponibles :**
@@ -512,6 +535,7 @@ uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 90 --json
 | `--capital` | `10000` | Capital initial ($) |
 | `--exchange` | `binance` | Source des candles |
 | `--leverage` | depuis strategies.yaml | Override leverage de tous les runners |
+| `--params` | — | Override params stratégie : `key=val,key2=val2` |
 | `--kill-switch-pct` | `30.0` | Seuil kill switch (%) |
 | `--kill-switch-window` | `24` | Fenêtre kill switch (heures) |
 | `--json` | false | Sortie JSON |

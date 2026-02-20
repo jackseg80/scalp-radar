@@ -203,6 +203,10 @@ async def main(args: argparse.Namespace) -> None:
         multi_strategies = _parse_multi_strategies(args.strategies)
         strategy_label = "+".join(s for s, _ in multi_strategies)
 
+    # Auto-label si --params sans --label explicite
+    if getattr(args, "params", None) and not args.label:
+        args.label = f"{strategy_label}_{args.params.replace(',', '_').replace('=', '')}"
+
     assets = args.assets.split(",") if args.assets else None
 
     # Override leverage dans la config (sans toucher au YAML)
@@ -218,6 +222,39 @@ async def main(args: argparse.Namespace) -> None:
                 strat_cfg.leverage = args.leverage
         print(f"  Leverage override   : {args.leverage}x")
 
+    # Override params stratégie (sans toucher au YAML)
+    if args.params:
+        params_override: dict[str, int | float | str] = {}
+        for item in args.params.split(","):
+            key, val_str = item.strip().split("=", 1)
+            try:
+                val: int | float | str = int(val_str)
+            except ValueError:
+                try:
+                    val = float(val_str)
+                except ValueError:
+                    val = val_str
+            params_override[key.strip()] = val
+
+        strat_names = list({s for s, _ in multi_strategies}) if multi_strategies else [args.strategy]
+        for sname in strat_names:
+            strat_cfg = getattr(config.strategies, sname, None)
+            if strat_cfg is None:
+                continue
+            for k, v in params_override.items():
+                if hasattr(strat_cfg, k):
+                    setattr(strat_cfg, k, v)
+                else:
+                    logger.warning("Param '{}' inconnu pour {}, ignoré", k, sname)
+            # Patcher aussi les per_asset (sinon per_asset écrase l'override)
+            if hasattr(strat_cfg, "per_asset"):
+                for asset_params in strat_cfg.per_asset.values():
+                    for k, v in params_override.items():
+                        if k in asset_params or hasattr(strat_cfg, k):
+                            asset_params[k] = v
+
+        print(f"  Params override     : {params_override}")
+
     # Résoudre --days : "auto" ou nombre
     if args.days == "auto":
         common_days, detail = await _detect_max_days(
@@ -231,9 +268,9 @@ async def main(args: argparse.Namespace) -> None:
             min_days = min(detail.values()) if detail else 0
             print("\n  Auto-détection historique :")
             for sym, d in sorted(detail.items(), key=lambda x: x[1]):
-                marker = " ← goulot" if d == min_days and d > 0 else ""
+                marker = " <- goulot" if d == min_days and d > 0 else ""
                 if d == 0:
-                    marker = " ← ABSENT"
+                    marker = " <- ABSENT"
                 print(f"    {sym:15s} : {d:5d} jours{marker}")
             print(f"  → Période commune : {common_days} jours\n")
         else:
@@ -385,6 +422,12 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Override leverage pour tous les runners (défaut: depuis strategies.yaml)",
+    )
+    parser.add_argument(
+        "--params",
+        type=str,
+        default=None,
+        help="Override params stratégie (ex: 'max_hold_candles=48,sl_percent=15')",
     )
 
     args = parser.parse_args()

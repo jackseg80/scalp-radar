@@ -2271,10 +2271,37 @@ Suppression de deux pages frontend obsolètes sans valeur ajoutée.
 
 ---
 
+### Hotfix WFO unhashable + --resume optimize (20 février 2026)
+
+**Contexte** : WFO `grid_range_atr --all-symbols` crashait avec `unhashable type: 'list'`
+sur toutes les fenêtres. Le paramètre `sides` dans `param_grids.yaml` est défini comme une
+liste de listes (`["long", "short"]`, `["long"]`, `["short"]`), qui sont non-hashables.
+
+**Corrections `walk_forward.py`** :
+
+- `_fine_grid_around_top` : `neighbors.add(values[ni])` et `fine_combos.add(combo_tuple)` — introduit `_to_hashable`/`_from_hashable` pour convertir liste↔tuple autour des opérations set
+- `_median_params` : `Counter(values)` — même fix pour le calcul du mode sur les valeurs non-numériques
+- `_run_sequential` ligne groupe indicateurs — fix défensif `_to_hashable` sur les clés de groupe (si un indicateur-key était une liste un jour)
+
+**Améliorations `scripts/optimize.py`** :
+
+- `--resume` : skippe les assets déjà en DB (`is_latest=1`) pour la stratégie demandée. Relancer `grid_range_atr --all-symbols --resume` après un crash reprend uniquement les assets restants.
+- `_get_done_assets(strategy, db_path)` : requête SQLite directe, silencieuse sur erreur.
+- Dry-run enrichi : affiche les assets skippés vs à faire quand `--resume` est actif.
+
+**Améliorations `scripts/portfolio_backtest.py`** :
+
+- `--params` : override paramètres stratégie en CLI sans toucher au YAML (ex: `--params max_hold_candles=48,sl_percent=15`). Propagé aussi dans les `per_asset` overrides.
+- Auto-label depuis `--params` si `--label` absent.
+
+**Tests** : 10 nouveaux (5 `test_optimize_resume.py` + 5 `test_portfolio_params.py`) → **1507 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
-- **1497 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc**
+- **1507 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

@@ -133,6 +133,20 @@ def _latin_hypercube_sample(
     return [grid[i] for i in sorted(indices)]
 
 
+def _to_hashable(v: Any) -> Any:
+    """Convertit une valeur en forme hashable (liste → tuple)."""
+    if isinstance(v, list):
+        return tuple(v)
+    return v
+
+
+def _from_hashable(v: Any) -> Any:
+    """Reconvertit une valeur hashable en forme originale (tuple → liste)."""
+    if isinstance(v, tuple):
+        return list(v)
+    return v
+
+
 def _fine_grid_around_top(
     top_params: list[dict[str, Any]],
     full_grid_values: dict[str, list],
@@ -140,6 +154,7 @@ def _fine_grid_around_top(
     """Génère un grid fin autour des top N combinaisons.
 
     Pour chaque paramètre de chaque top combo, explore ±1 step dans le grid.
+    Supporte les paramètres non hashables (ex: sides = ["long", "short"]).
     """
     fine_combos: set[tuple] = set()
     sorted_keys = sorted(full_grid_values.keys())
@@ -151,21 +166,24 @@ def _fine_grid_around_top(
             if current_val not in values:
                 continue
             idx = values.index(current_val)
-            # ±1 step
-            neighbors = set()
+            # ±1 step — utiliser des valeurs hashables dans le set
+            neighbors: set = set()
             for offset in [-1, 0, 1]:
                 ni = idx + offset
                 if 0 <= ni < len(values):
-                    neighbors.add(values[ni])
+                    neighbors.add(_to_hashable(values[ni]))
 
             # Construire les combos voisines pour ce paramètre
             for neighbor_val in neighbors:
                 combo = dict(params)
-                combo[key] = neighbor_val
-                combo_tuple = tuple(combo[k] for k in sorted_keys)
+                combo[key] = _from_hashable(neighbor_val)
+                combo_tuple = tuple(_to_hashable(combo[k]) for k in sorted_keys)
                 fine_combos.add(combo_tuple)
 
-    return [dict(zip(sorted_keys, combo)) for combo in fine_combos]
+    return [
+        dict(zip(sorted_keys, [_from_hashable(v) for v in combo]))
+        for combo in fine_combos
+    ]
 
 
 def _median_params(
@@ -200,8 +218,10 @@ def _median_params(
                 result[key] = median_val
         else:
             # Non-numérique : mode (valeur la plus fréquente)
+            # Utiliser _to_hashable pour supporter les listes (ex: sides)
             from collections import Counter
-            result[key] = Counter(values).most_common(1)[0][0]
+            counts = Counter(_to_hashable(v) for v in values)
+            result[key] = _from_hashable(counts.most_common(1)[0][0])
 
     return result
 
@@ -1244,7 +1264,7 @@ class WalkForwardOptimizer:
         # Grouper les combos par paramètres indicateurs
         groups: dict[tuple, list[dict[str, Any]]] = {}
         for params in grid:
-            key = tuple(params.get(k) for k in indicator_keys) if indicator_keys else ()
+            key = tuple(_to_hashable(params.get(k)) for k in indicator_keys) if indicator_keys else ()
             groups.setdefault(key, []).append(params)
 
         n_groups = len(groups)
