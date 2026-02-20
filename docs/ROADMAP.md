@@ -2222,10 +2222,37 @@ Phase 5: Scaling Stratégies     ✅
 
 ---
 
+### Sprint Time-Based Stop Loss (`max_hold_candles`) ✅
+
+**Problème** : Les stratégies grid mean-reversion (`grid_atr`, `grid_boltrend`) gardent les positions ouvertes indéfiniment en l'absence de rebond, jusqu'au SL global ou kill switch. Pendant ce temps, elles accumulent du funding (toutes les 8h) et immobilisent du capital.
+
+**Solution** : Paramètre `max_hold_candles` (défaut 0 = désactivé). Si la position est ouverte depuis >= X candles ET en perte (unrealized PnL < 0), fermeture avec exit_reason `"time_stop"`. Priorité : TP > SL > time_stop.
+
+**Fichiers modifiés** :
+
+| Fichier | Changement |
+|---------|-----------|
+| `backend/core/config.py` | `max_hold_candles: int = Field(default=0, ge=0)` dans GridATRConfig et GridBolTrendConfig |
+| `backend/strategies/grid_atr.py` | time_stop dans `should_close_all()` + `get_params()` |
+| `backend/strategies/grid_boltrend.py` | time_stop dans `should_close_all()` (entre SL et TP inverse) + `get_params()` |
+| `backend/optimization/fast_multi_backtest.py` | `_simulate_grid_common()` (first_entry_idx), `_simulate_grid_atr()` wrapper, `_simulate_grid_boltrend()` (breakout_candle_idx) |
+| `tests/test_time_stop.py` | **28 tests** (strategy layer, fast engine, config, parité) |
+
+**Détails techniques** :
+- Comptage par candles (pas par temps) dans le fast engine (`i - first_entry_idx`)
+- Comptage par timestamp dans la strategy layer (`(ctx.timestamp - first_entry).total_seconds() / tf_secs`)
+- Fees time_stop = taker + slippage (fermeture marché forcée, comme SL)
+- Backward compatible : `max_hold_candles=0` = désactivé, aucun impact sur les autres stratégies
+- Pas dans `param_grids.yaml` — A/B test séparé prévu
+
+**Tests** : 1497 passants (+28 nouveaux, 0 régression)
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
-- **1469 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19**
+- **1497 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

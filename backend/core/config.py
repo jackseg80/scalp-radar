@@ -257,6 +257,7 @@ class GridATRConfig(BaseModel):
     sides: list[str] = Field(default=["long"])
     leverage: int = Field(default=6, ge=1, le=20)
     weight: float = Field(default=0.20, ge=0, le=1)
+    max_hold_candles: int = Field(default=0, ge=0)
     per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:
@@ -388,6 +389,7 @@ class GridBolTrendConfig(BaseModel):
     sides: list[str] = Field(default=["long", "short"])
     leverage: int = Field(default=6, ge=1, le=20)
     weight: float = Field(default=0.20, ge=0, le=1)
+    max_hold_candles: int = Field(default=0, ge=0)
     per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:

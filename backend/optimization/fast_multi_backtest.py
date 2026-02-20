@@ -139,6 +139,7 @@ def _simulate_grid_common(
     directions: np.ndarray | None = None,
     trail_mult: float = 0.0,
     trail_atr_arr: np.ndarray | None = None,
+    max_hold_candles: int = 0,
 ) -> tuple[list[float], list[float], float]:
     """Boucle chaude unifiée pour toutes les stratégies grid/DCA.
 
@@ -172,6 +173,7 @@ def _simulate_grid_common(
     # Trailing stop state
     hwm = 0.0  # High Water Mark (LONG) ou Low Water Mark (SHORT)
     neutral_zone = False
+    first_entry_idx = -1  # candle index de la première ouverture du cycle
 
     # Funding settlement mask (00:00, 08:00, 16:00 UTC)
     funding_rates = cache.funding_rates_1h
@@ -205,6 +207,7 @@ def _simulate_grid_common(
                     capital += pnl
                     positions = []
                     hwm = 0.0
+                    first_entry_idx = -1
                 last_dir = cur_dir_int
                 direction = cur_dir_int  # Override le scalar pour TP/SL et entry
 
@@ -293,8 +296,20 @@ def _simulate_grid_common(
                     exit_reason = "tp_global"
                     exit_price = tp_price
 
+            # Time-based stop loss
+            if exit_reason is None and max_hold_candles > 0 and first_entry_idx >= 0:
+                candles_held = i - first_entry_idx
+                if candles_held >= max_hold_candles:
+                    if direction == 1:
+                        unrealized = (cache.closes[i] - avg_entry) * total_qty
+                    else:
+                        unrealized = (avg_entry - cache.closes[i]) * total_qty
+                    if unrealized < 0:
+                        exit_reason = "time_stop"
+                        exit_price = cache.closes[i]
+
             if exit_reason is not None:
-                # trail_stop et sl_global → taker fee + slippage
+                # trail_stop, sl_global, time_stop → taker fee + slippage
                 # tp_global → maker fee, pas de slippage
                 if exit_reason == "tp_global":
                     fee = maker_fee
@@ -310,6 +325,7 @@ def _simulate_grid_common(
                 capital += pnl
                 positions = []
                 hwm = 0.0
+                first_entry_idx = -1
                 continue
 
         # 2. Funding costs aux settlements 8h
@@ -354,6 +370,8 @@ def _simulate_grid_common(
                         continue
                     entry_fee = qty * ep * taker_fee
                     positions.append((lvl, ep, qty, entry_fee))
+                    if len(positions) == 1:
+                        first_entry_idx = i
                     # Init HWM à la première ouverture (trailing stop)
                     if trail_mult > 0 and hwm == 0.0:
                         if direction == 1:
@@ -873,6 +891,8 @@ def _simulate_grid_boltrend(
     positions: list[tuple[int, float, float, float]] = []
     entry_levels: list[float] = []  # prix d'entrée fixés au breakout
     direction = 0  # 0=inactif, 1=LONG, -1=SHORT
+    breakout_candle_idx = -1  # candle index du breakout (= première entrée possible)
+    max_hold = params.get("max_hold_candles", 0)
 
     # Start index : besoin de SMA long terme valide
     start_idx = max(bol_window, long_ma_window) + 1
@@ -923,8 +943,21 @@ def _simulate_grid_boltrend(
                 exit_reason = "signal_exit"
                 exit_price = close_i  # clôture au prix de marché (close), pas la SMA
 
+            # Time-based stop loss
+            if exit_reason is None and max_hold > 0 and breakout_candle_idx >= 0:
+                candles_held = i - breakout_candle_idx
+                if candles_held >= max_hold:
+                    total_qty_b = sum(p[2] for p in positions)
+                    if direction == 1:
+                        unrealized_b = (close_i - avg_entry) * total_qty_b
+                    else:
+                        unrealized_b = (avg_entry - close_i) * total_qty_b
+                    if unrealized_b < 0:
+                        exit_reason = "time_stop"
+                        exit_price = close_i
+
             if exit_reason is not None:
-                # signal_exit = clôture marché (taker fee + slippage), cohérent avec event-driven
+                # signal_exit, sl_global, time_stop = clôture marché (taker fee + slippage)
                 fee = taker_fee
                 slip = slippage_pct
 
@@ -936,6 +969,7 @@ def _simulate_grid_boltrend(
                 positions = []
                 entry_levels = []
                 direction = 0
+                breakout_candle_idx = -1
                 continue
 
         # === 2. Funding costs aux settlements 8h ===
@@ -1035,6 +1069,7 @@ def _simulate_grid_boltrend(
                     if qty > 0:
                         entry_fee = qty * ep0 * taker_fee
                         positions.append((0, ep0, qty, entry_fee))
+                        breakout_candle_idx = i
 
     # Force close fin de données
     if positions:
@@ -1141,6 +1176,7 @@ def _simulate_grid_atr(
     entry_prices = _build_entry_prices("grid_atr", cache, params, num_levels, direction)
     return _simulate_grid_common(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct, direction,
+        max_hold_candles=params.get("max_hold_candles", 0),
     )
 
 
