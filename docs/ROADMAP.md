@@ -2447,10 +2447,32 @@ Résultat : `buffer[-1].close` était figé jusqu'à la minute suivante → l'ex
 
 ---
 
+### Hotfix DataEngine Monitoring Per-Symbol (20 février 2026)
+
+**Problème** : le heartbeat global vérifiait `_last_candle_received` (rafraîchi par N'IMPORTE QUEL symbol).
+On pouvait avoir 21 symbols morts et 1 vivant → heartbeat OK. De plus, les tasks `watch_SYMBOL` pouvaient
+mourir silencieusement sans aucune alerte.
+
+**Fix** :
+
+- `DataEngine.__init__` : `_last_update_per_symbol: dict[str, datetime]`, `_heartbeat_tick: int`
+- `_on_candle_received()` : met à jour `_last_update_per_symbol[symbol]` ; log INFO si retour après silence > 300s
+- `_heartbeat_loop()` enrichi (4 niveaux) :
+  - Chaque minute : silence global → full_reconnect (inchangé)
+  - Chaque minute : `restart_dead_tasks()` — relance les tasks watch_ mortes
+  - Toutes les 5 min : détecte symbols sans données (absent ou > 300s) ; alerte Telegram si > 3 stale
+  - Toutes les 15 min : log INFO `X/Y symbols actifs, Z candles en buffer`
+- `backend/api/data_routes.py` (nouveau) : `GET /data/status` — statut par symbol (last_update_ago_s, ok/stale)
+- `server.py` : enregistrement `data_router`
+
+**Tests** : 12 nouveaux (6 per-symbol dans `test_dataengine_heartbeat.py` + 6 endpoint dans `test_data_routes.py`) → **1550 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
-- **1538 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update**
+- **1550 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
@@ -2611,7 +2633,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 1538 passants, 0 régression
+- **Tests** : 1550 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

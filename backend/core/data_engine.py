@@ -139,6 +139,10 @@ class DataEngine:
         self._last_candle_received: float = time.time()
         self._heartbeat_interval: int = 300  # 5 minutes
         self._heartbeat_task: asyncio.Task | None = None
+        self._heartbeat_tick: int = 0  # incrémenté à chaque cycle 60s
+
+        # Monitoring per-symbol : timestamp de la dernière candle reçue
+        self._last_update_per_symbol: dict[str, datetime] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -384,16 +388,21 @@ class DataEngine:
     # ─── HEARTBEAT ──────────────────────────────────────────────────────────
 
     async def _heartbeat_loop(self) -> None:
-        """Vérifie que des candles sont reçues toutes les minutes.
+        """Vérifie l'état du DataEngine toutes les minutes.
 
-        Si aucune candle depuis _heartbeat_interval secondes (5 min),
-        déclenche un full_reconnect et envoie une alerte Telegram.
+        - Chaque minute : check silence global > 5 min → full_reconnect
+        - Chaque minute : relance les tasks watch_ mortes
+        - Toutes les 5 min : détecte les symbols sans données (stale per-symbol)
+        - Toutes les 15 min : log résumé actif/total + nb candles en buffer
         """
         while self._running:
             try:
-                await asyncio.sleep(60)  # check toutes les minutes
+                await asyncio.sleep(60)
+                self._heartbeat_tick += 1
                 elapsed = time.time() - self._last_candle_received
+                now_dt = datetime.now(tz=timezone.utc)
 
+                # ── 1. Silence global → full_reconnect ──
                 if elapsed > self._heartbeat_interval:
                     logger.warning(
                         "DataEngine: aucune candle depuis {:.0f}s — lancement full_reconnect",
@@ -411,7 +420,7 @@ class DataEngine:
                             )
                     try:
                         await self.full_reconnect()
-                        self._last_candle_received = time.time()  # reset après reconnect
+                        self._last_candle_received = time.time()
                         logger.info("DataEngine: heartbeat — reconnexion OK")
                     except Exception as e:
                         logger.error("DataEngine: full_reconnect échoué: {}", e)
@@ -419,6 +428,59 @@ class DataEngine:
                     logger.debug(
                         "DataEngine: heartbeat OK — dernière candle il y a {:.0f}s", elapsed
                     )
+
+                # ── 2. Relance des tasks watch_ mortes (chaque minute) ──
+                try:
+                    restarted = await self.restart_dead_tasks()
+                    if restarted:
+                        logger.warning(
+                            "DataEngine: heartbeat a relancé {} task(s) morte(s)", restarted
+                        )
+                except Exception as e:
+                    logger.warning("DataEngine: erreur restart_dead_tasks: {}", e)
+
+                # ── 3. Stale per-symbol (toutes les 5 min) ──
+                if self._heartbeat_tick % 5 == 0:
+                    stale = [
+                        sym for sym in self.get_all_symbols()
+                        if (
+                            sym not in self._last_update_per_symbol
+                            or (now_dt - self._last_update_per_symbol[sym]).total_seconds() > 300
+                        )
+                    ]
+                    if stale:
+                        logger.warning(
+                            "DataEngine: {} symbol(s) sans données depuis 5min: {}",
+                            len(stale), ", ".join(stale),
+                        )
+                        if self._notifier and len(stale) > 3:
+                            try:
+                                await self._notifier.notify_anomaly(
+                                    AnomalyType.DATA_STALE,
+                                    f"{len(stale)} symbols sans données: {', '.join(stale[:5])}",
+                                )
+                            except Exception as notif_err:
+                                logger.warning(
+                                    "DataEngine: erreur alerte stale symbols: {}", notif_err
+                                )
+
+                # ── 4. Log résumé toutes les 15 min ──
+                if self._heartbeat_tick % 15 == 0:
+                    all_syms = self.get_all_symbols()
+                    active = sum(
+                        1 for sym in all_syms
+                        if sym in self._last_update_per_symbol
+                        and (now_dt - self._last_update_per_symbol[sym]).total_seconds() < 120
+                    )
+                    total_candles = sum(
+                        len(bufs) for sym_bufs in self._buffers.values()
+                        for bufs in sym_bufs.values()
+                    )
+                    logger.info(
+                        "DataEngine: {}/{} symbols actifs, {} candles en buffer",
+                        active, len(all_syms), total_candles,
+                    )
+
             except asyncio.CancelledError:
                 break
 
@@ -581,8 +643,20 @@ class DataEngine:
 
         # Freshness : tout message WS valide rafraîchit le timestamp
         # (même si la candle est un doublon = mise à jour de la candle en cours)
-        self._last_update = datetime.now(tz=timezone.utc)
+        now_dt = datetime.now(tz=timezone.utc)
+        self._last_update = now_dt
         self._last_candle_received = time.time()
+
+        # Tracking per-symbol + log si le symbol revient après un silence
+        prev_sym_update = self._last_update_per_symbol.get(symbol)
+        if prev_sym_update is not None:
+            silence_s = (now_dt - prev_sym_update).total_seconds()
+            if silence_s > 300:
+                logger.info(
+                    "DataEngine: {} de retour après {:.0f}s de silence",
+                    symbol, silence_s,
+                )
+        self._last_update_per_symbol[symbol] = now_dt
 
         buffer = self._buffers[symbol][timeframe_str]
 

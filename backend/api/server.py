@@ -19,6 +19,7 @@ from backend.alerts.notifier import Notifier
 from backend.alerts.telegram import TelegramClient
 from backend.api.arena_routes import router as arena_router
 from backend.api.conditions_routes import router as conditions_router
+from backend.api.data_routes import router as data_router
 from backend.api.executor_routes import router as executor_router
 from backend.api.health import router as health_router
 from backend.api.journal_routes import router as journal_router
@@ -257,3 +258,4 @@ app.include_router(optimization_router)
 app.include_router(portfolio_router)
 app.include_router(journal_router)
 app.include_router(log_router)
+app.include_router(data_router)

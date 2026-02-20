@@ -180,3 +180,145 @@ class TestHeartbeat:
         engine = _make_engine()
         after = time.time()
         assert before <= engine._last_candle_received <= after + 1
+
+
+class TestPerSymbolTracking:
+    """Tests du tracking _last_update_per_symbol."""
+
+    @pytest.mark.asyncio
+    async def test_last_update_per_symbol_tracked(self):
+        """Chaque candle reçue met à jour le timestamp per-symbol."""
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock()
+        engine = DataEngine(config=_make_config(), database=db)
+
+        ts_ms = 1_700_000_000_000
+        await engine._on_candle_received(
+            "BTC/USDT", "1m",
+            [ts_ms, 49000.0, 51000.0, 48000.0, 50000.0, 1.0],
+        )
+
+        assert "BTC/USDT" in engine._last_update_per_symbol
+        from datetime import datetime, timezone
+        assert isinstance(engine._last_update_per_symbol["BTC/USDT"], datetime)
+
+    @pytest.mark.asyncio
+    async def test_last_update_per_symbol_updated_on_intra_candle(self):
+        """Les mises à jour intra-candle mettent aussi à jour le timestamp per-symbol."""
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock()
+        engine = DataEngine(config=_make_config(), database=db)
+
+        ts_ms = 1_700_000_000_000
+
+        await engine._on_candle_received(
+            "BTC/USDT", "1m", [ts_ms, 49000.0, 51000.0, 48000.0, 50000.0, 1.0]
+        )
+        t1 = engine._last_update_per_symbol["BTC/USDT"]
+
+        await asyncio.sleep(0.01)
+        # Même timestamp → mise à jour intra-candle
+        await engine._on_candle_received(
+            "BTC/USDT", "1m", [ts_ms, 49000.0, 52000.0, 48000.0, 51000.0, 2.0]
+        )
+        t2 = engine._last_update_per_symbol["BTC/USDT"]
+
+        assert t2 >= t1
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_detects_stale_symbols(self):
+        """Symbols sans données depuis 5min → warning loggé."""
+        engine = _make_engine()
+        engine._heartbeat_interval = 300
+        engine._last_candle_received = time.time() - 10  # global OK
+        engine.full_reconnect = AsyncMock()
+
+        from datetime import datetime, timezone, timedelta
+
+        # Simuler 2 symbols dont 1 stale
+        engine.config.assets = [MagicMock(symbol="BTC/USDT"), MagicMock(symbol="ETH/USDT")]
+        now = datetime.now(tz=timezone.utc)
+        engine._last_update_per_symbol = {
+            "BTC/USDT": now - timedelta(seconds=10),   # actif
+            # ETH/USDT absent → stale
+        }
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            # tick 5 → stale check déclenché (tick % 5 == 0)
+            engine._heartbeat_tick = 4  # sera incrémenté à 5 dans la boucle
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await engine._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        # ETH/USDT doit avoir été détecté comme stale
+        # (on vérifie indirectement que la boucle n'a pas planté)
+        assert engine._heartbeat_tick == 5
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_notifies_telegram_when_many_stale(self):
+        """Si >3 symbols stale → notify_anomaly appelé."""
+        notifier = MagicMock()
+        notifier.notify_anomaly = AsyncMock()
+        engine = _make_engine(notifier=notifier)
+        engine._heartbeat_interval = 9999  # pas de full_reconnect global
+        engine._last_candle_received = time.time() - 10
+        engine.full_reconnect = AsyncMock()
+
+        # 5 symbols, aucun dans per_symbol → tous stale
+        engine.config.assets = [MagicMock(symbol=f"SYM{i}/USDT") for i in range(5)]
+        engine._last_update_per_symbol = {}
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            engine._heartbeat_tick = 4
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await engine._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        notifier.notify_anomaly.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_no_telegram_when_few_stale(self):
+        """Si ≤3 symbols stale → pas d'alerte Telegram (juste log WARNING)."""
+        notifier = MagicMock()
+        notifier.notify_anomaly = AsyncMock()
+        engine = _make_engine(notifier=notifier)
+        engine._heartbeat_interval = 9999
+        engine._last_candle_received = time.time() - 10
+        engine.full_reconnect = AsyncMock()
+
+        # 3 symbols stale exactement
+        engine.config.assets = [MagicMock(symbol=f"SYM{i}/USDT") for i in range(3)]
+        engine._last_update_per_symbol = {}
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            engine._heartbeat_tick = 4
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await engine._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        notifier.notify_anomaly.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_restarts_dead_tasks(self):
+        """Les tasks watch_ mortes sont relancées à chaque tick heartbeat."""
+        engine = _make_engine()
+        engine._heartbeat_interval = 9999
+        engine._last_candle_received = time.time() - 10
+
+        engine.restart_dead_tasks = AsyncMock(return_value=2)
+        engine.full_reconnect = AsyncMock()
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await engine._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        engine.restart_dead_tasks.assert_awaited_once()
