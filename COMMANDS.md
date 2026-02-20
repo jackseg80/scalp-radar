@@ -16,6 +16,7 @@ Attention aux quotes : utiliser `"` pour les strings Python, créer un fichier .
 
 > Toutes les commandes suivantes s'exécutent **sur le serveur** (`ssh jack@192.168.1.200`, dans `~/scalp-radar`).
 > Pour le rollback git, la purge état et la désactivation stratégie → voir **§ 18. Rollback d'urgence**.
+> Pour un guide de dépannage complet (symptômes → diagnostic → fix) → voir **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**.
 
 ### Reset Kill Switch Live
 

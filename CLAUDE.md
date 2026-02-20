@@ -22,6 +22,7 @@ and presents results via a real-time dashboard.
   - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Architecture runtime, flux de données, boot/shutdown, persistence
   - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI, requêtes DB, déploiement, méthodologie
   - **IMPORTANT pour Claude Code** : Consulter ce fichier avant de proposer des commandes
+  - **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Guide de dépannage production (symptômes → diagnostic → fix)
 
 ## Developer Profile
 
