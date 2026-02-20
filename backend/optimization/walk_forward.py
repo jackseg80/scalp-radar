@@ -16,7 +16,7 @@ import time
 
 # Désactiver le JIT Python 3.13 (segfaults sur calculs longs)
 os.environ.setdefault("PYTHON_JIT", "0")
-from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
+from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -662,6 +662,7 @@ class WalkForwardOptimizer:
                     bt_config_dict, main_tf, n_workers, metric,
                     extra_data_map=is_extra_data_map,
                     db_path=db_path, exchange=exchange,
+                    cancel_event=cancel_event,
                 )
 
                 # Top 20
@@ -679,6 +680,7 @@ class WalkForwardOptimizer:
                         bt_config_dict, main_tf, n_workers, metric,
                         extra_data_map=is_extra_data_map,
                         db_path=db_path, exchange=exchange,
+                        cancel_event=cancel_event,
                     )
                     all_is_results = coarse_results + fine_results
                 else:
@@ -738,6 +740,7 @@ class WalkForwardOptimizer:
                         bt_config_dict, main_tf, n_workers, metric,
                         extra_data_map=oos_extra_data_map,
                         db_path=db_path, exchange=exchange,
+                        cancel_event=cancel_event,
                     )
 
                     # Index les résultats IS et OOS par params_key
@@ -1013,6 +1016,7 @@ class WalkForwardOptimizer:
         extra_data_map: dict[str, dict[str, Any]] | None = None,
         db_path: str | None = None,
         exchange: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> list[_ISResult]:
         """Lance les backtests avec chaîne de fallback :
 
@@ -1050,6 +1054,7 @@ class WalkForwardOptimizer:
                 grid, candles_serialized, strategy_name, symbol,
                 bt_config_dict, main_tf, n_workers,
                 extra_data_map=extra_data_map,
+                cancel_event=cancel_event,
             )
             # Libérer les candles sérialisées dès que le pool est fini
             del candles_serialized
@@ -1183,13 +1188,15 @@ class WalkForwardOptimizer:
         main_tf: str,
         n_workers: int,
         extra_data_map: dict[str, dict[str, Any]] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> tuple[list[_ISResult], list[dict[str, Any]]]:
-        """Exécution parallèle par lots avec cooldown.
+        """Exécution parallèle par lots avec cooldown et timeout.
 
         Retourne (résultats obtenus, combos restantes non traitées).
-        Si le pool crash, les résultats des lots terminés sont conservés.
+        Si le pool crash ou timeout, les résultats des lots terminés sont conservés.
         """
         batch_size = 20  # 20 tasks par lot
+        batch_timeout = 300  # 5 min max par lot de 20
         total = len(grid)
 
         results: list[_ISResult] = []
@@ -1203,33 +1210,63 @@ class WalkForwardOptimizer:
                 initializer=_init_worker,
                 initargs=(candles_serialized, strategy_name, symbol, bt_config_dict, main_tf, extra_data_map),
                 max_tasks_per_child=50,
-            ) as executor:
+            ) as pool:
                 for batch_idx in range(n_batches):
+                    # Check annulation entre les lots
+                    if cancel_event and cancel_event.is_set():
+                        logger.warning("Pool annulé (cancel_event set) après {} backtests", done_count)
+                        break
+
                     batch_start = batch_idx * batch_size
                     batch = grid[batch_start : batch_start + batch_size]
-                    chunksize = max(1, len(batch) // (n_workers * 2))
 
                     logger.info(
                         "    Lot {}/{} ({} backtests)...",
                         batch_idx + 1, n_batches, len(batch),
                     )
 
-                    for result in executor.map(
-                        _run_single_backtest_worker, batch, chunksize=chunksize,
-                    ):
-                        results.append(result)
-                        done_count += 1
+                    # submit() + as_completed() au lieu de map()
+                    # Permet un timeout par lot et une annulation réactive
+                    futures = {
+                        pool.submit(_run_single_backtest_worker, params): params
+                        for params in batch
+                    }
 
-                        # Log progression toutes les 10 complétions ou fin de lot
-                        if done_count % 10 == 0 or done_count == total:
-                            elapsed = time.monotonic() - t_start
-                            avg_s = elapsed / done_count
-                            remaining = (total - done_count) * avg_s
-                            eta_min, eta_sec = divmod(int(remaining), 60)
-                            logger.info(
-                                "    Pool {}/{} — {:.1f}s/bt — ETA: {}m{:02d}s",
-                                done_count, total, avg_s, eta_min, eta_sec,
-                            )
+                    try:
+                        for future in as_completed(futures, timeout=batch_timeout):
+                            try:
+                                result = future.result()
+                                results.append(result)
+                                done_count += 1
+                            except Exception as exc:
+                                done_count += 1
+                                logger.warning("Backtest worker exception: {}", exc)
+
+                            # Log progression toutes les 10 complétions ou fin de lot
+                            if done_count % 10 == 0 or done_count == total:
+                                elapsed = time.monotonic() - t_start
+                                avg_s = elapsed / done_count
+                                remaining_time = (total - done_count) * avg_s
+                                eta_min, eta_sec = divmod(int(remaining_time), 60)
+                                logger.info(
+                                    "    Pool {}/{} — {:.1f}s/bt — ETA: {}m{:02d}s",
+                                    done_count, total, avg_s, eta_min, eta_sec,
+                                )
+                    except TimeoutError:
+                        # Lot bloqué — annuler les futures restants, passer au fallback
+                        n_pending = sum(1 for f in futures if not f.done())
+                        logger.warning(
+                            "    Lot {}/{} timeout après {}s — {} futures annulés, "
+                            "fallback séquentiel pour le reste",
+                            batch_idx + 1, n_batches, batch_timeout, n_pending,
+                        )
+                        for f in futures:
+                            f.cancel()
+                        break
+
+                    # Cooldown entre lots (anti-surchauffe CPU)
+                    if batch_idx < n_batches - 1:
+                        time.sleep(2)
 
         except (BrokenExecutor, OSError) as exc:
             logger.warning(

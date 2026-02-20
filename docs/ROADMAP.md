@@ -2566,10 +2566,29 @@ si le silence est global. Résultat : un symbol mort reste mort jusqu'à interve
 
 ---
 
+### Hotfix Résilience Explorateur WFO (21 février 2026)
+
+**Problème** : Un backtest WFO qui bloque (deadlock ProcessPool, segfault Numba, surchauffe CPU Windows) gelait indéfiniment le worker loop du JobManager → plus aucun job ne démarrait, le bouton "Annuler" inopérant, l'interface semblait morte.
+
+**3 protections ajoutées** :
+
+1. **Timeout global par job** (`JOB_TIMEOUT_SECONDS = 3600`) — `asyncio.wait_for()` autour de `asyncio.to_thread()`. Si le WFO dépasse 1h → job marqué "failed", `cancel_event` activé, worker loop reprend le job suivant
+2. **Timeout par lot ProcessPool** — remplacement de `executor.map()` (bloque indéfiniment) par `executor.submit()` + `as_completed(timeout=300)`. Lot de 20 backtests > 5 min → futures annulés, fallback séquentiel. Erreurs worker captées individuellement
+3. **Check `cancel_event` entre les lots** — propagé depuis `optimize()` → `_parallel_backtest()` → `_run_pool()` via nouveau paramètre. Arrêt propre si job annulé ou en timeout
+
+**Fichiers modifiés** (2) :
+
+- `backend/optimization/job_manager.py` : `JOB_TIMEOUT_SECONDS`, `asyncio.wait_for()` wrapper, `TimeoutError` handling
+- `backend/optimization/walk_forward.py` : `as_completed` import, `_run_pool()` refactoré (submit + timeout + cancel_event), `_parallel_backtest()` propagation cancel_event
+
+**Tests** : 27 tests existants passent (22 job_manager + 2 WFO intégration + 3 callback), 0 régression → **1558 passants**.
+
+---
+
 ## ÉTAT ACTUEL (21 février 2026)
 
 - **1558 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

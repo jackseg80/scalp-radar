@@ -24,6 +24,9 @@ from backend.optimization import STRATEGY_REGISTRY
 # Limite globale : max pending jobs dans la queue
 MAX_PENDING_JOBS = 5
 
+# Timeout global par job (secondes) — protège le worker loop si un WFO bloque
+JOB_TIMEOUT_SECONDS = 3600  # 1h max par job
+
 
 @dataclass
 class OptimizationJob:
@@ -295,9 +298,19 @@ class JobManager:
             await self._broadcast_progress(job, "running", 0, "Démarrage...")
 
             # Lancer le WFO dans un thread dédié avec son propre event loop
-            result_id = await asyncio.to_thread(
-                self._run_job_wfo_thread, job, cancel_event
-            )
+            # Timeout pour éviter de bloquer le worker loop indéfiniment
+            try:
+                result_id = await asyncio.wait_for(
+                    asyncio.to_thread(self._run_job_wfo_thread, job, cancel_event),
+                    timeout=JOB_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # Signaler au thread de s'arrêter proprement
+                cancel_event.set()
+                raise TimeoutError(
+                    f"Job timeout après {JOB_TIMEOUT_SECONDS}s — "
+                    "le WFO a été interrompu"
+                )
 
             # Marquer le job completed
             duration = time.monotonic() - t_start
