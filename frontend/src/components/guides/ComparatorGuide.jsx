@@ -35,7 +35,7 @@ const SHARED_DATA = [
 ]
 
 // --- Calcul des niveaux Envelope DCA (% fixes) ---
-function computeEnvelopeLevels(dataPoint, { envelopeStart = 0.05, envelopeStep = 0.05, numLevels = 3 } = {}) {
+function computeEnvelopeLevels(dataPoint, { envelopeStart = 0.02, envelopeStep = 0.02, numLevels = 3 } = {}) {
   const levels = []
   for (let i = 0; i < numLevels; i++) {
     const offset = envelopeStart + i * envelopeStep
@@ -114,7 +114,7 @@ const STEPS = [
   },
   {
     title: 'Marche calme : niveaux similaires',
-    desc: "En marche calme (ATR ~ 450$), les deux strategies placent leurs niveaux dans le meme ordre de grandeur. Envelope DCA a des niveaux fixes (5/10/15% sous la SMA). Grid ATR utilise ATR x 2/3/4 qui, avec un ATR bas, donne des ecarts similaires.",
+    desc: "En marche calme (ATR ~ 450$), les deux strategies placent leurs niveaux dans le meme ordre de grandeur. Envelope DCA a des niveaux fixes (2/4/6% sous la SMA). Grid ATR utilise ATR x 2/3/4 qui, avec un ATR bas, donne des ecarts proches.",
     keyInsight: "En marche calme, les deux approches donnent des resultats comparables.",
     showLevels: true,
     showBuys: false,
@@ -270,7 +270,7 @@ export default function ComparatorGuide() {
               </thead>
               <tbody>
                 {[
-                  ['Niveaux', '% fixe (5/10/15%)', 'ATR x mult (adaptatif)'],
+                  ['Niveaux', '% fixe (2/4/6%)', 'ATR x mult (adaptatif)'],
                   ['En marche calme', '~ similaire', '~ similaire'],
                   ['En crash (ATR \u2191)', 'Achete trop tot', 'Achete plus bas'],
                   ['Prix moyen', 'Plus haut', 'Plus bas'],
