@@ -264,6 +264,73 @@ async def cancel_optimization_job(request: Request, job_id: str) -> dict:
     return {"status": "cancelled"}
 
 
+@router.get("/assets-status")
+async def get_assets_status(
+    strategy: str = Query(..., description="Nom de la stratégie"),
+) -> dict:
+    """Retourne tous les assets configurés avec leur statut WFO pour la stratégie.
+
+    Lit assets.yaml pour la liste complète, joint avec optimization_results (is_latest=1).
+
+    Returns:
+        {
+            "assets": [
+                {"symbol": "BTC/USDT", "tested": true,  "grade": "A", "total_score": 92, "result_id": 42},
+                {"symbol": "SOL/USDT", "tested": false, "grade": null, "total_score": null, "result_id": null},
+                ...
+            ]
+        }
+    """
+    import yaml
+    import aiosqlite
+    from pathlib import Path
+
+    # Charger tous les symbols depuis assets.yaml
+    with open(Path("config/assets.yaml"), encoding="utf-8") as f:
+        assets_cfg = yaml.safe_load(f)
+    all_symbols = sorted(a["symbol"] for a in assets_cfg.get("assets", []))
+
+    # Charger les résultats WFO is_latest=1 pour cette stratégie
+    db_path = _get_db_path()
+    wfo_by_symbol: dict = {}
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT asset, grade, total_score, id
+               FROM optimization_results
+               WHERE strategy_name = ? AND is_latest = 1""",
+            (strategy,),
+        )
+        for row in await cursor.fetchall():
+            wfo_by_symbol[row["asset"]] = {
+                "grade": row["grade"],
+                "total_score": row["total_score"],
+                "result_id": row["id"],
+            }
+
+    assets_out = []
+    for symbol in all_symbols:
+        wfo = wfo_by_symbol.get(symbol)
+        if wfo:
+            assets_out.append({
+                "symbol": symbol,
+                "tested": True,
+                "grade": wfo["grade"],
+                "total_score": wfo["total_score"],
+                "result_id": wfo["result_id"],
+            })
+        else:
+            assets_out.append({
+                "symbol": symbol,
+                "tested": False,
+                "grade": None,
+                "total_score": None,
+                "result_id": None,
+            })
+
+    return {"assets": assets_out}
+
+
 @router.get("/strategies")
 async def get_optimizable_strategies() -> dict:
     """Retourne la liste des stratégies optimisables (celles qui ont un param_grid).

@@ -25,7 +25,8 @@ const STATUS_COLORS = {
 export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalStrategy }) {
   // États persistés (sélections utilisateur)
   const [strategy, setStrategy] = usePersistedState('explorer-strategy', '')
-  const [asset, setAsset] = usePersistedState('explorer-asset', '')
+  const [viewAsset, setViewAsset] = usePersistedState('explorer-view-asset', '')     // asset heatmap
+  const [selectedAssets, setSelectedAssets] = usePersistedState('explorer-wfo-assets', [])  // assets WFO
   const [paramsOverride, setParamsOverride] = usePersistedState('explorer-params', {})
   const [activeParamsArray, setActiveParamsArray] = usePersistedState('explorer-active-params', [])
   const activeParams = useMemo(() => new Set(activeParamsArray), [activeParamsArray])
@@ -63,8 +64,8 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
   // Stratégies disponibles (chargées dynamiquement depuis le backend)
   const [strategies, setStrategies] = useState([])
 
-  // Assets disponibles (chargés dynamiquement depuis les résultats d'optimisation)
-  const [assets, setAssets] = useState([])
+  // Assets disponibles avec leur statut WFO pour la stratégie sélectionnée
+  const [assetsStatus, setAssetsStatus] = useState([])  // [{symbol, tested, grade, total_score}]
 
   // Métriques disponibles (Sprint 14b : nouvelles métriques combo_results)
   const metrics = [
@@ -91,25 +92,17 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
     fetchStrategies()
   }, [])
 
-  // Charger les assets dynamiquement depuis les résultats d'optimisation
+  // Charger les assets depuis assets.yaml + statut WFO quand la stratégie change
   useEffect(() => {
-    const fetchAssets = async () => {
-      try {
-        const resp = await fetch('/api/optimization/results?limit=500&latest_only=false')
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-        const data = await resp.json()
-        const uniqueAssets = [...new Set((data.results || []).map(r => r.asset))].sort()
-        setAssets(uniqueAssets)
-        // Reset sélection si l'asset actuel n'est plus dans la liste
-        if (asset && uniqueAssets.length > 0 && !uniqueAssets.includes(asset)) {
-          setAsset('')
-        }
-      } catch (err) {
-        console.error('Erreur fetch assets:', err)
-      }
+    if (!strategy) {
+      setAssetsStatus([])
+      return
     }
-    fetchAssets()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    fetch(`/api/optimization/assets-status?strategy=${encodeURIComponent(strategy)}`)
+      .then((r) => r.json())
+      .then((data) => setAssetsStatus(data.assets || []))
+      .catch(() => setAssetsStatus([]))
+  }, [strategy])
 
   // Charger la grille de paramètres quand la stratégie change
   useEffect(() => {
@@ -148,7 +141,7 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
 
   // Fonction réutilisable pour charger les runs disponibles
   const fetchAvailableRuns = async (autoSelect = true) => {
-    if (!strategy || !asset) {
+    if (!strategy || !viewAsset) {
       setAvailableRuns([])
       setSelectedRunId(null)
       setComboResults(null)
@@ -158,7 +151,7 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
     try {
       const params = new URLSearchParams({
         strategy,
-        asset,
+        asset: viewAsset,
         latest_only: 'false',
         limit: '20',
       })
@@ -185,30 +178,37 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
       } else if (runs.length > 0) {
         // Fallback : prendre le premier run (trié par score desc)
         setSelectedRunId(runs[0].id)
+      } else {
+        // Aucun run pour cet asset → reset (vide aussi comboResults via useEffect)
+        setSelectedRunId(null)
       }
     } catch (err) {
       console.error('Erreur fetch available runs:', err)
       setAvailableRuns([])
+      setSelectedRunId(null)
     }
   }
 
-  // Sprint 14b : Charger les runs disponibles quand strategy/asset changent
+  // Sprint 14b : Charger les runs disponibles quand strategy/viewAsset changent
   useEffect(() => {
     fetchAvailableRuns()
-  }, [strategy, asset])
+  }, [strategy, viewAsset])
 
-  // Charger la heatmap quand strategy/asset/axisX/axisY/metric/selectedRunId changent
+  // Charger la heatmap quand strategy/viewAsset/axisX/axisY/metric/selectedRunId changent
   useEffect(() => {
-    if (!strategy || !asset || !axisX || !axisY) {
+    if (!strategy || !viewAsset || !axisX || !axisY) {
       setHeatmapData(null)
       return
     }
+
+    // Vider immédiatement pour ne pas afficher l'ancienne heatmap pendant le fetch
+    setHeatmapData(null)
 
     const fetchHeatmap = async () => {
       try {
         const params = new URLSearchParams({
           strategy,
-          asset,
+          asset: viewAsset,
           param_x: axisX,
           param_y: axisY,
           metric,
@@ -230,7 +230,7 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
     }
 
     fetchHeatmap()
-  }, [strategy, asset, axisX, axisY, metric, selectedRunId])
+  }, [strategy, viewAsset, axisX, axisY, metric, selectedRunId])
 
   // Sprint 14b : Charger les combo results quand selectedRunId change
   useEffect(() => {
@@ -295,59 +295,76 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
   }
 
   const handleSubmitJob = async () => {
-    if (!strategy || !asset) {
-      alert('Sélectionner une stratégie et un asset')
+    if (!strategy || selectedAssets.length === 0) {
+      alert('Sélectionner une stratégie et au moins un asset')
       return
     }
 
-    // Vérifier qu'il n'y a pas déjà un job running/pending pour cette combo
-    const alreadyRunning = jobs.some(
-      (j) =>
-        j.strategy_name === strategy &&
-        j.asset === asset &&
-        (j.status === 'pending' || j.status === 'running')
+    // Construire params_override : seulement les params actifs
+    const override = {}
+    activeParams.forEach((paramName) => {
+      if (paramsOverride[paramName] !== undefined) {
+        override[paramName] = paramsOverride[paramName]
+      }
+    })
+    const finalOverride = Object.keys(override).length > 0 ? override : null
+
+    // Filtrer les assets déjà en pending/running
+    const alreadyRunning = selectedAssets.filter((a) =>
+      jobs.some(
+        (j) =>
+          j.strategy_name === strategy &&
+          j.asset === a &&
+          (j.status === 'pending' || j.status === 'running')
+      )
     )
-    if (alreadyRunning) {
-      alert(`Un job pour ${strategy} × ${asset} est déjà en cours`)
+    const toRun = selectedAssets.filter((a) => !alreadyRunning.includes(a))
+
+    if (toRun.length === 0) {
+      alert(`Tous les assets sélectionnés ont déjà un job en cours`)
       return
+    }
+
+    if (alreadyRunning.length > 0) {
+      const names = alreadyRunning.map((a) => a.replace('/USDT', '')).join(', ')
+      // On continue pour les autres, juste une info
+      console.info(`Jobs déjà en cours ignorés : ${names}`)
     }
 
     setLoading(true)
     setError(null)
-    try {
-      // Construire params_override : seulement les params actifs
-      const override = {}
-      activeParams.forEach((paramName) => {
-        if (paramsOverride[paramName] !== undefined) {
-          override[paramName] = paramsOverride[paramName]
+    let submitted = 0
+    const errors = []
+
+    for (const asset of toRun) {
+      try {
+        const resp = await fetch('/api/optimization/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            strategy_name: strategy,
+            asset,
+            params_override: finalOverride,
+          }),
+        })
+        if (resp.ok) {
+          submitted++
+        } else if (resp.status !== 409) {
+          // 409 = doublon détecté côté backend, ignorer silencieusement
+          const err = await resp.json()
+          errors.push(`${asset}: ${err.detail || resp.status}`)
         }
-      })
-
-      // Si aucun param actif → envoyer null (grille complète)
-      const finalOverride = Object.keys(override).length > 0 ? override : null
-
-      const resp = await fetch('/api/optimization/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          strategy_name: strategy,
-          asset,
-          params_override: finalOverride,
-        }),
-      })
-
-      if (!resp.ok) {
-        const err = await resp.json()
-        throw new Error(err.detail || `HTTP ${resp.status}`)
+      } catch (err) {
+        errors.push(`${asset}: ${err.message}`)
       }
+    }
 
-      // Recharger les jobs
-      await fetchJobs()
-    } catch (err) {
-      setError(err.message)
-      alert(`Erreur: ${err.message}`)
-    } finally {
-      setLoading(false)
+    await fetchJobs()
+    setLoading(false)
+
+    if (errors.length > 0) {
+      setError(errors.join('\n'))
+      alert(`${submitted} job(s) lancés, ${errors.length} erreur(s):\n${errors.join('\n')}`)
     }
   }
 
@@ -367,6 +384,28 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
     // Vider params_override et désactiver tous les sliders → grille complète
     setParamsOverride({})
     setActiveParams(new Set())
+  }
+
+  // Helpers sélection assets pour WFO
+  const toggleAssetSelection = (symbol, checked) => {
+    setSelectedAssets((prev) =>
+      checked ? [...prev, symbol] : prev.filter((a) => a !== symbol)
+    )
+  }
+
+  const selectAll = (e) => {
+    e.stopPropagation()
+    setSelectedAssets(assetsStatus.map((a) => a.symbol))
+  }
+
+  const selectUntested = (e) => {
+    e.stopPropagation()
+    setSelectedAssets(assetsStatus.filter((a) => !a.tested).map((a) => a.symbol))
+  }
+
+  const clearAllAssets = (e) => {
+    e.stopPropagation()
+    setSelectedAssets([])
   }
 
   // Toggle activation d'un paramètre
@@ -445,21 +484,47 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
             </select>
           </div>
 
-          <div className="form-group">
-            <label>Asset</label>
-            <select
-              value={asset}
-              onChange={(e) => setAsset(e.target.value)}
-              className="select-input"
-            >
-              <option value="">Sélectionner...</option>
-              {assets.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </div>
+          {strategy && (
+            <div className="form-group">
+              <div className="assets-list-header">
+                <label>Assets</label>
+                <div className="assets-shortcuts">
+                  <button type="button" onClick={selectAll} title="Tout sélectionner">Tout</button>
+                  <button type="button" onClick={selectUntested} title="Sélectionner les non testés">Non testés</button>
+                  <button type="button" onClick={clearAllAssets} title="Tout décocher">Effacer</button>
+                </div>
+              </div>
+              {assetsStatus.length === 0 ? (
+                <p className="assets-empty">Chargement...</p>
+              ) : (
+                <div className="assets-list">
+                  {assetsStatus.map((a) => (
+                    <div
+                      key={a.symbol}
+                      className={[
+                        'asset-row',
+                        viewAsset === a.symbol ? 'view-active' : '',
+                        !a.tested ? 'untested' : '',
+                      ].filter(Boolean).join(' ')}
+                      onClick={() => setViewAsset(a.symbol)}
+                      title={a.tested ? `Grade ${a.grade} — cliquer pour voir la heatmap` : 'Non testé — cliquer pour voir la heatmap'}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedAssets.includes(a.symbol)}
+                        onChange={(e) => toggleAssetSelection(a.symbol, e.target.checked)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <span className="asset-symbol">{a.symbol.replace('/USDT', '')}</span>
+                      <span className={`grade-badge grade-${a.tested ? a.grade : 'none'}`}>
+                        {a.tested ? a.grade : '—'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {availableRuns.length > 0 && (
             <div className="form-group">
@@ -617,10 +682,14 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
           <div className="action-buttons">
             <button
               onClick={handleSubmitJob}
-              disabled={!strategy || !asset || loading || activeJobsCount >= 5}
+              disabled={!strategy || selectedAssets.length === 0 || loading || activeJobsCount >= 5}
               className="btn btn-primary"
             >
-              {loading ? 'Lancement...' : 'Lancer WFO'}
+              {loading
+                ? 'Lancement...'
+                : selectedAssets.length > 0
+                  ? `Lancer WFO (${selectedAssets.length})`
+                  : 'Lancer WFO'}
             </button>
             <button onClick={handleReset} disabled={!paramGrid} className="btn btn-secondary">
               Réinitialiser (grille complète)
@@ -633,20 +702,21 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
 
         {/* Zone centrale : Heatmap */}
         <div className="heatmap-container">
-          {!strategy || !asset ? (
+          {!strategy || !viewAsset ? (
             <div className="empty-state">
-              <p>Sélectionnez une stratégie et un asset pour commencer</p>
+              <p>Sélectionnez une stratégie et cliquez sur un asset pour voir la heatmap</p>
+              {strategy && <p style={{ fontSize: '12px', color: '#666' }}>Cochez des assets puis cliquez sur "Lancer WFO" pour les tester</p>}
             </div>
           ) : !heatmapData || heatmapData.x_values.length === 0 ? (
             <div className="empty-state">
-              <p>Aucun résultat existant pour cette combinaison.</p>
-              <p>Lancez un WFO pour remplir la heatmap.</p>
+              <p>Aucun résultat existant pour {viewAsset}.</p>
+              <p>Cochez cet asset et lancez un WFO pour remplir la heatmap.</p>
             </div>
           ) : (
             <>
               <div className="heatmap-header">
                 <h3>
-                  Heatmap {strategy} × {asset}
+                  Heatmap {strategy} × {viewAsset}
                 </h3>
                 <p className="heatmap-subtitle">
                   Axe X: {axisX} | Axe Y: {axisY} | Métrique: {metric}
@@ -667,7 +737,7 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
             {selectedRun && (
               <ExportButton
                 strategy={strategy}
-                asset={asset}
+                asset={viewAsset}
                 selectedRun={selectedRun}
                 combos={comboResults.combos}
                 regimeAnalysis={comboResults.regime_analysis || null}

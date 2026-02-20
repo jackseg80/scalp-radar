@@ -490,6 +490,130 @@
   gap: 16px;
 }
 
+/* ─── Multi-assets selection ─────────────────────────────────────────────── */
+
+.assets-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.assets-list-header label {
+  margin-bottom: 0;
+}
+
+.assets-shortcuts {
+  display: flex;
+  gap: 4px;
+}
+
+.assets-shortcuts button {
+  font-size: 10px;
+  padding: 2px 7px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #2a2a2a;
+  color: #aaa;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.assets-shortcuts button:hover {
+  background: #333;
+  color: #fff;
+}
+
+.assets-list {
+  max-height: 270px;
+  overflow-y: auto;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #111;
+}
+
+.assets-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.assets-list::-webkit-scrollbar-track {
+  background: #111;
+}
+
+.assets-list::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 2px;
+}
+
+.asset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-bottom: 1px solid #1a1a1a;
+  user-select: none;
+}
+
+.asset-row:last-child {
+  border-bottom: none;
+}
+
+.asset-row:hover {
+  background: #1f1f1f;
+}
+
+.asset-row.view-active {
+  background: #162416;
+  border-left: 2px solid #10b981;
+  padding-left: 6px;
+}
+
+.asset-row.untested {
+  opacity: 0.55;
+}
+
+.asset-row input[type='checkbox'] {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: #10b981;
+}
+
+.asset-symbol {
+  flex: 1;
+  font-size: 12px;
+  color: #ccc;
+  font-weight: 500;
+}
+
+/* Badges grades (Explorer assets + page Recherche) */
+.grade-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  min-width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.grade-A { background: #064e3b; color: #34d399; }
+.grade-B { background: #1e3a5f; color: #60a5fa; }
+.grade-C { background: #451a03; color: #fb923c; }
+.grade-D { background: #3b1515; color: #f87171; }
+.grade-F { background: #1f1f1f; color: #6b7280; }
+.grade-none { background: #1f1f1f; color: #444; }
+
+.assets-empty {
+  font-size: 12px;
+  color: #666;
+  padding: 8px;
+  margin: 0;
+}
+
 /* Responsive : empiler config au-dessus de heatmap en dessous de 1024px */
 @media (max-width: 1024px) {
   .explorer-main {
