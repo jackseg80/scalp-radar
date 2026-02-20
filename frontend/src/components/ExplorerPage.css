@@ -7,11 +7,26 @@
   padding: 16px;
 }
 
-/* Layout principal : Config + Heatmap */
+/* Layout principal : Config + Poignée + Heatmap */
 .explorer-main {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 16px;
+  grid-template-columns: var(--explorer-config-width, 320px) auto 1fr;
+  gap: 0;
+}
+
+.explorer-resize-handle {
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  flex-shrink: 0;
+  border-radius: 3px;
+  margin: 0 5px;
+}
+
+.explorer-resize-handle:hover {
+  background: #10b981;
+  opacity: 0.4;
 }
 
 /* Panel de configuration (gauche) */

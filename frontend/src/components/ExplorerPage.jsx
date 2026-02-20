@@ -3,7 +3,7 @@
  * Sprint 14
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import HeatmapChart from './HeatmapChart'
 import Top10Table from './Top10Table'
 import ScatterChart from './ScatterChart'
@@ -460,10 +460,68 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
     return availableRuns.find((r) => r.id === selectedRunId) || null
   }, [availableRuns, selectedRunId])
 
+  // ─── Panneau config redimensionnable ────────────────────────────────────
+  const CONFIG_MIN = 240
+  const CONFIG_MAX_PCT = 0.5
+  const CONFIG_DEFAULT = 320
+
+  const [configWidth, setConfigWidth] = useState(() => {
+    const saved = localStorage.getItem('explorer-config-width')
+    if (saved) {
+      const n = parseInt(saved, 10)
+      if (n >= CONFIG_MIN && n <= 900) return n
+    }
+    return CONFIG_DEFAULT
+  })
+  const draggingConfig = useRef(false)
+  const explorerMainRef = useRef(null)
+
+  const onConfigResizeMouseDown = useCallback((e) => {
+    e.preventDefault()
+    draggingConfig.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!draggingConfig.current || !explorerMainRef.current) return
+      const rect = explorerMainRef.current.getBoundingClientRect()
+      const newWidth = Math.max(
+        CONFIG_MIN,
+        Math.min(rect.width * CONFIG_MAX_PCT, e.clientX - rect.left)
+      )
+      setConfigWidth(Math.round(newWidth))
+    }
+
+    const onMouseUp = () => {
+      if (draggingConfig.current) {
+        draggingConfig.current = false
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setConfigWidth((prev) => {
+          localStorage.setItem('explorer-config-width', String(prev))
+          return prev
+        })
+      }
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
+
   return (
     <div className="explorer-page">
       {/* Layout Grid : Config (gauche) + Heatmap (centre) */}
-      <div className="explorer-main">
+      <div
+        className="explorer-main"
+        ref={explorerMainRef}
+        style={{ '--explorer-config-width': `${configWidth}px` }}
+      >
         {/* Panel de configuration (gauche) */}
         <aside className="config-panel">
           <h3>Configuration</h3>
@@ -699,6 +757,9 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
             <p className="warning-text">Queue pleine (5 jobs max simultanés)</p>
           )}
         </aside>
+
+        {/* Poignée de redimensionnement */}
+        <div className="explorer-resize-handle" onMouseDown={onConfigResizeMouseDown} />
 
         {/* Zone centrale : Heatmap */}
         <div className="heatmap-container">
