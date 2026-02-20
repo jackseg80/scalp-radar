@@ -1,7 +1,7 @@
 /**
- * GridBolTrendGuide — Tutoriel interactif Grid BolTrend en 8 étapes
- * Données ETH-like avec Bollinger Bands + SMA longue + breakout + DCA fixé
- * Sprint Strategy Lab V2
+ * GridBolTrendGuide — Tutoriel interactif Grid BolTrend en 8 etapes
+ * Donnees ETH-like avec Bollinger Bands + SMA longue + breakout + DCA fixe
+ * Sprint Strategy Lab V2 + V3 (sliders de parametres)
  */
 
 import { useState, useMemo } from 'react'
@@ -10,12 +10,18 @@ import {
   ReferenceLine, ReferenceDot, ResponsiveContainer, Area, Tooltip,
 } from 'recharts'
 
-// ─── Paramètres de la stratégie ───
-const ATR_SPACING_MULT = 1.0
-const NUM_LEVELS = 3
-const SL_PERCENT = 15
+// --- Valeurs par defaut des parametres ---
+const DEFAULTS = {
+  bolStd: 2.0,
+  atrSpacingMult: 1.0,
+  numLevels: 3,
+  slPercent: 15,
+}
 
-// ─── Données brutes du scénario (ETH-like, ~3200$) ───
+// bol_std par defaut utilise pour les donnees brutes (bb_upper/bb_lower calculees avec 2.0)
+const BASE_BOL_STD = 2.0
+
+// --- Donnees brutes du scenario (ETH-like, ~3200$) ---
 
 // Phase attente (prix dans les bandes) + breakout + pullback + DCA
 const BASE_DATA = [
@@ -30,66 +36,80 @@ const BASE_DATA = [
   { t: 7,  label: '8 Jan',  price: 3340, bb_sma: 3235, bb_upper: 3395, bb_lower: 3075, long_ma: 3140, atr: 88 },
 
   // Phase breakout — close > bb_upper ET close > long_ma
-  // prev_close=3340 < prev_upper=3395 ✓, close=3430 > upper=3400 ✓, close=3430 > long_ma=3150 ✓
   { t: 8,  label: '9 Jan',  price: 3430, bb_sma: 3255, bb_upper: 3400, bb_lower: 3110, long_ma: 3150, atr: 95 },
 
-  // Phase pullback + DCA (niveaux fixés au breakout)
-  // Level 0 = 3430 (breakout), Level 1 = 3430 - 95*1.0 = 3335, Level 2 = 3430 - 95*2.0 = 3240
+  // Phase pullback + DCA (niveaux fixes au breakout)
   { t: 9,  label: '10 Jan', price: 3380, bb_sma: 3270, bb_upper: 3420, bb_lower: 3120, long_ma: 3155, atr: 98 },
   { t: 10, label: '11 Jan', price: 3320, bb_sma: 3280, bb_upper: 3430, bb_lower: 3130, long_ma: 3160, atr: 100 },
-  // prix=3320 < Level 1=3335 → ACHAT niveau 1
   { t: 11, label: '12 Jan', price: 3280, bb_sma: 3285, bb_upper: 3435, bb_lower: 3135, long_ma: 3165, atr: 102 },
   { t: 12, label: '13 Jan', price: 3230, bb_sma: 3280, bb_upper: 3430, bb_lower: 3130, long_ma: 3168, atr: 105 },
-  // prix=3230 < Level 2=3240 → ACHAT niveau 2
 ]
 
-// Scénario recovery — TP inversé (close < bb_sma)
+// Scenario recovery — TP inverse (close < bb_sma)
 const RECOVERY_DATA = [
   { t: 13, label: '14 Jan', price: 3350, bb_sma: 3290, bb_upper: 3440, bb_lower: 3140, long_ma: 3172, atr: 100 },
   { t: 14, label: '15 Jan', price: 3420, bb_sma: 3310, bb_upper: 3450, bb_lower: 3170, long_ma: 3178, atr: 95 },
   { t: 15, label: '16 Jan', price: 3380, bb_sma: 3320, bb_upper: 3440, bb_lower: 3200, long_ma: 3182, atr: 90 },
   { t: 16, label: '17 Jan', price: 3300, bb_sma: 3325, bb_upper: 3430, bb_lower: 3220, long_ma: 3185, atr: 88 },
-  // prix=3300 < bb_sma=3325 → TP INVERSÉ
   { t: 17, label: '18 Jan', price: 3280, bb_sma: 3320, bb_upper: 3420, bb_lower: 3220, long_ma: 3185, atr: 85 },
 ]
 
-// Scénario disaster — SL touché
+// Scenario disaster — SL touche
 const DISASTER_DATA = [
   { t: 13, label: '14 Jan', price: 3180, bb_sma: 3275, bb_upper: 3420, bb_lower: 3130, long_ma: 3170, atr: 110 },
   { t: 14, label: '15 Jan', price: 3100, bb_sma: 3260, bb_upper: 3410, bb_lower: 3110, long_ma: 3165, atr: 115 },
   { t: 15, label: '16 Jan', price: 3020, bb_sma: 3240, bb_upper: 3395, bb_lower: 3085, long_ma: 3158, atr: 120 },
   { t: 16, label: '17 Jan', price: 2950, bb_sma: 3215, bb_upper: 3380, bb_lower: 3050, long_ma: 3150, atr: 125 },
   { t: 17, label: '18 Jan', price: 2820, bb_sma: 3185, bb_upper: 3360, bb_lower: 3010, long_ma: 3140, atr: 130 },
-  // avg ≈ 3333, SL = 3333 × 0.85 = 2833 → prix=2820 < SL=2833 → SL TOUCHÉ
 ]
 
-// ─── Le breakout se produit à t=8 ───
-const BREAKOUT_INDEX = 8
-const BREAKOUT_PRICE = BASE_DATA[BREAKOUT_INDEX].price   // 3430
-const BREAKOUT_ATR = BASE_DATA[BREAKOUT_INDEX].atr        // 95
+// --- Recalculer les bandes Bollinger avec un nouveau bol_std ---
+function recalcBands(data, newBolStd) {
+  if (newBolStd === BASE_BOL_STD) return data
+  return data.map(d => {
+    const sigma = (d.bb_upper - d.bb_sma) / BASE_BOL_STD
+    return {
+      ...d,
+      bb_upper: d.bb_sma + newBolStd * sigma,
+      bb_lower: d.bb_sma - newBolStd * sigma,
+    }
+  })
+}
 
-// ─── Niveaux FIXES au breakout ───
-function computeFixedLevels(breakoutPrice, atr) {
+// --- Trouver le breakout dans les donnees (parametrique) ---
+function findBreakoutIndex(data) {
+  for (let i = 1; i < data.length; i++) {
+    if (
+      data[i].price > data[i].bb_upper &&
+      data[i - 1].price <= data[i - 1].bb_upper &&
+      data[i].price > data[i].long_ma
+    ) {
+      return i
+    }
+  }
+  return -1
+}
+
+// --- Niveaux FIXES au breakout (parametrique) ---
+function computeFixedLevels(breakoutPrice, atr, params) {
   const levels = []
-  for (let i = 0; i < NUM_LEVELS; i++) {
+  for (let i = 0; i < params.numLevels; i++) {
     levels.push({
       level: i,
-      price: breakoutPrice - atr * ATR_SPACING_MULT * (i + 1),
+      price: breakoutPrice - atr * params.atrSpacingMult * (i + 1),
     })
   }
   return levels
 }
 
-const FIXED_LEVELS = computeFixedLevels(BREAKOUT_PRICE, BREAKOUT_ATR)
-// Level 0 = breakout (3430), Level 1 = 3335, Level 2 = 3240
-
-// ─── Points d'achat (DCA) ───
-function findBuyPoints(data) {
-  const buys = [{ t: BREAKOUT_INDEX, level: 0, price: BREAKOUT_PRICE }]
+// --- Points d'achat (DCA, parametrique) ---
+function findBuyPoints(data, breakoutIdx, fixedLevels) {
+  if (breakoutIdx < 0) return []
+  const buys = [{ t: breakoutIdx, level: 0, price: data[breakoutIdx].price }]
   const bought = new Set([0])
 
-  for (let i = BREAKOUT_INDEX + 1; i < data.length; i++) {
-    for (const lvl of FIXED_LEVELS) {
+  for (let i = breakoutIdx + 1; i < data.length; i++) {
+    for (const lvl of fixedLevels) {
       if (!bought.has(lvl.level) && data[i].price <= lvl.price && data[i - 1].price > lvl.price) {
         buys.push({ t: data[i].t, level: lvl.level, price: data[i].price })
         bought.add(lvl.level)
@@ -99,9 +119,10 @@ function findBuyPoints(data) {
   return buys
 }
 
-// ─── Point TP inversé (premier close < bb_sma après achats) ───
-function findTpPoint(data) {
-  for (let i = BREAKOUT_INDEX + 2; i < data.length; i++) {
+// --- Point TP inverse (premier close < bb_sma apres achats) ---
+function findTpPoint(data, breakoutIdx) {
+  if (breakoutIdx < 0) return null
+  for (let i = breakoutIdx + 2; i < data.length; i++) {
     if (data[i].price < data[i].bb_sma && data[i - 1].price >= data[i - 1].bb_sma) {
       return { t: data[i].t, price: data[i].price }
     }
@@ -109,131 +130,156 @@ function findTpPoint(data) {
   return null
 }
 
-// ─── Enrichir les données avec niveaux fixes (horizontaux après breakout) ───
-function enrichData(rawData) {
+// --- Enrichir les donnees avec niveaux fixes (horizontaux apres breakout) ---
+function enrichData(rawData, breakoutIdx, fixedLevels, numLevels) {
   return rawData.map(d => {
     const enriched = { ...d }
-    if (d.t >= BREAKOUT_INDEX) {
-      enriched.fixedLevel1 = FIXED_LEVELS[0].price
-      enriched.fixedLevel2 = FIXED_LEVELS[1].price
-      enriched.fixedLevel3 = FIXED_LEVELS[2] ? FIXED_LEVELS[2].price : undefined
+    if (breakoutIdx >= 0 && d.t >= rawData[breakoutIdx]?.t) {
+      for (let i = 0; i < Math.min(numLevels, 5); i++) {
+        enriched[`fixedLevel${i + 1}`] = fixedLevels[i] ? fixedLevels[i].price : undefined
+      }
     }
     return enriched
   })
 }
 
-// ─── Étapes du tutoriel ───
+// --- Etapes du tutoriel ---
 const STEPS = [
   {
     title: 'Le prix et les Bandes de Bollinger',
-    desc: "Les Bandes de Bollinger mesurent la volatilité. La bande haute = SMA + 2 écarts-types, la bande basse = SMA - 2 écarts-types. Quand les bandes s'écartent, le marché est nerveux. Quand elles se resserrent, il est calme.",
-    keyInsight: "Les bandes encadrent ~95% des mouvements de prix. Un franchissement est un événement rare et significatif.",
+    desc: "Les Bandes de Bollinger mesurent la volatilite. La bande haute = SMA + 2 ecarts-types, la bande basse = SMA - 2 ecarts-types. Quand les bandes s'ecartent, le marche est nerveux. Quand elles se resserrent, il est calme.",
+    keyInsight: "Les bandes encadrent ~95% des mouvements de prix. Un franchissement est un evenement rare et significatif.",
     show: { price: true, bb: true, bbSma: true },
   },
   {
     title: 'Le filtre de tendance (SMA longue)',
-    desc: "La SMA 200 (orange) filtre la direction. On n'accepte les breakouts LONG que si le prix est AU-DESSUS de cette SMA longue. Cela évite d'acheter dans une tendance baissière.",
-    keyInsight: "Filtre tendance = filet de sécurité. On ne trade que dans le sens du courant.",
+    desc: "La SMA 200 (orange) filtre la direction. On n'accepte les breakouts LONG que si le prix est AU-DESSUS de cette SMA longue. Cela evite d'acheter dans une tendance baissiere.",
+    keyInsight: "Filtre tendance = filet de securite. On ne trade que dans le sens du courant.",
     show: { price: true, bb: true, bbSma: true, longMa: true },
   },
   {
     title: 'La grille est OFF — En attente',
-    desc: "Contrairement à Grid ATR qui achète en permanence, Grid BolTrend attend. Le prix oscille dans les bandes → pas de signal → pas d'action. Le bot est patient.",
-    keyInsight: "Grid ATR serait déjà en train d'acheter des dips. Grid BolTrend attend un breakout confirmé.",
+    desc: "Contrairement a Grid ATR qui achete en permanence, Grid BolTrend attend. Le prix oscille dans les bandes -> pas de signal -> pas d'action. Le bot est patient.",
+    keyInsight: "Grid ATR serait deja en train d'acheter des dips. Grid BolTrend attend un breakout confirme.",
     show: { price: true, bb: true, bbSma: true, longMa: true },
   },
   {
     title: 'BREAKOUT ! La grille s\'active',
-    desc: "Le prix franchit violemment la bande haute (close > bb_upper) alors qu'il était en-dessous (prev_close < prev_upper). Le filtre tendance est OK (close > SMA longue). Les 4 conditions sont réunies → Level 0 entre au prix du breakout. Les niveaux DCA sont FIXÉS maintenant.",
-    keyInsight: "Les niveaux sont calculés UNE FOIS au breakout : Level k = breakout - k × ATR × spacing. Ils ne bougent plus.",
+    desc: "Le prix franchit violemment la bande haute (close > bb_upper) alors qu'il etait en-dessous (prev_close < prev_upper). Le filtre tendance est OK (close > SMA longue). Les 4 conditions sont reunies -> Level 0 entre au prix du breakout. Les niveaux DCA sont FIXES maintenant.",
+    keyInsight: "Les niveaux sont calcules UNE FOIS au breakout : Level k = breakout - k x ATR x spacing. Ils ne bougent plus.",
     show: { price: true, bb: true, bbSma: true, longMa: true, levels: true, buys: [0], breakout: true },
   },
   {
     title: 'Pullback : DCA en action',
-    desc: "Après un breakout, le pullback est classique. Le prix corrige et touche les niveaux DCA fixés au breakout. Chaque franchissement ouvre une nouvelle position. Le prix moyen baisse à chaque achat.",
-    keyInsight: "Les niveaux ne bougent PAS (fixés au breakout). Contrairement à Grid ATR dont les niveaux s'adaptent à chaque candle.",
-    show: { price: true, bb: true, bbSma: true, longMa: true, levels: true, buys: [0, 1, 2], avgPrice: true },
+    desc: "Apres un breakout, le pullback est classique. Le prix corrige et touche les niveaux DCA fixes au breakout. Chaque franchissement ouvre une nouvelle position. Le prix moyen baisse a chaque achat.",
+    keyInsight: "Les niveaux ne bougent PAS (fixes au breakout). Contrairement a Grid ATR dont les niveaux s'adaptent a chaque candle.",
+    show: { price: true, bb: true, bbSma: true, longMa: true, levels: true, buys: 'all', avgPrice: true },
   },
   {
-    title: 'Happy end : TP inversé',
-    desc: "Le prix remonte mais s'essouffle. Quand il redescend sous la BB SMA (SMA Bollinger), c'est le signal : le breakout est épuisé, retour à la normale. Toutes les positions sont fermées.",
-    keyInsight: "Le TP est INVERSÉ vs Grid ATR. Grid ATR vend quand close > SMA. Grid BolTrend vend quand close < BB SMA.",
-    show: { price: true, bb: true, bbSma: true, longMa: true, levels: true, buys: [0, 1, 2], avgPrice: true, tp: true },
+    title: 'Happy end : TP inverse',
+    desc: "Le prix remonte mais s'essouffle. Quand il redescend sous la BB SMA (SMA Bollinger), c'est le signal : le breakout est epuise, retour a la normale. Toutes les positions sont fermees.",
+    keyInsight: "Le TP est INVERSE vs Grid ATR. Grid ATR vend quand close > SMA. Grid BolTrend vend quand close < BB SMA.",
+    show: { price: true, bb: true, bbSma: true, longMa: true, levels: true, buys: 'all', avgPrice: true, tp: true },
     scenario: 'recovery',
   },
   {
     title: 'La catastrophe : faux breakout',
-    desc: "Scénario alternatif. Le breakout était un piège haussier. Le prix s'effondre sans jamais remonter. Le SL global est touché. Les faux breakouts sont le risque principal de cette stratégie.",
-    keyInsight: "Les faux breakouts sont fréquents. Le SL global protège le capital. C'est pourquoi le sl_percent est crucial.",
-    show: { price: true, bb: true, bbSma: true, longMa: true, levels: true, buys: [0, 1, 2], avgPrice: true, sl: true },
+    desc: "Scenario alternatif. Le breakout etait un piege haussier. Le prix s'effondre sans jamais remonter. Le SL global est touche. Les faux breakouts sont le risque principal de cette strategie.",
+    keyInsight: "Les faux breakouts sont frequents. Le SL global protege le capital. C'est pourquoi le sl_percent est crucial.",
+    show: { price: true, bb: true, bbSma: true, longMa: true, levels: true, buys: 'all', avgPrice: true, sl: true },
     scenario: 'disaster',
   },
   {
     title: 'Grid ATR vs Grid BolTrend',
     desc: null,
-    keyInsight: "Grid ATR = filet de pêche permanent. Grid BolTrend = harpon déclenché sur signal.",
+    keyInsight: "Grid ATR = filet de peche permanent. Grid BolTrend = harpon declenche sur signal.",
     show: { comparison: true },
   },
 ]
 
-// ─── Composant principal ───
+const LEVEL_OPACITIES = [1, 0.7, 0.5, 0.4, 0.35]
+
+// --- Composant principal ---
 export default function GridBolTrendGuide() {
   const [step, setStep] = useState(0)
+  const [params, setParams] = useState(DEFAULTS)
+  const [slidersOpen, setSlidersOpen] = useState(false)
   const currentStep = STEPS[step]
 
-  // Données selon le scénario
-  const fullData = useMemo(() => {
-    if (currentStep.scenario === 'recovery') {
-      return enrichData([...BASE_DATA, ...RECOVERY_DATA])
-    }
-    if (currentStep.scenario === 'disaster') {
-      return enrichData([...BASE_DATA, ...DISASTER_DATA])
-    }
-    return enrichData(BASE_DATA)
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Recalculer les bandes avec le bol_std courant
+  const adjBaseData = useMemo(() => recalcBands(BASE_DATA, params.bolStd), [params.bolStd])
+  const adjRecoveryData = useMemo(() => recalcBands(RECOVERY_DATA, params.bolStd), [params.bolStd])
+  const adjDisasterData = useMemo(() => recalcBands(DISASTER_DATA, params.bolStd), [params.bolStd])
+
+  // Trouver le breakout dans les donnees ajustees
+  const breakoutIdx = useMemo(() => findBreakoutIndex(adjBaseData), [adjBaseData])
+  const noBreakout = breakoutIdx < 0
+
+  const breakoutPrice = noBreakout ? 0 : adjBaseData[breakoutIdx].price
+  const breakoutAtr = noBreakout ? 0 : adjBaseData[breakoutIdx].atr
+
+  // Niveaux fixes au breakout
+  const fixedLevels = useMemo(
+    () => noBreakout ? [] : computeFixedLevels(breakoutPrice, breakoutAtr, params),
+    [breakoutPrice, breakoutAtr, params.atrSpacingMult, params.numLevels, noBreakout] // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  // Resolve buys list (handles 'all' for dynamic num_levels)
+  const buyLevels = currentStep.show.buys === 'all'
+    ? Array.from({ length: params.numLevels }, (_, i) => i)
+    : (currentStep.show.buys || [])
+
+  // Donnees selon le scenario
+  const scenarioData = useMemo(() => {
+    if (currentStep.scenario === 'recovery') return [...adjBaseData, ...adjRecoveryData]
+    if (currentStep.scenario === 'disaster') return [...adjBaseData, ...adjDisasterData]
+    return adjBaseData
+  }, [step, adjBaseData, adjRecoveryData, adjDisasterData]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fullData = useMemo(
+    () => enrichData(scenarioData, breakoutIdx, fixedLevels, params.numLevels),
+    [scenarioData, breakoutIdx, fixedLevels, params.numLevels]
+  )
 
   // Points d'achat
-  const buyPoints = useMemo(() => {
-    const scenario = currentStep.scenario === 'disaster'
-      ? [...BASE_DATA, ...DISASTER_DATA]
-      : currentStep.scenario === 'recovery'
-        ? [...BASE_DATA, ...RECOVERY_DATA]
-        : BASE_DATA
-    return findBuyPoints(scenario)
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+  const buyPoints = useMemo(
+    () => noBreakout ? [] : findBuyPoints(scenarioData, breakoutIdx, fixedLevels),
+    [scenarioData, breakoutIdx, fixedLevels, noBreakout]
+  )
 
-  const visibleBuys = (currentStep.show.buys || [])
+  const visibleBuys = buyLevels
     .map(lvl => buyPoints.find(b => b.level === lvl))
     .filter(Boolean)
 
-  // Prix moyen pondéré
+  // Prix moyen pondere
   const avgPrice = visibleBuys.length > 0
     ? visibleBuys.reduce((s, b) => s + b.price, 0) / visibleBuys.length
     : null
 
   // SL price
-  const slPrice = avgPrice ? avgPrice * (1 - SL_PERCENT / 100) : null
+  const slPrice = avgPrice ? avgPrice * (1 - params.slPercent / 100) : null
 
-  // Point TP inversé
+  // Point TP inverse
   const tpPoint = useMemo(() => {
-    if (!currentStep.show.tp) return null
-    const data = [...BASE_DATA, ...RECOVERY_DATA]
-    return findTpPoint(data)
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!currentStep.show.tp || noBreakout) return null
+    const data = [...adjBaseData, ...adjRecoveryData]
+    return findTpPoint(data, breakoutIdx)
+  }, [step, adjBaseData, adjRecoveryData, breakoutIdx, noBreakout]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Y domain
   const allPrices = fullData.flatMap(d => {
     const vals = [d.price, d.bb_sma, d.bb_upper, d.bb_lower]
-    if (d.fixedLevel1) vals.push(d.fixedLevel1, d.fixedLevel2)
-    if (d.fixedLevel3) vals.push(d.fixedLevel3)
+    for (let i = 1; i <= params.numLevels; i++) {
+      if (d[`fixedLevel${i}`] !== undefined) vals.push(d[`fixedLevel${i}`])
+    }
     return vals
   })
   if (slPrice) allPrices.push(slPrice)
   const yMin = Math.floor(Math.min(...allPrices) / 100) * 100 - 100
   const yMax = Math.ceil(Math.max(...allPrices) / 100) * 100 + 100
 
-  // Chiffres de référence
-  const breakoutPoint = BASE_DATA[BREAKOUT_INDEX]
+  // Chiffres de reference
+  const breakoutPoint = noBreakout ? adjBaseData[8] || adjBaseData[adjBaseData.length - 1] : adjBaseData[breakoutIdx]
 
   // Gain/perte
   let resultText = null
@@ -242,10 +288,15 @@ export default function GridBolTrendGuide() {
     resultText = `Gain : +${gain}% (hors leverage et fees)`
   }
   if (step === 6 && slPrice && avgPrice) {
-    resultText = `Perte : -${SL_PERCENT}% (SL global touché)`
+    resultText = `Perte : -${params.slPercent}% (SL global touche)`
   }
 
-  // Étape comparative (pas de graphique)
+  const isDefault = params.bolStd === DEFAULTS.bolStd
+    && params.atrSpacingMult === DEFAULTS.atrSpacingMult
+    && params.numLevels === DEFAULTS.numLevels
+    && params.slPercent === DEFAULTS.slPercent
+
+  // Etape comparative (pas de graphique)
   if (currentStep.show.comparison) {
     return (
       <div>
@@ -286,29 +337,29 @@ export default function GridBolTrendGuide() {
               title="Grid ATR"
               color="#4da6ff"
               items={[
-                { icon: '✓', text: 'Grille toujours active', color: '#00e68a' },
-                { icon: '✓', text: 'Niveaux recalculés à chaque candle', color: '#00e68a' },
-                { icon: '✓', text: 'TP = retour à la SMA', color: '#00e68a' },
-                { icon: '✓', text: 'Mean reversion', color: '#00e68a' },
-                { icon: '✓', text: 'Excelle en crash + recovery', color: '#00e68a' },
-                { icon: '✗', text: 'Inactif en range serré', color: '#ff4466' },
+                { icon: '\u2713', text: 'Grille toujours active', color: '#00e68a' },
+                { icon: '\u2713', text: 'Niveaux recalcules a chaque candle', color: '#00e68a' },
+                { icon: '\u2713', text: 'TP = retour a la SMA', color: '#00e68a' },
+                { icon: '\u2713', text: 'Mean reversion', color: '#00e68a' },
+                { icon: '\u2713', text: 'Excelle en crash + recovery', color: '#00e68a' },
+                { icon: '\u2717', text: 'Inactif en range serre', color: '#ff4466' },
               ]}
             />
             <ComparisonCard
               title="Grid BolTrend"
               color="#ffc53d"
               items={[
-                { icon: '✓', text: 'Grille OFF par défaut', color: '#00e68a' },
-                { icon: '✓', text: 'Niveaux fixés au breakout', color: '#00e68a' },
-                { icon: '✓', text: 'TP inversé (close < BB SMA)', color: '#00e68a' },
-                { icon: '✓', text: 'Trend following', color: '#00e68a' },
-                { icon: '✓', text: 'Excelle en breakout + pullback', color: '#00e68a' },
-                { icon: '✗', text: 'Faux breakouts = piège', color: '#ff4466' },
+                { icon: '\u2713', text: 'Grille OFF par defaut', color: '#00e68a' },
+                { icon: '\u2713', text: 'Niveaux fixes au breakout', color: '#00e68a' },
+                { icon: '\u2713', text: 'TP inverse (close < BB SMA)', color: '#00e68a' },
+                { icon: '\u2713', text: 'Trend following', color: '#00e68a' },
+                { icon: '\u2713', text: 'Excelle en breakout + pullback', color: '#00e68a' },
+                { icon: '\u2717', text: 'Faux breakouts = piege', color: '#ff4466' },
               ]}
             />
           </div>
 
-          {/* Concept clé */}
+          {/* Concept cle */}
           <div style={{ fontSize: 13, color: '#4da6ff', fontWeight: 600 }}>
             {currentStep.keyInsight}
           </div>
@@ -321,6 +372,15 @@ export default function GridBolTrendGuide() {
     <div>
       {/* Graphique */}
       <div style={{ width: '100%', marginBottom: 16 }}>
+        {noBreakout && currentStep.show.levels && (
+          <div style={{
+            padding: '10px 14px', marginBottom: 8, borderRadius: 6,
+            background: 'rgba(255,197,61,0.1)', border: '1px solid rgba(255,197,61,0.3)',
+            color: '#ffc53d', fontSize: 13,
+          }}>
+            Pas de breakout detecte avec bol_std={params.bolStd.toFixed(1)}. Les bandes sont trop larges pour ce scenario.
+          </div>
+        )}
         <ResponsiveContainer width="100%" height={370}>
           <LineChart data={fullData} margin={{ top: 10, right: 20, bottom: 10, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#222" />
@@ -370,14 +430,23 @@ export default function GridBolTrendGuide() {
               <Line type="monotone" dataKey="long_ma" stroke="#f97316" strokeWidth={1.5} strokeDasharray="8 4" dot={false} name="SMA 200" />
             )}
 
-            {/* Niveaux DCA fixes (horizontaux après breakout) */}
-            {currentStep.show.levels && (
+            {/* Niveaux DCA fixes (horizontaux apres breakout) */}
+            {currentStep.show.levels && !noBreakout && (
               <>
-                <Line type="stepAfter" dataKey="fixedLevel1" stroke="#00e68a" strokeWidth={1} strokeDasharray="4 4" dot={false} name="Niveau 1" connectNulls={false} />
-                <Line type="stepAfter" dataKey="fixedLevel2" stroke="#00e68a" strokeWidth={1} strokeDasharray="4 4" dot={false} name="Niveau 2" opacity={0.7} connectNulls={false} />
-                {NUM_LEVELS >= 3 && (
-                  <Line type="stepAfter" dataKey="fixedLevel3" stroke="#00e68a" strokeWidth={1} strokeDasharray="4 4" dot={false} name="Niveau 3" opacity={0.5} connectNulls={false} />
-                )}
+                {Array.from({ length: params.numLevels }, (_, i) => (
+                  <Line
+                    key={`level-${i}`}
+                    type="stepAfter"
+                    dataKey={`fixedLevel${i + 1}`}
+                    stroke="#00e68a"
+                    strokeWidth={1}
+                    strokeDasharray="4 4"
+                    dot={false}
+                    name={`Niveau ${i + 1}`}
+                    opacity={LEVEL_OPACITIES[i] || 0.3}
+                    connectNulls={false}
+                  />
+                ))}
               </>
             )}
 
@@ -402,10 +471,10 @@ export default function GridBolTrendGuide() {
             )}
 
             {/* Point de breakout */}
-            {currentStep.show.breakout && (
+            {currentStep.show.breakout && !noBreakout && (
               <ReferenceDot
-                x={fullData.find(d => d.t === BREAKOUT_INDEX)?.label}
-                y={BREAKOUT_PRICE}
+                x={fullData.find(d => d.t === adjBaseData[breakoutIdx].t)?.label}
+                y={breakoutPrice}
                 r={8}
                 fill="#ffc53d"
                 stroke="#fff"
@@ -464,7 +533,7 @@ export default function GridBolTrendGuide() {
           {currentStep.desc}
         </p>
 
-        {/* Encadré chiffres */}
+        {/* Encadre chiffres */}
         <div style={{
           background: '#1a1a2a',
           border: '1px solid rgba(77,166,255,0.2)',
@@ -474,13 +543,13 @@ export default function GridBolTrendGuide() {
           gap: 6, fontSize: 12,
         }}>
           <span style={{ color: '#888' }}>BB SMA: <b style={{ color: '#ffc53d' }}>${breakoutPoint.bb_sma}</b></span>
-          <span style={{ color: '#888' }}>BB Upper: <b style={{ color: '#8ab4f8' }}>${breakoutPoint.bb_upper}</b></span>
+          <span style={{ color: '#888' }}>BB Upper: <b style={{ color: '#8ab4f8' }}>${breakoutPoint.bb_upper.toFixed(0)}</b></span>
           <span style={{ color: '#888' }}>SMA 200: <b style={{ color: '#f97316' }}>${breakoutPoint.long_ma}</b></span>
           <span style={{ color: '#888' }}>ATR: <b style={{ color: '#ff8c42' }}>${breakoutPoint.atr}</b></span>
-          {step >= 3 && (
+          {step >= 3 && !noBreakout && (
             <>
-              <span style={{ color: '#888' }}>Breakout: <b style={{ color: '#ffc53d' }}>${BREAKOUT_PRICE}</b></span>
-              {FIXED_LEVELS.map(l => (
+              <span style={{ color: '#888' }}>Breakout: <b style={{ color: '#ffc53d' }}>${breakoutPrice}</b></span>
+              {fixedLevels.map(l => (
                 <span key={l.level} style={{ color: '#888' }}>
                   Niv.{l.level + 1}: <b style={{ color: '#00e68a' }}>${l.price.toFixed(0)}</b>
                 </span>
@@ -495,7 +564,7 @@ export default function GridBolTrendGuide() {
           )}
         </div>
 
-        {/* Résultat gain/perte */}
+        {/* Resultat gain/perte */}
         {resultText && (
           <div style={{
             padding: '8px 12px', borderRadius: 4, marginBottom: 10,
@@ -508,16 +577,123 @@ export default function GridBolTrendGuide() {
           </div>
         )}
 
-        {/* Concept clé */}
+        {/* Concept cle */}
         <div style={{ fontSize: 13, color: '#4da6ff', fontWeight: 600 }}>
           {currentStep.keyInsight}
         </div>
+      </div>
+
+      {/* Panneau sliders collapsible */}
+      <div style={{
+        marginTop: 12,
+        border: '1px solid #333',
+        borderRadius: 8,
+        overflow: 'hidden',
+      }}>
+        <button
+          onClick={() => setSlidersOpen(!slidersOpen)}
+          style={{
+            width: '100%',
+            padding: '10px 16px',
+            background: '#0d1117',
+            border: 'none',
+            color: '#ccc',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>Ajuster les parametres</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {!isDefault && (
+              <span
+                onClick={(e) => { e.stopPropagation(); setParams(DEFAULTS) }}
+                style={{
+                  fontSize: 11, color: '#4da6ff', cursor: 'pointer',
+                  padding: '2px 8px', border: '1px solid #4da6ff33',
+                  borderRadius: 4, background: '#4da6ff11',
+                }}
+              >
+                Reset
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: '#666', transition: 'transform 0.2s', transform: slidersOpen ? 'rotate(180deg)' : 'none' }}>
+              ▼
+            </span>
+          </div>
+        </button>
+
+        {slidersOpen && (
+          <div style={{
+            padding: '12px 16px',
+            background: '#0d1117',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}>
+            <SliderRow
+              label="Bollinger Std"
+              value={params.bolStd}
+              min={1.0} max={3.5} step={0.5}
+              onChange={v => setParams(p => ({ ...p, bolStd: v }))}
+            />
+            <SliderRow
+              label="ATR Spacing"
+              value={params.atrSpacingMult}
+              min={0.5} max={3.0} step={0.5}
+              onChange={v => setParams(p => ({ ...p, atrSpacingMult: v }))}
+            />
+            <SliderRow
+              label="Niveaux DCA"
+              value={params.numLevels}
+              min={1} max={5} step={1}
+              onChange={v => setParams(p => ({ ...p, numLevels: v }))}
+              format={v => `${v}`}
+            />
+            <SliderRow
+              label="Stop Loss %"
+              value={params.slPercent}
+              min={5} max={30} step={5}
+              onChange={v => setParams(p => ({ ...p, slPercent: v }))}
+              format={v => `${v}%`}
+            />
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-// ─── Composants utilitaires ───
+// --- Composants utilitaires ---
+
+function SliderRow({ label, value, min, max, step, onChange, format }) {
+  const display = format ? format(value) : value.toFixed(1)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span style={{ color: '#aaa', fontSize: 12, minWidth: 110, flexShrink: 0 }}>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        style={{
+          flex: 1,
+          height: 4,
+          accentColor: '#4da6ff',
+          cursor: 'pointer',
+        }}
+      />
+      <span style={{ color: '#e8eaed', fontSize: 12, fontWeight: 600, minWidth: 40, textAlign: 'right' }}>
+        {display}
+      </span>
+    </div>
+  )
+}
 
 function NavButton({ dir, step, setStep, total }) {
   const isPrev = dir === 'prev'
@@ -533,7 +709,7 @@ function NavButton({ dir, step, setStep, total }) {
         cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 13,
       }}
     >
-      {isPrev ? '← Précédent' : 'Suivant →'}
+      {isPrev ? '\u2190 Precedent' : 'Suivant \u2192'}
     </button>
   )
 }

@@ -69,7 +69,7 @@ const STRATEGIES = [
     type: 'Mean Reversion',
     direction: 'Long only',
     status: 'replaced',
-    hasGuide: false,
+    hasGuide: true,
     shortDesc: "Ancêtre de grid_atr. Enveloppes à pourcentages fixes autour de la SMA (pas adaptatives).",
     edge: "Concept fondateur du DCA multi-niveaux. Remplacé par grid_atr qui adapte les niveaux à la volatilité.",
     strengths: ['Simple à comprendre', 'Premier Grade B obtenu'],

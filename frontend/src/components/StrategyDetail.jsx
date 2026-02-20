@@ -20,6 +20,7 @@ const GRADE_COLORS = {
 const guideComponents = {
   grid_atr: lazy(() => import('./guides/GridAtrGuide')),
   grid_boltrend: lazy(() => import('./guides/GridBolTrendGuide')),
+  envelope_dca: lazy(() => import('./guides/ComparatorGuide')),
 }
 
 export default function StrategyDetail({ strategyId, onBack, onNavigate, setEvalStrategy }) {
