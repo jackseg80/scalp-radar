@@ -438,11 +438,11 @@ class TestExitAutonomous:
         strategy = _make_strategy(should_close_result=None, tp_price=100.0, sl_price=40.0)
         executor._strategies = {"grid_atr": strategy}
 
-        # DataEngine buffer : candle en cours avec close=101 (au-dessus du TP)
+        # DataEngine buffer : candle 1m en cours avec close=101 (au-dessus du TP)
         candle_mock = MagicMock()
         candle_mock.close = 101.0
         data_engine = MagicMock()
-        data_engine._buffers = {"BTC/USDT": {"1h": [candle_mock]}}
+        data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
         executor._data_engine = data_engine
 
         executor._close_grid_cycle = AsyncMock()
@@ -451,7 +451,7 @@ class TestExitAutonomous:
         executor._close_grid_cycle.assert_called_once()
         event = executor._close_grid_cycle.call_args[0][0]
         assert event.exit_reason == "tp_global"
-        assert event.exit_price == 101.0  # prix temps réel, pas le close papier
+        assert event.exit_price == 101.0  # prix temps réel 1m, pas le close papier 1h
 
     @pytest.mark.asyncio
     async def test_exit_no_false_tp_with_correct_sma(self):
@@ -469,11 +469,11 @@ class TestExitAutonomous:
         strategy = _make_strategy(should_close_result=None, tp_price=100.0, sl_price=40.0)
         executor._strategies = {"grid_atr": strategy}
 
-        # DataEngine buffer : candle en cours avec close=99 (toujours sous le TP)
+        # DataEngine buffer : candle 1m en cours avec close=99 (toujours sous le TP)
         candle_mock = MagicMock()
         candle_mock.close = 99.0
         data_engine = MagicMock()
-        data_engine._buffers = {"BTC/USDT": {"1h": [candle_mock]}}
+        data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
         executor._data_engine = data_engine
 
         executor._close_grid_cycle = AsyncMock()

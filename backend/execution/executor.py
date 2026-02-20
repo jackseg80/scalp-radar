@@ -592,9 +592,13 @@ class Executor:
         current_price = current_close  # fallback : close bougie fermée
         if self._data_engine is not None:
             buffers = getattr(self._data_engine, "_buffers", {})
-            candles_tf = buffers.get(spot_sym, {}).get(strategy_tf, [])
-            if candles_tf:
-                current_price = candles_tf[-1].close
+            symbol_buffers = buffers.get(spot_sym, {})
+            # Lire le timeframe le plus court disponible (prix le plus récent)
+            for tf in ("1m", "5m", "15m", "1h"):
+                tf_candles = symbol_buffers.get(tf, [])
+                if tf_candles:
+                    current_price = tf_candles[-1].close
+                    break
 
         # ── CHECK TP/SL INTRA-CANDLE ──
         tp_price = strategy.get_tp_price(grid_state, tf_indicators)
