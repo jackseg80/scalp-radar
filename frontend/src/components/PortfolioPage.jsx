@@ -313,16 +313,8 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
   // Filtrer les backtests par stratégie
   const filteredBacktests = useMemo(() => {
     if (!selectedStrategy) return backtests
-    const filtered = backtests.filter(b => !b.strategy_name || b.strategy_name === selectedStrategy)
-    return filtered
+    return backtests.filter(b => !b.strategy_name || b.strategy_name === selectedStrategy)
   }, [backtests, selectedStrategy])
-
-  // Si la stratégie sélectionnée n'a aucun run, revenir à 'grid_atr'
-  useEffect(() => {
-    if (backtests.length > 0 && filteredBacktests.length === 0 && selectedStrategy && selectedStrategy !== 'grid_atr') {
-      setSelectedStrategy('grid_atr')
-    }
-  }, [backtests, filteredBacktests.length, selectedStrategy]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Assets disponibles pour la sélection (extraits des presets)
   const allAssets = useMemo(() => {
@@ -552,6 +544,12 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
       {/* ─── Comparaison (pleine largeur) ─── */}
       {compareDetails.length >= 2 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {effectiveCompareIds.size > compareIds.size && baselineRun && (
+            <div className="baseline-notice">
+              <span className="baseline-notice-icon">ℹ</span>
+              Baseline <strong>grid_atr</strong> (Run #{baselineRun.id} — {baselineRun.label || `${baselineRun.period_days}j`}) auto-ajoutée pour comparaison
+            </div>
+          )}
           <div className="compare-section">
             <h4>Comparaison — Equity Curves (% return)</h4>
             <EquityCurveSVG curves={compareCurves} height={280} />

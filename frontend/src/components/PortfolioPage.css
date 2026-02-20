@@ -460,6 +460,24 @@
   margin-left: 6px;
 }
 
+/* Notice baseline auto-ajoutée */
+.baseline-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(107, 114, 128, 0.08);
+  border: 1px solid rgba(107, 114, 128, 0.2);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.baseline-notice-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
   .portfolio-main {
