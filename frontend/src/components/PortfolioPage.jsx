@@ -102,15 +102,6 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
       .catch(() => {})
   }, [])
 
-  // Sync via CustomEvent (EvalBar/ResearchPage -> PortfolioPage)
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.detail) setSelectedStrategy(e.detail)
-    }
-    window.addEventListener('eval-strategy-change', handler)
-    return () => window.removeEventListener('eval-strategy-change', handler)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
   // Config (persisté)
   const [activePreset, setActivePreset] = usePersistedState('portfolio-preset', 'balanced')
   const [capital, setCapital] = usePersistedState('portfolio-capital', 5000)
@@ -322,8 +313,16 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
   // Filtrer les backtests par stratégie
   const filteredBacktests = useMemo(() => {
     if (!selectedStrategy) return backtests
-    return backtests.filter(b => !b.strategy_name || b.strategy_name === selectedStrategy)
+    const filtered = backtests.filter(b => !b.strategy_name || b.strategy_name === selectedStrategy)
+    return filtered
   }, [backtests, selectedStrategy])
+
+  // Si la stratégie sélectionnée n'a aucun run, revenir à 'grid_atr'
+  useEffect(() => {
+    if (backtests.length > 0 && filteredBacktests.length === 0 && selectedStrategy && selectedStrategy !== 'grid_atr') {
+      setSelectedStrategy('grid_atr')
+    }
+  }, [backtests, filteredBacktests.length, selectedStrategy]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Assets disponibles pour la sélection (extraits des presets)
   const allAssets = useMemo(() => {
