@@ -640,6 +640,88 @@ class MyStrategy(BaseStrategy):
 
 ---
 
+## Validation Workflow
+
+### A. Nouvelle stratégie
+
+Pipeline complète, chaque étape doit être validée avant de passer à la suivante :
+
+```text
+1. Implémentation
+   └─ Stratégie + fast engine + tests (parité, signaux, registry)
+
+2. WFO mono-coin (21 assets)
+   └─ uv run python -m scripts.optimize --strategy <name> --all-assets
+   └─ Critère : Grade A ou B sur ≥ 5 assets
+
+3. Portfolio backtest multi-coin (Grade A/B seulement)
+   └─ uv run python -m scripts.portfolio_backtest --strategy <name> --days auto
+   └─ Critère : Return > 0, Max DD < -35%, Sharpe > 0.5
+
+4. Stress test leverage
+   └─ uv run python -m scripts.stress_test_leverage --strategy <name>
+   └─ Critère : Liq distance > 50%, KS@45 = 0, Calmar optimal
+
+5. Paper trading (≥ 2 semaines, idéalement 1 mois)
+   └─ Déployer sur le serveur avec enabled: true
+   └─ Critère : Résultats cohérents avec le backtest (±20% sur les métriques clés)
+
+6. Live trading (capital progressif)
+   └─ Commencer avec capital minimal, augmenter par paliers
+   └─ Critère : Slippage paper vs live < 0.1%, pas d'anomalies executor
+```
+
+### B. Nouveau paramètre / feature (ex: max_hold_candles)
+
+Workflow A/B test — on isole l'impact d'une seule variable :
+
+```text
+1. Implémentation
+   └─ Code + tests (backward compat avec défaut = désactivé)
+
+2. WFO A/B mono-coin
+   └─ Run A : WFO existant (baseline, paramètre désactivé)
+   └─ Run B : WFO avec params_override={paramètre: [valeur_test]}
+   └─ Comparer par asset : Sharpe OOS, Max DD, Win Rate, Consistance
+   └─ Critère : Amélioration Sharpe sur ≥ 60% des assets
+
+3. Si concluant → WFO avec plusieurs valeurs
+   └─ params_override={paramètre: [val1, val2, val3]}
+   └─ Trouver la valeur optimale par asset
+   └─ Appliquer via per_asset dans strategies.yaml
+
+4. Portfolio backtest comparatif
+   └─ Run baseline (params actuels) vs Run avec nouveau paramètre
+   └─ Critère : Sharpe portfolio amélioré, Max DD pas dégradé
+
+5. Paper trading validation (même workflow que A.5)
+
+6. Live deployment (même workflow que A.6)
+```
+
+### C. Changement de leverage ou risk params
+
+```text
+1. Stress test leverage multi-fenêtre
+   └─ uv run python -m scripts.stress_test_leverage --leverages 2,4,6,8
+   └─ Critères : Liq > 50%, DD < -40%, KS@45 = 0, meilleur Calmar
+
+2. Portfolio backtest au leverage choisi
+   └─ uv run python -m scripts.portfolio_backtest --leverage <N>
+
+3. Paper trading validation
+```
+
+### Règles générales
+
+- **Jamais de raccourci** : ne pas sauter d'étape, même si "ça a l'air évident"
+- **Un changement à la fois** : ne pas tester un nouveau paramètre ET un nouveau leverage simultanément
+- **Grade minimum** : seuls les Grade A et B passent en portfolio/paper/live
+- **Backward compat** : tout nouveau paramètre a un défaut qui préserve le comportement existant
+- **Données fraîches** : toujours `fetch_history` avant un WFO important pour avoir les dernières candles
+
+---
+
 ## Glossaire
 
 | Terme | Définition |
