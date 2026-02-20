@@ -505,7 +505,7 @@ class DataEngine:
 
                         # Auto-guérison — relancer les symbols stale > 10 min
                         for sym, age in stale:
-                            if age is not None and age > 600:
+                            if age is None or age > 600:
                                 try:
                                     restarted_sym = await self.restart_stale_symbol(sym)
                                     if restarted_sym:

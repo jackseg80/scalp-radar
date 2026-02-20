@@ -160,8 +160,8 @@ class TestHeartbeatAutoHeal:
         engine.restart_stale_symbol.assert_awaited_once_with("XTZ/USDT")
 
     @pytest.mark.asyncio
-    async def test_no_heal_under_10min(self):
-        """Symbol stale 400s → PAS de restart (seulement log)."""
+    async def test_no_heal_between_5_and_10min(self):
+        """Symbol stale 400s (entre 5 et 10 min, age connu) → PAS de restart."""
         engine = _make_engine(["BTC/USDT", "ETH/USDT"])
         engine._heartbeat_interval = 9999
         engine._last_candle_received = time.time() - 10
@@ -185,6 +185,33 @@ class TestHeartbeatAutoHeal:
                 pass
 
         engine.restart_stale_symbol.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_restart_stale_symbol_age_none(self):
+        """Symbol avec age=None (jamais reçu) → restart immédiat (comme >10min)."""
+        engine = _make_engine(["BTC/USDT", "JUP/USDT"])
+        engine._heartbeat_interval = 9999
+        engine._last_candle_received = time.time() - 10
+        engine.full_reconnect = AsyncMock()
+
+        now = datetime.now(tz=timezone.utc)
+        engine._last_update_per_symbol = {
+            "BTC/USDT": now - timedelta(seconds=30),  # actif
+            # JUP/USDT absent → age=None dans le heartbeat
+        }
+
+        engine.restart_stale_symbol = AsyncMock(return_value=True)
+        engine.restart_dead_tasks = AsyncMock(return_value=0)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            engine._heartbeat_tick = 4
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await engine._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        engine.restart_stale_symbol.assert_awaited_once_with("JUP/USDT")
 
     @pytest.mark.asyncio
     async def test_full_reconnect_on_mass_stale(self):
