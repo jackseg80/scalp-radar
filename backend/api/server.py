@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
     # 3. DataEngine (optionnel via ENABLE_WEBSOCKET)
     engine: DataEngine | None = None
     if config.secrets.enable_websocket:
-        engine = DataEngine(config, db)
+        engine = DataEngine(config, db, notifier=notifier)
         await engine.start()
         logger.info("DataEngine démarré via lifespan")
     else:

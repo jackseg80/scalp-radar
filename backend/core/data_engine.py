@@ -7,9 +7,10 @@ Gère les souscriptions klines, la validation des données, le stockage mémoire
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import ccxt.pro as ccxtpro
 from loguru import logger
@@ -17,6 +18,12 @@ from loguru import logger
 from backend.core.config import AppConfig
 from backend.core.database import Database
 from backend.core.models import Candle, MultiTimeframeData, OISnapshot, TimeFrame
+
+if TYPE_CHECKING:
+    from backend.alerts.notifier import Notifier
+
+# Import runtime pour AnomalyType (utilisé dans _heartbeat_loop)
+from backend.alerts.notifier import AnomalyType
 
 # Taille max du buffer rolling par (symbol, timeframe)
 MAX_BUFFER_SIZE = 500
@@ -97,6 +104,7 @@ class DataEngine:
         self,
         config: AppConfig,
         database: Database,
+        notifier: "Notifier | None" = None,
     ) -> None:
         self.config = config
         self.db = database
@@ -125,6 +133,12 @@ class DataEngine:
         self._funding_rates: dict[str, float] = {}
         self._open_interest: dict[str, list[OISnapshot]] = {}
         self._oi_max_snapshots = 60  # 60 snapshots × 60s = 1h d'historique
+
+        # Heartbeat : détecte silences WS > 5 min → full_reconnect
+        self._notifier = notifier
+        self._last_candle_received: float = time.time()
+        self._heartbeat_interval: int = 300  # 5 minutes
+        self._heartbeat_task: asyncio.Task | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -211,6 +225,12 @@ class DataEngine:
             asyncio.create_task(self._poll_open_interest(), name="poll_oi")
         )
 
+        # Heartbeat : détecte les silences WS et déclenche full_reconnect si besoin
+        self._last_candle_received = time.time()  # reset au démarrage
+        self._heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(), name="heartbeat"
+        )
+
         self._connected = True
         logger.info(
             "DataEngine: connecté, {} symbols × {} timeframes",
@@ -223,6 +243,15 @@ class DataEngine:
         logger.info("DataEngine: arrêt en cours...")
         self._running = False
         self._connected = False
+
+        # Annuler le heartbeat
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        self._heartbeat_task = None
 
         # Annuler la tâche de flush et flush final du buffer restant
         if self._flush_task and not self._flush_task.done():
@@ -351,6 +380,47 @@ class DataEngine:
         logger.warning(
             "DataEngine: full reconnect terminé ({} tâches)", len(self._tasks)
         )
+
+    # ─── HEARTBEAT ──────────────────────────────────────────────────────────
+
+    async def _heartbeat_loop(self) -> None:
+        """Vérifie que des candles sont reçues toutes les minutes.
+
+        Si aucune candle depuis _heartbeat_interval secondes (5 min),
+        déclenche un full_reconnect et envoie une alerte Telegram.
+        """
+        while self._running:
+            try:
+                await asyncio.sleep(60)  # check toutes les minutes
+                elapsed = time.time() - self._last_candle_received
+
+                if elapsed > self._heartbeat_interval:
+                    logger.warning(
+                        "DataEngine: aucune candle depuis {:.0f}s — lancement full_reconnect",
+                        elapsed,
+                    )
+                    if self._notifier:
+                        try:
+                            await self._notifier.notify_anomaly(
+                                AnomalyType.DATA_STALE,
+                                f"Aucune candle WS depuis {elapsed:.0f}s, reconnexion en cours",
+                            )
+                        except Exception as notif_err:
+                            logger.warning(
+                                "DataEngine: erreur alerte Telegram heartbeat: {}", notif_err
+                            )
+                    try:
+                        await self.full_reconnect()
+                        self._last_candle_received = time.time()  # reset après reconnect
+                        logger.info("DataEngine: heartbeat — reconnexion OK")
+                    except Exception as e:
+                        logger.error("DataEngine: full_reconnect échoué: {}", e)
+                else:
+                    logger.debug(
+                        "DataEngine: heartbeat OK — dernière candle il y a {:.0f}s", elapsed
+                    )
+            except asyncio.CancelledError:
+                break
 
     # ─── WATCH LOOP ─────────────────────────────────────────────────────────
 
@@ -512,6 +582,7 @@ class DataEngine:
         # Freshness : tout message WS valide rafraîchit le timestamp
         # (même si la candle est un doublon = mise à jour de la candle en cours)
         self._last_update = datetime.now(tz=timezone.utc)
+        self._last_candle_received = time.time()
 
         buffer = self._buffers[symbol][timeframe_str]
 

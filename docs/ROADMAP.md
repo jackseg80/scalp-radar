@@ -2397,10 +2397,44 @@ Divergence croissante de P&L et de positions entre live et paper rendant la comp
 
 ---
 
+### Hotfix DataEngine Heartbeat — Détection silence WS + auto-reconnect (20 février 2026)
+
+**Problème** : `watch_ohlcv` peut se déconnecter silencieusement ("connection closed" sans exception captée).
+La boucle de reconnexion `_watch_symbol` ne se déclenche pas. Le bot continue à checker des prix figés —
+l'exit monitor croit que rien ne bouge alors que le marché évolue. Position live ouverte, bot aveugle,
+seul le SL server-side Bitget protège.
+
+**Fix** :
+
+- `backend/core/data_engine.py` :
+  - `__init__` : nouveau paramètre `notifier: Notifier | None = None`, attributs `_last_candle_received` (timestamp float), `_heartbeat_interval = 300`, `_heartbeat_task`
+  - `_on_candle_received()` : met à jour `_last_candle_received = time.time()` à chaque candle validée
+  - `_heartbeat_loop()` (nouveau) : tâche asyncio check toutes les 60s. Si `elapsed > 300s` → log WARNING + `notify_anomaly(DATA_STALE)` + `full_reconnect()` + reset timer. Erreur reconnect loguée mais ne crash pas la boucle
+  - `start()` : lance `_heartbeat_task` après les tâches de polling, reset `_last_candle_received` au démarrage
+  - `stop()` : annule `_heartbeat_task` en premier
+- `backend/api/server.py` : `DataEngine(config, db, notifier=notifier)` — passe le Notifier au démarrage
+
+**Comportement dans les logs** :
+```
+# Toutes les minutes si tout va bien :
+DEBUG | DataEngine: heartbeat OK — dernière candle il y a 42s
+
+# Si WS mort depuis 5 min :
+WARNING | DataEngine: aucune candle depuis 305s — lancement full_reconnect
+WARNING | Notifier: anomalie data_stale: Données obsolètes (>5 min) — Aucune candle WS depuis 305s, reconnexion en cours
+WARNING | DataEngine: full reconnect — recréation exchange
+WARNING | DataEngine: full reconnect terminé (23 tâches)
+INFO    | DataEngine: heartbeat — reconnexion OK
+```
+
+**Tests** : 9 nouveaux dans `test_dataengine_heartbeat.py` → **1535 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
-- **1520 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper**
+- **1535 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
@@ -2561,7 +2595,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 1507 passants, 0 régression
+- **Tests** : 1535 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
