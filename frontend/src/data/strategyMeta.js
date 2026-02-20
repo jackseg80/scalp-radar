@@ -44,7 +44,7 @@ const STRATEGIES = [
     type: 'Trend DCA',
     direction: 'Long + Short',
     status: 'paper',
-    hasGuide: false,
+    hasGuide: true,
     shortDesc: 'DCA event-driven activé sur breakout Bollinger filtré par tendance long terme.',
     edge: "Combine signal directionnel (breakout) avec exécution DCA. Active la grille uniquement sur signal fort.",
     strengths: ['Signal directionnel réduit les faux départs', 'Bon en trend + pullback'],

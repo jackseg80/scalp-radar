@@ -19,6 +19,7 @@ const GRADE_COLORS = {
 // Lazy-load des guides interactifs (Recharts = lourd)
 const guideComponents = {
   grid_atr: lazy(() => import('./guides/GridAtrGuide')),
+  grid_boltrend: lazy(() => import('./guides/GridBolTrendGuide')),
 }
 
 export default function StrategyDetail({ strategyId, onBack, onNavigate, setEvalStrategy }) {

@@ -2500,6 +2500,36 @@ mourir silencieusement sans aucune alerte.
 
 ---
 
+### Sprint Strategy Lab V2 — Tutoriel Grid BolTrend + Sliders Grid ATR (20 février 2026)
+
+**But** : Enrichir les tutoriels interactifs de l'onglet Stratégies — ajouter un 2ème guide interactif (grid_boltrend) et transformer le guide Grid ATR en mini-simulateur avec des sliders de paramètres.
+
+**Feature 1 — GridBolTrendGuide.jsx** (nouveau fichier) :
+- Tutoriel interactif **8 étapes** avec Recharts (lazy-loaded)
+- Données ETH-like (~$3200) avec Bandes de Bollinger (upper, lower, bb_sma) + SMA 200 (long_ma)
+- Étapes : BB intro → SMA longue → Grille OFF → BREAKOUT! (point doré) → DCA pullback (niveaux fixés) → TP inversé (close < SMA) → SL catastrophe → Comparaison Grid ATR vs Grid BolTrend
+- Step 8 : tableau comparatif côte à côte (ComparisonCard) au lieu du graphique
+- Scénario recovery (5 points prix remontant) + scénario disaster (5 points prix en chute)
+
+**Feature 2 — Sliders dans GridAtrGuide.jsx** (refactorisé) :
+- Panneau collapsible "Ajuster les paramètres" sous le tutoriel
+- 4 sliders natifs HTML : ATR Mult. Start (1-4), ATR Mult. Step (0.5-3), Niveaux DCA (1-5), Stop Loss % (5-40)
+- Recalcul temps réel du graphique + info panel via `useMemo([step, params])`
+- Bouton "Reset" apparaît quand les paramètres diffèrent des defaults
+- Support dynamique numLevels (1-5) : boucle `for i in 0..4` avec `level${i+1}`, mot-clé `'all'` dans STEPS
+
+**Fichiers créés** (1) :
+- `frontend/src/components/guides/GridBolTrendGuide.jsx` — tutoriel 8 étapes
+
+**Fichiers modifiés** (3) :
+- `frontend/src/components/guides/GridAtrGuide.jsx` — refonte complète (constants → useState, sliders, numLevels dynamique)
+- `frontend/src/components/StrategyDetail.jsx` — ajout `grid_boltrend` dans `guideComponents` lazy map
+- `frontend/src/data/strategyMeta.js` — `hasGuide: true` pour grid_boltrend
+
+**Tests** : 0 nouveau (frontend pur, pas de backend) → **1558 passants**, 0 régression.
+
+---
+
 ### Hotfix Auto-Guérison Symbols Stale + Fix Route Prefix (20 février 2026)
 
 **Problème** : Le DataEngine détecte les symbols stale (>5 min sans données via `/api/data/status`)
@@ -2536,10 +2566,10 @@ si le silence est global. Résultat : un symbol mort reste mort jusqu'à interve
 
 ---
 
-## ÉTAT ACTUEL (20 février 2026)
+## ÉTAT ACTUEL (21 février 2026)
 
 - **1558 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
@@ -2547,7 +2577,7 @@ si le silence est global. Résultat : un symbol mort reste mort jusqu'à interve
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
-- **Frontend complet** : 7 pages (Scanner, **Stratégies**, Recherche, Explorer, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve)
+- **Frontend complet** : 7 pages (Scanner, **Stratégies**, Recherche, Explorer, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve) + **2 tutoriels interactifs** (Grid ATR avec sliders, Grid BolTrend 8 étapes)
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Sprint 35** : `scripts/stress_test_leverage.py` — 20 backtests (2 stratégies × 4 leverages × 2-3 fenêtres), KS désactivé (99%), analyse KS a posteriori à 30%/45%/60%, Calmar ratio, recommandation automatique, CSV `data/stress_test_results.csv`. Pas de tests unitaires (script de benchmark).

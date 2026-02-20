@@ -1,7 +1,7 @@
 /**
  * GridAtrGuide — Tutoriel interactif Grid ATR en 7 étapes
  * Données BTC-like avec ATR variable, niveaux calculés dynamiquement
- * Sprint Strategy Lab
+ * Sprint Strategy Lab + V2 (sliders de paramètres)
  */
 
 import { useState, useMemo } from 'react'
@@ -10,11 +10,13 @@ import {
   ReferenceLine, ReferenceDot, ResponsiveContainer, Area, Tooltip,
 } from 'recharts'
 
-// ─── Paramètres de la stratégie (identiques à strategyMeta) ───
-const ATR_MULT_START = 2.0
-const ATR_MULT_STEP = 1.0
-const NUM_LEVELS = 3
-const SL_PERCENT = 20
+// ─── Valeurs par défaut des paramètres ───
+const DEFAULTS = {
+  atrMultStart: 2.0,
+  atrMultStep: 1.0,
+  numLevels: 3,
+  slPercent: 20,
+}
 
 // ─── Données brutes du scénario ───
 // ATR variable : ~450 → ~640 (crash) → ~520 (recovery)
@@ -54,11 +56,11 @@ const DISASTER_DATA = [
   { t: 17, label: '18 Jan', price: 32500, sma: 37200, atr: 750 },
 ]
 
-// ─── Calcul dynamique des niveaux ───
-function computeLevels(dataPoint) {
+// ─── Calcul dynamique des niveaux (paramétré) ───
+function computeLevels(dataPoint, params) {
   const levels = []
-  for (let i = 0; i < NUM_LEVELS; i++) {
-    const mult = ATR_MULT_START + i * ATR_MULT_STEP
+  for (let i = 0; i < params.numLevels; i++) {
+    const mult = params.atrMultStart + i * params.atrMultStep
     levels.push({
       level: i + 1,
       mult,
@@ -69,12 +71,12 @@ function computeLevels(dataPoint) {
 }
 
 // Points d'achat (basés sur le moment où le prix croise chaque niveau)
-function findBuyPoints(data) {
+function findBuyPoints(data, params) {
   const buys = []
   const bought = new Set()
 
   for (let i = 1; i < data.length; i++) {
-    const levels = computeLevels(data[i])
+    const levels = computeLevels(data[i], params)
     for (const lvl of levels) {
       if (!bought.has(lvl.level) && data[i].price <= lvl.price && data[i - 1].price > lvl.price) {
         buys.push({ t: data[i].t, level: lvl.level, price: data[i].price, levelPrice: lvl.price })
@@ -86,15 +88,14 @@ function findBuyPoints(data) {
 }
 
 // ─── Enrichir les données avec les niveaux calculés ───
-function enrichData(rawData) {
+function enrichData(rawData, params) {
   return rawData.map(d => {
-    const levels = computeLevels(d)
-    return {
-      ...d,
-      level1: levels[0].price,
-      level2: levels[1].price,
-      level3: levels[2].price,
+    const levels = computeLevels(d, params)
+    const enriched = { ...d }
+    for (let i = 0; i < 5; i++) {
+      enriched[`level${i + 1}`] = levels[i] ? levels[i].price : undefined
     }
+    return enriched
   })
 }
 
@@ -114,53 +115,64 @@ const STEPS = [
   },
   {
     title: 'La grille adaptative',
-    desc: 'Les 3 niveaux d\'achat sont positionnés dynamiquement : Niveau i = SMA - ATR × (2 + i). Comme la SMA et l\'ATR bougent, la grille se déplace avec la volatilité — contrairement aux enveloppes à % fixe.',
+    desc: 'Les niveaux d\'achat sont positionnés dynamiquement : Niveau i = SMA - ATR × (start + i × step). Comme la SMA et l\'ATR bougent, la grille se déplace avec la volatilité — contrairement aux enveloppes à % fixe.',
     keyInsight: 'Quand la volatilité augmente, les niveaux s\'écartent → on achète plus bas → meilleur prix moyen.',
     show: { price: true, sma: true, levels: true },
   },
   {
     title: 'Le crash : Achat Niveau 1',
     desc: 'Le prix plonge et franchit le premier niveau. Grid ATR ouvre automatiquement une position LONG. La grille a anticipé le dip grâce à l\'ATR élevé.',
-    keyInsight: 'Le Niveau 1 est à SMA - ATR × 2.0. Avec ATR=570$, ça place l\'achat ~1140$ sous la SMA.',
+    keyInsight: 'Le Niveau 1 est à SMA - ATR × start. Avec ATR=570$, ça place l\'achat bien sous la SMA.',
     show: { price: true, sma: true, levels: true, buys: [1] },
   },
   {
-    title: 'DCA : Niveaux 2 et 3',
-    desc: 'Le crash continue. Le prix franchit les niveaux 2 puis 3. À chaque franchissement, une nouvelle position s\'ouvre — c\'est le DCA (Dollar Cost Averaging). Le prix moyen baisse à chaque achat.',
+    title: 'DCA : Niveaux suivants',
+    desc: 'Le crash continue. Le prix franchit les niveaux suivants. À chaque franchissement, une nouvelle position s\'ouvre — c\'est le DCA (Dollar Cost Averaging). Le prix moyen baisse à chaque achat.',
     keyInsight: 'Prix moyen pondéré = somme des prix d\'entrée / nombre de positions. Plus on DCA bas, meilleur est le prix moyen.',
-    show: { price: true, sma: true, levels: true, buys: [1, 2, 3], avgPrice: true },
+    show: { price: true, sma: true, levels: true, buys: 'all', avgPrice: true },
   },
   {
     title: 'Happy end : le TP',
     desc: 'Le marché se retourne. Le prix remonte et croise la SMA — c\'est le signal de Take Profit. Toutes les positions sont fermées en profit.',
     keyInsight: 'TP = prix croise la SMA. Pas de prix fixe : le TP suit la SMA, donc il est aussi adaptatif.',
-    show: { price: true, sma: true, levels: true, buys: [1, 2, 3], avgPrice: true, tp: true },
+    show: { price: true, sma: true, levels: true, buys: 'all', avgPrice: true, tp: true },
     scenario: 'recovery',
   },
   {
     title: 'La catastrophe : le SL',
-    desc: 'Scénario alternatif. Le crash ne s\'arrête pas. Le prix continue de chuter au-delà du SL global (prix moyen - 20%). Toutes les positions sont fermées en perte.',
-    keyInsight: 'Le SL global protège le capital. Perte = 20% du prix moyen × 3 positions × leverage. C\'est pourquoi le sizing est crucial.',
-    show: { price: true, sma: true, levels: true, buys: [1, 2, 3], avgPrice: true, sl: true },
+    desc: 'Scénario alternatif. Le crash ne s\'arrête pas. Le prix continue de chuter au-delà du SL global. Toutes les positions sont fermées en perte.',
+    keyInsight: 'Le SL global protège le capital. C\'est pourquoi le sizing est crucial.',
+    show: { price: true, sma: true, levels: true, buys: 'all', avgPrice: true, sl: true },
     scenario: 'disaster',
   },
 ]
 
+// ─── Level colors ───
+const LEVEL_COLORS = ['#00e68a', '#00e68a', '#00e68a', '#00cc7a', '#00b36b']
+const LEVEL_OPACITIES = [1, 0.7, 0.5, 0.4, 0.35]
+
 // ─── Composant principal ───
 export default function GridAtrGuide() {
   const [step, setStep] = useState(0)
+  const [params, setParams] = useState(DEFAULTS)
+  const [slidersOpen, setSlidersOpen] = useState(false)
   const currentStep = STEPS[step]
+
+  // Resolve buys list (handles 'all' for dynamic num_levels)
+  const buyLevels = currentStep.show.buys === 'all'
+    ? Array.from({ length: params.numLevels }, (_, i) => i + 1)
+    : (currentStep.show.buys || [])
 
   // Données selon le scénario
   const fullData = useMemo(() => {
     if (currentStep.scenario === 'recovery') {
-      return enrichData([...BASE_DATA, ...RECOVERY_DATA])
+      return enrichData([...BASE_DATA, ...RECOVERY_DATA], params)
     }
     if (currentStep.scenario === 'disaster') {
-      return enrichData([...BASE_DATA, ...DISASTER_DATA])
+      return enrichData([...BASE_DATA, ...DISASTER_DATA], params)
     }
-    return enrichData(BASE_DATA)
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+    return enrichData(BASE_DATA, params)
+  }, [step, params]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Points d'achat
   const buyPoints = useMemo(() => {
@@ -169,10 +181,10 @@ export default function GridAtrGuide() {
       : currentStep.scenario === 'recovery'
         ? [...BASE_DATA, ...RECOVERY_DATA]
         : BASE_DATA
-    return findBuyPoints(scenario)
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+    return findBuyPoints(scenario, params)
+  }, [step, params]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visibleBuys = (currentStep.show.buys || [])
+  const visibleBuys = buyLevels
     .map(lvl => buyPoints.find(b => b.level === lvl))
     .filter(Boolean)
 
@@ -182,7 +194,7 @@ export default function GridAtrGuide() {
     : null
 
   // SL price
-  const slPrice = avgPrice ? avgPrice * (1 - SL_PERCENT / 100) : null
+  const slPrice = avgPrice ? avgPrice * (1 - params.slPercent / 100) : null
 
   // Point de TP (prix croise la SMA)
   const tpPoint = useMemo(() => {
@@ -199,14 +211,20 @@ export default function GridAtrGuide() {
   }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Y domain
-  const allPrices = fullData.flatMap(d => [d.price, d.sma, d.level1, d.level2, d.level3])
+  const allPrices = fullData.flatMap(d => {
+    const vals = [d.price, d.sma]
+    for (let i = 1; i <= params.numLevels; i++) {
+      if (d[`level${i}`] !== undefined) vals.push(d[`level${i}`])
+    }
+    return vals
+  })
   if (slPrice) allPrices.push(slPrice)
   const yMin = Math.floor(Math.min(...allPrices) / 500) * 500 - 500
   const yMax = Math.ceil(Math.max(...allPrices) / 500) * 500 + 500
 
   // Chiffres de l'étape courante (point milieu du crash)
   const refPoint = fullData[Math.min(7, fullData.length - 1)]
-  const refLevels = computeLevels(refPoint)
+  const refLevels = computeLevels(refPoint, params)
 
   // Gain/perte pour les étapes 6 et 7
   let resultText = null
@@ -215,8 +233,13 @@ export default function GridAtrGuide() {
     resultText = `Gain : +${gain}% (hors leverage et fees)`
   }
   if (step === 6 && slPrice && avgPrice) {
-    resultText = `Perte : -${SL_PERCENT}% (SL global touché)`
+    resultText = `Perte : -${params.slPercent}% (SL global touché)`
   }
+
+  const isDefault = params.atrMultStart === DEFAULTS.atrMultStart
+    && params.atrMultStep === DEFAULTS.atrMultStep
+    && params.numLevels === DEFAULTS.numLevels
+    && params.slPercent === DEFAULTS.slPercent
 
   return (
     <div>
@@ -235,15 +258,29 @@ export default function GridAtrGuide() {
             <Tooltip
               contentStyle={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, fontSize: 12 }}
               labelStyle={{ color: '#888' }}
-              formatter={(val, name) => [`$${val.toLocaleString()}`, name]}
+              formatter={(val, name) => {
+                if (val === undefined || val === null) return ['-', name]
+                return [`$${val.toLocaleString()}`, name]
+              }}
             />
 
-            {/* Niveaux d'achat (zones) */}
+            {/* Niveaux d'achat (dynamiques selon numLevels) */}
             {currentStep.show.levels && (
               <>
-                <Line type="monotone" dataKey="level1" stroke="#00e68a" strokeWidth={1} strokeDasharray="4 4" dot={false} name="Niveau 1" />
-                <Line type="monotone" dataKey="level2" stroke="#00e68a" strokeWidth={1} strokeDasharray="4 4" dot={false} name="Niveau 2" opacity={0.7} />
-                <Line type="monotone" dataKey="level3" stroke="#00e68a" strokeWidth={1} strokeDasharray="4 4" dot={false} name="Niveau 3" opacity={0.5} />
+                {Array.from({ length: params.numLevels }, (_, i) => (
+                  <Line
+                    key={`level-${i}`}
+                    type="monotone"
+                    dataKey={`level${i + 1}`}
+                    stroke={LEVEL_COLORS[i] || '#00e68a'}
+                    strokeWidth={1}
+                    strokeDasharray="4 4"
+                    dot={false}
+                    name={`Niveau ${i + 1}`}
+                    opacity={LEVEL_OPACITIES[i] || 0.3}
+                    connectNulls={false}
+                  />
+                ))}
               </>
             )}
 
@@ -393,7 +430,7 @@ export default function GridAtrGuide() {
           <span style={{ color: '#888' }}>ATR: <b style={{ color: '#ff8c42' }}>${refPoint.atr}</b></span>
           {refLevels.map(l => (
             <span key={l.level} style={{ color: '#888' }}>
-              Niv.{l.level} (×{l.mult}): <b style={{ color: '#00e68a' }}>${l.price.toFixed(0)}</b>
+              Niv.{l.level} (×{l.mult.toFixed(1)}): <b style={{ color: '#00e68a' }}>${l.price.toFixed(0)}</b>
             </span>
           ))}
           {avgPrice && (
@@ -426,9 +463,117 @@ export default function GridAtrGuide() {
           color: '#4da6ff',
           fontWeight: 600,
         }}>
-          🔑 {currentStep.keyInsight}
+          {currentStep.keyInsight}
         </div>
       </div>
+
+      {/* Panneau sliders collapsible */}
+      <div style={{
+        marginTop: 12,
+        border: '1px solid #333',
+        borderRadius: 8,
+        overflow: 'hidden',
+      }}>
+        <button
+          onClick={() => setSlidersOpen(!slidersOpen)}
+          style={{
+            width: '100%',
+            padding: '10px 16px',
+            background: '#0d1117',
+            border: 'none',
+            color: '#ccc',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>Ajuster les paramètres</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {!isDefault && (
+              <span
+                onClick={(e) => { e.stopPropagation(); setParams(DEFAULTS) }}
+                style={{
+                  fontSize: 11, color: '#4da6ff', cursor: 'pointer',
+                  padding: '2px 8px', border: '1px solid #4da6ff33',
+                  borderRadius: 4, background: '#4da6ff11',
+                }}
+              >
+                Reset
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: '#666', transition: 'transform 0.2s', transform: slidersOpen ? 'rotate(180deg)' : 'none' }}>
+              ▼
+            </span>
+          </div>
+        </button>
+
+        {slidersOpen && (
+          <div style={{
+            padding: '12px 16px',
+            background: '#0d1117',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}>
+            <SliderRow
+              label="ATR Mult. Start"
+              value={params.atrMultStart}
+              min={1.0} max={4.0} step={0.5}
+              onChange={v => setParams(p => ({ ...p, atrMultStart: v }))}
+            />
+            <SliderRow
+              label="ATR Mult. Step"
+              value={params.atrMultStep}
+              min={0.5} max={3.0} step={0.5}
+              onChange={v => setParams(p => ({ ...p, atrMultStep: v }))}
+            />
+            <SliderRow
+              label="Niveaux DCA"
+              value={params.numLevels}
+              min={1} max={5} step={1}
+              onChange={v => setParams(p => ({ ...p, numLevels: v }))}
+              format={v => `${v}`}
+            />
+            <SliderRow
+              label="Stop Loss %"
+              value={params.slPercent}
+              min={5} max={40} step={5}
+              onChange={v => setParams(p => ({ ...p, slPercent: v }))}
+              format={v => `${v}%`}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Composant Slider ───
+function SliderRow({ label, value, min, max, step, onChange, format }) {
+  const display = format ? format(value) : value.toFixed(1)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span style={{ color: '#aaa', fontSize: 12, minWidth: 110, flexShrink: 0 }}>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        style={{
+          flex: 1,
+          height: 4,
+          accentColor: '#4da6ff',
+          cursor: 'pointer',
+        }}
+      />
+      <span style={{ color: '#e8eaed', fontSize: 12, fontWeight: 600, minWidth: 40, textAlign: 'right' }}>
+        {display}
+      </span>
     </div>
   )
 }
