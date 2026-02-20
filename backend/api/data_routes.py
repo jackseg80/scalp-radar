@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 
-router = APIRouter()
+router = APIRouter(prefix="/api/data", tags=["data"])
 
 
-@router.get("/data/status")
+@router.get("/status")
 async def data_status(request: Request) -> dict:
     """Retourne le statut du DataEngine par symbol.
 

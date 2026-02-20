@@ -333,6 +333,51 @@ class DataEngine:
         self._tasks = new_tasks
         return restarted
 
+    async def restart_stale_symbol(self, symbol: str) -> bool:
+        """Kill et relance la task watch_ d'un symbol spécifique.
+
+        Utilisé quand la task est vivante mais ne reçoit plus de données.
+        Retourne True si la task a été relancée.
+        """
+        task_name = f"watch_{symbol}"
+
+        for i, task in enumerate(self._tasks):
+            if task.get_name() == task_name:
+                # Cancel la task existante
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(task), timeout=5.0
+                        )
+                    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                        pass
+
+                # Trouver les timeframes pour ce symbol
+                asset = next(
+                    (a for a in self.config.assets if a.symbol == symbol),
+                    None,
+                )
+                if asset is None:
+                    logger.error(
+                        "DataEngine: symbol {} non trouvé dans la config", symbol
+                    )
+                    return False
+
+                # Relancer
+                new_task = asyncio.create_task(
+                    self._watch_symbol(symbol, asset.timeframes),
+                    name=task_name,
+                )
+                self._tasks[i] = new_task
+                logger.warning(
+                    "DataEngine: task {} relancée (symbol stale)", task_name
+                )
+                return True
+
+        logger.warning("DataEngine: task {} non trouvée", task_name)
+        return False
+
     async def full_reconnect(self) -> None:
         """Recrée l'instance exchange et relance toutes les souscriptions.
 
@@ -441,23 +486,65 @@ class DataEngine:
 
                 # ── 3. Stale per-symbol (toutes les 5 min) ──
                 if self._heartbeat_tick % 5 == 0:
-                    stale = [
-                        sym for sym in self.get_all_symbols()
-                        if (
-                            sym not in self._last_update_per_symbol
-                            or (now_dt - self._last_update_per_symbol[sym]).total_seconds() > 300
-                        )
-                    ]
+                    stale: list[tuple[str, float | None]] = []
+                    for sym in self.get_all_symbols():
+                        last = self._last_update_per_symbol.get(sym)
+                        if last is None:
+                            stale.append((sym, None))
+                        else:
+                            age = (now_dt - last).total_seconds()
+                            if age > 300:
+                                stale.append((sym, age))
+
                     if stale:
+                        stale_names = [s[0] for s in stale]
                         logger.warning(
                             "DataEngine: {} symbol(s) sans données depuis 5min: {}",
-                            len(stale), ", ".join(stale),
+                            len(stale), ", ".join(stale_names),
                         )
+
+                        # Auto-guérison — relancer les symbols stale > 10 min
+                        for sym, age in stale:
+                            if age is not None and age > 600:
+                                try:
+                                    restarted_sym = await self.restart_stale_symbol(sym)
+                                    if restarted_sym:
+                                        logger.warning(
+                                            "DataEngine: {} relancé après {:.0f}s de silence",
+                                            sym, age,
+                                        )
+                                except Exception as e:
+                                    logger.error(
+                                        "DataEngine: erreur restart_stale_symbol {}: {}",
+                                        sym, e,
+                                    )
+
+                        # Escalade : si > 50% symbols stale > 15 min → full_reconnect
+                        all_count = len(self.get_all_symbols())
+                        if len(stale) > all_count // 2:
+                            long_stale = [
+                                s for s, a in stale
+                                if a is not None and a > 900
+                            ]
+                            if len(long_stale) > 5:
+                                logger.critical(
+                                    "DataEngine: {} symbols stale > 15min — full_reconnect",
+                                    len(long_stale),
+                                )
+                                try:
+                                    await self.full_reconnect()
+                                    self._last_candle_received = time.time()
+                                except Exception as e:
+                                    logger.error(
+                                        "DataEngine: full_reconnect échoué: {}", e
+                                    )
+
+                        # Alerte Telegram si > 3 symbols stale
                         if self._notifier and len(stale) > 3:
                             try:
                                 await self._notifier.notify_anomaly(
                                     AnomalyType.DATA_STALE,
-                                    f"{len(stale)} symbols sans données: {', '.join(stale[:5])}",
+                                    f"{len(stale)} symbols sans données: {', '.join(stale_names[:5])}",
                                 )
                             except Exception as notif_err:
                                 logger.warning(

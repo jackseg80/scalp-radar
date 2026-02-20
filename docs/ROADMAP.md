@@ -2495,10 +2495,46 @@ mourir silencieusement sans aucune alerte.
 
 ---
 
+### Hotfix Auto-Guérison Symbols Stale + Fix Route Prefix (20 février 2026)
+
+**Problème** : Le DataEngine détecte les symbols stale (>5 min sans données via `/api/data/status`)
+mais ne les guérit pas individuellement. Une task WebSocket peut être **vivante** mais avoir une
+connexion silencieusement fermée côté Bitget (XTZ mort depuis 100 min, la task tourne toujours).
+`restart_dead_tasks()` ne relance que les tasks `done()`. `full_reconnect()` ne se déclenche que
+si le silence est global. Résultat : un symbol mort reste mort jusqu'à intervention SSH.
+
+**Fix A — `restart_stale_symbol(symbol)` dans DataEngine** :
+
+- Nouvelle méthode : cancel la task `watch_<symbol>` existante (vivante ou morte) et la relance
+- `asyncio.wait_for(..., timeout=5.0)` pour ne pas bloquer indéfiniment
+
+**Fix B — Heartbeat stale enrichi** — escalade en 3 paliers :
+
+| Durée stale          | Action                                                  |
+|----------------------|---------------------------------------------------------|
+| 0-5 min              | Rien (gap naturel Bitget sur altcoins à faible volume)  |
+| 5-10 min             | Log WARNING + alerte Telegram si >3 symbols             |
+| 10+ min              | `restart_stale_symbol()` — kill + relance individuelle  |
+| 15+ min et >50% syms | `full_reconnect()` — tout recréer                       |
+
+**Fix C — Route prefix `/api/data/status`** :
+
+- `APIRouter()` → `APIRouter(prefix="/api/data", tags=["data"])` — aligne sur la convention des 8 autres routers
+- Endpoint accessible à `/api/data/status` (au lieu de `/data/status`)
+
+**Fichiers modifiés** (2) :
+
+- `backend/core/data_engine.py` : `restart_stale_symbol()` + heartbeat enrichi
+- `backend/api/data_routes.py` : prefix `/api/data`
+
+**Tests** : 8 nouveaux (`tests/test_dataengine_autoheal.py`) → **1558 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
-- **1550 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab**
+- **1558 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

@@ -1,4 +1,4 @@
-"""Tests pour GET /data/status — monitoring per-symbol DataEngine."""
+"""Tests pour GET /api/data/status — monitoring per-symbol DataEngine."""
 
 from __future__ import annotations
 
