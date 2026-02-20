@@ -6,6 +6,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import WfoChart from './WfoChart'
 import InfoTooltip from './InfoTooltip'
+import StrategySummaryPanel from './StrategySummaryPanel'
 import { usePersistedObject } from '../hooks/usePersistedState'
 import './ResearchPage.css'
 
@@ -17,7 +18,7 @@ const GRADE_COLORS = {
   F: '#ef4444',
 }
 
-export default function ResearchPage() {
+export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrategy }) {
   // États persistés dans localStorage
   const [persistedState, updatePersistedState] = usePersistedObject('research-page', {
     view: 'table',
@@ -39,6 +40,24 @@ export default function ResearchPage() {
   const setSortBy = (s) => updatePersistedState({ sortBy: s })
   const setSortDir = (d) => updatePersistedState({ sortDir: d })
 
+  // Sync via CustomEvent (EvalBar -> ResearchPage et inversement)
+  useEffect(() => {
+    const handler = (e) => {
+      const val = e.detail || ''
+      if (val !== filters.strategy) {
+        setFilters({ ...filters, strategy: val })
+      }
+    }
+    window.addEventListener('eval-strategy-change', handler)
+    return () => window.removeEventListener('eval-strategy-change', handler)
+  }, [filters.strategy]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleStrategyFilter = useCallback((value) => {
+    setFilters({ ...filters, strategy: value })
+    if (setEvalStrategy) setEvalStrategy(value)
+    window.dispatchEvent(new CustomEvent('eval-strategy-change', { detail: value }))
+  }, [filters, setEvalStrategy]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // API: liste des résultats (fetch au montage uniquement, pas de polling)
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -47,7 +66,9 @@ export default function ResearchPage() {
   const fetchResults = useCallback(async () => {
     setLoading(true)
     try {
-      const resp = await fetch('/api/optimization/results')
+      const params = new URLSearchParams({ limit: '500' })
+      if (filters.strategy) params.append('strategy', filters.strategy)
+      const resp = await fetch(`/api/optimization/results?${params}`)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const json = await resp.json()
       setResults(json)
@@ -57,11 +78,11 @@ export default function ResearchPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [filters.strategy]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetchResults()
-  }, [])
+  }, [fetchResults])
 
   // API: détail d'un résultat (pas de polling, fetch manuel)
   const [detail, setDetail] = useState(null)
@@ -121,11 +142,14 @@ export default function ResearchPage() {
     return filtered
   }, [results, filters, sortBy, sortDir])
 
-  // Listes uniques pour les filtres
-  const strategies = useMemo(() => {
-    if (!results || !results.results) return []
-    return [...new Set(results.results.map(r => r.strategy_name))].sort()
-  }, [results])
+  // Stratégies : fetch depuis endpoint dédié (pas paginé)
+  const [strategies, setStrategies] = useState([])
+  useEffect(() => {
+    fetch('/api/optimization/strategies')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.strategies) setStrategies(data.strategies) })
+      .catch(() => {})
+  }, [])
 
   const assets = useMemo(() => {
     if (!results || !results.results) return []
@@ -306,6 +330,65 @@ export default function ResearchPage() {
           </section>
         )}
 
+        {/* Trades OOS par fenêtre */}
+        {detail.wfo_windows && (() => {
+          let windows = detail.wfo_windows
+          if (typeof windows === 'string') try { windows = JSON.parse(windows) } catch { return null }
+          if (typeof windows === 'string') try { windows = JSON.parse(windows) } catch { return null }
+          if (!Array.isArray(windows)) windows = windows?.windows || []
+          if (!Array.isArray(windows) || windows.length === 0) return null
+
+          const trades = windows.map(w => w.oos_trades || 0)
+          const total = trades.reduce((a, b) => a + b, 0)
+          const avg = total / trades.length
+          const min = Math.min(...trades)
+          const max = Math.max(...trades)
+
+          return (
+            <section className="detail-section">
+              <h3>Trades OOS par fenetre</h3>
+              <div className="oos-summary">
+                <div className="metric-card"><div className="metric-label">Total OOS</div><div className="metric-value">{total}</div></div>
+                <div className="metric-card"><div className="metric-label">Moyenne</div><div className="metric-value">{avg.toFixed(1)}</div></div>
+                <div className="metric-card"><div className="metric-label">Min</div><div className="metric-value">{min}</div></div>
+                <div className="metric-card"><div className="metric-label">Max</div><div className="metric-value">{max}</div></div>
+              </div>
+              {total < 50 && (
+                <p style={{color: '#f59e0b', fontSize: '13px', marginTop: '8px', marginBottom: '12px'}}>
+                  {'\u26A0\uFE0F'} Moins de 50 trades OOS — resultats statistiquement fragiles
+                </p>
+              )}
+              <div className="oos-bars">
+                {windows.map((w, i) => {
+                  const t = w.oos_trades || 0
+                  const pct = max > 0 ? (t / max) * 100 : 0
+                  return (
+                    <div key={i} className="oos-bar-row" title={`Fenetre ${i+1}: ${t} trades`}>
+                      <span className="oos-bar-label">W{i+1}</span>
+                      <div className="oos-bar-bg">
+                        <div className="oos-bar-fill" style={{width: `${pct}%`, background: t < 10 ? '#ef4444' : t < 30 ? '#f59e0b' : '#10b981'}} />
+                      </div>
+                      <span className="oos-bar-value">{t}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          )
+        })()}
+
+        {/* Lien Explorer */}
+        <div className="detail-explorer-link">
+          <span className="muted">Pour l'analyse detaillee (heatmap, scatter, distribution) {'\u2192'}</span>
+          <button className="btn-link" onClick={() => {
+            localStorage.setItem('explorer-strategy', detail.strategy_name)
+            localStorage.setItem('explorer-asset', detail.asset)
+            onTabChange?.('explorer')
+          }}>
+            Ouvrir dans Explorer
+          </button>
+        </div>
+
         {/* Validation Bitget */}
         <section className="detail-section">
           <h3>Validation Bitget (OOS réel)</h3>
@@ -381,7 +464,7 @@ export default function ResearchPage() {
         <div className="filters">
           <select
             value={filters.strategy}
-            onChange={(e) => setFilters({ ...filters, strategy: e.target.value })}
+            onChange={(e) => handleStrategyFilter(e.target.value)}
             className="filter-select"
           >
             <option value="">Toutes les stratégies</option>
@@ -451,6 +534,29 @@ export default function ResearchPage() {
             </>
           ) : (
             <span>Aucun changement — strategies.yaml inchangé</span>
+          )}
+        </div>
+      )}
+
+      {filters.strategy && (
+        <StrategySummaryPanel
+          strategyName={filters.strategy}
+          onNavigatePortfolio={() => onTabChange?.('portfolio')}
+        />
+      )}
+
+      {filters.strategy && filteredResults.length === 0 && (
+        <div className="info-banner">
+          <span>Aucun resultat pour {filters.strategy} avec les filtres actuels</span>
+          {filters.minGrade && (
+            <button className="btn-link" onClick={() => setFilters({...filters, minGrade: ''})}>
+              Retirer le filtre grade ({filters.minGrade})
+            </button>
+          )}
+          {filters.asset && (
+            <button className="btn-link" onClick={() => setFilters({...filters, asset: ''})}>
+              Retirer le filtre asset
+            </button>
           )}
         </div>
       )}

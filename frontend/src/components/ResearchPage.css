@@ -357,3 +357,71 @@
   color: #666;
   font-size: 12px;
 }
+
+/* Info banner (0 résultats filtrés) */
+.info-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  color: #93c5fd;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.btn-link {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 13px;
+  padding: 0;
+}
+
+/* OOS trades bars */
+.oos-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.oos-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.oos-bar-row {
+  display: grid;
+  grid-template-columns: 30px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.oos-bar-label { color: #888; text-align: right; }
+.oos-bar-bg {
+  height: 14px;
+  background: #222;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.oos-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+.oos-bar-value { color: #ccc; font-family: monospace; }
+
+/* Lien Explorer dans vue détail */
+.detail-explorer-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(59, 130, 246, 0.05);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 6px;
+  margin-bottom: 20px;
+}

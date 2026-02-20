@@ -390,7 +390,7 @@ class Database:
         await self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS portfolio_backtests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy_name TEXT NOT NULL,
+                strategy_name TEXT NOT NULL DEFAULT 'grid_atr',
                 initial_capital REAL NOT NULL,
                 n_assets INTEGER NOT NULL,
                 period_days INTEGER NOT NULL,
@@ -422,6 +422,23 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_portfolio_created
                 ON portfolio_backtests(created_at);
         """)
+        await self._migrate_portfolio_strategy_name()
+
+    async def _migrate_portfolio_strategy_name(self) -> None:
+        """Migration idempotente : ajoute strategy_name à portfolio_backtests si absent."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(portfolio_backtests)")
+        columns = await cursor.fetchall()
+        if not columns:
+            return  # Table n'existe pas encore
+        col_names = [col[1] for col in columns]
+        if "strategy_name" in col_names:
+            return  # Déjà présent
+        await self._conn.execute(
+            "ALTER TABLE portfolio_backtests ADD COLUMN strategy_name TEXT DEFAULT 'grid_atr'"
+        )
+        await self._conn.commit()
+        logger.info("Migration portfolio_backtests : colonne strategy_name ajoutée")
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
 

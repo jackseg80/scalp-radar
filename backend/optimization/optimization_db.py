@@ -674,3 +674,125 @@ async def get_combo_results_async(db_path: str, result_id: int) -> list[dict]:
             {**dict(row), "params": json.loads(row["params"])}
             for row in rows
         ]
+
+
+# ─── Strategy Summary (Sprint 36) ────────────────────────────────────────
+
+
+async def get_strategy_summary_async(db_path: str, strategy_name: str) -> dict:
+    """Résumé agrégé d'une stratégie : grades, red flags, convergence params, portfolio runs.
+
+    Args:
+        db_path: Chemin vers la DB SQLite
+        strategy_name: Nom de la stratégie (ex: "grid_atr")
+
+    Returns:
+        Dict complet avec grades, red_flags, param_convergence, portfolio_runs
+    """
+    from collections import Counter
+
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+
+        # 1. Tous les résultats is_latest=1 pour cette stratégie
+        cursor = await conn.execute(
+            """SELECT asset, grade, total_score, oos_sharpe, consistency,
+                      oos_is_ratio, monte_carlo_pvalue, mc_underpowered,
+                      param_stability, best_params, created_at
+               FROM optimization_results
+               WHERE is_latest = 1 AND strategy_name = ?
+               ORDER BY total_score DESC""",
+            (strategy_name,),
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
+            return {"strategy_name": strategy_name, "total_assets": 0}
+
+        total = len(rows)
+
+        # 2. Grade distribution
+        grade_counts = Counter(r["grade"] for r in rows)
+
+        # 3. Red flags
+        red_flags = {
+            "oos_is_ratio_suspect": sum(
+                1 for r in rows if r["oos_is_ratio"] and r["oos_is_ratio"] > 1.5
+            ),
+            "sharpe_anomalous": sum(
+                1 for r in rows if r["oos_sharpe"] and r["oos_sharpe"] > 20
+            ),
+            "underpowered": sum(1 for r in rows if r["mc_underpowered"]),
+            "low_consistency": sum(
+                1 for r in rows if r["consistency"] is not None and r["consistency"] < 0.5
+            ),
+            "low_stability": sum(
+                1 for r in rows
+                if r["param_stability"] is not None and r["param_stability"] < 0.3
+            ),
+        }
+
+        # 4. Convergence params (double-JSON guard)
+        param_vals: dict[str, list] = {}
+        for r in rows:
+            raw = r["best_params"]
+            if not raw:
+                continue
+            params = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(params, str):
+                params = json.loads(params)  # double-encoded
+            if isinstance(params, dict):
+                for k, v in params.items():
+                    param_vals.setdefault(k, []).append(v)
+
+        convergence = []
+        for k, vals in sorted(param_vals.items()):
+            counter = Counter(str(v) for v in vals)
+            mode_val, mode_count = counter.most_common(1)[0]
+            convergence.append({
+                "param": k,
+                "n_unique": len(set(str(v) for v in vals)),
+                "mode": mode_val,
+                "mode_pct": round(mode_count / len(vals) * 100),
+            })
+
+        # 5. Portfolio runs
+        cursor = await conn.execute(
+            """SELECT id, label, total_return_pct, period_days, created_at
+               FROM portfolio_backtests
+               WHERE strategy_name = ?
+               ORDER BY created_at DESC LIMIT 10""",
+            (strategy_name,),
+        )
+        portfolio_rows = await cursor.fetchall()
+        portfolio_runs = [
+            {
+                "id": r["id"],
+                "label": r["label"],
+                "return_pct": r["total_return_pct"],
+                "days": r["period_days"],
+                "created_at": r["created_at"],
+            }
+            for r in portfolio_rows
+        ]
+
+        ab_count = grade_counts.get("A", 0) + grade_counts.get("B", 0)
+        avg_sharpe = sum(r["oos_sharpe"] or 0 for r in rows) / total
+        avg_consistency = sum(r["consistency"] or 0 for r in rows) / total
+
+        return {
+            "strategy_name": strategy_name,
+            "total_assets": total,
+            "grades": {g: grade_counts.get(g, 0) for g in ["A", "B", "C", "D", "F"]},
+            "ab_count": ab_count,
+            "ab_pct": round(ab_count / total * 100, 1) if total else 0,
+            "avg_oos_sharpe": round(avg_sharpe, 2),
+            "avg_consistency": round(avg_consistency, 2),
+            "underpowered_count": red_flags["underpowered"],
+            "underpowered_pct": round(red_flags["underpowered"] / total * 100, 1),
+            "red_flags": red_flags,
+            "red_flags_total": sum(red_flags.values()),
+            "param_convergence": convergence,
+            "latest_wfo_date": max(r["created_at"][:10] for r in rows),
+            "portfolio_runs": portfolio_runs,
+        }

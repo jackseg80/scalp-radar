@@ -428,6 +428,38 @@
   margin-bottom: 4px;
 }
 
+/* Bouton Forward Test */
+.pf-forward-btn {
+  width: 100%;
+  padding: 10px 16px;
+  background: rgba(249, 115, 22, 0.15);
+  border: 1px solid #f97316;
+  border-radius: 6px;
+  color: #f97316;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.15s;
+  margin-top: 6px;
+}
+.pf-forward-btn:hover:not(:disabled) {
+  background: rgba(249, 115, 22, 0.25);
+}
+.pf-forward-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Badge baseline */
+.baseline-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(107, 114, 128, 0.2);
+  color: #9ca3af;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
   .portfolio-main {

@@ -15,7 +15,9 @@ import LogMini from './components/LogMini'
 import TradeHistory from './components/TradeHistory'
 import ArenaRankingMini from './components/ArenaRankingMini'
 import OverviewPage from './components/OverviewPage'
+import StrategyEvalBar from './components/StrategyEvalBar'
 import { useWebSocket } from './hooks/useWebSocket'
+import { usePersistedState } from './hooks/usePersistedState'
 import { StrategyProvider, useStrategyContext } from './contexts/StrategyContext'
 import useFilteredWsData from './hooks/useFilteredWsData'
 
@@ -64,6 +66,7 @@ function AppContent() {
 
   const { activeStrategy, strategyFilter } = useStrategyContext()
   const filteredWsData = useFilteredWsData(lastUpdate, strategyFilter)
+  const [evalStrategy, setEvalStrategy] = usePersistedState('eval-strategy', '')
 
   // Sauvegarder l'onglet actif dans localStorage
   useEffect(() => {
@@ -153,6 +156,12 @@ function AppContent() {
         unseenLogErrors={unseenLogErrors}
         wsData={lastUpdate}
       />
+      <StrategyEvalBar
+        activeTab={activeTab}
+        onNavigate={handleTabChange}
+        evalStrategy={evalStrategy}
+        setEvalStrategy={setEvalStrategy}
+      />
       <div
         className="main-grid"
         ref={containerRef}
@@ -163,9 +172,21 @@ function AppContent() {
             ? <OverviewPage wsData={lastUpdate} />
             : <Scanner wsData={wsData} />
           )}
-          {activeTab === 'research' && <ResearchPage />}
+          {activeTab === 'research' && (
+            <ResearchPage
+              onTabChange={handleTabChange}
+              evalStrategy={evalStrategy}
+              setEvalStrategy={setEvalStrategy}
+            />
+          )}
           {activeTab === 'explorer' && <ExplorerPage wsData={lastUpdate} lastEvent={lastEvent} />}
-          {activeTab === 'portfolio' && <PortfolioPage wsData={lastUpdate} lastEvent={lastEvent} />}
+          {activeTab === 'portfolio' && (
+            <PortfolioPage
+              wsData={lastUpdate}
+              lastEvent={lastEvent}
+              evalStrategy={evalStrategy}
+            />
+          )}
           {activeTab === 'journal' && <JournalPage wsData={lastUpdate} onTabChange={handleTabChange} />}
           {activeTab === 'logs' && <LogViewer />}
         </div>

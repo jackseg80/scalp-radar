@@ -11,6 +11,7 @@ from backend.optimization.optimization_db import (
     get_comparison_async,
     get_result_by_id_async,
     get_results_async,
+    get_strategy_summary_async,
     save_result_from_payload_sync,
 )
 
@@ -580,6 +581,21 @@ async def apply_optimization_params(
 
     result = apply_from_db(strategy_names)
     return result
+
+
+# ─── Sprint 36 — Strategy Summary ────────────────────────────────────────
+
+
+@router.get("/strategy-summary")
+async def get_strategy_summary(
+    strategy: str = Query(..., description="Nom de la stratégie"),
+) -> dict:
+    """Résumé complet d'une stratégie : grades, red flags, convergence, portfolio runs."""
+    db_path = _get_db_path()
+    summary = await get_strategy_summary_async(db_path, strategy)
+    if summary["total_assets"] == 0:
+        raise HTTPException(404, f"Aucun résultat WFO pour {strategy}")
+    return summary
 
 
 # ─── Sprint 14b — Combo Results ──────────────────────────────────────────

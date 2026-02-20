@@ -14,7 +14,6 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange, unse
       <div className="header-top">
         <span className="header-logo">SCALP RADAR</span>
         <span className="header-version">v1.0.0</span>
-        <StrategyBar wsData={wsData} />
         <div className="header-right">
           <StatusDot label="Engine" ok={engineOk} tooltip="DataEngine : connexion WebSocket Bitget" />
           <StatusDot label="DB" ok={dbOk} tooltip="Base de données SQLite" />
@@ -60,6 +59,7 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange, unse
           </button>
         ))}
       </div>
+      {activeTab === 'scanner' && <StrategyBar wsData={wsData} />}
     </header>
   )
 }

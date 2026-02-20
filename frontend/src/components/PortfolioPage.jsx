@@ -85,10 +85,31 @@ function AssetTable({ data }) {
 
 // ─── Page principale ────────────────────────────────────────────────────
 
-export default function PortfolioPage({ wsData, lastEvent }) {
+export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
   // Presets
   const { data: presetsData } = useApi('/api/portfolio/presets')
   const presets = presetsData?.presets || []
+
+  // Stratégie sélectionnée
+  const [selectedStrategy, setSelectedStrategy] = usePersistedState('portfolio-strategy', 'grid_atr')
+  const [strategies, setStrategies] = useState([])
+
+  // Fetch strategies list
+  useEffect(() => {
+    fetch('/api/optimization/strategies')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.strategies) setStrategies(data.strategies) })
+      .catch(() => {})
+  }, [])
+
+  // Sync via CustomEvent (EvalBar/ResearchPage -> PortfolioPage)
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.detail) setSelectedStrategy(e.detail)
+    }
+    window.addEventListener('eval-strategy-change', handler)
+    return () => window.removeEventListener('eval-strategy-change', handler)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Config (persisté)
   const [activePreset, setActivePreset] = usePersistedState('portfolio-preset', 'balanced')
@@ -155,14 +176,29 @@ export default function PortfolioPage({ wsData, lastEvent }) {
     return () => { cancelled = true }
   }, [selectedId])
 
+  // Baseline grid_atr (dernier run, pour comparaison auto)
+  const baselineRun = useMemo(() => {
+    if (!backtests || backtests.length === 0) return null
+    return backtests.find(b => b.strategy_name === 'grid_atr') || null
+  }, [backtests])
+
+  // IDs compare effectifs (ajouter baseline si nécessaire)
+  const effectiveCompareIds = useMemo(() => {
+    const ids = new Set(compareIds)
+    if (baselineRun && ids.size >= 1 && selectedStrategy !== 'grid_atr' && !ids.has(baselineRun.id)) {
+      ids.add(baselineRun.id)
+    }
+    return ids
+  }, [compareIds, baselineRun, selectedStrategy])
+
   // Charger les détails pour la comparaison
   useEffect(() => {
-    if (compareIds.size < 2) { setCompareDetails([]); return }
+    if (effectiveCompareIds.size < 2) { setCompareDetails([]); return }
     let cancelled = false
     ;(async () => {
-      const ids = Array.from(compareIds).join(',')
+      const idsStr = Array.from(effectiveCompareIds).join(',')
       try {
-        const res = await fetch(`${API}/api/portfolio/compare?ids=${ids}`)
+        const res = await fetch(`${API}/api/portfolio/compare?ids=${idsStr}`)
         if (res.ok && !cancelled) {
           const data = await res.json()
           setCompareDetails(data.runs || [])
@@ -170,7 +206,7 @@ export default function PortfolioPage({ wsData, lastEvent }) {
       } catch { /* ignore */ }
     })()
     return () => { cancelled = true }
-  }, [compareIds])
+  }, [effectiveCompareIds])
 
   // WebSocket progress (via lastEvent, séparé de wsData type=update)
   useEffect(() => {
@@ -207,20 +243,20 @@ export default function PortfolioPage({ wsData, lastEvent }) {
     }
   }, [])
 
-  // Lancer un backtest
-  const launchBacktest = useCallback(async () => {
+  // Lancer un backtest (overrides optionnels pour Forward Test)
+  const launchBacktest = useCallback(async (overrides = {}) => {
     setIsRunning(true)
     setProgress(0)
     try {
       const body = {
-        strategy_name: 'grid_atr',
+        strategy_name: selectedStrategy || 'grid_atr',
         initial_capital: capital,
-        days,
+        days: overrides.days || days,
         assets: assetsMode === 'custom' && selectedAssets.size > 0
           ? Array.from(selectedAssets)
           : null,
         kill_switch_pct: killSwitchPct,
-        label: label || activePreset || undefined,
+        label: overrides.label || label || activePreset || undefined,
       }
       const res = await fetch(`${API}/api/portfolio/run`, {
         method: 'POST',
@@ -236,7 +272,7 @@ export default function PortfolioPage({ wsData, lastEvent }) {
       alert('Erreur réseau: ' + e.message)
       setIsRunning(false)
     }
-  }, [capital, days, assetsMode, selectedAssets, killSwitchPct, label, activePreset])
+  }, [capital, days, assetsMode, selectedAssets, killSwitchPct, label, activePreset, selectedStrategy])
 
   // Supprimer un run
   const deleteRun = useCallback(async (id, e) => {
@@ -283,6 +319,12 @@ export default function PortfolioPage({ wsData, lastEvent }) {
     }))
   }, [compareDetails])
 
+  // Filtrer les backtests par stratégie
+  const filteredBacktests = useMemo(() => {
+    if (!selectedStrategy) return backtests
+    return backtests.filter(b => !b.strategy_name || b.strategy_name === selectedStrategy)
+  }, [backtests, selectedStrategy])
+
   // Assets disponibles pour la sélection (extraits des presets)
   const allAssets = useMemo(() => {
     const set = new Set()
@@ -298,6 +340,20 @@ export default function PortfolioPage({ wsData, lastEvent }) {
         {/* ─── Config Panel (gauche) ─── */}
         <div className="portfolio-config">
           <h3>Portfolio Backtest</h3>
+
+          {/* Stratégie */}
+          <div className="pf-form-group">
+            <label>Strategie</label>
+            <select className="pf-input" value={selectedStrategy}
+              onChange={e => setSelectedStrategy(e.target.value)}>
+              {strategies.length === 0 && (
+                <option value="grid_atr">grid_atr</option>
+              )}
+              {strategies.map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
 
           {/* Presets */}
           <h4>Presets</h4>
@@ -394,6 +450,14 @@ export default function PortfolioPage({ wsData, lastEvent }) {
           >
             {isRunning ? `En cours... ${progress.toFixed(0)}%` : 'Lancer le backtest'}
           </button>
+          <button
+            className="pf-forward-btn"
+            onClick={() => launchBacktest({ days: 365, label: `${selectedStrategy}_forward_365` })}
+            disabled={isRunning || !selectedStrategy}
+            title="Lance un backtest 365 jours avec les parametres A/B appliques"
+          >
+            {'\u26A1'} Forward Test 365j
+          </button>
           {isRunning && (
             <>
               <div className="pf-progress">
@@ -406,9 +470,9 @@ export default function PortfolioPage({ wsData, lastEvent }) {
           <div className="divider" />
 
           {/* Runs précédents */}
-          <h4>Runs précédents ({backtests.length})</h4>
+          <h4>Runs précédents ({filteredBacktests.length})</h4>
           <div className="runs-history">
-            {backtests.map(run => (
+            {filteredBacktests.map(run => (
               <div
                 key={run.id}
                 className={`run-item ${selectedId === run.id ? 'selected' : ''}`}
@@ -435,7 +499,7 @@ export default function PortfolioPage({ wsData, lastEvent }) {
                 </button>
               </div>
             ))}
-            {backtests.length === 0 && (
+            {filteredBacktests.length === 0 && (
               <div className="muted" style={{ fontSize: 12, textAlign: 'center', padding: 12 }}>
                 Aucun run sauvegardé
               </div>
