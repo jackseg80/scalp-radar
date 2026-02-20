@@ -1876,9 +1876,10 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 2. **Divergence paper↔live au restart** : Executor restaure ses positions live, Simulator repart à zéro → pas de surveillance TP/SL, pas d'events live
 3. **SL trop grand avec 6x levier** : SL 20% × 6x = 120% marge → liquidation avant le SL en cross margin. Fix : 3x (20% × 3x = 60% marge, safe)
 
-**Bloc 0 — Fix leverage 6x → 3x** :
-- `config/risk.yaml` : `default_leverage: 15` → `3`
+**Bloc 0 — Fix leverage** :
+- `config/risk.yaml` : `default_leverage: 15` → `3` (fallback non-grid)
 - `config/strategies.yaml` : `leverage: 6` → `3` pour grid_atr et grid_boltrend
+- *Note : leverage remonté ensuite à 6x (grid_atr) et 8x (grid_boltrend) après validation par stress test Sprint 35*
 
 **Bloc 1 — Exit monitor autonome** (`executor.py`) :
 - `set_data_engine()` + `set_strategies()` : enregistrement des dépendances
@@ -2298,6 +2299,37 @@ liste de listes (`["long", "short"]`, `["long"]`, `["short"]`), qui sont non-has
 
 ---
 
+### Micro-Sprint Audit Complet — Nettoyage Codebase (20 février 2026)
+
+**But** : Corriger les 16 points identifiés par l'audit complet du projet (code + docs + config + frontend).
+
+**Fixes sécurité / code** :
+- Kill switch defaults alignés sur 45% (8 endroits : config.py, portfolio_engine, portfolio_db×4, database DDL, portfolio_routes)
+- Stratégie fantôme `orderflow` supprimée (config.py, strategies.yaml, conftest.py, docs/strategies/orderflow.md)
+- `check_live_sizing.py` lit le leverage depuis strategies.yaml (au lieu de `LEVERAGE = 6` hardcodé)
+
+**Fixes docs** :
+- Compteur tests unifié : CLAUDE.md et ARCHITECTURE.md renvoient vers ROADMAP.md (source unique)
+- STRATEGIES.md : grid_boltrend mis à jour (enabled, paper trading 6 assets, leverage 8x, résultats WFO), section boltrend ajoutée, politique leverage documentée
+- ARCHITECTURE.md : 4 valeurs mises à jour (batch subscribe 5/2s, reconnexion infinie+Watchdog, cooldown 3h, warmup 500 candles)
+- ROADMAP.md : 16 stratégies (était 13), Python 3.13 (était 3.12), LIVE_TRADING=true, tests 1507, leverage Sprint Executor Autonome clarifié (3x→6x/8x après stress test)
+- COMMANDS.md : kill-switch-pct default 30→45, références scripts orphelins retirées
+
+**Cleanup frontend** :
+- AlertFeed.jsx + SignalBreakdown.jsx supprimés (orphelins depuis Sprint 25)
+- CSS orphelin retiré (.alert-item, .breakdown-bar)
+- STRATEGY_NAMES étendu à 16 stratégies (SignalDetail.jsx + SignalDots.jsx + STRATEGY_ICONS)
+- Version alignée v1.0.0 (Header.jsx + pyproject.toml)
+- Métrique "Score Total (legacy)" retirée du dropdown heatmap Explorer
+
+**Cleanup scripts** :
+- 9 fichiers orphelins supprimés (check_journal.py, test_persistence.md, check_combos.py, check_jobs_params.py, fix_fake_grade_a.py, fix_invalid_explorer_runs.py, show_results.py, check_backtests_db.py, test_regime_performance.py)
+- 4 TODO reformulés sans référence sprint obsolète (simulator.py, grid_range_atr.py×3)
+
+**Tests** : **1507 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
 - **1507 tests**, 0 régression
@@ -2384,7 +2416,7 @@ config/
 
 backend/
   core/               # Config, DataEngine, Database, StateManager, PositionManager, GridPositionManager
-  strategies/         # BaseStrategy, BaseGridStrategy, 13 stratégies (4 scalp, 3 swing, 6 grid/DCA)
+  strategies/         # BaseStrategy, BaseGridStrategy, 16 stratégies (4 scalp, 4 swing, 8 grid/DCA)
   backtesting/        # BacktestEngine, MultiPositionEngine, Simulator, GridStrategyRunner, Arena
   optimization/       # WFO, Monte Carlo, DSR, grading, fast engine (mono + multi), indicator cache
   execution/          # Executor (mono + grid), RiskManager, AdaptiveSelector
@@ -2461,8 +2493,8 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 ## RESSOURCES
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
-- **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=false)
-- **Tests** : 1424 passants, 0 régression
-- **Stack** : Python 3.12 (FastAPI, ccxt, numpy, aiosqlite), React (Vite), Docker
+- **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
+- **Tests** : 1507 passants, 0 régression
+- **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

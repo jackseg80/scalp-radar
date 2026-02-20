@@ -536,7 +536,7 @@ uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --sa
 | `--exchange` | `binance` | Source des candles |
 | `--leverage` | depuis strategies.yaml | Override leverage de tous les runners |
 | `--params` | — | Override params stratégie : `key=val,key2=val2` |
-| `--kill-switch-pct` | `30.0` | Seuil kill switch (%) |
+| `--kill-switch-pct` | `45.0` | Seuil kill switch (%) |
 | `--kill-switch-window` | `24` | Fenêtre kill switch (heures) |
 | `--json` | false | Sortie JSON |
 | `--output` | — | Fichier de sortie |
@@ -583,21 +583,6 @@ uv run python -m scripts.test_timeframe_sweep --symbol SOL/USDT --days 365 --str
 ```
 
 **Stratégies supportées :** `boltrend`, `envelope_dca`, `envelope_dca_short`, `grid_atr`, `grid_range_atr`, `grid_trend`
-
-### Performance par régime de marché
-
-```powershell
-# grid_boltrend sur BTC, fenêtres 60 jours
-uv run python -m scripts.test_regime_performance --strategy grid_boltrend --symbol BTC/USDT --window 60
-
-# grid_atr sur ETH, fenêtres 90 jours (défaut), pas 30 jours
-uv run python -m scripts.test_regime_performance --strategy grid_atr --symbol ETH/USDT --window 90 --step 30
-
-# Avec params override
-uv run python -m scripts.test_regime_performance --strategy grid_atr --symbol BTC/USDT --params "sl_percent=12.0,num_levels=3"
-```
-
-**Stratégies supportées :** `boltrend`, `bollinger_mr`, `donchian_breakout`, `envelope_dca`, `envelope_dca_short`, `grid_atr`, `grid_boltrend`, `grid_funding`, `grid_multi_tf`, `grid_range_atr`, `grid_trend`, `supertrend`
 
 ### Diagnostic Grid Range ATR (fast engine)
 
@@ -695,18 +680,6 @@ uv run python -m scripts.migrate_optimization --dry-run
 
 # Import réel
 uv run python -m scripts.migrate_optimization
-```
-
-### Vérifier l'état de la DB backtests
-
-```powershell
-uv run python -m scripts.check_backtests_db
-```
-
-### Vérifier le journal des trades live
-
-```powershell
-uv run python check_journal.py
 ```
 
 ---

@@ -24,14 +24,6 @@ liquidation:
   sl_percent: 0.4
   weight: 0.2
   per_asset: {}
-orderflow:
-  enabled: false
-  timeframe: 1m
-  imbalance_threshold: 2.0
-  large_order_multiplier: 5.0
-  absorption_threshold: 0.7
-  confirmation_only: true
-  weight: 0.2
 momentum:
   enabled: false
   live_eligible: true
@@ -400,6 +392,15 @@ grid_multi_tf:
       sl_percent: 20.0
       st_atr_multiplier: 2.0
       st_atr_period: 10
+    BTC/USDT:
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 10
+      num_levels: 3
+      sl_percent: 20.0
+      st_atr_multiplier: 2.0
+      st_atr_period: 14
     CRV/USDT:
       atr_multiplier_start: 2.0
       atr_multiplier_step: 1.0
@@ -437,12 +438,12 @@ grid_multi_tf:
       st_atr_multiplier: 3.0
       st_atr_period: 14
     ETH/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 10
-      ma_period: 7
+      atr_multiplier_start: 1.5
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 10
       num_levels: 3
-      sl_percent: 25.0
+      sl_percent: 20.0
       st_atr_multiplier: 2.0
       st_atr_period: 14
     FET/USDT:
@@ -480,6 +481,15 @@ grid_multi_tf:
       num_levels: 3
       sl_percent: 15.0
       st_atr_multiplier: 2.0
+      st_atr_period: 10
+    JUP/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 14
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 15.0
+      st_atr_multiplier: 3.0
       st_atr_period: 10
     LINK/USDT:
       atr_multiplier_start: 1.5
@@ -524,6 +534,15 @@ grid_multi_tf:
       ma_period: 7
       num_levels: 2
       sl_percent: 20.0
+      st_atr_multiplier: 3.0
+      st_atr_period: 10
+    THETA/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 0.5
+      atr_period: 10
+      ma_period: 7
+      num_levels: 3
+      sl_percent: 25.0
       st_atr_multiplier: 3.0
       st_atr_period: 10
     UNI/USDT:

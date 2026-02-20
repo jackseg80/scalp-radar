@@ -45,9 +45,10 @@ def test_in_registry(name):
     assert strategy_cls is not None
 
 
-def test_registry_excludes_non_optimizable():
-    """Les stratégies non optimisables ne sont pas dans le registre."""
+def test_registry_excludes_non_implemented():
+    """Les noms fantômes ne sont pas dans le registre."""
     assert "orderflow" not in STRATEGY_REGISTRY
+    assert "nonexistent" not in STRATEGY_REGISTRY
 
 
 @pytest.mark.parametrize("name", ALL_STRATEGIES)

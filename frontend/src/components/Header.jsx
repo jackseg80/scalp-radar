@@ -13,7 +13,7 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange, unse
     <header className="header">
       <div className="header-top">
         <span className="header-logo">SCALP RADAR</span>
-        <span className="header-version">v0.7.0</span>
+        <span className="header-version">v1.0.0</span>
         <StrategyBar wsData={wsData} />
         <div className="header-right">
           <StatusDot label="Engine" ok={engineOk} tooltip="DataEngine : connexion WebSocket Bitget" />

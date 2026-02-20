@@ -154,7 +154,7 @@ Au `start()`, une tâche asyncio est créée par asset :
 asyncio.create_task(_watch_symbol(symbol, timeframes))
 ```
 
-Les souscriptions sont staggerées par batch de 10 avec 0.5s de délai entre les batchs (anti rate-limit Bitget code 30006).
+Les souscriptions sont staggerées par batch de 5 avec 2.0s de délai entre les batchs (anti rate-limit Bitget code 30006).
 
 ### Réception des candles
 
@@ -190,7 +190,7 @@ _buffers: dict[str, dict[str, list[Candle]]]
 - **Rate limit** (codes 30006, 429) : retry 3× avec backoff `2s × attempt`, puis backoff global exponentiel
 - **Symbol invalide** ("does not have market symbol") : abandon immédiat, log WARNING
 - **Toute autre erreur** : `await asyncio.sleep(1.0)` pour yield à l'event loop (évite affamement)
-- **Reconnexion** : backoff exponentiel `delay × 2^attempt` (max 60s), jusqu'à `max_reconnect_attempts`
+- **Reconnexion** : boucle infinie par symbol avec backoff exponentiel plafonné à 5 min (seul `CancelledError` ou symbol invalide interrompt la boucle). La recovery est gérée par le Watchdog : `restart_dead_tasks()` après 10 min sans données, `full_reconnect()` après 30 min
 
 ---
 
@@ -210,7 +210,7 @@ Fichier : [simulator.py](../backend/backtesting/simulator.py)
    - Sinon → `LiveStrategyRunner` + `PositionManager` partagé
 5. Cleanup orphelins (stratégies désactivées avec positions sauvegardées)
 6. `runner.restore_state(state)` pour chaque runner (crash recovery)
-7. Warm-up grid runners : `runner._warmup_from_db(db, symbol)` — charge max 200 candles depuis la DB
+7. Warm-up grid runners : `runner._warmup_from_db(db, symbol)` — charge max 500 candles depuis la DB
 8. Restaure le kill switch global si sauvegardé
 9. **Câblage** : `self._data_engine.on_candle(self._dispatch_candle)` — c'est ce qui connecte le flux
 
@@ -246,8 +246,8 @@ on_candle(symbol, timeframe, candle)
     |
     +-- Détection fin warm-up : candle_age <= 2h → _end_warmup()
     |
-    +-- POST_WARMUP_COOLDOWN : 3 premières bougies post-warmup → _emit_event() bloqué
-    |     (évite ouvertures massives après restart) [Hotfix 35]
+    +-- POST_WARMUP_COOLDOWN_SECONDS = 10800 : 3h post-warmup → _emit_event() bloqué
+    |     (évite ouvertures massives après restart) [Hotfix 36]
     |
     +-- Mise à jour buffer closes + SMA interne
     |

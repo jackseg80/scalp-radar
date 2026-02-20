@@ -65,7 +65,6 @@ export default function ExplorerPage({ wsData, lastEvent }) {
     { value: 'consistency', label: 'Consistance' },
     { value: 'oos_is_ratio', label: 'Ratio OOS/IS' },
     { value: 'is_sharpe', label: 'IS Sharpe' },
-    { value: 'total_score', label: 'Score Total (legacy)' },
   ]
 
   // Charger la liste des stratégies optimisables au montage

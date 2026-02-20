@@ -1,7 +1,7 @@
 """Vérification des minimums Bitget avant passage LIVE.
 
 Se connecte à Bitget, load_markets(), et vérifie pour chaque asset du Top 10
-que le sizing à 1000$ / 10 assets / leverage 6 respecte les minimums.
+que le sizing respecte les minimums Bitget. Le leverage est lu depuis strategies.yaml.
 
 Usage :
     uv run python scripts/check_live_sizing.py
@@ -14,18 +14,24 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
+
 # Ajouter la racine du projet au path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 # ─── Configuration ─────────────────────────────────────────────────────────
 
+_STRATS_PATH = Path(__file__).resolve().parent.parent / "config" / "strategies.yaml"
+with open(_STRATS_PATH) as f:
+    _strats = yaml.safe_load(f)
+
 TOTAL_CAPITAL = 1000.0  # USDT
 TOP_10_ASSETS = [
     "BTC/USDT", "CRV/USDT", "DOGE/USDT", "DYDX/USDT", "ENJ/USDT",
     "FET/USDT", "GALA/USDT", "ICP/USDT", "NEAR/USDT", "AVAX/USDT",
 ]
-LEVERAGE = 6
+LEVERAGE = _strats.get("grid_atr", {}).get("leverage", 6)
 NB_ASSETS = len(TOP_10_ASSETS)
 
 # Nombre de levels par asset (depuis strategies.yaml per_asset grid_atr)

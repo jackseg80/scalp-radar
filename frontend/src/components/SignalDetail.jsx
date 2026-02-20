@@ -8,10 +8,22 @@ import ScoreRing from './ScoreRing'
 import Tooltip from './Tooltip'
 
 const STRATEGY_NAMES = {
-  vwap_rsi: 'VWAP+RSI',
+  vwap_rsi: 'VWAP + RSI',
   momentum: 'Momentum',
   funding: 'Funding',
   liquidation: 'Liquidation',
+  bollinger_mr: 'Bollinger MR',
+  donchian_breakout: 'Donchian Breakout',
+  supertrend: 'Supertrend',
+  boltrend: 'Bollinger Trend',
+  envelope_dca: 'Envelope DCA',
+  envelope_dca_short: 'Envelope DCA Short',
+  grid_atr: 'Grid ATR',
+  grid_range_atr: 'Grid Range ATR',
+  grid_multi_tf: 'Grid Multi-TF',
+  grid_funding: 'Grid Funding',
+  grid_trend: 'Grid Trend',
+  grid_boltrend: 'Grid BolTrend',
 }
 
 function conditionBarColor(met) {

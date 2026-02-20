@@ -1024,11 +1024,10 @@ class GridStrategyRunner:
                     pos_per_asset = pos_raw / self._nb_assets
 
                     # Equal allocation sizing (Sprint 20a)
-                    # TODO Sprint Phase 2 : L'ajout de runners grid_boltrend dilue
-                    # l'allocation grid_atr (10 assets → 16 runners = -37% par runner).
-                    # Accepté pour le paper. Options pour le live multi-stratégie :
-                    # 1. Capital séparé par stratégie (config.weight)
-                    # 2. Compter les assets uniques au lieu des runners
+                    # Note : l'ajout de runners multi-stratégie dilue l'allocation
+                    # (10 assets → 16 runners = -37% par runner). Accepté pour le paper.
+                    # Options si besoin : capital séparé par stratégie (config.weight)
+                    # ou compter les assets uniques au lieu des runners.
                     # Marge fixe par niveau = capital / nb_assets / num_levels
                     # Le SL contrôle le risque en $, PAS la taille de position
                     num_levels = effective_max

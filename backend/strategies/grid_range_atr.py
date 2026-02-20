@@ -122,32 +122,27 @@ class GridRangeATRStrategy(BaseGridStrategy):
     def should_close_all(
         self, ctx: StrategyContext, grid_state: GridState
     ) -> str | None:
-        """Jamais de close-all global — TP/SL individuels.
+        """Jamais de close-all global — TP/SL individuels par position.
 
-        TODO Sprint 29b : le SL global sera géré par le runner
-        (RangeGridRunner), pas par la stratégie. Le kill switch
-        framework (Simulator) prend le relais.
+        Le kill switch framework (Simulator) prend le relais pour
+        la protection globale du capital.
         """
         return None
 
     def get_tp_price(
         self, grid_state: GridState, current_indicators: dict
     ) -> float:
-        """TP global non utilisé (NaN). TP individuel géré par le fast engine / runner.
+        """TP global non utilisé (NaN). TP individuel géré par le fast engine.
 
-        TODO Sprint 29b : NaN safe car GridStrategyRunner n'est pas utilisé
-        pour grid_range. Le futur RangeGridRunner n'appellera pas
-        check_global_tp_sl.
+        Retourne NaN car GridStrategyRunner n'est pas utilisé pour
+        grid_range — pas d'appel à check_global_tp_sl.
         """
         return float("nan")
 
     def get_sl_price(
         self, grid_state: GridState, current_indicators: dict
     ) -> float:
-        """SL global non utilisé (NaN). SL individuel géré par le fast engine / runner.
-
-        TODO Sprint 29b : cf. get_tp_price.
-        """
+        """SL global non utilisé (NaN). SL individuel géré par le fast engine."""
         return float("nan")
 
     def get_params(self) -> dict[str, Any]:

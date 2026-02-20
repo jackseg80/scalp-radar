@@ -142,7 +142,7 @@ class PortfolioBacktester:
         strategy_name: str = "grid_atr",
         assets: list[str] | None = None,
         exchange: str = "binance",
-        kill_switch_pct: float = 30.0,
+        kill_switch_pct: float = 45.0,
         kill_switch_window_hours: int = 24,
         multi_strategies: list[tuple[str, list[str]]] | None = None,
     ) -> None:

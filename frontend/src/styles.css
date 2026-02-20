@@ -390,35 +390,6 @@ tr:last-child td { border-bottom: none; }
   flex-shrink: 0;
 }
 
-/* ─── SIGNAL BREAKDOWN ─────────────────────────────────────────────────── */
-.breakdown-bar {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border);
-  overflow: hidden;
-}
-.breakdown-bar__fill {
-  height: 100%;
-  border-radius: 2px;
-  transition: width 0.3s ease;
-}
-
-/* ─── ALERT FEED ───────────────────────────────────────────────────────── */
-.alert-item {
-  display: flex;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-  animation: slideIn 0.3s ease-out;
-}
-.alert-item:last-child { border-bottom: none; }
-.alert-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-top: 4px;
-  flex-shrink: 0;
-}
 
 /* ─── EXECUTOR PANEL ───────────────────────────────────────────────────── */
 .executor-position {

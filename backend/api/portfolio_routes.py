@@ -84,7 +84,7 @@ class RunPortfolioRequest(BaseModel):
     days: int = 90
     assets: list[str] | None = None
     exchange: str = "binance"
-    kill_switch_pct: float = 30.0
+    kill_switch_pct: float = 45.0
     kill_switch_window: int = 24
     label: str | None = None
 

@@ -45,7 +45,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (1422 passants) |
+| Testing            | pytest            | Critical components must have unit tests                |
 
 ## Key Architecture Principles
 
@@ -72,7 +72,7 @@ scalp-radar/
 │   ├── alerts/                   # telegram, notifier, heartbeat
 │   └── monitoring/               # watchdog
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
-├── tests/                        # 1422 tests (pytest)
+├── tests/                        # pytest (voir ROADMAP.md pour le décompte actuel)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
 └── docs/plans/                   # Sprint plans 1-34b archivés
 ```
@@ -162,7 +162,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## État Actuel du Projet
 
-**Sprints complétés (1-15d + hotfixes + Sprint 16+17 + Sprint 19 + Sprint 20a-b-UI + Hotfix 20d-f + Sprint 21a + Sprint 22 + Perf + Sprint 23 + Audit + Sprint 23b + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Améliorations CLI portfolio) : 1422 tests passants**
+**Voir `docs/ROADMAP.md` section "État actuel" pour le décompte de tests à jour.**
 
 ### Sprint 1-4 : Foundations & Production
 - Sprint 1 : Infrastructure de base (configs, models, database, DataEngine, API, 40 tests)
@@ -249,8 +249,8 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 - Sprint 34a : Lancement paper trading grid_boltrend — warm-up dynamique via `strategy.min_candles` (MAX_WARMUP_CANDLES 200→500), try/except `compute_live_indicators()` + alerte Telegram INDICATOR_ERROR (cooldown 1h), préfixes stratégie `[ATR]`/`[BOLT]` dans Telegram, rollback d'urgence COMMANDS.md section 17, 6 tests (1359 tests)
 - Sprint 34b : Dashboard Multi-Stratégie — barre navigation par stratégie (StrategyBar), filtrage WS côté client (useFilteredWsData), OverviewPage résumé, fix collision grid_positions key `strategy:symbol`, 4 fichiers frontend créés + 6 modifiés + 1 ligne backend (1359 tests)
 - Hotfix 36 : Cooldown par temps + DataEngine auto-recovery — `POST_WARMUP_COOLDOWN_SECONDS=10800` (3h), `restart_dead_tasks()` + `full_reconnect()` DataEngine, Watchdog auto-recovery (10min→restart, 30min→full reconnect), stagger 5 symbols / 2.0s (12 tests)
-- Sprint Executor Autonome : leverage 6x→3x, exit monitor 60s `should_close_all()` autonome, `sync_live_to_paper()` boot, guard OPEN `_fetch_positions_safe()`, `get_strategy_instances()` simulator (20 tests)
-- Améliorations CLI portfolio_backtest : `--days auto` (auto-détecte max historique commun via DB, affiche goulot par asset), `--leverage` (override sans modifier YAML, exposé dans `PortfolioResult` + rapport), 9 tests (1422 tests)
+- Sprint Executor Autonome : leverage réduit à 3x (puis remonté à 6x/8x après stress test), exit monitor 60s `should_close_all()` autonome, `sync_live_to_paper()` boot, guard OPEN `_fetch_positions_safe()`, `get_strategy_instances()` simulator (20 tests)
+- Améliorations CLI portfolio_backtest : `--days auto` (auto-détecte max historique commun via DB, affiche goulot par asset), `--leverage` (override sans modifier YAML, exposé dans `PortfolioResult` + rapport), 9 tests
 
 Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 

@@ -48,7 +48,6 @@ def config_dir(tmp_path):
     strategies = {
         "vwap_rsi": {"enabled": True, "timeframe": "5m", "weight": 0.25},
         "liquidation": {"enabled": False},
-        "orderflow": {"enabled": False},
         "momentum": {"enabled": False},
         "funding": {"enabled": False},
         "custom_strategies": {

@@ -14,7 +14,7 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 3 | `grid_multi_tf` | 1h + 4h | Grid/DCA | Long + Short | false | WFO terminé |
 | 4 | `grid_funding` | 1h | Grid/DCA | Long only | false | WFO terminé |
 | 5 | `grid_range_atr` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
-| 6 | `grid_boltrend` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
+| 6 | `grid_boltrend` | 1h | Grid/DCA | Long + Short | **true** | Paper trading 6 assets |
 | 7 | `envelope_dca` | 1h | Grid/DCA | Long only | false | Remplacé par grid_atr |
 | 8 | `envelope_dca_short` | 1h | Grid/DCA | Short only | false | Validation en attente |
 | 9 | `boltrend` | 1h | Swing | Long + Short | false | Grade C (trop peu de trades) |
@@ -26,7 +26,9 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 15 | `funding` | 15m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 | 16 | `liquidation` | 5m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 
-**Paper trading actif** : `grid_atr` sur 10 assets (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX).
+**Paper trading actif** :
+- `grid_atr` sur 10 assets (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — leverage 6x
+- `grid_boltrend` sur 6 assets (BTC, ETH, DOGE, DYDX, LINK, SAND) — leverage 8x
 
 ---
 
@@ -56,7 +58,11 @@ Règle fondamentale : **un seul côté actif à la fois**. Si des positions LONG
 margin_par_level = capital / nb_assets / num_levels
 ```
 Cap 25% du capital par asset. Margin guard global 70% (`max_margin_ratio` dans `risk.yaml`).
-Leverage 6x par défaut pour les stratégies grid.
+
+**Politique leverage** :
+- Stratégies grid : leverage défini par stratégie dans `strategies.yaml` (grid_atr = 6x, grid_boltrend = 8x)
+- Stratégies non-grid : `risk.yaml` `default_leverage: 3` (fallback)
+- Résultats stress test (Sprint 35) : grid_atr optimal à 4-6x (Calmar 11.2), grid_boltrend optimal à 8x (Calmar 20.4)
 
 ---
 
@@ -336,7 +342,7 @@ Réutilise 100% du code de `envelope_dca`. Seuls le nom (`"envelope_dca_short"`)
 
 ---
 
-### 7. grid_boltrend — DCA Event-Driven sur Breakout Bollinger ✨ NOUVEAU
+### 7. grid_boltrend — DCA Event-Driven sur Breakout Bollinger (paper trading actif)
 
 **Fichier** : `backend/strategies/grid_boltrend.py`
 
@@ -374,7 +380,9 @@ Réutilise 100% du code de `envelope_dca`. Seuls le nom (`"envelope_dca_short"`)
 
 **Différence vs grid_atr** : grid_atr = grille toujours active (mean reversion). grid_boltrend = grille activée uniquement sur signal directionnel (trend following DCA).
 
-**Statut** : `enabled: false`, WFO à lancer.
+**Statut** : `enabled: true`, `live_eligible: false`. Paper trading actif sur 6 assets (BTC, ETH, DOGE, DYDX, LINK, SAND) avec leverage 8x.
+
+**Résultats WFO** : Grade B (83/100), Sharpe +1.58 (post-Hotfix 33a). Bugs corrigés : TP inverse via `get_tp_price()` retournant NaN (Hotfix 33a), exit_price/fees fast engine (Hotfix 33b), divergence fast/event réduite à 2.62%.
 
 ---
 
@@ -574,6 +582,36 @@ Pas de trade si la direction n'a pas changé.
 Pourcentages fixes (`tp_percent`, `sl_percent`). Pas de sortie anticipée.
 
 **Statut** : `enabled: false`.
+
+---
+
+### 14. boltrend — Bollinger Trend Following
+
+**Fichier** : `backend/strategies/boltrend.py`
+
+**Concept** : Version mono-position de la logique grid_boltrend. Trade les breakouts des bandes de Bollinger filtrés par tendance long terme (SMA). Sortie dynamique au retour à la SMA Bollinger (TP inverse : close < SMA = exit LONG).
+
+**Logique d'entrée** :
+
+- LONG : `prev_close < bb_upper` ET `close > bb_upper` ET spread > `min_bol_spread` ET `close > sma_long`
+- SHORT : `prev_close > bb_lower` ET `close < bb_lower` ET spread > `min_bol_spread` ET `close < sma_long`
+
+**Logique de sortie** :
+
+- **TP inverse** : close croise la SMA Bollinger (retour au centre) → `"signal_exit"`
+- **SL** : % fixe depuis l'entrée (filet de sécurité)
+
+**Paramètres** :
+
+| Paramètre | Défaut | Rôle |
+|-----------|--------|------|
+| `bol_window` | 100 | Période Bollinger |
+| `bol_std` | 2.0 | Écart-type Bollinger |
+| `long_ma_window` | 200 | SMA filtre tendance |
+| `min_bol_spread` | 0.0 | Spread min bandes (% price) |
+| `sl_percent` | 5.0 | SL fixe (%) |
+
+**Statut** : `enabled: false`. Grade C (trop peu de trades par fenêtre OOS → DSR 0.00). La version DCA `grid_boltrend` résout ce problème.
 
 ---
 

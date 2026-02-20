@@ -79,16 +79,6 @@ class LiquidationConfig(BaseModel):
         return {**base, **overrides}
 
 
-class OrderflowConfig(BaseModel):
-    enabled: bool = False
-    timeframe: str = "1m"
-    imbalance_threshold: float = Field(default=2.0, gt=0)
-    large_order_multiplier: float = Field(default=5.0, gt=0)
-    absorption_threshold: float = Field(default=0.7, ge=0, le=1)
-    confirmation_only: bool = True
-    weight: float = Field(default=0.20, ge=0, le=1)
-
-
 class MomentumConfig(BaseModel):
     enabled: bool = False
     live_eligible: bool = True
@@ -408,7 +398,6 @@ class CustomStrategyConfig(BaseModel):
 class StrategiesConfig(BaseModel):
     vwap_rsi: VwapRsiConfig = Field(default_factory=VwapRsiConfig)
     liquidation: LiquidationConfig = Field(default_factory=LiquidationConfig)
-    orderflow: OrderflowConfig = Field(default_factory=OrderflowConfig)
     momentum: MomentumConfig = Field(default_factory=MomentumConfig)
     funding: FundingConfig = Field(default_factory=FundingConfig)
     bollinger_mr: BollingerMRConfig = Field(default_factory=BollingerMRConfig)
@@ -429,7 +418,7 @@ class StrategiesConfig(BaseModel):
     def validate_weights(self) -> StrategiesConfig:
         enabled = [
             s for s in [
-                self.vwap_rsi, self.liquidation, self.orderflow,
+                self.vwap_rsi, self.liquidation,
                 self.momentum, self.funding,
                 self.bollinger_mr, self.donchian_breakout, self.supertrend,
                 self.boltrend,
@@ -456,7 +445,7 @@ class KillSwitchConfig(BaseModel):
     max_daily_loss_percent: float = Field(default=10.0, gt=0)
     grid_max_session_loss_percent: Optional[float] = None
     grid_max_daily_loss_percent: Optional[float] = None
-    global_max_loss_pct: float = Field(default=30.0, gt=0)
+    global_max_loss_pct: float = Field(default=45.0, gt=0)
     global_window_hours: int = Field(default=24, ge=1)
 
 

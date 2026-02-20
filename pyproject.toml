@@ -1,6 +1,6 @@
 [project]
 name = "scalp-radar"
-version = "0.1.0"
+version = "1.0.0"
 description = "Multi-strategy automated scalping tool for crypto futures"
 requires-python = ">=3.12"
 dependencies = [

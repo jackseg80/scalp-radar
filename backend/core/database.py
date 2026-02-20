@@ -396,7 +396,7 @@ class Database:
                 period_days INTEGER NOT NULL,
                 assets TEXT NOT NULL,
                 exchange TEXT NOT NULL DEFAULT 'binance',
-                kill_switch_pct REAL NOT NULL DEFAULT 30.0,
+                kill_switch_pct REAL NOT NULL DEFAULT 45.0,
                 kill_switch_window_hours INTEGER NOT NULL DEFAULT 24,
                 final_equity REAL NOT NULL,
                 total_return_pct REAL NOT NULL,
