@@ -37,13 +37,15 @@ body {
 
 /* ─── LAYOUT ───────────────────────────────────────────────────────────── */
 .app {
-  display: grid;
-  grid-template-rows: 48px 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
 }
 
 .main-grid {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 0;
