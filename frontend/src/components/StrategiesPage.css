@@ -1,8 +1,9 @@
 /* StrategiesPage — Catalogue des stratégies */
 .strategies-page {
   padding: 20px;
+  width: 100%;
   max-width: 1600px;
-  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .strategies-header {

@@ -327,12 +327,13 @@ export default function GridAtrGuide() {
         ))}
       </div>
 
-      {/* Panneau d'info */}
+      {/* Panneau d'info — min-height fixe pour éviter les sauts de hauteur entre étapes */}
       <div style={{
         background: '#0d1117',
         border: '1px solid #333',
         borderRadius: 8,
         padding: 16,
+        minHeight: 290,
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <h4 style={{ margin: 0, color: '#e8eaed', fontSize: 16 }}>
