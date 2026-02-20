@@ -2493,6 +2493,11 @@ mourir silencieusement sans aucune alerte.
 
 **Tests** : 0 nouveau (frontend pur, pas de backend) → **1550 passants**, 0 régression.
 
+**Hotfixes post-sprint** (3 commits) :
+- `1aba0d8` — Catalogue responsive (`width: 100%` au lieu de `margin: 0 auto` dans flex column) + hauteur tutoriel stable (`minHeight: 290px` sur panneau info GridAtrGuide)
+- `837a0a3` — "Voir les résultats WFO" pré-sélectionne la bonne stratégie dans Recherche : `evalStrategy` prop → `useEffect` sync au montage de ResearchPage (l'événement `eval-strategy-change` arrivait avant le montage du composant)
+- `1529cb4` — "Explorer les paramètres" pré-sélectionne la bonne stratégie dans Explorer : `evalStrategy` n'était pas passé à `ExplorerPage` dans App.jsx + même `useEffect` sync
+
 ---
 
 ### Hotfix Auto-Guérison Symbols Stale + Fix Route Prefix (20 février 2026)
