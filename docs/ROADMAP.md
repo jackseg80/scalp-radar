@@ -2370,10 +2370,37 @@ Un TP touché en milieu de bougie n'était jamais déclenché.
 
 ---
 
+### Hotfix Sync Live→Paper (20 février 2026)
+
+**Problème** : L'exit monitor fermait les positions live en intra-candle (prix temps réel, toutes les 60s).
+Le Simulator paper ne fermait qu'au close de la bougie 1h via `should_close_all()`.
+Divergence croissante de P&L et de positions entre live et paper rendant la comparaison sans valeur.
+
+**Fix** :
+
+- `backend/backtesting/simulator.py` : Nouvelle méthode `Simulator.force_close_grid(strategy_name, symbol, exit_price, exit_reason)` —
+  trouve le `GridStrategyRunner` par nom, ferme via `_gpm.close_all_positions()` au prix live, restitue la marge,
+  met à jour `_capital`, `_realized_pnl`, `_stats` (total_trades, wins/losses, net_pnl), `_trades`
+- `backend/execution/executor.py` : Deux points de sync après `del self._grid_states[futures_sym]` :
+  - `_close_grid_cycle()` — TP/SL détecté par l'exit monitor
+  - `_handle_grid_sl_executed()` — SL exécuté par Bitget via watchOrders
+- `try/except` large : une erreur paper ne bloque jamais la fermeture live
+- Guard `if not positions: return` — si le paper a déjà fermé naturellement (SMA crossing), no-op silencieux
+
+**Comportement dans les logs** :
+```
+15:22:58 | Executor: GRID CLOSE LONG GALA/USDT:USDT — 2 niveaux, net=+10.46 (tp_global)
+15:22:58 | [grid_atr] SYNC CLOSE GALA/USDT — 2 niveaux, exit=0.003870, net=+10.46 (tp_global)
+```
+
+**Tests** : 11 nouveaux dans `test_executor_sync_paper.py` (7 unitaires `force_close_grid` + 4 intégration executor) → **1520 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
-- **1509 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle**
+- **1520 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

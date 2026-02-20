@@ -2447,6 +2447,55 @@ class Simulator:
                 return runner.build_context(symbol)
         return None
 
+    def force_close_grid(
+        self,
+        strategy_name: str,
+        symbol: str,
+        exit_price: float,
+        exit_reason: str,
+    ) -> None:
+        """Ferme une position grid paper au même prix que le live (sync live→paper)."""
+        for runner in self._runners:
+            if runner.name != strategy_name:
+                continue
+            if not hasattr(runner, "_positions"):
+                return
+            positions = runner._positions.get(symbol, [])
+            if not positions:
+                return
+            total_notional = sum(
+                p.entry_price * p.quantity for p in positions
+            )
+            margin_to_return = total_notional / runner._leverage
+            trade = runner._gpm.close_all_positions(
+                positions,
+                exit_price,
+                datetime.now(tz=timezone.utc),
+                exit_reason,
+                "unknown",
+            )
+            runner._capital += trade.net_pnl + margin_to_return
+            runner._realized_pnl += trade.net_pnl
+            runner._positions[symbol] = []
+            runner._stats.total_trades += 1
+            runner._trades.append((symbol, trade))
+            if trade.net_pnl >= 0:
+                runner._stats.wins += 1
+            else:
+                runner._stats.losses += 1
+            runner._stats.net_pnl = runner._capital - runner._initial_capital
+            runner._stats.capital = runner._capital
+            logger.info(
+                "[{}] SYNC CLOSE {} — {} niveaux, exit={:.6f}, net={:+.2f} ({})",
+                strategy_name,
+                symbol,
+                len(positions),
+                exit_price,
+                trade.net_pnl,
+                exit_reason,
+            )
+            return
+
     @property
     def runners(self) -> list[LiveStrategyRunner | GridStrategyRunner]:
         return self._runners

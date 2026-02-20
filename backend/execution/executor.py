@@ -1241,6 +1241,21 @@ class Executor:
         # 6. Cleanup
         del self._grid_states[futures_sym]
 
+        # 7. Sync fermeture vers le runner paper (même prix, même moment)
+        if self._simulator is not None:
+            try:
+                spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+                self._simulator.force_close_grid(
+                    strategy_name=state.strategy_name,
+                    symbol=spot_sym,
+                    exit_price=exit_price,
+                    exit_reason=event.exit_reason or "tp_global",
+                )
+            except Exception as e:
+                logger.warning(
+                    "Executor: sync close vers paper échoué pour {}: {}", futures_sym, e
+                )
+
     async def _handle_grid_sl_executed(
         self, futures_sym: str, state: GridLiveState, exit_price: float,
         exit_fee: float | None = None,
@@ -1281,6 +1296,20 @@ class Executor:
             "Executor: SL grid exécuté {} — net={:+.2f}", futures_sym, net_pnl,
         )
         del self._grid_states[futures_sym]
+
+        # Sync SL vers le runner paper
+        if self._simulator is not None:
+            try:
+                self._simulator.force_close_grid(
+                    strategy_name=state.strategy_name,
+                    symbol=spot_sym,
+                    exit_price=exit_price,
+                    exit_reason="sl_global",
+                )
+            except Exception as e:
+                logger.warning(
+                    "Executor: sync SL vers paper échoué pour {}: {}", futures_sym, e
+                )
 
     # ─── Fermeture de position ─────────────────────────────────────────
 
