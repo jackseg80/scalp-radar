@@ -2330,10 +2330,50 @@ liste de listes (`["long", "short"]`, `["long"]`, `["short"]`), qui sont non-has
 
 ---
 
+### Hotfix UI Statut Paper/Live + Exit Monitor Intra-candle (20 février 2026)
+
+**Problème 1 — Affichage EXECUTOR confus pour grid_boltrend :**
+Quand `grid_boltrend` était sélectionné dans la StrategyBar, le panneau EXECUTOR affichait
+"Mode OFF / Connexion déconnecté", donnant l'impression que rien ne tournait alors que 6 assets
+étaient en warm-up paper trading.
+
+**Fix UI (3 fichiers) :**
+
+- `backend/backtesting/simulator.py` : ajout `is_warming_up` dans `GridStrategyRunner.get_status()`
+  (propagé automatiquement via WS `get_all_status()` → `wsData.strategies[name]`)
+- `frontend/src/hooks/useFilteredWsData.js` : enrichissement de `filteredExecutor` quand la stratégie
+  est paper — ajout `paper_assets`, `paper_num_positions`, `paper_is_warming_up` depuis `strategyData`
+- `frontend/src/components/ExecutorPanel.jsx` :
+  - Nouveau composant `PaperOnlyPanel` : badge `PAPER ONLY`, statut Actif/Warm-up, liste assets, positions
+  - Résumé stratégies en mode Overview : section "Stratégies paper" avec badges jaunes pour chaque runner paper
+  - `getSummary()` retourne `'PAPER'` (au lieu de `'OFF'`) quand une stratégie paper est sélectionnée
+
+**Comportement après fix :**
+
+- Sélection `grid_boltrend` → `PAPER ONLY ✅ Actif / 6 assets (BTC, ETH, DOGE, DYDX, LINK, SAND)`
+- Sélection `grid_atr` → panneau LIVE inchangé
+- Overview → résumé `Stratégies live : grid_atr` + `Stratégies paper : grid_boltrend`
+
+**Problème 2 — Exit monitor manque les TPs intra-candle :**
+`_check_grid_exit()` utilisait le `close` de la dernière bougie fermée pour tester le TP,
+ignorant le prix temps réel de la candle en cours (disponible dans `DataEngine._buffers`).
+Un TP touché en milieu de bougie n'était jamais déclenché.
+
+**Fix executor.py :**
+
+- Lecture de `data_engine._buffers[spot_sym][strategy_tf][-1].close` comme prix temps réel
+- Check TP/SL intra-candle en priorité (`get_tp_price()` / `get_sl_price()`)
+- Fallback sur `should_close_all()` pour les cas spéciaux (TP inverse BolTrend : `get_tp_price()=NaN`)
+- Log enrichi : `price=`, `tp=`, `sl=` pour diagnostic
+
+**Tests** : 2 nouveaux (`test_exit_intracandle_tp`, `test_exit_no_false_tp_with_correct_sma`) → **1509 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
-- **1507 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize**
+- **1509 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)

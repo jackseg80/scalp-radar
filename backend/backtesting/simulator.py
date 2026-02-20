@@ -1362,6 +1362,7 @@ class GridStrategyRunner:
             "funding_cost": round(self._total_funding_cost, 2),
             "watched_symbols": sorted(self._per_asset_keys) if self._per_asset_keys else [],
             "leverage": self._leverage,
+            "is_warming_up": self._is_warming_up,
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:

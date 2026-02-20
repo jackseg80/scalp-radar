@@ -138,10 +138,16 @@ def _make_grid_state(
     )
 
 
-def _make_strategy(should_close_result=None):
-    """Crée une stratégie mock avec should_close_all configurable."""
+def _make_strategy(should_close_result=None, tp_price=float("nan"), sl_price=float("nan")):
+    """Crée une stratégie mock avec should_close_all configurable.
+
+    Par défaut tp_price/sl_price = NaN → désactive le check intra-candle,
+    seul should_close_all() est évalué (rétrocompat tests existants).
+    """
     strategy = MagicMock()
     strategy.should_close_all = MagicMock(return_value=should_close_result)
+    strategy.get_tp_price = MagicMock(return_value=tp_price)
+    strategy.get_sl_price = MagicMock(return_value=sl_price)
     strategy._config = MagicMock()
     strategy._config.timeframe = "1h"
     strategy._config.ma_period = 7
@@ -416,6 +422,64 @@ class TestExitAutonomous:
         await executor._exit_monitor_loop()
 
         assert call_count >= 2  # La boucle a survécu à l'erreur
+
+    @pytest.mark.asyncio
+    async def test_exit_intracandle_tp(self):
+        """Prix temps réel au-dessus du TP mais close bougie fermée en dessous → ferme quand même.
+
+        Réplique check_global_tp_sl() du backtest : le HIGH intra-candle peut
+        toucher le TP même si le close de la bougie précédente est encore sous le TP.
+        """
+        executor = _make_executor()
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state(entry_price=50000.0)
+        # SMA/TP = 100, close dernière bougie fermée = 98 (sous le TP)
+        executor._simulator = _make_simulator_ctx(close=98.0, sma=100.0)
+        # La stratégie signale TP=100, SL=40 ; should_close_all retourne None (close<sma)
+        strategy = _make_strategy(should_close_result=None, tp_price=100.0, sl_price=40.0)
+        executor._strategies = {"grid_atr": strategy}
+
+        # DataEngine buffer : candle en cours avec close=101 (au-dessus du TP)
+        candle_mock = MagicMock()
+        candle_mock.close = 101.0
+        data_engine = MagicMock()
+        data_engine._buffers = {"BTC/USDT": {"1h": [candle_mock]}}
+        executor._data_engine = data_engine
+
+        executor._close_grid_cycle = AsyncMock()
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        executor._close_grid_cycle.assert_called_once()
+        event = executor._close_grid_cycle.call_args[0][0]
+        assert event.exit_reason == "tp_global"
+        assert event.exit_price == 101.0  # prix temps réel, pas le close papier
+
+    @pytest.mark.asyncio
+    async def test_exit_no_false_tp_with_correct_sma(self):
+        """Prix temps réel sous le TP → pas de fermeture (pas de faux TP).
+
+        Vérifie que la SMA du runner paper (source de vérité) est utilisée
+        pour calculer le TP, et que si le prix live est encore sous le TP,
+        l'exit monitor ne ferme pas.
+        """
+        executor = _make_executor()
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state(entry_price=50000.0)
+        # SMA/TP = 100, close bougie fermée = 98
+        executor._simulator = _make_simulator_ctx(close=98.0, sma=100.0)
+        # TP=100 depuis la stratégie ; should_close_all retourne None
+        strategy = _make_strategy(should_close_result=None, tp_price=100.0, sl_price=40.0)
+        executor._strategies = {"grid_atr": strategy}
+
+        # DataEngine buffer : candle en cours avec close=99 (toujours sous le TP)
+        candle_mock = MagicMock()
+        candle_mock.close = 99.0
+        data_engine = MagicMock()
+        data_engine._buffers = {"BTC/USDT": {"1h": [candle_mock]}}
+        executor._data_engine = data_engine
+
+        executor._close_grid_cycle = AsyncMock()
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        executor._close_grid_cycle.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -43,11 +43,22 @@ export default function useFilteredWsData(wsData, strategyFilter) {
     const isStrategyLive = wsData.executor?.enabled &&
       (wsData.executor?.selector?.allowed_strategies || []).includes(strategyFilter)
 
+    // Données du runner paper pour enrichir l'affichage
+    const strategyData = filteredStrategies[strategyFilter]
     const filteredExecutor = isStrategyLive
       // Stratégie live : garder l'executor mais filtrer les positions
       ? { ...wsData.executor, positions: filteredPositions }
-      // Stratégie paper : objet minimal safe (évite les TypeError dans les composants)
-      : { enabled: false, mode: 'paper', positions: [], connected: false, selector: { allowed_strategies: [] } }
+      // Stratégie paper : objet enrichi avec infos du runner (watched_symbols, positions, warming_up)
+      : {
+          enabled: false,
+          mode: 'paper',
+          positions: [],
+          connected: false,
+          selector: { allowed_strategies: [] },
+          paper_assets: strategyData?.watched_symbols || [],
+          paper_num_positions: strategyData?.open_positions ?? 0,
+          paper_is_warming_up: strategyData?.is_warming_up ?? false,
+        }
 
     // 4. Filtrer simulator_positions par strategy
     const filteredSimPositions = (wsData.simulator_positions || [])

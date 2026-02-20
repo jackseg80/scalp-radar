@@ -2,6 +2,12 @@
  * ExecutorPanel — Panneau de statut de l'executor (multi-positions).
  * Props : wsData
  * Conçu pour être wrappé par CollapsibleCard dans App.jsx.
+ *
+ * Cas d'affichage :
+ *  - executor absent           → SIMULATION ONLY
+ *  - executor.mode === 'paper' → PAPER ONLY (stratégie paper sélectionnée)
+ *  - executor.enabled === true → LIVE (mode normal)
+ *  - executor.enabled === false && !mode → OFF (executor inactif)
  */
 import { useState } from 'react'
 import Tooltip from './Tooltip'
@@ -35,6 +41,11 @@ export default function ExecutorPanel({ wsData }) {
     )
   }
 
+  // Mode PAPER ONLY (stratégie paper sélectionnée dans la StrategyBar)
+  if (executor.mode === 'paper') {
+    return <PaperOnlyPanel executor={executor} />
+  }
+
   const { enabled, connected, risk_manager: rm, selector } = executor
   // Multi-positions (nouveau) avec fallback sur position (ancien)
   const positions = executor.positions || (executor.position ? [executor.position] : [])
@@ -43,6 +54,11 @@ export default function ExecutorPanel({ wsData }) {
   const sessionPnl = rm?.session_pnl ?? 0
   // Solde Bitget réel en priorité, fallback sur capital initial configuré
   const balance = executor.exchange_balance ?? rm?.initial_capital
+
+  // Stratégies paper (pour résumé en mode overview)
+  const allStrategyNames = Object.keys(wsData?.strategies || {})
+  const liveStrats = selector?.allowed_strategies || []
+  const paperStrats = allStrategyNames.filter(s => !liveStrats.includes(s))
 
   return (
     <>
@@ -91,7 +107,7 @@ export default function ExecutorPanel({ wsData }) {
 
       {/* Selector — stratégies autorisées en live */}
       {selector && (
-        <div style={{ marginBottom: positions.length > 0 ? 12 : 0 }}>
+        <div style={{ marginBottom: (paperStrats.length > 0 || positions.length > 0) ? 12 : 0 }}>
           <div className="text-xs muted" style={{ marginBottom: 4 }}>Stratégies live autorisées</div>
           {selector.allowed_strategies && selector.allowed_strategies.length > 0 ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -106,6 +122,20 @@ export default function ExecutorPanel({ wsData }) {
               <span className="text-xs muted">aucune (en évaluation)</span>
             </Tooltip>
           )}
+        </div>
+      )}
+
+      {/* Stratégies paper (visible en mode overview quand des stratégies paper tournent) */}
+      {paperStrats.length > 0 && (
+        <div style={{ marginBottom: positions.length > 0 ? 12 : 0 }}>
+          <div className="text-xs muted" style={{ marginBottom: 4 }}>Stratégies paper</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {paperStrats.map((s) => (
+              <span key={s} className="badge badge-simulation" style={{ fontSize: 10, padding: '2px 8px' }}>
+                {s}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -148,7 +178,58 @@ export default function ExecutorPanel({ wsData }) {
 ExecutorPanel.getSummary = function(wsData) {
   const executor = wsData?.executor
   if (!executor) return 'OFF'
+  if (executor.mode === 'paper') return 'PAPER'
   return executor.enabled ? 'LIVE' : 'OFF'
+}
+
+/** Vue PAPER ONLY — stratégie paper sélectionnée dans la StrategyBar */
+function PaperOnlyPanel({ executor }) {
+  const assets = executor.paper_assets || []
+  const numPositions = executor.paper_num_positions ?? 0
+  const isWarmingUp = executor.paper_is_warming_up ?? false
+
+  // Noms courts des assets : "BTC/USDT" → "BTC"
+  const assetNames = assets.map(s => s.split('/')[0])
+  // Si trop long, tronquer à 6 + "…"
+  const displayNames = assetNames.length > 6
+    ? assetNames.slice(0, 6).join(', ') + ', …'
+    : assetNames.join(', ')
+
+  return (
+    <>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="flex-between" style={{ marginBottom: 2 }}>
+          <span className="text-xs muted">Mode</span>
+          <Tooltip content="Cette stratégie tourne en paper trading (simulation). Pas d'ordres réels.">
+            <span className="badge badge-simulation" style={{ fontSize: 10, padding: '2px 8px' }}>
+              PAPER ONLY
+            </span>
+          </Tooltip>
+        </div>
+        <div className="flex-between" style={{ fontSize: 12 }}>
+          <span className="muted">Statut</span>
+          <span style={{ color: 'var(--accent)', fontWeight: 500 }}>
+            {isWarmingUp ? '⏳ Warm-up' : '✅ Actif'}
+          </span>
+        </div>
+        {assets.length > 0 && (
+          <div style={{ fontSize: 12 }}>
+            <div className="flex-between" style={{ marginBottom: 4 }}>
+              <span className="muted">Assets</span>
+              <span className="mono" style={{ fontWeight: 500 }}>{assets.length}</span>
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text-dim)', textAlign: 'right', lineHeight: 1.4 }}>
+              {displayNames}
+            </div>
+          </div>
+        )}
+        <StatusRow label="Positions" value={`${numPositions} ouverte${numPositions !== 1 ? 's' : ''}`} />
+      </div>
+      <div className="text-xs muted text-center" style={{ paddingTop: 12 }}>
+        {isWarmingUp ? 'Warm-up en cours, patience...' : numPositions === 0 ? 'En attente de signaux...' : ''}
+      </div>
+    </>
+  )
 }
 
 function PositionCard({ position, currentPrice }) {

@@ -512,9 +512,13 @@ class Executor:
     async def _check_grid_exit(self, futures_sym: str) -> None:
         """Vérifie si un cycle grid doit être fermé.
 
-        Lit les indicateurs depuis le runner paper (source unique de vérité)
-        et appelle strategy.should_close_all() — même SMA que le dashboard.
+        Lit les indicateurs depuis le runner paper (source unique de vérité pour
+        la SMA/TP), puis vérifie le TP/SL avec le prix temps réel du DataEngine
+        (réplique check_global_tp_sl du backtest). Fallback sur should_close_all()
+        pour les cas spéciaux (TP inverse, signal BolTrend, etc.).
         """
+        import math
+
         state = self._grid_states.get(futures_sym)
         if state is None or not state.positions:
             return
@@ -581,21 +585,51 @@ class Executor:
             unrealized_pnl=unrealized,
         )
 
-        # APPELER LA STRATÉGIE — même logique que le paper
-        exit_reason = strategy.should_close_all(ctx, grid_state)
+        # ── PRIX TEMPS RÉEL : candle en cours du DataEngine ──
+        # Permet de détecter un TP touché intra-candle (comme check_global_tp_sl
+        # du backtest qui compare le HIGH). Le close de la candle en cours reflète
+        # le dernier tick reçu via WebSocket.
+        current_price = current_close  # fallback : close bougie fermée
+        if self._data_engine is not None:
+            buffers = getattr(self._data_engine, "_buffers", {})
+            candles_tf = buffers.get(spot_sym, {}).get(strategy_tf, [])
+            if candles_tf:
+                current_price = candles_tf[-1].close
+
+        # ── CHECK TP/SL INTRA-CANDLE ──
+        tp_price = strategy.get_tp_price(grid_state, tf_indicators)
+        sl_price = strategy.get_sl_price(grid_state, tf_indicators)
+
+        exit_reason: str | None = None
+        if not math.isnan(tp_price):
+            if direction == Direction.LONG and current_price >= tp_price:
+                exit_reason = "tp_global"
+            elif direction == Direction.SHORT and current_price <= tp_price:
+                exit_reason = "tp_global"
+
+        if exit_reason is None and not math.isnan(sl_price):
+            if direction == Direction.LONG and current_price <= sl_price:
+                exit_reason = "sl_global"
+            elif direction == Direction.SHORT and current_price >= sl_price:
+                exit_reason = "sl_global"
+
+        # ── FALLBACK : should_close_all() pour les cas spéciaux ──
+        # (TP inverse BolTrend : get_tp_price()=NaN, exit géré ici via signal SMA)
+        if exit_reason is None:
+            exit_reason = strategy.should_close_all(ctx, grid_state)
 
         if exit_reason is None:
             sma_val = tf_indicators.get("sma", 0.0)
             logger.debug(
-                "Exit monitor: {} — close={:.6f}, sma={:.6f}, no exit",
-                futures_sym, current_close, sma_val,
+                "Exit monitor: {} — price={:.6f}, sma={:.6f}, tp={:.6f}, no exit",
+                futures_sym, current_price, sma_val, tp_price,
             )
             return
 
         logger.info(
-            "Executor: EXIT AUTONOME {} {} — raison={}, close={:.6f}, sma={:.6f}, avg_entry={:.6f}",
+            "Executor: EXIT AUTONOME {} {} — raison={}, price={:.6f}, tp={:.6f}, sl={:.6f}, avg_entry={:.6f}",
             state.direction, futures_sym, exit_reason,
-            current_close, tf_indicators.get("sma", 0.0), avg_entry,
+            current_price, tp_price, sl_price, avg_entry,
         )
 
         # Réutiliser _close_grid_cycle avec un TradeEvent synthétique
@@ -612,7 +646,7 @@ class Executor:
             timestamp=datetime.now(tz=timezone.utc),
             market_regime="unknown",
             exit_reason=exit_reason,
-            exit_price=current_close,
+            exit_price=current_price,
         )
         await self._close_grid_cycle(synthetic_event)
 
