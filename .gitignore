@@ -27,6 +27,8 @@ ENV/
 # Data
 data/
 !data/.gitkeep
+# Exception : données statiques frontend (pas des données de trading)
+!frontend/src/data/
 
 # Logs
 logs/

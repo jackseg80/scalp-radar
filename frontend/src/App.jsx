@@ -16,6 +16,7 @@ import TradeHistory from './components/TradeHistory'
 import ArenaRankingMini from './components/ArenaRankingMini'
 import OverviewPage from './components/OverviewPage'
 import StrategyEvalBar from './components/StrategyEvalBar'
+import StrategiesPage from './components/StrategiesPage'
 import { useWebSocket } from './hooks/useWebSocket'
 import { usePersistedState } from './hooks/usePersistedState'
 import { StrategyProvider, useStrategyContext } from './contexts/StrategyContext'
@@ -25,6 +26,7 @@ const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${windo
 
 const TABS = [
   { id: 'scanner', label: 'Scanner' },
+  { id: 'strategies', label: 'Stratégies' },
   { id: 'research', label: 'Recherche' },
   { id: 'explorer', label: 'Explorer' },
   { id: 'portfolio', label: 'Portfolio' },
@@ -33,7 +35,7 @@ const TABS = [
 ]
 
 // Tabs qui ne sont PAS filtrés par stratégie
-const UNFILTERED_TABS = new Set(['research', 'explorer', 'portfolio', 'journal', 'logs'])
+const UNFILTERED_TABS = new Set(['strategies', 'research', 'explorer', 'portfolio', 'journal', 'logs'])
 
 const SIDEBAR_MIN = 280
 const SIDEBAR_MAX_PCT = 0.50
@@ -50,7 +52,7 @@ function loadSidebarWidth() {
 
 function loadActiveTab() {
   const saved = localStorage.getItem('scalp-radar-active-tab')
-  const validTabs = ['scanner', 'research', 'explorer', 'portfolio', 'journal', 'logs']
+  const validTabs = ['scanner', 'strategies', 'research', 'explorer', 'portfolio', 'journal', 'logs']
   if (saved && validTabs.includes(saved)) return saved
   return 'scanner'
 }
@@ -171,6 +173,9 @@ function AppContent() {
           {activeTab === 'scanner' && (showOverview
             ? <OverviewPage wsData={lastUpdate} />
             : <Scanner wsData={wsData} />
+          )}
+          {activeTab === 'strategies' && (
+            <StrategiesPage onNavigate={handleTabChange} setEvalStrategy={setEvalStrategy} />
           )}
           {activeTab === 'research' && (
             <ResearchPage

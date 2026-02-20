@@ -2469,10 +2469,36 @@ mourir silencieusement sans aucune alerte.
 
 ---
 
+### Sprint Strategy Lab — Documentation Interactive des Stratégies (20 février 2026)
+
+**But** : Ajouter un 7ème tab "Stratégies" au dashboard — documentation interactive pour comprendre chaque stratégie sans se plonger dans le code.
+
+**Nouveau tab "Stratégies"** positionné entre Scanner et Recherche :
+- **Catalogue** : 16 cartes groupées par famille (Grid/DCA → Swing → Scalp), filtres famille, badges statut (LIVE/PAPER/OFF/REMPLACÉ) et grades WFO (A-F colorés)
+- **Vue détail** : fiche résumé (type, direction, timeframe, famille), paramètres clés en tableau, logique entrée/sortie, guide visuel
+- **Tutoriel interactif `grid_atr`** : 7 étapes avec Recharts (lazy-loaded) — crash scenario + recovery scenario + SL scenario, niveaux DCA calculés dynamiquement (`SMA - ATR × (2.0 + i × 1.0)`), ATR variable (450→640→520), prix moyen pondéré
+- **GenericGuide SVG** : 5 schémas inline par type de stratégie (Mean Reversion, Trend Following, Breakout, Range Trading, Funding Arbitrage) — zéro dépendance externe
+- **"Aller plus loin"** : navigation cross-tab avec pré-filtrage stratégie (`setEvalStrategy` + `eval-strategy-change` CustomEvent → `scalp-radar-eval-strategy` localStorage)
+
+**Fichiers créés** (7) :
+- `frontend/src/data/strategyMeta.js` — source unique métadonnées 16 stratégies
+- `frontend/src/components/StrategiesPage.jsx` + `.css`
+- `frontend/src/components/StrategyDetail.jsx` + `.css`
+- `frontend/src/components/guides/GridAtrGuide.jsx` — tutoriel interactif Recharts
+- `frontend/src/components/guides/GenericGuide.jsx` — fallback SVG
+
+**Fichier modifié** (1) : `App.jsx` — import + TABS + UNFILTERED_TABS + validTabs + rendu conditionnel
+
+**Dépendance ajoutée** : `recharts` (chunk séparé 373kB lazy-loaded, hors bundle principal)
+
+**Tests** : 0 nouveau (frontend pur, pas de backend) → **1550 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (20 février 2026)
 
 - **1550 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
@@ -2480,7 +2506,7 @@ mourir silencieusement sans aucune alerte.
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
-- **Frontend complet** : 6 pages (Scanner, Explorer, Recherche, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve)
+- **Frontend complet** : 7 pages (Scanner, **Stratégies**, Recherche, Explorer, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve)
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Sprint 35** : `scripts/stress_test_leverage.py` — 20 backtests (2 stratégies × 4 leverages × 2-3 fenêtres), KS désactivé (99%), analyse KS a posteriori à 30%/45%/60%, Calmar ratio, recommandation automatique, CSV `data/stress_test_results.csv`. Pas de tests unitaires (script de benchmark).
@@ -2488,7 +2514,7 @@ mourir silencieusement sans aucune alerte.
 - **Hotfix Dashboard Leverage/Bug43** : leverage affiché dans ActivePositions/ExecutorPanel/Scanner, bug per_asset num_levels corrigé (`_get_num_levels()` + patch temp config), unrealized_pnl temps réel (1m au lieu de 1h)
 - **Hotfix Sidebar Isolation** : ExecutorPanel affiche "SIMULATION ONLY" pour les stratégies paper, EquityCurve isolée par stratégie (`?strategy=X`), kill_switch par runner
 - **Kill switch live** : seuil 25% pour grid (était 5%), endpoint reset `/api/executor/kill-switch/reset`, alerte Telegram, reset quotidien minuit UTC, kill switch global drawdown 45%/24h
-- **Prochaine étape** : Déployer les fixes P0+P1 sur le serveur, valider le comportement live, puis choisir le leverage optimal grid_boltrend et déployer en paper trading
+- **Prochaine étape** : Déployer les fixes P0+P1 sur le serveur, valider le comportement live, choisir le leverage optimal grid_boltrend et déployer en paper trading
 
 ### Résultats Portfolio Backtest — Validation Finale
 

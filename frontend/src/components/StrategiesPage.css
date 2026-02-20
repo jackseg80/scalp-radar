@@ -1,0 +1,232 @@
+/* StrategiesPage — Catalogue des stratégies */
+.strategies-page {
+  padding: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.strategies-header {
+  margin-bottom: 24px;
+}
+
+.strategies-header h2 {
+  margin: 0 0 4px 0;
+  color: var(--text-primary);
+  font-size: 24px;
+}
+
+.strategies-header p {
+  margin: 0 0 16px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* Filtres famille */
+.strategies-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.strategies-filter-btn {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.strategies-filter-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.strategies-filter-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Groupe de famille */
+.strategies-family-group {
+  margin-bottom: 28px;
+}
+
+.strategies-family-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.strategies-family-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.strategies-family-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Grille de cartes */
+.strategies-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+/* Carte */
+.strategy-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-left: 3px solid transparent;
+}
+
+.strategy-card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--text-muted);
+}
+
+.strategy-card.status-live {
+  border-left-color: var(--accent);
+}
+
+.strategy-card.status-paper {
+  border-left-color: var(--yellow);
+}
+
+.strategy-card.status-disabled {
+  opacity: 0.7;
+}
+
+.strategy-card.status-replaced {
+  opacity: 0.6;
+}
+
+/* Card header : nom + badges */
+.strategy-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.strategy-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strategy-card.status-replaced .strategy-card-name {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.strategy-card-badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Badge statut */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.status-badge.live {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.status-badge.paper {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+}
+
+.status-badge.disabled {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.status-badge.replaced {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  text-decoration: line-through;
+}
+
+/* Badge grade (mini) */
+.strategy-grade-mini {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 700;
+  font-size: 11px;
+  color: white;
+}
+
+.strategy-grade-mini.grade-null {
+  background: #444;
+  color: var(--text-muted);
+}
+
+/* Card body */
+.strategy-card-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.strategy-card-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.strategy-card-footer {
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.strategy-card-cta {
+  font-size: 12px;
+  color: var(--blue);
+  font-weight: 500;
+}
+
+.strategy-card:hover .strategy-card-cta {
+  text-decoration: underline;
+}
