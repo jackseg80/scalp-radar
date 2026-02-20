@@ -40,6 +40,16 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
   const setSortBy = (s) => updatePersistedState({ sortBy: s })
   const setSortDir = (d) => updatePersistedState({ sortDir: d })
 
+  // Sync prop evalStrategy → filters.strategy au montage (navigation depuis StrategyDetail)
+  // L'événement eval-strategy-change est dispatché AVANT le changement de tab, donc avant
+  // le montage de ResearchPage — ce useEffect rattrape la valeur via la prop React.
+  useEffect(() => {
+    if (evalStrategy && evalStrategy !== filters.strategy) {
+      setFilters({ ...filters, strategy: evalStrategy })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evalStrategy])
+
   // Sync via CustomEvent (EvalBar -> ResearchPage et inversement)
   useEffect(() => {
     const handler = (e) => {
