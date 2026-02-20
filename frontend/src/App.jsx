@@ -184,7 +184,7 @@ function AppContent() {
               setEvalStrategy={setEvalStrategy}
             />
           )}
-          {activeTab === 'explorer' && <ExplorerPage wsData={lastUpdate} lastEvent={lastEvent} />}
+          {activeTab === 'explorer' && <ExplorerPage wsData={lastUpdate} lastEvent={lastEvent} evalStrategy={evalStrategy} setEvalStrategy={setEvalStrategy} />}
           {activeTab === 'portfolio' && (
             <PortfolioPage
               wsData={lastUpdate}

@@ -22,7 +22,7 @@ const STATUS_COLORS = {
   cancelled: '#6b7280',
 }
 
-export default function ExplorerPage({ wsData, lastEvent }) {
+export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalStrategy }) {
   // États persistés (sélections utilisateur)
   const [strategy, setStrategy] = usePersistedState('explorer-strategy', '')
   const [asset, setAsset] = usePersistedState('explorer-asset', '')
@@ -42,6 +42,14 @@ export default function ExplorerPage({ wsData, lastEvent }) {
   const [metric, setMetric] = usePersistedState('explorer-metric', 'oos_sharpe')
   const [paramsExpanded, setParamsExpanded] = usePersistedState('explorer-params-expanded', false)
   const [selectedRunId, setSelectedRunId] = usePersistedState('explorer-run-id', null)
+
+  // Sync prop evalStrategy → strategy au montage (navigation depuis StrategyDetail)
+  useEffect(() => {
+    if (evalStrategy && evalStrategy !== strategy) {
+      setStrategy(evalStrategy)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evalStrategy])
 
   // États non-persistés (données temporaires)
   const [paramGrid, setParamGrid] = useState(null)
