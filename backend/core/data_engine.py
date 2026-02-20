@@ -586,7 +586,15 @@ class DataEngine:
 
         buffer = self._buffers[symbol][timeframe_str]
 
-        # Doublon ?
+        # Candle en cours (même timestamp que la dernière) → mise à jour in-place
+        # Le WS Bitget envoie des mises à jour OHLCV sur la bougie en cours ;
+        # on remplace l'entrée pour que buffer[-1].close soit toujours le dernier tick.
+        # Pas de callback ni d'écriture DB (la candle sera persistée à sa clôture).
+        if buffer and buffer[-1].timestamp == candle.timestamp:
+            buffer[-1] = candle
+            return
+
+        # Doublon plus ancien → rejeter
         if self.validator.is_duplicate(candle, buffer):
             return
 

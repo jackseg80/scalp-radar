@@ -165,6 +165,78 @@ class TestCandleBuffer:
         assert len(engine._write_buffer) == 0
         db.insert_candles_batch.assert_called()
 
+    # ── Tests mise à jour intra-candle ────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_candle_update_in_place(self):
+        """Une candle avec le même timestamp met à jour le buffer au lieu d'être rejetée."""
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock()
+        engine = DataEngine(config=_make_config(), database=db)
+
+        ts = datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
+        ts_ms = int(ts.timestamp()) * 1000
+
+        # Première réception : close=50
+        await engine._on_candle_received("BTC/USDT", "1m", [ts_ms, 49.0, 51.0, 48.0, 50.0, 1.0])
+        assert len(engine._buffers["BTC/USDT"]["1m"]) == 1
+        assert engine._buffers["BTC/USDT"]["1m"][-1].close == 50.0
+
+        # Même timestamp, close=55 (mise à jour intra-candle)
+        await engine._on_candle_received("BTC/USDT", "1m", [ts_ms, 49.0, 56.0, 48.0, 55.0, 2.0])
+        assert len(engine._buffers["BTC/USDT"]["1m"]) == 1  # pas de doublon ajouté
+        assert engine._buffers["BTC/USDT"]["1m"][-1].close == 55.0  # prix mis à jour
+
+    @pytest.mark.asyncio
+    async def test_candle_update_does_not_trigger_callback(self):
+        """La mise à jour intra-candle ne déclenche pas on_candle callback."""
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock()
+        engine = DataEngine(config=_make_config(), database=db)
+
+        callback_calls: list[str] = []
+
+        def on_candle(symbol, tf, candle):
+            callback_calls.append(f"{symbol}:{tf}:{candle.close}")
+
+        engine.on_candle(on_candle)
+
+        ts_ms = int(datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc).timestamp()) * 1000
+
+        # Première candle → callback appelé
+        await engine._on_candle_received("BTC/USDT", "1m", [ts_ms, 49.0, 51.0, 48.0, 50.0, 1.0])
+        assert len(callback_calls) == 1
+
+        # Même timestamp → mise à jour in-place, callback PAS rappelé
+        await engine._on_candle_received("BTC/USDT", "1m", [ts_ms, 49.0, 56.0, 48.0, 55.0, 2.0])
+        assert len(callback_calls) == 1  # toujours 1
+
+    @pytest.mark.asyncio
+    async def test_old_duplicate_still_rejected(self):
+        """Un doublon plus ancien (pas la dernière candle) est toujours rejeté."""
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock()
+        engine = DataEngine(config=_make_config(), database=db)
+
+        base_ts = int(datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc).timestamp()) * 1000
+        min_ms = 60_000
+
+        # 3 candles successives (high = close + 1 pour respecter la validation Pydantic)
+        for i in range(3):
+            close = 50.0 + i
+            await engine._on_candle_received(
+                "BTC/USDT", "1m",
+                [base_ts + i * min_ms, 49.0, close + 1.0, 48.0, close, 1.0],
+            )
+        assert len(engine._buffers["BTC/USDT"]["1m"]) == 3
+
+        # Re-envoyer la candle ts=0 (ancienne, pas la dernière) → rejetée
+        await engine._on_candle_received(
+            "BTC/USDT", "1m",
+            [base_ts, 49.0, 100.0, 48.0, 99.0, 1.0],
+        )
+        assert len(engine._buffers["BTC/USDT"]["1m"]) == 3  # pas de 4e
+
     @pytest.mark.asyncio
     async def test_empty_buffer_no_flush(self):
         """Vérifie qu'un buffer vide ne déclenche pas d'insert."""
