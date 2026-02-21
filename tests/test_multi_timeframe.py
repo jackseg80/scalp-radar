@@ -504,10 +504,12 @@ class TestParamGridsIntegration:
         default = param_grids["grid_multi_tf"]["default"]
         assert "timeframe" not in default
 
-    def test_grid_funding_no_timeframe(self, param_grids):
-        """grid_funding ne contient PAS timeframe."""
+    def test_grid_funding_has_timeframe(self, param_grids):
+        """grid_funding contient timeframe optimisable."""
         default = param_grids["grid_funding"]["default"]
-        assert "timeframe" not in default
+        assert "timeframe" in default
+        assert "1h" in default["timeframe"]
+        assert "4h" in default["timeframe"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -354,15 +354,18 @@ def _run_single_backtest_worker(params: dict[str, Any]) -> _ISResult:
     """
     from backend.optimization import is_grid_strategy
 
+    # Utiliser le timeframe du combo si présent, sinon le défaut
+    effective_tf = params.get("timeframe", _worker_main_tf)
+
     if is_grid_strategy(_worker_strategy):
         from backend.backtesting.multi_engine import run_multi_backtest_single
         result = run_multi_backtest_single(
-            _worker_strategy, params, _worker_candles, _worker_bt_config, _worker_main_tf,
+            _worker_strategy, params, _worker_candles, _worker_bt_config, effective_tf,
             extra_data_by_timestamp=_worker_extra_data,
         )
     else:
         result = run_backtest_single(
-            _worker_strategy, params, _worker_candles, _worker_bt_config, _worker_main_tf,
+            _worker_strategy, params, _worker_candles, _worker_bt_config, effective_tf,
             extra_data_by_timestamp=_worker_extra_data,
         )
     metrics = calculate_metrics(result)
@@ -388,16 +391,19 @@ def _run_single_backtest_sequential(
     """Version séquentielle (fallback si ProcessPoolExecutor crashe)."""
     from backend.optimization import is_grid_strategy
 
+    # Utiliser le timeframe du combo si présent, sinon le défaut
+    effective_tf = params.get("timeframe", main_tf)
+
     if is_grid_strategy(strategy_name):
         from backend.backtesting.multi_engine import run_multi_backtest_single
         result = run_multi_backtest_single(
-            strategy_name, params, candles_by_tf, bt_config, main_tf,
+            strategy_name, params, candles_by_tf, bt_config, effective_tf,
             precomputed_indicators=precomputed_indicators,
             extra_data_by_timestamp=extra_data_by_timestamp,
         )
     else:
         result = run_backtest_single(
-            strategy_name, params, candles_by_tf, bt_config, main_tf,
+            strategy_name, params, candles_by_tf, bt_config, effective_tf,
             precomputed_indicators=precomputed_indicators,
             extra_data_by_timestamp=extra_data_by_timestamp,
         )
@@ -497,6 +503,20 @@ class WalkForwardOptimizer:
         if hasattr(default_cfg, "trend_filter_timeframe"):
             tfs_needed.append(default_cfg.trend_filter_timeframe)
 
+        # Extraire les timeframes du param grid pour les charger depuis la DB
+        strategy_grids_raw = self._grids.get(strategy_name, {})
+        merged_grid_raw = {
+            **strategy_grids_raw.get("default", {}),
+            **strategy_grids_raw.get(symbol, {}),
+        }
+        if params_override:
+            merged_grid_raw.update(params_override)
+        grid_tfs = merged_grid_raw.get("timeframe", [])
+        if isinstance(grid_tfs, list):
+            for tf in grid_tfs:
+                if tf not in tfs_needed:
+                    tfs_needed.append(tf)
+
         # Exchange par défaut : binance (données profondes depuis 2020)
         # Override possible via --exchange en CLI
         db = Database()
@@ -515,8 +535,11 @@ class WalkForwardOptimizer:
             candles = await db.get_candles(
                 symbol, tf, exchange=exchange, limit=1_000_000
             )
-            all_candles_by_tf[tf] = candles
-            logger.info("  {} : {} candles", tf, len(candles))
+            if candles:
+                all_candles_by_tf[tf] = candles
+                logger.info("  {} : {} candles", tf, len(candles))
+            else:
+                logger.info("  {} : 0 candles (sera resampleé si nécessaire)", tf)
 
         # Charger funding/OI si la stratégie en a besoin
         from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
@@ -767,9 +790,14 @@ class WalkForwardOptimizer:
                 # --- OOS evaluation (best params uniquement) ---
 
                 # Multi-timeframe : resampler OOS si le meilleur IS
-                # utilise un timeframe différent de main_tf (1h)
+                # utilise un timeframe différent de main_tf
                 best_tf = best_params.get("timeframe", main_tf)
-                if best_tf != main_tf and best_tf != "1h":
+                if best_tf in oos_candles_by_tf:
+                    # TF déjà chargé depuis la DB (ex: 15m pour scalp)
+                    oos_candles_for_eval = oos_candles_by_tf
+                    oos_extra_for_eval = oos_extra_data_map
+                    oos_eval_tf = best_tf
+                elif best_tf != main_tf:
                     from backend.optimization.indicator_cache import resample_candles
                     oos_resampled = resample_candles(
                         oos_candles_by_tf.get("1h", oos_candles_by_tf.get(main_tf, [])),
@@ -1122,8 +1150,10 @@ class WalkForwardOptimizer:
         t_start = time.monotonic()
 
         for tf, tf_combos in tf_groups.items():
-            # Resampler les candles si nécessaire
-            if tf != main_tf and tf != "1h":
+            # Resampler les candles si nécessaire (skip si TF déjà chargé depuis la DB)
+            if tf in candles_by_tf:
+                local_candles = candles_by_tf
+            elif tf != main_tf:
                 source_candles = candles_by_tf.get("1h", candles_by_tf.get(main_tf, []))
                 resampled = resample_candles(source_candles, tf)
                 local_candles = {tf: resampled}

@@ -9,6 +9,7 @@ optimization:
 
 vwap_rsi:
   default:
+    timeframe: ["5m", "15m"]
     rsi_period: [10, 14, 20]
     rsi_long_threshold: [25, 30, 35]
     rsi_short_threshold: [65, 70, 75]
@@ -26,6 +27,7 @@ vwap_rsi:
 
 momentum:
   default:
+    timeframe: ["5m", "15m"]
     breakout_lookback: [15, 20, 30, 40]
     volume_confirmation_multiplier: [1.5, 2.0, 2.5]
     atr_multiplier_tp: [1.5, 2.0, 2.5]
@@ -37,6 +39,7 @@ momentum:
 # extreme_negative_threshold miroir automatique de extreme_positive_threshold
 funding:
   default:
+    timeframe: ["5m", "15m"]
     extreme_positive_threshold: [0.01, 0.02, 0.03, 0.05]
     entry_delay_minutes: [0, 3, 5, 10]
     tp_percent: [0.2, 0.3, 0.4, 0.6]
@@ -45,6 +48,7 @@ funding:
 # Liquidation : ~576 combos (4×4×4×3×4 = 768, réduit par coarse sampling)
 liquidation:
   default:
+    timeframe: ["5m", "15m"]
     oi_change_threshold: [3.0, 5.0, 7.0, 10.0]
     leverage_estimate: [10, 15, 20, 25]
     zone_buffer_percent: [0.5, 1.0, 1.5, 2.0]
@@ -59,6 +63,7 @@ bollinger_mr:
     oos_days: 60
     step_days: 60
   default:
+    timeframe: ["1h", "4h"]
     bb_period: [15, 20, 25, 30]
     bb_std: [1.5, 2.0, 2.5]
     sl_percent: [3.0, 5.0, 7.0, 10.0]
@@ -69,6 +74,7 @@ donchian_breakout:
     oos_days: 60
     step_days: 60
   default:
+    timeframe: ["1h", "4h"]
     entry_lookback: [20, 30, 40, 55]
     atr_period: [10, 14, 20]
     atr_tp_multiple: [2.0, 3.0, 4.0]
@@ -80,6 +86,7 @@ supertrend:
     oos_days: 60
     step_days: 60
   default:
+    timeframe: ["1h", "4h"]
     atr_period: [7, 10, 14, 20]
     atr_multiplier: [2.0, 2.5, 3.0, 4.0]
     tp_percent: [3.0, 4.0, 6.0, 8.0]
@@ -114,7 +121,7 @@ grid_boltrend:
     num_levels: [2, 3, 4]
     sl_percent: [10.0, 15.0, 20.0]
     atr_spacing_mult: [0.5, 1.0, 1.5]
-    timeframe: ["1h"]
+    timeframe: ["1h", "4h"]
 
 # Envelope DCA : 972 combos (3×4×3×5×3×4), coarse LHS 200
 envelope_dca:
@@ -166,6 +173,7 @@ grid_range_atr:
     oos_days: 60
     step_days: 60
   default:
+    timeframe: ["1h", "4h"]
     ma_period: [14, 20, 30, 50]
     atr_period: [10, 14, 20]
     atr_spacing_mult: [0.2, 0.3, 0.4, 0.5, 0.7]
@@ -200,6 +208,7 @@ grid_funding:
     oos_days: 90
     step_days: 90
   default:
+    timeframe: ["1h", "4h"]
     funding_threshold_start: [0.0003, 0.0005, 0.0008, 0.001]
     funding_threshold_step: [0.0003, 0.0005, 0.001]
     num_levels: [2, 3]

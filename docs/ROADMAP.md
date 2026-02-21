@@ -2614,12 +2614,36 @@ si le silence est global. Résultat : un symbol mort reste mort jusqu'à interve
 
 **Tests** : 0 nouveau (frontend pur, pas de backend) → **1558 passants**, 0 régression.
 
+### Sprint Multi-Timeframe WFO — Timeframe optimisable pour toutes les stratégies (21 février 2026)
+
+**But** : Permettre au WFO d'optimiser le timeframe pour les 10 stratégies qui avaient un timeframe fixe.
+
+**Stratégies enrichies** (10) :
+- **Scalp 5m** : vwap_rsi, momentum, funding, liquidation → `["5m", "15m"]` (×2 combos)
+- **Swing 1h** : bollinger_mr, donchian_breakout, supertrend → `["1h", "4h"]` (×2 combos)
+- **Grid 1h** : grid_range_atr, grid_funding → `["1h", "4h"]` (×2 combos)
+- **grid_boltrend** : `["1h"]` → `["1h", "4h"]` (×2 combos)
+- **grid_multi_tf exclu** : filtre 4h interne baked-in, incompatible avec changement de TF primaire
+
+**Changements walk_forward.py** (4 fixes) :
+1. Chargement dynamique : extrait les TFs du param grid et les charge depuis la DB au démarrage
+2. Resampling intelligent : si le TF est déjà en mémoire (ex: 15m chargé depuis DB), skip le resampling. Sinon resample depuis 1h (ex: 1h→4h)
+3. OOS evaluation : même logique pour l'évaluation out-of-sample
+4. Workers pool/séquentiel : utilisent le `timeframe` du combo (corrige un bug pré-existant où le TF fixe était utilisé)
+
+**Fichiers modifiés** (3) :
+- `config/param_grids.yaml` — ajout `timeframe` à 10 stratégies
+- `backend/optimization/walk_forward.py` — chargement dynamique TFs, resampling intelligent, fix workers
+- `tests/test_multi_timeframe.py` — test grid_funding mis à jour
+
+**Tests** : 1 test modifié → **1559 passants**, 0 régression.
+
 ---
 
 ## ÉTAT ACTUEL (21 février 2026)
 
-- **1558 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3**
+- **1559 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **22 assets** (21 historiques + JUP/USDT pour grid_trend, THETA/USDT retiré — inexistant sur Bitget)
