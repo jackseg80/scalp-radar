@@ -454,7 +454,7 @@ class JobManager:
              "--job-id", job.id,
              "--db-path", str(self._db_path)],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=None,  # Hérite du terminal parent → logs visibles
         )
         self._running_procs[job.id] = proc
         logger.debug("WFO subprocess lancé (PID {})", proc.pid)
@@ -518,13 +518,7 @@ class JobManager:
 
         returncode = proc.returncode
         if returncode not in (0, 2) and result_id is None:
-            stderr_str = ""
-            try:
-                assert proc.stderr is not None
-                stderr_str = proc.stderr.read().decode(errors="replace")[:500]
-            except Exception:
-                pass
-            msg = error_msg or f"WFO subprocess exit {returncode}: {stderr_str}"
+            msg = error_msg or f"WFO subprocess crash (exit {returncode})"
             raise RuntimeError(msg)
 
         return result_id
