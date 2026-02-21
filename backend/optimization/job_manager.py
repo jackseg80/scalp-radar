@@ -460,12 +460,19 @@ class JobManager:
         logger.debug("WFO subprocess lancé (PID {})", proc.pid)
 
         def _monitor_stdout() -> tuple[int | None, str | None, bool]:
-            """Lit stdout, met à jour DB + WS en temps réel depuis le thread."""
+            """Lit stdout, met à jour DB + WS en temps réel depuis le thread.
+
+            Utilise readline() au lieu de l'itérateur fichier pour éviter
+            le buffering interne de Python (8KB) qui retarde les updates.
+            """
             _result_id: int | None = None
             _error_msg: str | None = None
             _cancelled = False
             assert proc.stdout is not None
-            for raw_line in proc.stdout:
+            while True:
+                raw_line = proc.stdout.readline()
+                if not raw_line:
+                    break  # EOF = subprocess terminé
                 line = raw_line.decode(errors="replace").strip()
                 if not line:
                     continue
