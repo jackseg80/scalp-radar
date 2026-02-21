@@ -111,27 +111,19 @@ class GridPositionManager:
         total_entry_fees = sum(p.entry_fee for p in positions)
         earliest_entry = min(p.entry_time for p in positions)
 
-        # Slippage
-        slippage_cost = 0.0
-        actual_exit_price = exit_price
+        # Gross PnL sur prix brut (pas d'actual_exit ajusté)
+        if direction == Direction.LONG:
+            gross_pnl = (exit_price - avg_entry) * total_qty
+        else:
+            gross_pnl = (avg_entry - exit_price) * total_qty
 
+        # Slippage : flat cost 1 seule fois (exit seulement, sauf TP)
+        slippage_cost = 0.0
         if exit_reason in ("sl_global", "signal_exit", "end_of_data"):
             slippage_rate = self._config.slippage_pct
             if regime == MarketRegime.HIGH_VOLATILITY:
                 slippage_rate *= self._config.high_vol_slippage_mult
-
             slippage_cost = total_qty * exit_price * slippage_rate
-
-            if direction == Direction.LONG:
-                actual_exit_price = exit_price * (1 - slippage_rate)
-            else:
-                actual_exit_price = exit_price * (1 + slippage_rate)
-
-        # Gross PnL
-        if direction == Direction.LONG:
-            gross_pnl = (actual_exit_price - avg_entry) * total_qty
-        else:
-            gross_pnl = (avg_entry - actual_exit_price) * total_qty
 
         # Fee de sortie
         if exit_reason == "tp_global":
@@ -145,7 +137,7 @@ class GridPositionManager:
         return TradeResult(
             direction=direction,
             entry_price=avg_entry,
-            exit_price=actual_exit_price,
+            exit_price=exit_price,
             quantity=total_qty,
             entry_time=earliest_entry,
             exit_time=exit_time,

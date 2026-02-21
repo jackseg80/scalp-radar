@@ -654,7 +654,7 @@ class PortfolioBacktester:
             ((total_equity - maintenance_margin) / total_equity * 100)
             if total_equity > 0 else -100.0
         )
-        is_liquidated = total_equity <= maintenance_margin and total_notional > 0
+        is_liquidated = total_equity < maintenance_margin and total_notional > 0
 
         worst_case_sl_loss_pct = (
             (worst_case_sl_loss / self._initial_capital * 100)

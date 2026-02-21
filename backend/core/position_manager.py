@@ -151,26 +151,19 @@ class PositionManager:
         regime: MarketRegime,
     ) -> TradeResult:
         """Clôture une position et calcule le P&L."""
-        slippage_cost = 0.0
-        actual_exit_price = exit_price
+        # Gross P&L sur prix brut (pas d'actual_exit ajusté)
+        if position.direction == Direction.LONG:
+            gross_pnl = (exit_price - position.entry_price) * position.quantity
+        else:
+            gross_pnl = (position.entry_price - exit_price) * position.quantity
 
+        # Slippage : flat cost 1 seule fois (exit seulement, sauf TP)
+        slippage_cost = 0.0
         if exit_reason in ("sl", "signal_exit", "end_of_data", "regime_change"):
             slippage_rate = self._config.slippage_pct
             if regime == MarketRegime.HIGH_VOLATILITY:
                 slippage_rate *= self._config.high_vol_slippage_mult
-
             slippage_cost = position.quantity * exit_price * slippage_rate
-
-            if position.direction == Direction.LONG:
-                actual_exit_price = exit_price * (1 - slippage_rate)
-            else:
-                actual_exit_price = exit_price * (1 + slippage_rate)
-
-        # Gross P&L
-        if position.direction == Direction.LONG:
-            gross_pnl = (actual_exit_price - position.entry_price) * position.quantity
-        else:
-            gross_pnl = (position.entry_price - actual_exit_price) * position.quantity
 
         # Fee de sortie
         if exit_reason == "tp":
@@ -184,7 +177,7 @@ class PositionManager:
         return TradeResult(
             direction=position.direction,
             entry_price=position.entry_price,
-            exit_price=actual_exit_price,
+            exit_price=exit_price,
             quantity=position.quantity,
             entry_time=position.entry_time,
             exit_time=exit_time,

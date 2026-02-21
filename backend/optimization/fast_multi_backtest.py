@@ -198,6 +198,11 @@ def _simulate_grid_common(
                 neutral_zone = False
                 # Force-close si direction a flippé
                 if positions and last_dir != 0 and cur_dir_int != last_dir:
+                    # Restaurer la marge verrouillée
+                    margin_to_return = sum(
+                        ep * qty / leverage for _l, ep, qty, _f in positions
+                    )
+                    capital += margin_to_return
                     pnl = _calc_grid_pnl(
                         positions, cache.closes[i], taker_fee, slippage_pct, last_dir,
                     )
@@ -318,6 +323,11 @@ def _simulate_grid_common(
                     fee = taker_fee
                     slip = slippage_pct
 
+                # Restaurer la marge verrouillée
+                margin_to_return = sum(
+                    ep * qty / leverage for _l, ep, qty, _f in positions
+                )
+                capital += margin_to_return
                 pnl = _calc_grid_pnl(positions, exit_price, fee, slip, direction)
                 trade_pnls.append(pnl)
                 if capital > 0:
@@ -368,6 +378,11 @@ def _simulate_grid_common(
                     qty = notional / ep
                     if qty <= 0:
                         continue
+                    # Margin deduction (cohérent avec GridStrategyRunner)
+                    margin = notional / leverage
+                    if capital < margin:
+                        continue
+                    capital -= margin
                     entry_fee = qty * ep * taker_fee
                     positions.append((lvl, ep, qty, entry_fee))
                     if len(positions) == 1:
@@ -382,6 +397,11 @@ def _simulate_grid_common(
     # Force close fin de données
     if positions:
         exit_price = float(cache.closes[n - 1])
+        # Restaurer la marge verrouillée
+        margin_to_return = sum(
+            ep * qty / leverage for _l, ep, qty, _f in positions
+        )
+        capital += margin_to_return
         pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
         trade_pnls.append(pnl)
         if capital > 0:
@@ -550,23 +570,19 @@ def _simulate_grid_range(
                         fee = taker_fee
                         slip = slippage_pct
 
-                    # PnL individuel (même pattern que _calc_grid_pnl)
-                    actual_exit = exit_price
-                    slippage_cost = 0.0
-                    if slip > 0:
-                        slippage_cost = qty * exit_price * slip
-                        if direction == 1:
-                            actual_exit = exit_price * (1 - slip)
-                        else:
-                            actual_exit = exit_price * (1 + slip)
-
+                    # Gross PnL sur prix brut (pas d'actual_exit)
                     if direction == 1:
-                        gross = (actual_exit - ep) * qty
+                        gross = (exit_price - ep) * qty
                     else:
-                        gross = (ep - actual_exit) * qty
+                        gross = (ep - exit_price) * qty
 
                     exit_fee = qty * exit_price * fee
+                    slippage_cost = qty * exit_price * slip if slip > 0 else 0.0
                     net = gross - efee - exit_fee - slippage_cost
+
+                    # Restaurer la marge de cette position
+                    margin_to_return = ep * qty / leverage
+                    capital += margin_to_return
                     trade_pnls.append(net)
                     if capital > 0:
                         trade_returns.append(net / capital)
@@ -608,7 +624,9 @@ def _simulate_grid_range(
                     if ep > 0 and cache.lows[i] <= ep:
                         notional = capital * (1.0 / total_slots) * leverage
                         qty = notional / ep
-                        if qty > 0:
+                        margin = notional / leverage
+                        if qty > 0 and capital >= margin:
+                            capital -= margin
                             entry_fee = qty * ep * taker_fee
                             positions.append((lvl, 1, ep, qty, entry_fee, cur_sma))
                             filled_slots.add(lvl)
@@ -620,7 +638,9 @@ def _simulate_grid_range(
                     if cache.highs[i] >= ep:
                         notional = capital * (1.0 / total_slots) * leverage
                         qty = notional / ep
-                        if qty > 0:
+                        margin = notional / leverage
+                        if qty > 0 and capital >= margin:
+                            capital -= margin
                             entry_fee = qty * ep * taker_fee
                             positions.append((short_slot, -1, ep, qty, entry_fee, cur_sma))
                             filled_slots.add(short_slot)
@@ -629,17 +649,19 @@ def _simulate_grid_range(
     if positions:
         exit_price = float(cache.closes[n - 1])
         for _slot, direction, ep, qty, efee, _esma in positions:
-            actual_exit = exit_price
-            slippage_cost = qty * exit_price * slippage_pct
+            # Gross PnL sur prix brut
             if direction == 1:
-                actual_exit = exit_price * (1 - slippage_pct)
-                gross = (actual_exit - ep) * qty
+                gross = (exit_price - ep) * qty
             else:
-                actual_exit = exit_price * (1 + slippage_pct)
-                gross = (ep - actual_exit) * qty
+                gross = (ep - exit_price) * qty
 
+            slippage_cost = qty * exit_price * slippage_pct
             exit_fee = qty * exit_price * taker_fee
             net = gross - efee - exit_fee - slippage_cost
+
+            # Restaurer la marge de cette position
+            margin_to_return = ep * qty / leverage
+            capital += margin_to_return
             trade_pnls.append(net)
             if capital > 0:
                 trade_returns.append(net / capital)
@@ -704,7 +726,8 @@ def _calc_grid_pnl_with_funding(
         # Fees (entry + exit)
         entry_fee = notional * taker_fee
         exit_fee = exit_price * quantity * taker_fee
-        slippage = notional * slippage_pct + exit_price * quantity * slippage_pct
+        # Slippage uniquement sur exit (cohérent avec _calc_grid_pnl)
+        slippage = exit_price * quantity * slippage_pct
 
         # Funding payments accumulés entre entry et exit
         funding_pnl = 0.0
@@ -761,7 +784,7 @@ def _simulate_grid_funding(
 
     for i in range(start_idx, n):
         close = cache.closes[i]
-        if capital <= 0 or math.isnan(close):
+        if math.isnan(close):
             continue
 
         # === CHECK EXIT ===
@@ -787,6 +810,11 @@ def _simulate_grid_funding(
                     should_exit = True
 
             if should_exit:
+                # Restaurer la marge verrouillée
+                margin_to_return = sum(
+                    ep * qty / leverage for ep, qty, _, _ in positions
+                )
+                capital += margin_to_return
                 pnl = _calc_grid_pnl_with_funding(
                     [(p[0], p[1], p[2]) for p in positions],
                     close, i, funding, candle_ts,
@@ -807,13 +835,22 @@ def _simulate_grid_funding(
                     margin_per_level = capital / num_levels
                     notional = margin_per_level * leverage
                     qty = notional / close
-                    fee = notional * taker_fee
-                    capital -= fee
+                    # Margin deduction (cohérent avec GridStrategyRunner)
+                    if capital < margin_per_level:
+                        continue
+                    capital -= margin_per_level
+                    # Ne pas déduire entry_fee ici : elle est déjà incluse
+                    # dans _calc_grid_pnl_with_funding() à la clôture (Hotfix 33b)
                     positions.append((close, qty, i, lvl))
                     filled_levels.add(lvl)
 
         # === FORCE CLOSE DERNIÈRE BOUGIE ===
         if i == n - 1 and positions:
+            # Restaurer la marge verrouillée
+            margin_to_return = sum(
+                ep * qty / leverage for ep, qty, _, _ in positions
+            )
+            capital += margin_to_return
             pnl = _calc_grid_pnl_with_funding(
                 [(p[0], p[1], p[2]) for p in positions],
                 close, i, funding, candle_ts,
@@ -899,7 +936,7 @@ def _simulate_grid_boltrend(
 
     for i in range(start_idx, n):
         close_i = closes[i]
-        if capital <= 0 or math.isnan(close_i):
+        if math.isnan(close_i):
             continue
 
         # === 1. CHECK EXITS (si positions ouvertes) ===
@@ -961,6 +998,11 @@ def _simulate_grid_boltrend(
                 fee = taker_fee
                 slip = slippage_pct
 
+                # Restaurer la marge verrouillée
+                margin_to_return = sum(
+                    ep * qty / leverage for _l, ep, qty, _f in positions
+                )
+                capital += margin_to_return
                 pnl = _calc_grid_pnl(positions, exit_price, fee, slip, direction)
                 trade_pnls.append(pnl)
                 if capital > 0:
@@ -1008,6 +1050,11 @@ def _simulate_grid_boltrend(
                     qty = notional / ep
                     if qty <= 0:
                         continue
+                    # Margin deduction (cohérent avec GridStrategyRunner)
+                    margin = notional / leverage
+                    if capital < margin:
+                        continue
+                    capital -= margin
                     entry_fee = qty * ep * taker_fee
                     positions.append((lvl, ep, qty, entry_fee))
 
@@ -1066,7 +1113,9 @@ def _simulate_grid_boltrend(
                 if ep0 > 0 and capital > 0:
                     notional = capital * (1.0 / num_levels) * leverage
                     qty = notional / ep0
-                    if qty > 0:
+                    margin = notional / leverage
+                    if qty > 0 and capital >= margin:
+                        capital -= margin
                         entry_fee = qty * ep0 * taker_fee
                         positions.append((0, ep0, qty, entry_fee))
                         breakout_candle_idx = i
@@ -1074,6 +1123,11 @@ def _simulate_grid_boltrend(
     # Force close fin de données
     if positions:
         exit_price = float(closes[n - 1])
+        # Restaurer la marge verrouillée
+        margin_to_return = sum(
+            ep * qty / leverage for _l, ep, qty, _f in positions
+        )
+        capital += margin_to_return
         pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
         trade_pnls.append(pnl)
         if capital > 0:
@@ -1215,22 +1269,15 @@ def _calc_grid_pnl(
     """Calcule le net PnL agrégé pour fermer toutes les positions."""
     total_pnl = 0.0
     for _lvl, entry_price, qty, entry_fee in positions:
-        actual_exit = exit_price
-        slippage_cost = 0.0
-
-        if slippage_rate > 0:
-            slippage_cost = qty * exit_price * slippage_rate
-            if direction == 1:  # LONG
-                actual_exit = exit_price * (1 - slippage_rate)
-            else:
-                actual_exit = exit_price * (1 + slippage_rate)
-
+        # Gross PnL sur prix brut (sans ajustement slippage)
         if direction == 1:
-            gross = (actual_exit - entry_price) * qty
+            gross = (exit_price - entry_price) * qty
         else:
-            gross = (entry_price - actual_exit) * qty
+            gross = (entry_price - exit_price) * qty
 
         exit_fee = qty * exit_price * exit_fee_rate
+        # Slippage appliqué 1 seule fois (flat cost sur exit)
+        slippage_cost = qty * exit_price * slippage_rate if slippage_rate > 0 else 0.0
         net = gross - entry_fee - exit_fee - slippage_cost
         total_pnl += net
 

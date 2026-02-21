@@ -914,7 +914,10 @@ class GridStrategyRunner:
         # Funding cost (settlement toutes les 8h : 00:00, 08:00, 16:00 UTC)
         # Appliqué AVANT TP/SL : si position ouverte au settlement, on paie le funding
         if not self._is_warming_up and positions and candle.timestamp.hour in (0, 8, 16):
-            funding_rate = 0.0001  # 0.01% par session (approximation conservative)
+            # Lire le funding rate réel depuis DataEngine (en %, ex: 0.01 = 0.01%)
+            # Fallback sur 0.01% si non disponible (approximation conservative)
+            raw_fr = self._data_engine.get_funding_rate(symbol) if self._data_engine else None
+            funding_rate = (raw_fr / 100) if isinstance(raw_fr, (int, float)) else 0.0001
             for pos in positions:
                 notional = pos.entry_price * pos.quantity
                 if pos.direction == Direction.LONG:

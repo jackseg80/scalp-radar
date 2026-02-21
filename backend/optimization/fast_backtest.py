@@ -320,23 +320,19 @@ def _close_trade_numba(
 
     exit_reason: 0=tp, 1=sl, 2=signal_exit, 3=end_of_data
     """
-    slippage_cost = 0.0
-    actual_exit_price = exit_price
+    # Gross PnL sur prix brut (pas d'actual_exit ajusté)
+    if direction == 1:
+        gross_pnl = (exit_price - entry_price) * quantity
+    else:
+        gross_pnl = (entry_price - exit_price) * quantity
 
+    # Slippage : flat cost 1 seule fois (exit seulement, sauf TP)
+    slippage_cost = 0.0
     if exit_reason != 0:  # Pas TP → appliquer slippage
         slippage_rate = slippage_pct
         if regime_int == 3:  # HIGH_VOLATILITY
             slippage_rate *= high_vol_slippage_mult
         slippage_cost = quantity * exit_price * slippage_rate
-        if direction == 1:
-            actual_exit_price = exit_price * (1.0 - slippage_rate)
-        else:
-            actual_exit_price = exit_price * (1.0 + slippage_rate)
-
-    if direction == 1:
-        gross_pnl = (actual_exit_price - entry_price) * quantity
-    else:
-        gross_pnl = (entry_price - actual_exit_price) * quantity
 
     if exit_reason == 0:  # TP → maker fee
         exit_fee = quantity * exit_price * maker_fee
@@ -1618,26 +1614,19 @@ def _close_trade(
 
     Reproduit exactement PositionManager.close_position().
     """
-    slippage_cost = 0.0
-    actual_exit_price = exit_price
+    # Gross PnL sur prix brut (pas d'actual_exit ajusté)
+    if direction == 1:  # LONG
+        gross_pnl = (exit_price - entry_price) * quantity
+    else:  # SHORT
+        gross_pnl = (entry_price - exit_price) * quantity
 
+    # Slippage : flat cost 1 seule fois (exit seulement, sauf TP)
+    slippage_cost = 0.0
     if exit_reason in ("sl", "signal_exit", "end_of_data"):
         slippage_rate = slippage_pct
         if regime_int == _HIGH_VOL:
             slippage_rate *= high_vol_slippage_mult
-
         slippage_cost = quantity * exit_price * slippage_rate
-
-        if direction == 1:  # LONG
-            actual_exit_price = exit_price * (1 - slippage_rate)
-        else:  # SHORT
-            actual_exit_price = exit_price * (1 + slippage_rate)
-
-    # Gross PnL
-    if direction == 1:  # LONG
-        gross_pnl = (actual_exit_price - entry_price) * quantity
-    else:  # SHORT
-        gross_pnl = (entry_price - actual_exit_price) * quantity
 
     # Fee de sortie
     if exit_reason == "tp":

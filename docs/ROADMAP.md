@@ -2675,10 +2675,46 @@ si le silence est global. Résultat : un symbol mort reste mort jusqu'à interve
 
 ---
 
+### Sprint 36 — Audit Backtest : Double Slippage + Margin Deduction (21 février 2026)
+
+**But** : Corriger deux bugs structurels des fast engines identifiés lors de l'audit backtest : double slippage dans toutes les fonctions PnL, et absence de margin deduction (capital non verrouillé à l'ouverture).
+
+**Part A — Double slippage (6 locations, 5 fichiers)** :
+
+Pattern du bug : `actual_exit = exit_price × (1 - slip)` réduisait le prix d'exit, puis `slippage_cost = qty × exit_price × slip` déduisait le slippage une seconde fois. Le modèle correct (flat cost) calcule le gross sur le prix brut et déduit le slippage en coût séparé une seule fois.
+
+Fichiers corrigés :
+
+- `backend/optimization/fast_multi_backtest.py` — `_calc_grid_pnl()` + `_simulate_grid_range()` (2 locations inline)
+- `backend/optimization/fast_backtest.py` — `_close_trade_numba()` + `_close_trade()`
+- `backend/core/grid_position_manager.py` — `close_all_positions()`
+- `backend/core/position_manager.py` — `close_position()`
+
+Changement sémantique : `TradeResult.exit_price` passe de "prix ajusté slippage" à "prix brut marché". Tous les consommateurs (logging, DB, affichage) vérifiés — aucun calcul ne dépend de cette valeur.
+
+**Part B — Margin deduction dans les 4 fast engines** :
+
+Les fast engines ne verrouillaient jamais de marge à l'ouverture des positions, permettant une inflation illimitée du capital (capital jamais réduit pendant la durée des positions). Alignement avec `GridStrategyRunner` : `capital -= notional/leverage` à l'ouverture, `capital += Σ(entry_price × qty / leverage)` à la clôture.
+
+Fonctions modifiées :
+
+- `_simulate_grid_common()` — 1 open, 3 close points (envelope_dca, grid_atr, grid_multi_tf)
+- `_simulate_grid_boltrend()` — 2 open, 2 close points
+- `_simulate_grid_funding()` — 1 open, 2 close points
+- `_simulate_grid_range()` — 2 open (LONG+SHORT), 2 close points
+
+Correction bug guard : `_simulate_grid_funding` et `_simulate_grid_boltrend` avaient `if capital <= 0: continue` en tête de boucle. Après margin deduction, le capital peut atteindre 0 quand tous les niveaux sont remplis → les exit checks étaient sautés → positions jamais clôturées. Fix : guard retiré du top-of-loop.
+
+**Impact WFO** : Résultats mécaniquement **meilleurs** (Part A, moins de pénalités fictives) et **plus conservateurs** (Part B, capital verrouillé = moins de levier effectif). Valeurs de référence `test_fast_engine_refactor.py` mises à jour.
+
+**Tests** : 23 nouveaux dans `tests/test_backtest_audit.py` (12 audit initial + 8 Part A + 3 Part B) → **1604 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (21 février 2026)
 
-- **1582 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes**
+- **1604 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, SUI, BCH, BNB, AAVE, ARB, OP — 6 low-volume retirés : ENJ, SUSHI, IMX, SAND, AR, APE)
