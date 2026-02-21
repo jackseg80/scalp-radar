@@ -2734,10 +2734,47 @@ Correction bug guard : `_simulate_grid_funding` et `_simulate_grid_boltrend` ava
 
 ---
 
+### Hotfix P0 — Nettoyage Ordres Trigger Orphelins (21 février 2026)
+
+**Problème** : L'Executor ne trackait qu'un seul `sl_order_id` par grid. Quand un nouveau niveau DCA
+est ajouté, l'ancien SL est annulé et remplacé. Si l'annulation échoue silencieusement (erreur réseau,
+ordre déjà exécuté puis replacé), l'ancien SL reste sur Bitget. Résultat : **36 ordres trigger orphelins
+accumulés** sur le compte, dangereux car ils pourraient fermer des positions ouvertes ultérieurement.
+
+**Fix en 3 parties** :
+
+**1. `_cancel_all_open_orders(futures_sym)` — nouvelle méthode** :
+
+- `fetch_open_orders(symbol)` → annule chaque ordre individuellement → log INFO du total annulé
+- Tolère les échecs partiels (retry par ordre, pas tout-ou-rien)
+
+**2. `_close_grid_cycle()` — cancel ALL au lieu du seul `sl_order_id`** :
+
+- Remplace `cancel_order(state.sl_order_id)` par `_cancel_all_open_orders(futures_sym)`
+- Nettoie SL courant + orphelins accumulés à chaque fermeture de cycle TP/signal
+
+**3. `_update_grid_sl()` — meilleur logging + fallback `cancel_all`** :
+
+- Log INFO quand l'ancien SL est annulé avec succès (était silencieux)
+- Si `cancel_order()` échoue → fallback `_cancel_all_open_orders()` avant de placer le nouveau SL
+
+**Bonus — `_handle_grid_sl_executed()`** :
+
+- Appel `_cancel_all_open_orders()` après exécution SL pour nettoyer les anciens SL orphelins restants
+
+**Fichiers modifiés** (2) :
+
+- `backend/execution/executor.py` : nouvelle méthode + 3 points de modification
+- `tests/test_executor_grid.py` : `test_close_tp_global` adapté (mock `fetch_open_orders` + SL)
+
+**Tests** : 7 nouveaux dans `tests/test_executor_orphan_orders.py` → **1631 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (21 février 2026)
 
-- **1624 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker**
+- **1631 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, SUI, BCH, BNB, AAVE, ARB, OP — 6 low-volume retirés : ENJ, SUSHI, IMX, SAND, AR, APE)

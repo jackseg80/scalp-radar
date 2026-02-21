@@ -392,10 +392,14 @@ class TestGridClose:
 
     @pytest.mark.asyncio
     async def test_close_tp_global(self):
-        """TP global : cancel SL + market close + P&L + cleanup."""
+        """TP global : cancel ALL orders + market close + P&L + cleanup."""
         executor = _make_executor()
         self._setup_grid_state(executor)
 
+        # fetch_open_orders retourne le SL en cours (sera annulé par cancel_all)
+        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
+            {"id": "sl_grid", "symbol": "BTC/USDT:USDT"},
+        ])
         executor._exchange.create_order = AsyncMock(return_value={
             "id": "close_1", "average": 51_000.0, "filled": 0.002,
         })
@@ -403,7 +407,7 @@ class TestGridClose:
         event = _make_grid_close_event(exit_price=51_000.0, exit_reason="tp_global")
         await executor.handle_event(event)
 
-        # SL annulé
+        # SL annulé via cancel_all
         executor._exchange.cancel_order.assert_called_once()
         # Market close
         executor._exchange.create_order.assert_called_once()

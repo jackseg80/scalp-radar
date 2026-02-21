@@ -1102,8 +1102,15 @@ class Executor:
                 await self._exchange.cancel_order(
                     state.sl_order_id, futures_sym,
                 )
+                logger.info(
+                    "Executor: ancien SL {} annulé pour {}", state.sl_order_id, futures_sym,
+                )
             except Exception as e:
-                logger.warning("Executor: échec cancel ancien SL grid: {}", e)
+                logger.warning(
+                    "Executor: échec cancel ancien SL {} pour {}: {} — fallback cancel_all",
+                    state.sl_order_id, futures_sym, e,
+                )
+                await self._cancel_all_open_orders(futures_sym)
 
         # 2. Calculer nouveau SL
         sl_pct = self._get_grid_sl_percent(state.strategy_name)
@@ -1149,6 +1156,34 @@ class Executor:
         del self._grid_states[futures_sym]
         await self._notifier.notify_live_sl_failed(futures_sym, state.strategy_name)
 
+    async def _cancel_all_open_orders(self, futures_sym: str) -> int:
+        """Annule TOUS les ordres ouverts (trigger, SL, TP) pour un symbol.
+
+        Utilisé à la fermeture d'un cycle grid pour nettoyer les éventuels
+        ordres trigger orphelins (anciens SL dont le cancel a échoué).
+        """
+        cancelled = 0
+        try:
+            open_orders = await self._exchange.fetch_open_orders(
+                futures_sym, params={"type": "swap"},
+            )
+            for order in open_orders:
+                try:
+                    await self._exchange.cancel_order(order["id"], futures_sym)
+                    cancelled += 1
+                except Exception as e:
+                    logger.warning(
+                        "Executor: échec cancel ordre {} sur {}: {}",
+                        order.get("id"), futures_sym, e,
+                    )
+            if cancelled:
+                logger.info(
+                    "Executor: {} ordre(s) annulé(s) pour {}", cancelled, futures_sym,
+                )
+        except Exception as e:
+            logger.error("Executor: échec fetch_open_orders {}: {}", futures_sym, e)
+        return cancelled
+
     async def _close_grid_cycle(self, event: TradeEvent) -> None:
         """Ferme toutes les positions d'un cycle DCA.
 
@@ -1164,14 +1199,10 @@ class Executor:
 
         close_side = "sell" if state.direction == "LONG" else "buy"
 
-        # 1. Annuler SL (sauf si c'est le SL qui a déclenché)
-        if event.exit_reason != "sl_global" and state.sl_order_id:
-            try:
-                await self._exchange.cancel_order(
-                    state.sl_order_id, futures_sym,
-                )
-            except Exception as e:
-                logger.debug("Executor: annulation SL grid échouée (probablement déjà exécuté): {}", e)
+        # 1. Annuler TOUS les ordres ouverts (pas juste sl_order_id)
+        #    Nettoie les SL orphelins accumulés si des cancels ont échoué
+        if event.exit_reason != "sl_global":
+            await self._cancel_all_open_orders(futures_sym)
 
         # 2. Market close (sauf si SL déjà exécuté sur exchange)
         if event.exit_reason != "sl_global":
@@ -1299,6 +1330,10 @@ class Executor:
         logger.info(
             "Executor: SL grid exécuté {} — net={:+.2f}", futures_sym, net_pnl,
         )
+
+        # Nettoyer les éventuels ordres trigger orphelins restants
+        await self._cancel_all_open_orders(futures_sym)
+
         del self._grid_states[futures_sym]
 
         # Sync SL vers le runner paper
