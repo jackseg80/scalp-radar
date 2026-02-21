@@ -2310,36 +2310,48 @@ class Simulator:
                 "sparkline": [],
             }
 
-            # Prix courant depuis le buffer 1m du DataEngine
+            # Prix courant avec fallback multi-timeframe (1m → 5m → 1h → 4h)
             data = self._data_engine.get_data(symbol)
-            if data.candles.get("1m"):
-                last_candle = data.candles["1m"][-1]
+            price_candles = None
+            for _tf in ("1m", "5m", "1h", "4h"):
+                c = data.candles.get(_tf, [])
+                if c:
+                    price_candles = c
+                    break
+
+            if price_candles:
+                last_candle = price_candles[-1]
                 asset_data["price"] = last_candle.close
-                # Sparkline : 60 derniers close prices
+                # Sparkline : 60 derniers close prices (timeframe disponible)
                 asset_data["sparkline"] = [
-                    c.close for c in data.candles["1m"][-60:]
+                    c.close for c in price_candles[-60:]
                 ]
-                if len(data.candles["1m"]) >= 2:
-                    prev_close = data.candles["1m"][-2].close
+                if len(price_candles) >= 2:
+                    prev_close = price_candles[-2].close
                     if prev_close > 0:
                         asset_data["change_pct"] = round(
                             (last_candle.close - prev_close) / prev_close * 100, 2
                         )
 
-            # Calculer les indicateurs de base pour tous les symbols (même sans runner)
-            # Utiliser le timeframe 5m par défaut (commun aux stratégies scalp)
-            if self._indicator_engine and data.candles.get("5m"):
+            # Indicateurs de base avec fallback multi-timeframe (5m → 1h)
+            if self._indicator_engine:
+                ind_tf = None
                 indicators_data = self._indicator_engine.get_indicators(symbol)
-                if indicators_data and indicators_data.get("5m"):
-                    ind_5m = indicators_data["5m"]
-                    close = ind_5m.get("close")
-                    vwap = ind_5m.get("vwap")
-                    atr = ind_5m.get("atr")
+                for _tf in ("5m", "1h"):
+                    if data.candles.get(_tf) and indicators_data and indicators_data.get(_tf):
+                        ind_tf = _tf
+                        break
+
+                if ind_tf:
+                    ind = indicators_data[ind_tf]
+                    close = ind.get("close")
+                    vwap = ind.get("vwap")
+                    atr = ind.get("atr")
 
                     asset_data["indicators"] = {
-                        "rsi_14": _safe_round(ind_5m.get("rsi"), 1),
+                        "rsi_14": _safe_round(ind.get("rsi"), 1),
                         "vwap_distance_pct": None,
-                        "adx": _safe_round(ind_5m.get("adx"), 1),
+                        "adx": _safe_round(ind.get("adx"), 1),
                         "atr_pct": None,
                     }
 
@@ -2356,8 +2368,9 @@ class Simulator:
                         )
 
                     # Régime de marché par défaut
-                    if data.candles.get("5m") and len(data.candles["5m"]) >= 50:
-                        close_arr = np.array([c.close for c in data.candles["5m"][-50:]])
+                    candles_regime = data.candles.get(ind_tf, [])
+                    if len(candles_regime) >= 50:
+                        close_arr = np.array([c.close for c in candles_regime[-50:]])
                         asset_data["regime"] = detect_market_regime(close_arr).value
 
             # Conditions par runner/stratégie (enrichissement si runner actif)

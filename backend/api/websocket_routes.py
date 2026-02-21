@@ -17,19 +17,28 @@ router = APIRouter()
 
 
 def _get_current_prices(engine) -> dict:
-    """Extrait le dernier prix et variation depuis les buffers du DataEngine."""
+    """Extrait le dernier prix et variation depuis les buffers du DataEngine.
+
+    Fallback multi-timeframe : 1m → 5m → 1h → 4h pour les altcoins sans données 1m.
+    """
     prices = {}
     for symbol in engine.get_all_symbols():
         data = engine.get_data(symbol)
-        candles_1m = data.candles.get("1m", [])
-        if candles_1m:
-            last = candles_1m[-1]
-            change_pct = None
-            if len(candles_1m) >= 2:
-                prev = candles_1m[-2].close
-                if prev > 0:
-                    change_pct = round((last.close - prev) / prev * 100, 2)
-            prices[symbol] = {"last": last.close, "change_pct": change_pct}
+        candles = None
+        for tf in ("1m", "5m", "1h", "4h"):
+            c = data.candles.get(tf, [])
+            if c:
+                candles = c
+                break
+        if not candles:
+            continue
+        last = candles[-1]
+        change_pct = None
+        if len(candles) >= 2:
+            prev = candles[-2].close
+            if prev > 0:
+                change_pct = round((last.close - prev) / prev * 100, 2)
+        prices[symbol] = {"last": last.close, "change_pct": change_pct}
     return prices
 
 
