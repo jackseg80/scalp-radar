@@ -144,6 +144,10 @@ class DataEngine:
         # Monitoring per-symbol : timestamp de la dernière candle reçue
         self._last_update_per_symbol: dict[str, datetime] = {}
 
+        # Backoff restart stale : compteur de tentatives et symbols abandonnés
+        self._stale_restart_count: dict[str, int] = {}
+        self._stale_abandoned: set[str] = set()
+
     @property
     def is_connected(self) -> bool:
         return self._connected
@@ -503,21 +507,54 @@ class DataEngine:
                             len(stale), ", ".join(stale_names),
                         )
 
-                        # Auto-guérison — relancer les symbols stale > 10 min
+                        # Auto-guérison — relancer les symbols stale > 10 min (avec backoff)
                         for sym, age in stale:
-                            if age is None or age > 600:
-                                try:
-                                    restarted_sym = await self.restart_stale_symbol(sym)
-                                    if restarted_sym:
-                                        logger.warning(
-                                            "DataEngine: {} relancé après {:.0f}s de silence",
-                                            sym, age,
+                            if age is not None and age <= 600:
+                                continue  # Pas encore assez longtemps
+
+                            # Skip les symbols abandonnés
+                            if sym in self._stale_abandoned:
+                                continue
+
+                            count = self._stale_restart_count.get(sym, 0)
+
+                            if count >= 3:
+                                # Abandonner après 3 tentatives
+                                self._stale_abandoned.add(sym)
+                                logger.error(
+                                    "DataEngine: {} abandonné après {} tentatives de relance — "
+                                    "vérifier si la paire existe sur Bitget ou retirer de la config",
+                                    sym, count,
+                                )
+                                if self._notifier:
+                                    try:
+                                        await self._notifier.notify_anomaly(
+                                            AnomalyType.DATA_STALE,
+                                            f"{sym} abandonné après {count} relances échouées — retirer de la config ?",
                                         )
-                                except Exception as e:
-                                    logger.error(
-                                        "DataEngine: erreur restart_stale_symbol {}: {}",
-                                        sym, e,
-                                    )
+                                    except Exception:
+                                        pass
+                                continue
+
+                            try:
+                                restarted_sym = await self.restart_stale_symbol(sym)
+                                if restarted_sym:
+                                    self._stale_restart_count[sym] = count + 1
+                                    if age is not None:
+                                        logger.warning(
+                                            "DataEngine: {} relancé après {:.0f}s de silence (tentative {}/3)",
+                                            sym, age, count + 1,
+                                        )
+                                    else:
+                                        logger.warning(
+                                            "DataEngine: {} relancé — jamais reçu de données (tentative {}/3)",
+                                            sym, count + 1,
+                                        )
+                            except Exception as e:
+                                logger.error(
+                                    "DataEngine: erreur restart_stale_symbol {}: {}",
+                                    sym, e,
+                                )
 
                         # Escalade : si > 50% symbols stale > 15 min → full_reconnect
                         all_count = len(self.get_all_symbols())
@@ -744,6 +781,12 @@ class DataEngine:
                     symbol, silence_s,
                 )
         self._last_update_per_symbol[symbol] = now_dt
+
+        # Reset backoff si le symbol était en compteur de restart
+        if symbol in self._stale_restart_count:
+            del self._stale_restart_count[symbol]
+        if symbol in self._stale_abandoned:
+            self._stale_abandoned.discard(symbol)
 
         buffer = self._buffers[symbol][timeframe_str]
 

@@ -135,7 +135,7 @@ class TestHeartbeatAutoHeal:
     @pytest.mark.asyncio
     async def test_heals_stale_symbol_after_10min(self):
         """Symbol stale 650s → restart_stale_symbol appelé."""
-        engine = _make_engine(["BTC/USDT", "XTZ/USDT"])
+        engine = _make_engine(["BTC/USDT", "STALE/USDT"])
         engine._heartbeat_interval = 9999
         engine._last_candle_received = time.time() - 10
         engine.full_reconnect = AsyncMock()
@@ -143,7 +143,7 @@ class TestHeartbeatAutoHeal:
         now = datetime.now(tz=timezone.utc)
         engine._last_update_per_symbol = {
             "BTC/USDT": now - timedelta(seconds=30),    # actif
-            "XTZ/USDT": now - timedelta(seconds=650),   # stale > 10 min
+            "STALE/USDT": now - timedelta(seconds=650),   # stale > 10 min
         }
 
         engine.restart_stale_symbol = AsyncMock(return_value=True)
@@ -157,7 +157,7 @@ class TestHeartbeatAutoHeal:
             except asyncio.CancelledError:
                 pass
 
-        engine.restart_stale_symbol.assert_awaited_once_with("XTZ/USDT")
+        engine.restart_stale_symbol.assert_awaited_once_with("STALE/USDT")
 
     @pytest.mark.asyncio
     async def test_no_heal_between_5_and_10min(self):
@@ -188,8 +188,8 @@ class TestHeartbeatAutoHeal:
 
     @pytest.mark.asyncio
     async def test_restart_stale_symbol_age_none(self):
-        """Symbol avec age=None (jamais reçu) → restart immédiat (comme >10min)."""
-        engine = _make_engine(["BTC/USDT", "JUP/USDT"])
+        """Symbol avec age=None (jamais reçu) → restart + compteur incrémenté."""
+        engine = _make_engine(["BTC/USDT", "DEAD/USDT"])
         engine._heartbeat_interval = 9999
         engine._last_candle_received = time.time() - 10
         engine.full_reconnect = AsyncMock()
@@ -197,7 +197,7 @@ class TestHeartbeatAutoHeal:
         now = datetime.now(tz=timezone.utc)
         engine._last_update_per_symbol = {
             "BTC/USDT": now - timedelta(seconds=30),  # actif
-            # JUP/USDT absent → age=None dans le heartbeat
+            # DEAD/USDT absent → age=None dans le heartbeat
         }
 
         engine.restart_stale_symbol = AsyncMock(return_value=True)
@@ -211,7 +211,9 @@ class TestHeartbeatAutoHeal:
             except asyncio.CancelledError:
                 pass
 
-        engine.restart_stale_symbol.assert_awaited_once_with("JUP/USDT")
+        engine.restart_stale_symbol.assert_awaited_once_with("DEAD/USDT")
+        # Compteur incrémenté à 1
+        assert engine._stale_restart_count["DEAD/USDT"] == 1
 
     @pytest.mark.asyncio
     async def test_full_reconnect_on_mass_stale(self):
@@ -245,6 +247,147 @@ class TestHeartbeatAutoHeal:
                 pass
 
         engine.full_reconnect.assert_awaited_once()
+
+
+# ─── Tests backoff restart stale ─────────────────────────────────────────
+
+
+class TestStaleBackoff:
+
+    @pytest.mark.asyncio
+    async def test_stale_backoff_stops_after_3_retries(self):
+        """Symbol stale relancé 3 fois, puis abandonné au 4e tick."""
+        engine = _make_engine(["BTC/USDT", "DEAD/USDT"])
+        engine._heartbeat_interval = 9999
+        engine._last_candle_received = time.time() - 10
+        engine.full_reconnect = AsyncMock()
+        engine.restart_dead_tasks = AsyncMock(return_value=0)
+        engine.restart_stale_symbol = AsyncMock(return_value=True)
+
+        # Run 4 heartbeat ticks (chacun déclenche le check stale)
+        for _ in range(4):
+            now = datetime.now(tz=timezone.utc)
+            engine._last_update_per_symbol = {
+                "BTC/USDT": now - timedelta(seconds=30),
+                # DEAD/USDT absent → age=None
+            }
+            engine._heartbeat_tick = 4  # → 5 après incrément
+
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                mock_sleep.side_effect = [None, asyncio.CancelledError()]
+                try:
+                    await engine._heartbeat_loop()
+                except asyncio.CancelledError:
+                    pass
+
+        # restart appelé 3 fois (pas 4)
+        assert engine.restart_stale_symbol.await_count == 3
+        # Symbol dans _stale_abandoned
+        assert "DEAD/USDT" in engine._stale_abandoned
+        # Compteur à 3
+        assert engine._stale_restart_count.get("DEAD/USDT") == 3
+
+    @pytest.mark.asyncio
+    async def test_stale_backoff_resets_on_candle_received(self):
+        """Symbol en compteur de restart → reset quand il reçoit une candle."""
+        engine = _make_engine(["ETH/USDT"])
+
+        # Simuler 2 tentatives précédentes
+        engine._stale_restart_count["ETH/USDT"] = 2
+        engine._stale_abandoned.add("ETH/USDT")
+
+        # Simuler la réception d'une candle
+        now_ts = time.time() * 1000
+        ohlcv = [now_ts, 100.0, 105.0, 95.0, 102.0, 1000.0]
+
+        await engine._on_candle_received("ETH/USDT", "1h", ohlcv)
+
+        # Compteur reset
+        assert "ETH/USDT" not in engine._stale_restart_count
+        # Retiré de la liste abandonnée
+        assert "ETH/USDT" not in engine._stale_abandoned
+
+    @pytest.mark.asyncio
+    async def test_stale_abandoned_skipped_in_heartbeat(self):
+        """Symbol abandonné → restart_stale_symbol n'est PAS appelé."""
+        engine = _make_engine(["BTC/USDT", "DEAD/USDT"])
+        engine._heartbeat_interval = 9999
+        engine._last_candle_received = time.time() - 10
+        engine.full_reconnect = AsyncMock()
+        engine.restart_dead_tasks = AsyncMock(return_value=0)
+        engine.restart_stale_symbol = AsyncMock(return_value=True)
+
+        # Marquer comme abandonné
+        engine._stale_abandoned.add("DEAD/USDT")
+        engine._stale_restart_count["DEAD/USDT"] = 3
+
+        now = datetime.now(tz=timezone.utc)
+        engine._last_update_per_symbol = {
+            "BTC/USDT": now - timedelta(seconds=30),
+            # DEAD/USDT absent → age=None, mais abandonné
+        }
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            engine._heartbeat_tick = 4
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await engine._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        engine.restart_stale_symbol.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stale_abandon_notifies_telegram(self):
+        """Abandon après 3 tentatives → alerte Telegram envoyée."""
+        notifier = AsyncMock()
+        notifier.notify_anomaly = AsyncMock()
+        engine = _make_engine(["BTC/USDT", "DEAD/USDT"], notifier=notifier)
+        engine._heartbeat_interval = 9999
+        engine._last_candle_received = time.time() - 10
+        engine.full_reconnect = AsyncMock()
+        engine.restart_dead_tasks = AsyncMock(return_value=0)
+        engine.restart_stale_symbol = AsyncMock(return_value=True)
+
+        # Déjà 3 tentatives
+        engine._stale_restart_count["DEAD/USDT"] = 3
+
+        now = datetime.now(tz=timezone.utc)
+        engine._last_update_per_symbol = {
+            "BTC/USDT": now - timedelta(seconds=30),
+        }
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            engine._heartbeat_tick = 4
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+            try:
+                await engine._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        # Alerte envoyée
+        notifier.notify_anomaly.assert_awaited()
+        call_args = notifier.notify_anomaly.call_args
+        assert "abandonné" in call_args[0][1]
+        assert "DEAD/USDT" in call_args[0][1]
+
+
+# ─── Test config assets ─────────────────────────────────────────────────
+
+
+class TestConfigAssets:
+
+    def test_config_no_xtz_jup(self):
+        """XTZ/USDT et JUP/USDT ne sont plus dans assets.yaml, 20 assets restants."""
+        import yaml
+
+        with open("config/assets.yaml") as f:
+            data = yaml.safe_load(f)
+
+        symbols = [a["symbol"] for a in data["assets"]]
+        assert "XTZ/USDT" not in symbols, "XTZ/USDT encore présent"
+        assert "JUP/USDT" not in symbols, "JUP/USDT encore présent"
+        assert len(symbols) == 20, f"Attendu 20 assets, trouvé {len(symbols)}"
 
 
 # ─── Test route prefix ────────────────────────────────────────────────────
