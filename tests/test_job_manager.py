@@ -328,12 +328,11 @@ async def test_worker_loop_processes_job(manager_with_loop):
     """Le worker loop traite un job soumis (mock WFO rapide)."""
     from unittest.mock import patch
 
-    # Mock _run_job_wfo_thread pour éviter un vrai WFO (test unitaire rapide)
-    def mock_wfo_thread(job, cancel_event):
-        # Simuler un WFO instantané qui réussit
-        return 12345  # Fake result_id
+    # Mock _run_job_subprocess pour éviter un vrai WFO (test unitaire rapide)
+    from unittest.mock import AsyncMock
+    mock_subprocess = AsyncMock(return_value=12345)
 
-    with patch.object(manager_with_loop, '_run_job_wfo_thread', side_effect=mock_wfo_thread):
+    with patch.object(manager_with_loop, '_run_job_subprocess', mock_subprocess):
         job_id = await manager_with_loop.submit_job("envelope_dca", "BTC/USDT")
 
         # Attendre que le worker traite le job (mock = quasi instantané)
@@ -394,11 +393,11 @@ async def test_broadcast_called_on_progress(temp_db):
 
     mgr = JobManager(db_path=temp_db, ws_broadcast=mock_broadcast)
 
-    # Mock _run_job_wfo_thread pour un WFO instantané
-    def mock_wfo_thread(job, cancel_event):
-        return 12345
+    # Mock _run_job_subprocess pour un WFO instantané
+    from unittest.mock import AsyncMock
+    mock_subprocess = AsyncMock(return_value=12345)
 
-    with patch.object(mgr, '_run_job_wfo_thread', side_effect=mock_wfo_thread):
+    with patch.object(mgr, '_run_job_subprocess', mock_subprocess):
         await mgr.start()
 
         job_id = await mgr.submit_job("envelope_dca", "BTC/USDT")
@@ -417,3 +416,76 @@ async def test_broadcast_called_on_progress(temp_db):
     assert broadcasts[0]["type"] == "optimization_progress"
     assert broadcasts[0]["status"] == "running"
     assert broadcasts[-1]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_subprocess_crash_marks_job_failed(manager_with_loop):
+    """Si le subprocess WFO crashe (segfault simulé), le job est marqué failed.
+
+    Le JobManager (processus parent) doit survivre et marquer le job failed
+    plutôt que de se planter avec le subprocess.
+    """
+    from unittest.mock import patch, AsyncMock
+
+    # Simuler un subprocess qui crashe avec RuntimeError (équivalent crash propre)
+    async def mock_subprocess_crash(job, cancel_event):
+        raise RuntimeError("WFO subprocess exit 1: Segmentation fault (simulé)")
+
+    with patch.object(manager_with_loop, '_run_job_subprocess', side_effect=mock_subprocess_crash):
+        job_id = await manager_with_loop.submit_job("envelope_dca", "BTC/USDT")
+
+        # Attendre que le worker traite le job
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            job = await manager_with_loop.get_job(job_id)
+            if job.status in ("completed", "failed", "cancelled"):
+                break
+
+    job = await manager_with_loop.get_job(job_id)
+    # Le job doit être marqué failed (pas crash du processus parent)
+    assert job.status == "failed"
+    assert "Segmentation fault" in (job.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_subprocess_cancel_terminates_proc(temp_db):
+    """cancel_job() sur un job running termine le subprocess WFO."""
+    import asyncio
+    from unittest.mock import patch, AsyncMock
+
+    mgr = JobManager(db_path=temp_db)
+
+    # Simuler un subprocess qui attend longtemps (cancel avant fin)
+    cancelled_flag = []
+
+    async def mock_subprocess_slow(job, cancel_event):
+        # Attendre jusqu'à annulation
+        for _ in range(200):
+            if cancel_event.is_set():
+                cancelled_flag.append(True)
+                raise asyncio.CancelledError("Annulé")
+            await asyncio.sleep(0.05)
+        return 99
+
+    with patch.object(mgr, '_run_job_subprocess', side_effect=mock_subprocess_slow):
+        await mgr.start()
+        job_id = await mgr.submit_job("envelope_dca", "BTC/USDT")
+
+        # Laisser le job démarrer
+        await asyncio.sleep(0.2)
+
+        # Annuler
+        result = await mgr.cancel_job(job_id)
+        assert result is True
+
+        # Attendre la fin
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            job = await mgr.get_job(job_id)
+            if job.status in ("completed", "failed", "cancelled"):
+                break
+
+        await mgr.stop()
+
+    job = await mgr.get_job(job_id)
+    assert job.status == "cancelled"
