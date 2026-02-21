@@ -185,6 +185,7 @@ class Executor:
         self._exchange_balance: float | None = None  # Hotfix 28a
         self._balance_refresh_interval: int = 300  # 5 minutes
         self._order_history: deque[dict] = deque(maxlen=200)  # Sprint 32
+        self._leverage_applied: dict[str, int] = {}  # futures_sym → leverage au boot
 
         # Exit monitor autonome (Sprint Executor Autonome)
         self._data_engine: DataEngine | None = None
@@ -312,7 +313,8 @@ class Executor:
             for asset in self._config.assets:
                 try:
                     futures_sym = to_futures_symbol(asset.symbol)
-                    await self._setup_leverage_and_margin(futures_sym)
+                    leverage = self._get_leverage_for_symbol(asset.symbol)
+                    await self._setup_leverage_and_margin(futures_sym, leverage=leverage)
                     active_symbols.add(asset.symbol)
                 except Exception as e:
                     logger.warning(
@@ -406,14 +408,17 @@ class Executor:
 
     # ─── Setup ─────────────────────────────────────────────────────────
 
-    async def _setup_leverage_and_margin(self, futures_symbol: str) -> None:
+    async def _setup_leverage_and_margin(
+        self, futures_symbol: str, leverage: int | None = None,
+    ) -> None:
         """Set leverage et margin mode, seulement s'il n'y a pas de position ouverte."""
         positions = await self._fetch_positions_safe(futures_symbol)
         has_open = any(
             float(p.get("contracts", 0)) > 0 for p in positions
         )
 
-        leverage = self._config.risk.position.default_leverage
+        if leverage is None:
+            leverage = self._config.risk.position.default_leverage
         margin_mode = self._config.risk.margin.mode  # "cross" ou "isolated"
 
         if has_open:
@@ -438,6 +443,7 @@ class Executor:
             await self._exchange.set_leverage(
                 leverage, futures_symbol,
             )
+            self._leverage_applied[futures_symbol] = leverage
             logger.info("Executor: leverage set à {}x pour {}", leverage, futures_symbol)
         except Exception as e:
             logger.warning("Executor: impossible de set leverage: {}", e)
@@ -953,17 +959,24 @@ class Executor:
         if is_first_level:
             grid_leverage = self._get_grid_leverage(event.strategy_name)
 
-            # Setup leverage au 1er trade grid (pas au start)
-            try:
-                await self._exchange.set_leverage(
+            # Setup leverage au 1er trade grid — skip si déjà correct au boot
+            if self._leverage_applied.get(futures_sym) == grid_leverage:
+                logger.debug(
+                    "Executor: leverage {}x déjà appliqué au boot pour {}",
                     grid_leverage, futures_sym,
                 )
-                logger.info(
-                    "Executor: leverage grid set a {}x pour {}",
-                    grid_leverage, futures_sym,
-                )
-            except Exception as e:
-                logger.warning("Executor: set leverage grid: {}", e)
+            else:
+                try:
+                    await self._exchange.set_leverage(
+                        grid_leverage, futures_sym,
+                    )
+                    self._leverage_applied[futures_sym] = grid_leverage
+                    logger.info(
+                        "Executor: leverage grid set a {}x pour {}",
+                        grid_leverage, futures_sym,
+                    )
+                except Exception as e:
+                    logger.warning("Executor: set leverage grid: {}", e)
 
             balance = await self._exchange.fetch_balance(
                 {"type": "swap"},
@@ -2252,6 +2265,24 @@ class Executor:
         if strat_config and hasattr(strat_config, "sl_percent"):
             return strat_config.sl_percent
         return 20.0
+
+    def _get_leverage_for_symbol(self, symbol: str) -> int:
+        """Détermine le leverage de la stratégie assignée au symbol (boot)."""
+        strategies = self._config.strategies
+        for name in strategies.model_fields:
+            strat_cfg = getattr(strategies, name, None)
+            if strat_cfg is None:
+                continue
+            per_asset = getattr(strat_cfg, "per_asset", None)
+            if not isinstance(per_asset, dict) or symbol not in per_asset:
+                continue
+            enabled = getattr(strat_cfg, "enabled", False)
+            if not enabled:
+                continue
+            lev = getattr(strat_cfg, "leverage", None)
+            if isinstance(lev, int) and lev > 0:
+                return lev
+        return self._config.risk.position.default_leverage
 
     def _get_grid_leverage(self, strategy_name: str) -> int:
         """Récupère le leverage depuis la config stratégie."""
