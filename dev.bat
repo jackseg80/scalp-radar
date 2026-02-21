@@ -22,7 +22,7 @@ if not exist "frontend\node_modules" (
 
 :: Backend (FastAPI + DataEngine via lifespan)
 echo [*] Lancement du backend (port 8000)...
-start "SCALP-BACKEND" cmd /k "cd /d %~dp0 && uv run uvicorn backend.api.server:app --reload --port 8000"
+start "SCALP-BACKEND" cmd /k "cd /d %~dp0 && uv run uvicorn backend.api.server:app --reload --reload-dir backend --reload-dir config --port 8000"
 
 :: Frontend (Vite)
 echo [*] Lancement du frontend (port 5173)...
