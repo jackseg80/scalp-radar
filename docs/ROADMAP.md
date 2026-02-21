@@ -1867,6 +1867,32 @@ FORCE_STRATEGIES=grid_atr            # Bypass net_return/PF checks (comma-separa
 
 **Tests** : 12 nouveaux (`test_hotfix_36.py`), 7 adaptés (`test_hotfix_35.py`), 1 adapté (`test_grid_runner.py`), **1374 tests** au total, 0 régression.
 
+### Hotfix Warmup Tracking — Remplacer cooldown 3h par tracking positions ✅
+
+**But** : `POST_WARMUP_COOLDOWN_SECONDS = 10800` (3h) bloquait TOUS les TradeEvents vers l'Executor pendant 3h après chaque restart → chaque `deploy.sh` = 3h sans live trading.
+
+**Problème de fond** : le cooldown 3h était trop brutal. Le vrai objectif était de ne pas répliquer en live les positions ouvertes pendant le warm-up (candles historiques), qui n'ont pas de contrepartie sur Bitget.
+
+**Fix — Warmup position tracking** :
+
+- `_warmup_position_symbols: set[str]` dans `GridStrategyRunner.__init__`
+- `_end_warmup()` : snapshot des symbols avec positions **avant** `_positions.clear()`, exclusion des symbols restaurés via `_pending_restore` (ils ont des counterparts live)
+- `_emit_open_event()` : `if symbol in _warmup_position_symbols → block` (au lieu du check `elapsed < 10800s`)
+- `_emit_close_event()` : idem + `discard(symbol)` pour libérer le symbol après le premier close paper
+- Constante `POST_WARMUP_COOLDOWN_SECONDS` supprimée
+
+**Comportement** :
+
+| Situation | Avant (3h fixe) | Après (tracking ciblé) |
+| --------- | --------------- | ---------------------- |
+| Symbol sans position warmup | Bloqué 3h | Passe immédiatement |
+| Symbol avec position warmup | Bloqué 3h | Bloqué jusqu'au 1er close paper |
+| Restart avec saved state (positions live) | Bloqué 3h | Passe immédiatement |
+
+**Fichiers** : `backend/backtesting/simulator.py`, `tests/test_hotfix_36.py`, `tests/test_hotfix_35.py`
+
+**Tests** : 9 nouveaux/refactorisés (`test_hotfix_36.py`), 5 adaptés (`test_hotfix_35.py`), **1627 tests** au total (hors 3 tests pré-cassés API/DB), 0 régression.
+
 ### Sprint Executor Autonome — TP/SL indépendant + Réconciliation boot ✅
 
 **But** : Résoudre 3 problèmes critiques de production apparus après la mise en live.

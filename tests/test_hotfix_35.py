@@ -132,14 +132,13 @@ def _fill_buffer(runner: GridStrategyRunner, symbol: str = "BTC/USDT", n: int = 
 # ─── Bug A : Cooldown post-warmup ─────────────────────────────────────────────
 
 
-class TestCooldownPostWarmup:
-    """Tests du cooldown post-warmup basé sur le temps (Hotfix 36)."""
+class TestWarmupPositionTracking35:
+    """Tests du warmup position tracking (Hotfix 36 → remplacé cooldown 3h)."""
 
-    def test_emit_open_blocked_during_cooldown(self):
-        """_emit_open_event supprime l'event quand warmup_ended_at < 3h."""
+    def test_emit_open_blocked_for_warmup_symbol(self):
+        """_emit_open_event supprime l'event quand symbol dans warmup set."""
         runner = _make_grid_runner()
-        # Warm-up terminé il y a 30 secondes → cooldown actif
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
+        runner._warmup_position_symbols = {"BTC/USDT"}
 
         pos = MagicMock()
         pos.direction.value = "LONG"
@@ -150,13 +149,12 @@ class TestCooldownPostWarmup:
 
         runner._emit_open_event("BTC/USDT", level, pos)
 
-        assert len(runner._pending_events) == 0, "Event doit être supprimé pendant cooldown"
+        assert len(runner._pending_events) == 0, "Event doit être supprimé pour warmup symbol"
 
-    def test_emit_open_allowed_after_cooldown(self):
-        """_emit_open_event émet normalement une fois le cooldown écoulé (> 3h)."""
+    def test_emit_open_allowed_for_non_warmup_symbol(self):
+        """_emit_open_event émet normalement si symbol pas dans warmup set."""
         runner = _make_grid_runner()
-        # Warm-up terminé il y a 4h → cooldown passé
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(hours=4)
+        runner._warmup_position_symbols = set()  # vide
 
         pos = MagicMock()
         pos.direction.value = "LONG"
@@ -168,13 +166,12 @@ class TestCooldownPostWarmup:
         with patch("backend.execution.executor.TradeEvent"):
             runner._emit_open_event("BTC/USDT", level, pos)
 
-        assert len(runner._pending_events) == 1, "Event doit être émis après cooldown"
+        assert len(runner._pending_events) == 1, "Event doit être émis si pas warmup symbol"
 
-    def test_emit_close_blocked_during_cooldown(self):
-        """_emit_close_event supprime l'event pendant cooldown (pas de position live à fermer)."""
+    def test_emit_close_blocked_for_warmup_symbol(self):
+        """_emit_close_event supprime l'event pour warmup symbol + retire du set."""
         runner = _make_grid_runner()
-        # Warm-up terminé il y a 10 min → cooldown actif
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(minutes=10)
+        runner._warmup_position_symbols = {"BTC/USDT"}
 
         trade = MagicMock()
         trade.direction.value = "LONG"
@@ -186,7 +183,8 @@ class TestCooldownPostWarmup:
 
         runner._emit_close_event("BTC/USDT", trade)
 
-        assert len(runner._pending_events) == 0, "Event CLOSE doit être supprimé pendant cooldown"
+        assert len(runner._pending_events) == 0, "Event CLOSE doit être supprimé pour warmup symbol"
+        assert "BTC/USDT" not in runner._warmup_position_symbols
 
     def test_warmup_end_sets_timestamp(self):
         """_end_warmup() définit _warmup_ended_at."""
@@ -199,10 +197,10 @@ class TestCooldownPostWarmup:
         assert runner._warmup_ended_at is not None
         assert not runner._is_warming_up
 
-    def test_no_warmup_no_cooldown(self):
-        """Si _warmup_ended_at is None (pas de warm-up), les events passent."""
+    def test_no_warmup_symbols_no_blocking(self):
+        """Si warmup set vide, les events passent."""
         runner = _make_grid_runner()
-        runner._warmup_ended_at = None
+        runner._warmup_position_symbols = set()
 
         pos = MagicMock()
         pos.direction.value = "LONG"
@@ -214,11 +212,11 @@ class TestCooldownPostWarmup:
         with patch("backend.execution.executor.TradeEvent"):
             runner._emit_open_event("BTC/USDT", level, pos)
 
-        assert len(runner._pending_events) == 1, "Sans warm-up, pas de cooldown"
+        assert len(runner._pending_events) == 1, "Sans warmup symbols, pas de blocage"
 
     @pytest.mark.asyncio
-    async def test_paper_positions_open_during_cooldown(self):
-        """Les positions paper s'ouvrent normalement même pendant le cooldown."""
+    async def test_paper_positions_open_with_warmup_tracking(self):
+        """Les positions paper s'ouvrent, events bloqués pour warmup symbols."""
         level = GridLevel(
             index=0,
             entry_price=95_000.0,
@@ -227,8 +225,7 @@ class TestCooldownPostWarmup:
         )
         strategy = _make_mock_strategy(grid_levels=[level])
         runner = _make_grid_runner(strategy=strategy)
-        # Cooldown actif : warm-up terminé il y a 1 min
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(minutes=1)
+        runner._warmup_position_symbols = {"BTC/USDT"}
 
         _fill_buffer(runner)
 
@@ -236,14 +233,14 @@ class TestCooldownPostWarmup:
         await runner.on_candle("BTC/USDT", "1h", candle)
 
         positions = runner._positions.get("BTC/USDT", [])
-        assert len(positions) == 1, "Position paper doit s'ouvrir pendant cooldown"
+        assert len(positions) == 1, "Position paper doit s'ouvrir"
         assert positions[0].entry_price == 95_000.0
 
-        assert len(runner._pending_events) == 0, "Aucun event Executor pendant cooldown"
+        assert len(runner._pending_events) == 0, "Event bloqué pour warmup symbol"
 
     @pytest.mark.asyncio
-    async def test_events_emitted_after_cooldown(self):
-        """Les events Executor sont émis normalement après le cooldown (> 3h)."""
+    async def test_events_emitted_for_non_warmup_symbol(self):
+        """Les events Executor sont émis pour un symbol pas dans le warmup set."""
         level = GridLevel(
             index=0,
             entry_price=95_000.0,
@@ -252,8 +249,7 @@ class TestCooldownPostWarmup:
         )
         strategy = _make_mock_strategy(grid_levels=[level])
         runner = _make_grid_runner(strategy=strategy)
-        # Cooldown passé : warm-up terminé il y a 4h
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(hours=4)
+        runner._warmup_position_symbols = set()  # vide → tout passe
 
         _fill_buffer(runner)
 
@@ -262,7 +258,7 @@ class TestCooldownPostWarmup:
             mock_event.return_value = MagicMock()
             await runner.on_candle("BTC/USDT", "1h", candle)
 
-        assert len(runner._pending_events) == 1, "Event Executor doit être émis après cooldown"
+        assert len(runner._pending_events) == 1, "Event émis si pas warmup symbol"
 
 
 # ─── Bug B : Max grids Executor ───────────────────────────────────────────────

@@ -1,7 +1,7 @@
-"""Tests Hotfix 36 — Cooldown par temps + DataEngine auto-recovery.
+"""Tests Hotfix 36 — Warmup position tracking + DataEngine auto-recovery.
 
 Couvre :
-- Fix A : cooldown post-warmup basé sur le temps réel (pas un compteur)
+- Fix A : warmup position tracking (remplace le cooldown 3h par tracking ciblé par symbol)
 - Fix B : DataEngine never give up (_watch_symbol sans max_attempts)
 - Fix B3 : restart_dead_tasks relance les tâches mortes
 - Fix B4 : Watchdog auto-recovery sur data_stale
@@ -129,16 +129,16 @@ def _fill_buffer(runner: GridStrategyRunner, symbol: str = "BTC/USDT", n: int = 
         runner._close_buffer[symbol].append(98_000.0 + i * 100)
 
 
-# ─── Fix A : Cooldown par temps ──────────────────────────────────────────────
+# ─── Fix A : Warmup position tracking ────────────────────────────────────────
 
 
-class TestTimeCooldown:
-    """Tests du cooldown post-warmup basé sur le temps réel."""
+class TestWarmupPositionTracking:
+    """Tests du warmup position tracking (remplace le cooldown 3h)."""
 
-    def test_cooldown_blocks_within_time_window(self):
-        """Event OPEN supprimé si warmup_ended_at < POST_WARMUP_COOLDOWN_SECONDS."""
+    def test_warmup_tracking_blocks_open_for_warmup_symbols(self):
+        """Event OPEN supprimé si symbol dans _warmup_position_symbols."""
         runner = _make_grid_runner()
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
+        runner._warmup_position_symbols = {"BTC/USDT"}
 
         pos = MagicMock()
         pos.direction.value = "LONG"
@@ -151,10 +151,10 @@ class TestTimeCooldown:
 
         assert len(runner._pending_events) == 0
 
-    def test_cooldown_allows_after_time_window(self):
-        """Event OPEN passe si warmup_ended_at > POST_WARMUP_COOLDOWN_SECONDS."""
+    def test_warmup_tracking_allows_open_for_non_warmup_symbols(self):
+        """Event OPEN passe si symbol PAS dans _warmup_position_symbols."""
         runner = _make_grid_runner()
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(hours=4)
+        runner._warmup_position_symbols = {"ETH/USDT"}  # BTC pas dedans
 
         pos = MagicMock()
         pos.direction.value = "LONG"
@@ -168,10 +168,10 @@ class TestTimeCooldown:
 
         assert len(runner._pending_events) == 1
 
-    def test_cooldown_close_also_blocked(self):
-        """Event CLOSE supprimé pendant cooldown."""
+    def test_warmup_tracking_blocks_close_and_removes_symbol(self):
+        """Event CLOSE supprimé pour warmup symbol + symbol retiré du set."""
         runner = _make_grid_runner()
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(minutes=5)
+        runner._warmup_position_symbols = {"BTC/USDT", "ETH/USDT"}
 
         trade = MagicMock()
         trade.direction.value = "LONG"
@@ -184,10 +184,64 @@ class TestTimeCooldown:
         runner._emit_close_event("BTC/USDT", trade)
 
         assert len(runner._pending_events) == 0
+        assert "BTC/USDT" not in runner._warmup_position_symbols
+        assert "ETH/USDT" in runner._warmup_position_symbols
+
+    def test_warmup_tracking_allows_close_after_removal(self):
+        """Après retrait du set, CLOSE passe normalement."""
+        runner = _make_grid_runner()
+        runner._warmup_position_symbols = set()  # vide
+
+        trade = MagicMock()
+        trade.direction.value = "LONG"
+        trade.entry_price = 95_000.0
+        trade.quantity = 0.01
+        trade.exit_time = datetime.now(tz=timezone.utc)
+        trade.exit_reason = "sl_global"
+        trade.exit_price = 90_000.0
+
+        with patch("backend.execution.executor.TradeEvent"):
+            runner._emit_close_event("BTC/USDT", trade)
+
+        assert len(runner._pending_events) == 1
+
+    def test_warmup_tracking_complete_cycle(self):
+        """Cycle complet : open bloqué → close bloqué + retrait → prochain open passe."""
+        runner = _make_grid_runner()
+        runner._warmup_position_symbols = {"BTC/USDT"}
+
+        pos = MagicMock()
+        pos.direction.value = "LONG"
+        pos.entry_price = 95_000.0
+        pos.quantity = 0.01
+        pos.entry_time = datetime.now(tz=timezone.utc)
+        level = MagicMock()
+
+        # 1. OPEN bloqué
+        runner._emit_open_event("BTC/USDT", level, pos)
+        assert len(runner._pending_events) == 0
+
+        # 2. CLOSE bloqué + symbol retiré
+        trade = MagicMock()
+        trade.direction.value = "LONG"
+        trade.entry_price = 95_000.0
+        trade.quantity = 0.01
+        trade.exit_time = datetime.now(tz=timezone.utc)
+        trade.exit_reason = "tp"
+        trade.exit_price = 100_000.0
+
+        runner._emit_close_event("BTC/USDT", trade)
+        assert len(runner._pending_events) == 0
+        assert "BTC/USDT" not in runner._warmup_position_symbols
+
+        # 3. Prochain OPEN passe
+        with patch("backend.execution.executor.TradeEvent"):
+            runner._emit_open_event("BTC/USDT", level, pos)
+        assert len(runner._pending_events) == 1
 
     @pytest.mark.asyncio
-    async def test_paper_positions_open_during_time_cooldown(self):
-        """Positions paper s'ouvrent, events Executor bloqués."""
+    async def test_paper_positions_open_with_warmup_tracking(self):
+        """Positions paper s'ouvrent, events Executor bloqués pour warmup symbols."""
         level = GridLevel(
             index=0,
             entry_price=95_000.0,
@@ -196,7 +250,7 @@ class TestTimeCooldown:
         )
         strategy = _make_mock_strategy(grid_levels=[level])
         runner = _make_grid_runner(strategy=strategy)
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(minutes=1)
+        runner._warmup_position_symbols = {"BTC/USDT"}
 
         _fill_buffer(runner)
 
@@ -207,10 +261,10 @@ class TestTimeCooldown:
         assert len(positions) == 1
         assert len(runner._pending_events) == 0
 
-    def test_cooldown_none_warmup_ended_at(self):
-        """Si _warmup_ended_at is None, events passent (pas de warm-up = pas de cooldown)."""
+    def test_warmup_tracking_empty_set_allows_all(self):
+        """Si warmup set vide, tous les events passent (pas de warm-up positions)."""
         runner = _make_grid_runner()
-        runner._warmup_ended_at = None
+        runner._warmup_position_symbols = set()
 
         pos = MagicMock()
         pos.direction.value = "LONG"
@@ -223,6 +277,63 @@ class TestTimeCooldown:
             runner._emit_open_event("BTC/USDT", level, pos)
 
         assert len(runner._pending_events) == 1
+
+    def test_end_warmup_populates_warmup_set(self):
+        """_end_warmup() peuple _warmup_position_symbols depuis les positions ouvertes."""
+        runner = _make_grid_runner()
+        runner._is_warming_up = True
+
+        # Simuler des positions ouvertes pendant le warm-up
+        pos_btc = MagicMock()
+        pos_eth = MagicMock()
+        runner._positions = {
+            "BTC/USDT": [pos_btc],
+            "ETH/USDT": [pos_eth],
+            "SOL/USDT": [],  # pas de position → pas dans le set
+        }
+
+        runner._end_warmup()
+
+        assert runner._warmup_position_symbols == {"BTC/USDT", "ETH/USDT"}
+        assert runner._is_warming_up is False
+        assert runner._warmup_ended_at is not None
+
+    def test_end_warmup_excludes_restored_symbols(self):
+        """Symbols restaurés par _pending_restore ne sont pas dans le warmup set."""
+        runner = _make_grid_runner()
+        runner._is_warming_up = True
+
+        # Positions warm-up sur BTC et ETH
+        pos_btc = MagicMock()
+        pos_eth = MagicMock()
+        runner._positions = {
+            "BTC/USDT": [pos_btc],
+            "ETH/USDT": [pos_eth],
+        }
+
+        # État sauvegardé : BTC a des positions live (restart scenario)
+        # Format attendu par _apply_restored_state : grid_positions = liste plate
+        runner._pending_restore = {
+            "capital": 9500.0,
+            "realized_pnl": -500.0,
+            "grid_positions": [
+                {
+                    "symbol": "BTC/USDT",
+                    "entry_price": 95000,
+                    "quantity": 0.01,
+                    "direction": "LONG",
+                    "level": 0,
+                    "entry_fee": 0.0,
+                    "entry_time": datetime.now(tz=timezone.utc).isoformat(),
+                },
+            ],
+        }
+
+        runner._end_warmup()
+
+        # BTC exclu (restauré), ETH reste dans le warmup set
+        assert "BTC/USDT" not in runner._warmup_position_symbols
+        assert "ETH/USDT" in runner._warmup_position_symbols
 
 
 # ─── Fix B : DataEngine recovery ─────────────────────────────────────────────

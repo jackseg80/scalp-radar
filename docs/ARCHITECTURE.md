@@ -246,8 +246,9 @@ on_candle(symbol, timeframe, candle)
     |
     +-- Détection fin warm-up : candle_age <= 2h → _end_warmup()
     |
-    +-- POST_WARMUP_COOLDOWN_SECONDS = 10800 : 3h post-warmup → _emit_event() bloqué
-    |     (évite ouvertures massives après restart) [Hotfix 36]
+    +-- Warmup position tracking : _warmup_position_symbols set[str]
+    |     _end_warmup() → snapshot symbols avec positions → bloque OPEN/CLOSE
+    |     jusqu'au premier close paper, puis libère le symbol [Hotfix Warmup Tracking]
     |
     +-- Mise à jour buffer closes + SMA interne
     |
