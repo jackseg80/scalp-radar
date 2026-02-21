@@ -108,7 +108,6 @@ Le SL est **global** : si le prix moyen pondéré des positions ouvertes subit u
 | CRV/USDT | 7 | 10 | 1.0 | 1.5 | 4 | 30.0 |
 | DOGE/USDT | 10 | 10 | 1.5 | 0.5 | 4 | 20.0 |
 | DYDX/USDT | 7 | 14 | 1.5 | 1.5 | 2 | 15.0 |
-| ENJ/USDT | 7 | 14 | 1.5 | 1.0 | 4 | 20.0 |
 | FET/USDT | 7 | 14 | 1.0 | 1.5 | 4 | 30.0 |
 | GALA/USDT | 7 | 14 | 2.5 | 1.0 | 4 | 15.0 |
 | ICP/USDT | 7 | 10 | 1.0 | 0.5 | 2 | 30.0 |

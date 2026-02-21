@@ -98,12 +98,12 @@ scalp-radar/
 
 1. **Envelope DCA** — Multi-niveaux asymétriques LONG, TP=SMA, SL=% prix moyen (`enabled: false`, remplacé par grid_atr)
 2. **Envelope DCA SHORT** — Miroir SHORT d'envelope_dca, enveloppes hautes (`enabled: false`, validation WFO en attente)
-3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: true`, paper trading actif sur Top 10 assets)
+3. **Grid ATR** — Enveloppes adaptatives basées sur ATR (volatilité), `entry = SMA ± ATR × multiplier` (`enabled: true`, paper trading actif sur Top 9 assets)
 4. **Grid Range ATR** — Range trading bidirectionnel, LONG+SHORT simultanés, TP/SL individuels par position, `entry = SMA ± ATR × spacing`, TP = retour SMA (`enabled: false`, WFO à lancer)
 5. **Grid Multi-TF** — Supertrend 4h filtre directionnel + Grid ATR 1h exécution, LONG quand ST=UP / SHORT quand ST=DOWN, force-close au flip (`enabled: false`, WFO en cours)
 6. **Grid Funding** — DCA sur funding rate négatif (LONG-only), multi-niveaux par seuil, TP = funding positif / SMA cross, funding payments accumulés 8h (`enabled: false`, WFO à lancer)
 7. **Grid Trend** — Trend following DCA, EMA cross + ADX + trailing stop ATR, force-close au flip, zone neutre ADX < seuil (`enabled: false`, échoue en forward test bear market)
-8. **Grid BolTrend** — DCA event-driven sur breakout Bollinger + filtre SMA long, TP inversé (close < SMA = exit LONG), niveaux fixés au breakout (`enabled: true`, paper trading en préparation 6 assets : BTC, ETH, DOGE, DYDX, LINK, SAND)
+8. **Grid BolTrend** — DCA event-driven sur breakout Bollinger + filtre SMA long, TP inversé (close < SMA = exit LONG), niveaux fixés au breakout (`enabled: true`, paper trading actif 5 assets : BTC, ETH, DOGE, DYDX, LINK)
 
 ## Multi-Strategy Arena
 
@@ -155,7 +155,7 @@ Adaptive selector allocates more capital to top performers, pauses underperforme
 
 ## Config Files (5 YAML)
 
-- `assets.yaml` — 22 assets (21 historiques + JUP/USDT pour grid_trend), timeframes [1m/5m/15m/1h ou 1h], groupes corrélation
+- `assets.yaml` — 21 assets, timeframes [5m/15m/1h/4h/1d pour Top 6 (BTC,ETH,SOL,DOGE,LINK,XRP), 1h/4h/1d pour les 15 autres], groupes corrélation
 - `strategies.yaml` — 16 stratégies + custom + per_asset overrides
 - `risk.yaml` — kill switch, position sizing, fees, slippage, margin cross, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits par catégorie
@@ -335,7 +335,7 @@ Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 - Multi-stratégie : clé `strategy:symbol`, dispatch candles à tous runners du même symbol
 - Résultats : grid_atr Top 10 = +221% (730j), +82.4% (forward 365j), DD max -29.8%
 - grid_trend non déployé (1/5 profitables en forward, bear market sans trends)
-- Paper trading actif : **grid_atr Top 10** (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX)
+- Paper trading actif : **grid_atr Top 9** (BTC, AVAX, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR) + **grid_boltrend Top 5** (BTC, ETH, DOGE, DYDX, LINK)
 
 **Sync WFO :**
 

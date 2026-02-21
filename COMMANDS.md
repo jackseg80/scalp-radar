@@ -152,9 +152,9 @@ foreach ($s in @("BTC/USDT","ETH/USDT","SOL/USDT","DOGE/USDT","LINK/USDT")) {
 }
 ```
 
-### Boucle sur les 16 nouveaux altcoins
+### Boucle sur les 15 altcoins (hors Top 6)
 ```powershell
-foreach ($s in @("ADA/USDT","APE/USDT","AR/USDT","AVAX/USDT","CRV/USDT","DYDX/USDT","ENJ/USDT","FET/USDT","GALA/USDT","ICP/USDT","IMX/USDT","NEAR/USDT","SAND/USDT","SUSHI/USDT","UNI/USDT","XTZ/USDT")) {
+foreach ($s in @("ADA/USDT","AAVE/USDT","ARB/USDT","AVAX/USDT","BCH/USDT","BNB/USDT","CRV/USDT","DYDX/USDT","FET/USDT","GALA/USDT","ICP/USDT","NEAR/USDT","OP/USDT","SUI/USDT","UNI/USDT")) {
     Write-Host "=== envelope_dca $s ==="
     uv run python -m scripts.optimize --strategy envelope_dca --symbol $s
 }
@@ -190,7 +190,7 @@ uv run python -m scripts.optimize --strategy grid_range_atr --all-symbols --resu
 uv run python -m scripts.optimize --strategy grid_boltrend --symbol ETH/USDT --exchange binance -v
 
 # Boucle Top assets
-foreach ($s in @("BTC/USDT","ETH/USDT","DOGE/USDT","DYDX/USDT","LINK/USDT","SAND/USDT")) {
+foreach ($s in @("BTC/USDT","ETH/USDT","DOGE/USDT","DYDX/USDT","LINK/USDT")) {
     Write-Host "=== grid_boltrend $s ==="
     uv run python -m scripts.optimize --strategy grid_boltrend --symbol $s --exchange binance
 }
@@ -215,9 +215,8 @@ uv run python -m scripts.fetch_history --exchange binance --days 1800 --symbols 
 
 ### Fetch données courtes (indicateurs Scanner — 7 jours)
 ```powershell
-uv run python -m scripts.fetch_history --exchange binance --days 7 --symbols ADA/USDT,APE/USDT --timeframe 5m
-uv run python -m scripts.fetch_history --exchange binance --days 7 --symbols ADA/USDT,APE/USDT --timeframe 15m
-uv run python -m scripts.fetch_history --exchange binance --days 2 --symbols ADA/USDT,APE/USDT --timeframe 1m
+uv run python -m scripts.fetch_history --exchange binance --days 7 --symbols ADA/USDT,XRP/USDT --timeframe 5m
+uv run python -m scripts.fetch_history --exchange binance --days 7 --symbols ADA/USDT,XRP/USDT --timeframe 15m
 ```
 
 ### Backfill candles Binance (API publique, sans clé)
@@ -420,7 +419,7 @@ foreach ($s in @("BTC/USDT","ETH/USDT","SOL/USDT")) { uv run python -m scripts.o
 foreach ($s in @("DOGE/USDT","LINK/USDT","ADA/USDT")) { uv run python -m scripts.optimize --strategy grid_atr --symbol $s }
 
 # Terminal 3
-foreach ($s in @("APE/USDT","AR/USDT","AVAX/USDT")) { uv run python -m scripts.optimize --strategy grid_atr --symbol $s }
+foreach ($s in @("AAVE/USDT","ARB/USDT","AVAX/USDT")) { uv run python -m scripts.optimize --strategy grid_atr --symbol $s }
 ```
 
 ---
@@ -499,13 +498,13 @@ Simule N assets avec capital partagé (même code que la prod). Voir section 2 p
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --capital 10000
 
 # grid_atr sur les Top 10 assets paper, 365 jours
-uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,ETH/USDT,DOGE/USDT,DYDX/USDT,ENJ/USDT,FET/USDT,GALA/USDT,ICP/USDT,NEAR/USDT,AVAX/USDT --days 365 --capital 10000
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,AVAX/USDT,CRV/USDT,DOGE/USDT,DYDX/USDT,FET/USDT,GALA/USDT,ICP/USDT,NEAR/USDT --days 365 --capital 10000
 
 # Forward test grid_atr (365 derniers jours)
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,ETH/USDT,DOGE/USDT --days 365 --capital 10000 --save --label "forward_test_2025"
 
 # grid_boltrend sur 6 assets, 730 jours
-uv run python -m scripts.portfolio_backtest --strategy grid_boltrend --assets BTC/USDT,ETH/USDT,DOGE/USDT,DYDX/USDT,LINK/USDT,SAND/USDT --capital 1000 --days 730
+uv run python -m scripts.portfolio_backtest --strategy grid_boltrend --assets BTC/USDT,ETH/USDT,DOGE/USDT,DYDX/USDT,LINK/USDT --capital 1000 --days 730
 
 # Multi-stratégie (grid_atr + grid_boltrend)
 uv run python -m scripts.portfolio_backtest --strategies "grid_atr:BTC/USDT,ETH/USDT+grid_boltrend:DOGE/USDT,LINK/USDT" --capital 10000 --days 365

@@ -28,7 +28,7 @@ with open(_STRATS_PATH) as f:
 
 TOTAL_CAPITAL = 1000.0  # USDT
 TOP_10_ASSETS = [
-    "BTC/USDT", "CRV/USDT", "DOGE/USDT", "DYDX/USDT", "ENJ/USDT",
+    "BTC/USDT", "CRV/USDT", "DOGE/USDT", "DYDX/USDT",
     "FET/USDT", "GALA/USDT", "ICP/USDT", "NEAR/USDT", "AVAX/USDT",
 ]
 LEVERAGE = _strats.get("grid_atr", {}).get("leverage", 6)
@@ -40,7 +40,6 @@ LEVELS_PER_ASSET = {
     "CRV/USDT": 4,
     "DOGE/USDT": 4,
     "DYDX/USDT": 2,
-    "ENJ/USDT": 4,
     "FET/USDT": 4,
     "GALA/USDT": 4,
     "ICP/USDT": 2,
