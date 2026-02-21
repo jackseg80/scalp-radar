@@ -2367,11 +2367,16 @@ class Simulator:
                             atr / close * 100, 2
                         )
 
-                    # Régime de marché par défaut
-                    candles_regime = data.candles.get(ind_tf, [])
-                    if len(candles_regime) >= 50:
-                        close_arr = np.array([c.close for c in candles_regime[-50:]])
-                        asset_data["regime"] = detect_market_regime(close_arr).value
+                    # Régime de marché par défaut (depuis indicateurs scalaires)
+                    adx_val = ind.get("adx")
+                    di_plus_val = ind.get("di_plus")
+                    di_minus_val = ind.get("di_minus")
+                    atr_val = atr
+                    atr_sma_val = ind.get("atr_sma")
+                    if all(v is not None for v in (adx_val, di_plus_val, di_minus_val, atr_val, atr_sma_val)):
+                        asset_data["regime"] = detect_market_regime(
+                            adx_val, di_plus_val, di_minus_val, atr_val, atr_sma_val
+                        ).value
 
             # Conditions par runner/stratégie (enrichissement si runner actif)
             for runner in self._runners:
