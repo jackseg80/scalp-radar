@@ -36,7 +36,7 @@ PORTFOLIO_PRESETS = [
         "capital": 1000,
         "days": 90,
         "assets": [
-            "CRV/USDT", "FET/USDT", "ENJ/USDT", "AVAX/USDT", "DOGE/USDT",
+            "CRV/USDT", "FET/USDT", "NEAR/USDT", "AVAX/USDT", "DOGE/USDT",
         ],
     },
     {
@@ -46,8 +46,8 @@ PORTFOLIO_PRESETS = [
         "capital": 5000,
         "days": 90,
         "assets": [
-            "CRV/USDT", "ENJ/USDT", "FET/USDT", "XTZ/USDT", "AVAX/USDT",
-            "ICP/USDT", "AR/USDT", "DYDX/USDT", "UNI/USDT", "DOGE/USDT",
+            "CRV/USDT", "GALA/USDT", "FET/USDT", "NEAR/USDT", "AVAX/USDT",
+            "ICP/USDT", "BTC/USDT", "DYDX/USDT", "UNI/USDT", "DOGE/USDT",
         ],
     },
     {
@@ -65,8 +65,8 @@ PORTFOLIO_PRESETS = [
         "capital": 10000,
         "days": 365,
         "assets": [
-            "CRV/USDT", "ENJ/USDT", "FET/USDT", "XTZ/USDT", "AVAX/USDT",
-            "ICP/USDT", "AR/USDT",
+            "CRV/USDT", "NEAR/USDT", "FET/USDT", "DOGE/USDT", "AVAX/USDT",
+            "ICP/USDT", "DYDX/USDT",
         ],
     },
 ]

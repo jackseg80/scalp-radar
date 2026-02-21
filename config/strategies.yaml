@@ -109,18 +109,6 @@ envelope_dca:
       ma_period: 5
       num_levels: 4
       sl_percent: 25.0
-    APE/USDT:
-      envelope_start: 0.05
-      envelope_step: 0.05
-      ma_period: 5
-      num_levels: 4
-      sl_percent: 25.0
-    AR/USDT:
-      envelope_start: 0.05
-      envelope_step: 0.02
-      ma_period: 5
-      num_levels: 2
-      sl_percent: 30.0
     AVAX/USDT:
       envelope_start: 0.05
       envelope_step: 0.05
@@ -144,12 +132,6 @@ envelope_dca:
       envelope_step: 0.05
       ma_period: 5
       num_levels: 3
-      sl_percent: 25.0
-    ENJ/USDT:
-      envelope_start: 0.07
-      envelope_step: 0.05
-      ma_period: 7
-      num_levels: 4
       sl_percent: 25.0
     ETH/USDT:
       envelope_start: 0.05
@@ -175,12 +157,6 @@ envelope_dca:
       ma_period: 7
       num_levels: 2
       sl_percent: 30.0
-    IMX/USDT:
-      envelope_start: 0.05
-      envelope_step: 0.05
-      ma_period: 5
-      num_levels: 2
-      sl_percent: 30.0
     LINK/USDT:
       envelope_start: 0.05
       envelope_step: 0.03
@@ -193,23 +169,11 @@ envelope_dca:
       ma_period: 5
       num_levels: 4
       sl_percent: 15.0
-    SAND/USDT:
-      envelope_start: 0.05
-      envelope_step: 0.03
-      ma_period: 5
-      num_levels: 4
-      sl_percent: 30.0
     SOL/USDT:
       envelope_start: 0.05
       envelope_step: 0.02
       ma_period: 7
       num_levels: 3
-      sl_percent: 30.0
-    SUSHI/USDT:
-      envelope_start: 0.05
-      envelope_step: 0.03
-      ma_period: 5
-      num_levels: 4
       sl_percent: 30.0
     UNI/USDT:
       envelope_start: 0.05
@@ -217,12 +181,6 @@ envelope_dca:
       ma_period: 7
       num_levels: 4
       sl_percent: 25.0
-    XTZ/USDT:
-      envelope_start: 0.05
-      envelope_step: 0.05
-      ma_period: 8
-      num_levels: 3
-      sl_percent: 20.0
 envelope_dca_short:
   enabled: false
   live_eligible: false
@@ -287,13 +245,6 @@ grid_atr:
       ma_period: 7
       num_levels: 2
       sl_percent: 15.0
-    ENJ/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.0
-      atr_period: 14
-      ma_period: 7
-      num_levels: 4
-      sl_percent: 20.0
     FET/USDT:
       atr_multiplier_start: 1.0
       atr_multiplier_step: 1.5
@@ -365,24 +316,6 @@ grid_multi_tf:
       sl_percent: 20.0
       st_atr_multiplier: 3.0
       st_atr_period: 10
-    APE/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 1.0
-      atr_period: 10
-      ma_period: 7
-      num_levels: 2
-      sl_percent: 25.0
-      st_atr_multiplier: 2.0
-      st_atr_period: 14
-    AR/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 0.5
-      atr_period: 10
-      ma_period: 7
-      num_levels: 2
-      sl_percent: 20.0
-      st_atr_multiplier: 2.0
-      st_atr_period: 14
     AVAX/USDT:
       atr_multiplier_start: 2.0
       atr_multiplier_step: 1.0
@@ -428,15 +361,6 @@ grid_multi_tf:
       sl_percent: 25.0
       st_atr_multiplier: 3.0
       st_atr_period: 10
-    ENJ/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 14
-      ma_period: 7
-      num_levels: 2
-      sl_percent: 15.0
-      st_atr_multiplier: 3.0
-      st_atr_period: 14
     ETH/USDT:
       atr_multiplier_start: 1.5
       atr_multiplier_step: 1.0
@@ -473,24 +397,6 @@ grid_multi_tf:
       sl_percent: 15.0
       st_atr_multiplier: 3.0
       st_atr_period: 10
-    IMX/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.0
-      atr_period: 10
-      ma_period: 7
-      num_levels: 3
-      sl_percent: 15.0
-      st_atr_multiplier: 2.0
-      st_atr_period: 10
-    JUP/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 14
-      ma_period: 7
-      num_levels: 3
-      sl_percent: 15.0
-      st_atr_multiplier: 3.0
-      st_atr_period: 10
     LINK/USDT:
       atr_multiplier_start: 1.5
       atr_multiplier_step: 1.0
@@ -509,15 +415,6 @@ grid_multi_tf:
       sl_percent: 20.0
       st_atr_multiplier: 3.0
       st_atr_period: 10
-    SAND/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.0
-      atr_period: 14
-      ma_period: 10
-      num_levels: 3
-      sl_percent: 20.0
-      st_atr_multiplier: 3.0
-      st_atr_period: 10
     SOL/USDT:
       atr_multiplier_start: 1.5
       atr_multiplier_step: 0.5
@@ -527,38 +424,11 @@ grid_multi_tf:
       sl_percent: 25.0
       st_atr_multiplier: 2.0
       st_atr_period: 10
-    SUSHI/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 14
-      ma_period: 7
-      num_levels: 2
-      sl_percent: 20.0
-      st_atr_multiplier: 3.0
-      st_atr_period: 10
-    THETA/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 10
-      ma_period: 7
-      num_levels: 3
-      sl_percent: 25.0
-      st_atr_multiplier: 3.0
-      st_atr_period: 10
     UNI/USDT:
       atr_multiplier_start: 1.5
       atr_multiplier_step: 1.0
       atr_period: 14
       ma_period: 10
-      num_levels: 3
-      sl_percent: 20.0
-      st_atr_multiplier: 2.0
-      st_atr_period: 14
-    XTZ/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.0
-      atr_period: 10
-      ma_period: 7
       num_levels: 3
       sl_percent: 20.0
       st_atr_multiplier: 2.0
@@ -599,17 +469,6 @@ grid_trend:
   leverage: 6
   weight: 0.2
   per_asset:
-    AR/USDT:
-      adx_period: 14
-      adx_threshold: 25
-      atr_period: 14
-      ema_fast: 20
-      ema_slow: 50
-      num_levels: 3
-      pull_start: 1.5
-      pull_step: 1.0
-      sl_percent: 15
-      trail_mult: 1.5
     CRV/USDT:
       adx_period: 14
       adx_threshold: 15
@@ -632,17 +491,6 @@ grid_trend:
       pull_step: 0.5
       sl_percent: 20
       trail_mult: 2.5
-    JUP/USDT:
-      adx_period: 14
-      adx_threshold: 15
-      atr_period: 14
-      ema_fast: 20
-      ema_slow: 50
-      num_levels: 3
-      pull_start: 1.5
-      pull_step: 1.0
-      sl_percent: 20
-      trail_mult: 3.0
     SOL/USDT:
       adx_period: 14
       adx_threshold: 25
@@ -652,17 +500,6 @@ grid_trend:
       num_levels: 2
       pull_start: 1.5
       pull_step: 1.0
-      sl_percent: 20
-      trail_mult: 1.5
-    XTZ/USDT:
-      adx_period: 14
-      adx_threshold: 15
-      atr_period: 14
-      ema_fast: 20
-      ema_slow: 50
-      num_levels: 3
-      pull_start: 1.5
-      pull_step: 0.5
       sl_percent: 20
       trail_mult: 1.5
 grid_boltrend:
@@ -723,15 +560,6 @@ grid_boltrend:
       atr_period: 14
       atr_spacing_mult: 0.5
       bol_std: 1.5
-      bol_window: 50
-      long_ma_window: 200
-      min_bol_spread: 0.0
-      num_levels: 3
-      sl_percent: 10.0
-    SAND/USDT:
-      atr_period: 10
-      atr_spacing_mult: 0.5
-      bol_std: 2.0
       bol_window: 50
       long_ma_window: 200
       min_bol_spread: 0.0

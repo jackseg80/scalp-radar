@@ -71,30 +71,6 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: altcoins
-- symbol: APE/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 1m
-  - 5m
-  - 15m
-  - 1h
-  max_leverage: 25
-  min_order_size: 0.1
-  tick_size: 0.0001
-  correlation_group: altcoins
-- symbol: AR/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 1m
-  - 5m
-  - 15m
-  - 1h
-  max_leverage: 20
-  min_order_size: 0.1
-  tick_size: 0.001
-  correlation_group: altcoins
 - symbol: AVAX/USDT
   exchange: bitget
   type: futures
@@ -130,18 +106,6 @@ assets:
   max_leverage: 20
   min_order_size: 1.0
   tick_size: 0.0001
-  correlation_group: altcoins
-- symbol: ENJ/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 1m
-  - 5m
-  - 15m
-  - 1h
-  max_leverage: 20
-  min_order_size: 3.0
-  tick_size: 1e-05
   correlation_group: altcoins
 - symbol: FET/USDT
   exchange: bitget
@@ -179,43 +143,7 @@ assets:
   min_order_size: 0.01
   tick_size: 0.001
   correlation_group: altcoins
-- symbol: IMX/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 1m
-  - 5m
-  - 15m
-  - 1h
-  max_leverage: 20
-  min_order_size: 0.1
-  tick_size: 0.0001
-  correlation_group: altcoins
 - symbol: NEAR/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 1m
-  - 5m
-  - 15m
-  - 1h
-  max_leverage: 20
-  min_order_size: 1.0
-  tick_size: 0.0001
-  correlation_group: altcoins
-- symbol: SAND/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 1m
-  - 5m
-  - 15m
-  - 1h
-  max_leverage: 20
-  min_order_size: 1.0
-  tick_size: 1e-05
-  correlation_group: altcoins
-- symbol: SUSHI/USDT
   exchange: bitget
   type: futures
   timeframes:
@@ -238,6 +166,90 @@ assets:
   max_leverage: 20
   min_order_size: 1.0
   tick_size: 0.001
+  correlation_group: altcoins
+- symbol: XRP/USDT
+  exchange: bitget
+  type: futures
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  max_leverage: 20
+  min_order_size: 1.0
+  tick_size: 0.0001
+  correlation_group: crypto_major
+- symbol: SUI/USDT
+  exchange: bitget
+  type: futures
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  max_leverage: 20
+  min_order_size: 0.1
+  tick_size: 0.0001
+  correlation_group: altcoins
+- symbol: BCH/USDT
+  exchange: bitget
+  type: futures
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  max_leverage: 20
+  min_order_size: 0.01
+  tick_size: 0.01
+  correlation_group: crypto_major
+- symbol: BNB/USDT
+  exchange: bitget
+  type: futures
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  max_leverage: 20
+  min_order_size: 0.01
+  tick_size: 0.01
+  correlation_group: crypto_major
+- symbol: AAVE/USDT
+  exchange: bitget
+  type: futures
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  max_leverage: 20
+  min_order_size: 0.1
+  tick_size: 0.01
+  correlation_group: altcoins
+- symbol: ARB/USDT
+  exchange: bitget
+  type: futures
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  max_leverage: 20
+  min_order_size: 0.01
+  tick_size: 0.0001
+  correlation_group: altcoins
+- symbol: OP/USDT
+  exchange: bitget
+  type: futures
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  max_leverage: 20
+  min_order_size: 0.1
+  tick_size: 0.0001
   correlation_group: altcoins
 correlation_groups:
   crypto_major:
