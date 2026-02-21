@@ -957,37 +957,39 @@ class WalkForwardOptimizer:
 
             logger.info("Sprint 14b : {} combo results agrégés", len(combo_results))
 
-        # Agrégation regime_analysis pour le best combo (Sprint 15b)
+        # Agrégation regime_analysis — croisement direct windows × régimes (Hotfix 37c)
+        # On itère sur window_results (toutes les fenêtres OOS) au lieu de combo_accumulator
+        # qui ne contient que les combos testés ≤ 1 fenêtre chacun → agrégation quasi-vide.
         regime_analysis: dict[str, dict[str, Any]] | None = None
-        if collect_combo_results and combo_accumulator and window_regimes:
-            recommended_key = json.dumps(recommended, sort_keys=True)
-            best_window_data = combo_accumulator.get(recommended_key, [])
+        if window_regimes and window_results:
+            regime_groups: dict[str, list[dict]] = {}
+            for i, w in enumerate(window_results):
+                if i >= len(window_regimes):
+                    break
+                regime = window_regimes[i]["regime"]
+                oos_sharpe_val = w.oos_sharpe if not np.isnan(w.oos_sharpe) else None
+                regime_groups.setdefault(regime, []).append({
+                    "oos_sharpe": oos_sharpe_val,
+                    "oos_return_pct": w.oos_net_return_pct,
+                })
 
-            if best_window_data:
-                regime_groups: dict[str, list[dict]] = {}
-                for wd in best_window_data:
-                    w_idx = wd.get("window_idx", -1)
-                    if 0 <= w_idx < len(window_regimes):
-                        regime = window_regimes[w_idx]["regime"]
-                        regime_groups.setdefault(regime, []).append(wd)
+            regime_analysis = {}
+            for regime, entries in regime_groups.items():
+                oos_sharpes = [e["oos_sharpe"] for e in entries if e["oos_sharpe"] is not None]
+                oos_returns = [e["oos_return_pct"] for e in entries if e["oos_return_pct"] is not None]
+                n_positive = sum(1 for s in oos_sharpes if s > 0)
 
-                regime_analysis = {}
-                for regime, entries in regime_groups.items():
-                    oos_sharpes = [e["oos_sharpe"] for e in entries if e["oos_sharpe"] is not None]
-                    oos_returns = [e["oos_return_pct"] for e in entries if e["oos_return_pct"] is not None]
-                    n_positive = sum(1 for s in oos_sharpes if s > 0)
+                regime_analysis[regime] = {
+                    "n_windows": len(entries),
+                    "avg_oos_sharpe": round(float(np.nanmean(oos_sharpes)), 4) if oos_sharpes else 0.0,
+                    "consistency": round(n_positive / len(oos_sharpes), 4) if oos_sharpes else 0.0,
+                    "avg_return_pct": round(float(np.mean(oos_returns)), 4) if oos_returns else 0.0,
+                }
 
-                    regime_analysis[regime] = {
-                        "n_windows": len(entries),
-                        "avg_oos_sharpe": round(float(np.nanmean(oos_sharpes)), 4) if oos_sharpes else 0.0,
-                        "consistency": round(n_positive / len(oos_sharpes), 4) if oos_sharpes else 0.0,
-                        "avg_return_pct": round(float(np.mean(oos_returns)), 4) if oos_returns else 0.0,
-                    }
-
-                logger.info(
-                    "Sprint 15b : regime_analysis = {}",
-                    {r: f"n={d['n_windows']}, sharpe={d['avg_oos_sharpe']:.2f}" for r, d in regime_analysis.items()},
-                )
+            logger.info(
+                "Hotfix 37c : regime_analysis = {}",
+                {r: f"n={d['n_windows']}, sharpe={d['avg_oos_sharpe']:.2f}" for r, d in regime_analysis.items()},
+            )
 
         return WFOResult(
             strategy_name=strategy_name,

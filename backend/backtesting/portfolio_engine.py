@@ -35,6 +35,31 @@ from backend.optimization import create_strategy_with_params
 
 
 # ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class TimeframeConflictError(Exception):
+    """Levée si un runner a un timeframe incompatible avec le portfolio (1h)."""
+
+    def __init__(
+        self,
+        mismatched: list[tuple[str, str]],
+        expected_tf: str,
+        all_runner_keys: list[str],
+    ):
+        self.mismatched = mismatched
+        self.expected_tf = expected_tf
+        # Clés des runners valides — permet au script d'afficher --assets suggestion
+        bad_keys = {k for k, _ in mismatched}
+        self.valid_keys = [k for k in all_runner_keys if k not in bad_keys]
+        super().__init__(
+            f"{len(mismatched)} runners avec timeframe incompatible "
+            f"(attendu {expected_tf})"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
 
@@ -251,6 +276,16 @@ class PortfolioBacktester:
         runners, indicator_engine = self._create_runners(
             filtered_multi, per_runner_capital, regime_profiles_by_strategy
         )
+
+        # Check cohérence timeframe (portfolio = 1h seulement)
+        expected_tf = "1h"
+        mismatched: list[tuple[str, str]] = []
+        for runner_key, runner in runners.items():
+            runner_tf = getattr(runner._strategy._config, "timeframe", expected_tf)
+            if runner_tf != expected_tf:
+                mismatched.append((runner_key, runner_tf))
+        if mismatched:
+            raise TimeframeConflictError(mismatched, expected_tf, list(runners.keys()))
 
         # 3. Warm-up
         warmup_ends = self._warmup_runners(

@@ -692,6 +692,15 @@ Pipeline complète, chaque étape doit être validée avant de passer à la suiv
    └─ uv run python -m scripts.optimize --strategy <name> --all-assets
    └─ Critère : Grade A ou B sur ≥ 5 assets
 
+2b. Cohérence timeframe (OBLIGATOIRE avant --apply)
+   └─ Le badge TF dans la page Recherche signale les outliers (orange = ≠ 1h)
+   └─ Si outliers détectés, `--apply` est BLOQUÉ (exit 1, HTTP 409)
+   └─ Actions requises (par ordre de préférence) :
+       a) Re-tester les outliers en 1h : --symbols BCH/USDT --force-timeframe 1h
+       b) Exclure les outliers : --apply --exclude BCH/USDT
+       c) Forcer (exclut silencieusement) : --apply --ignore-tf-conflicts
+   └─ Critère : Tous les Grade A/B doivent avoir timeframe=1h
+
 3. Portfolio backtest multi-coin (Grade A/B seulement)
    └─ uv run python -m scripts.portfolio_backtest --strategy <name> --days auto
    └─ Critère : Return > 0, Max DD < -35%, Sharpe > 0.5
@@ -755,6 +764,7 @@ Workflow A/B test — on isole l'impact d'une seule variable :
 - **Jamais de raccourci** : ne pas sauter d'étape, même si "ça a l'air évident"
 - **Un changement à la fois** : ne pas tester un nouveau paramètre ET un nouveau leverage simultanément
 - **Grade minimum** : seuls les Grade A et B passent en portfolio/paper/live
+- **Timeframe unifié** : tous les Grade A/B d'une stratégie doivent avoir le même timeframe (1h pour le portfolio/paper/live). Un outlier 4h ou 1d ne produit aucun trade en portfolio malgré un Grade A.
 - **Backward compat** : tout nouveau paramètre a un défaut qui préserve le comportement existant
 - **Données fraîches** : toujours `fetch_history` avant un WFO important pour avoir les dernières candles
 

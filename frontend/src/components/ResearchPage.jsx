@@ -169,6 +169,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
   // Apply params
   const [applyResult, setApplyResult] = useState(null)
   const [applying, setApplying] = useState(false)
+  const [tfConflict, setTfConflict] = useState(null)
 
   const handleApply = async () => {
     const stratLabel = filters.strategy || 'toutes les stratégies'
@@ -179,9 +180,21 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
 
     setApplying(true)
     setApplyResult(null)
+    setTfConflict(null)
     try {
-      const qs = filters.strategy ? `?strategy_name=${encodeURIComponent(filters.strategy)}` : ''
-      const resp = await fetch(`/api/optimization/apply${qs}`, { method: 'POST' })
+      const qs = new URLSearchParams()
+      if (filters.strategy) qs.set('strategy_name', filters.strategy)
+      const resp = await fetch(`/api/optimization/apply?${qs}`, { method: 'POST' })
+      if (resp.status === 409) {
+        const err = await resp.json().catch(() => ({}))
+        const detail = err.detail || {}
+        setTfConflict({
+          majority_tf: detail.majority_tf || '?',
+          tf_outliers: detail.tf_outliers || [],
+          strategy_name: filters.strategy || 'toutes',
+        })
+        return
+      }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}))
         throw new Error(err.detail || `HTTP ${resp.status}`)
@@ -548,6 +561,59 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
         </div>
       )}
 
+      {tfConflict && (
+        <div className="tf-conflict-modal">
+          <div className="tf-conflict-content">
+            <h3>❌ Conflit de timeframe — apply bloqué</h3>
+            <p>
+              Timeframe majoritaire : <strong>{tfConflict.majority_tf}</strong><br />
+              Outliers ({tfConflict.tf_outliers.length} asset{tfConflict.tf_outliers.length > 1 ? 's' : ''}) :
+            </p>
+            <ul>
+              {tfConflict.tf_outliers.map(s => <li key={s}><code>{s}</code></li>)}
+            </ul>
+            <p>Actions :</p>
+            <ol>
+              <li>Re-tester en {tfConflict.majority_tf} :
+                <code className="cmd">
+                  uv run python -m scripts.optimize --strategy {tfConflict.strategy_name}{' '}
+                  --symbols {tfConflict.tf_outliers.join(',')} --force-timeframe {tfConflict.majority_tf}
+                </code>
+              </li>
+              <li>
+                <button
+                  className="btn-secondary"
+                  onClick={() => {
+                    const qs = new URLSearchParams()
+                    if (filters.strategy) qs.set('strategy_name', filters.strategy)
+                    qs.set('exclude', tfConflict.tf_outliers.join(','))
+                    fetch(`/api/optimization/apply?${qs}`, { method: 'POST' })
+                      .then(r => r.json()).then(j => { setApplyResult(j); setTfConflict(null) })
+                  }}
+                >
+                  Exclure les outliers et appliquer
+                </button>
+              </li>
+              <li>
+                <button
+                  className="btn-secondary"
+                  onClick={() => {
+                    const qs = new URLSearchParams()
+                    if (filters.strategy) qs.set('strategy_name', filters.strategy)
+                    qs.set('ignore_tf_conflicts', 'true')
+                    fetch(`/api/optimization/apply?${qs}`, { method: 'POST' })
+                      .then(r => r.json()).then(j => { setApplyResult(j); setTfConflict(null) })
+                  }}
+                >
+                  Forcer (exclure silencieusement)
+                </button>
+              </li>
+            </ol>
+            <button className="btn-close" onClick={() => setTfConflict(null)}>Fermer</button>
+          </div>
+        </div>
+      )}
+
       {filters.strategy && (
         <StrategySummaryPanel
           strategyName={filters.strategy}
@@ -585,6 +651,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
               <th style={{ width: '12%' }} onClick={() => handleSort('asset')}>
                 Asset {sortBy === 'asset' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
+              <th style={{ width: '5%' }}>TF</th>
               <th style={{ width: '7%' }} onClick={() => handleSort('grade')}>
                 Grade {sortBy === 'grade' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
@@ -614,7 +681,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
           <tbody>
             {filteredResults.length === 0 ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', color: '#888', padding: '40px' }}>
+                <td colSpan={11} style={{ textAlign: 'center', color: '#888', padding: '40px' }}>
                   Aucun résultat trouvé
                 </td>
               </tr>
@@ -623,6 +690,16 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
                 <tr key={r.id} onClick={() => fetchDetail(r.id)} className="clickable-row">
                   <td>{r.strategy_name}</td>
                   <td>{r.asset}</td>
+                  <td>
+                    <span
+                      className={`timeframe-badge${r.timeframe && r.timeframe !== '1h' ? ' timeframe-badge--warn' : ''}`}
+                      title={r.timeframe && r.timeframe !== '1h'
+                        ? `Optimisé en ${r.timeframe}. Incompatible avec paper/live (1h). Re-testez avec --force-timeframe 1h.`
+                        : `Timeframe : ${r.timeframe || '1h'}`}
+                    >
+                      {r.timeframe || '1h'}
+                    </span>
+                  </td>
                   <td>
                     <span className={`grade-badge grade-${r.grade}`}>{r.grade}</span>
                   </td>

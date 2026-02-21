@@ -24,7 +24,9 @@ import argparse
 import asyncio
 import itertools
 import math as _math
+import sys
 import threading
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -506,19 +508,44 @@ def _fetch_market_specs(symbols: list[str]) -> dict[str, dict]:
     return result
 
 
+def _params_equal(old: dict, new: dict) -> bool:
+    """Compare deux dicts de paramètres avec normalisation des types.
+
+    - Évite les faux "inchangé" quand int 25 vs float 25.0 (→ égaux)
+    - Évite les faux "changé" entre "1h" et "1h" (→ égaux)
+    - Détecte bien "4h" vs "1h", 20 vs 25, etc.
+    - Si les clés diffèrent → différents (ex: YAML a des clés en moins/plus)
+    """
+    if set(old.keys()) != set(new.keys()):
+        return False
+    for key, v_new in new.items():
+        v_old = old.get(key)
+        # Normaliser int/float : 25 == 25.0 → pas de faux "changé"
+        if isinstance(v_old, (int, float)) and isinstance(v_new, (int, float)):
+            if float(v_old) != float(v_new):
+                return False
+        elif str(v_old) != str(v_new):
+            return False
+    return True
+
+
 def apply_from_db(
     strategy_names: list[str],
     config_dir: str = "config",
     db_path: str | None = None,
+    exclude_symbols: list[str] | None = None,
+    ignore_tf_conflicts: bool = False,
 ) -> dict:
     """Lit les résultats is_latest=1 en DB et écrit per_asset dans strategies.yaml.
 
     - Grade A/B → best_params écrits dans per_asset
     - Grade C/D/F → retirés de per_asset
     - Champs non-optimisés préservés (enabled, leverage, weight, sides, timeframe)
+    - Bloque si plusieurs timeframes détectés parmi les Grade A/B (sauf --ignore-tf-conflicts)
 
     Returns:
-        dict avec clés: changed, applied, removed, excluded, grades, backup
+        dict avec clés: changed, applied, removed, excluded, grades, backup.
+        Si conflit timeframe : blocked=True, reason="tf_conflict", tf_outliers=[...].
     """
     import json
     import shutil
@@ -541,7 +568,7 @@ def apply_from_db(
     try:
         placeholders = ",".join("?" for _ in strategy_names)
         rows = conn.execute(
-            f"""SELECT strategy_name, asset, grade, total_score, best_params
+            f"""SELECT strategy_name, asset, timeframe, grade, total_score, best_params
                 FROM optimization_results
                 WHERE is_latest = 1 AND strategy_name IN ({placeholders})
                 ORDER BY strategy_name, asset""",
@@ -553,11 +580,17 @@ def apply_from_db(
     # Organiser par stratégie
     by_strategy: dict[str, list[dict]] = {}
     for row in rows:
+        best_params = json.loads(row["best_params"]) if row["best_params"] else {}
+        tf_col = row["timeframe"] or "1h"
+        # Synchroniser timeframe dans best_params avec la colonne (Hotfix 37d)
+        if "timeframe" in best_params:
+            best_params["timeframe"] = tf_col
         entry = {
             "asset": row["asset"],
             "grade": row["grade"],
             "total_score": row["total_score"],
-            "best_params": json.loads(row["best_params"]) if row["best_params"] else {},
+            "best_params": best_params,
+            "timeframe": tf_col,
         }
         by_strategy.setdefault(row["strategy_name"], []).append(entry)
 
@@ -581,6 +614,8 @@ def apply_from_db(
     print("  --apply : mise à jour per_asset depuis la DB")
     print(f"{'=' * 55}")
 
+    TF_ORDER = {"1m": 0, "5m": 1, "15m": 2, "1h": 3, "4h": 4, "1d": 5}
+
     for strat_name in strategy_names:
         if strat_name not in data:
             print(f"\n  {strat_name} : absent de strategies.yaml, skip")
@@ -591,42 +626,117 @@ def apply_from_db(
         new_per_asset: dict = {}
         results = by_strategy.get(strat_name, [])
 
+        # 1. Déterminer les éligibles (Grade A/B, minus exclusions manuelles)
+        if exclude_symbols:
+            eligible = [r for r in results if r["grade"] in ("A", "B") and r["asset"] not in exclude_symbols]
+        else:
+            eligible = [r for r in results if r["grade"] in ("A", "B")]
+
+        # 2. Vérifier la cohérence des timeframes AVANT d'écrire
+        if eligible:
+            tf_counts = Counter(r["timeframe"] for r in eligible)
+            majority_tf = tf_counts.most_common(1)[0][0]
+            # Tiebreak : prendre le plus petit timeframe si égalité
+            if len(tf_counts) > 1 and tf_counts.most_common(2)[0][1] == tf_counts.most_common(2)[1][1]:
+                majority_tf = min(tf_counts.keys(), key=lambda tf: TF_ORDER.get(tf, 99))
+
+            outliers = [r for r in eligible if r["timeframe"] != majority_tf]
+
+            if outliers and not ignore_tf_conflicts:
+                outlier_symbols = [r["asset"] for r in outliers]
+                symbols_csv = ",".join(outlier_symbols)
+                print(f"\n  ❌  TIMEFRAME CONFLICT — --apply BLOQUÉ\n")
+                print(f"  Timeframe majoritaire : {majority_tf} "
+                      f"({tf_counts[majority_tf]}/{len(eligible)} assets A/B)\n")
+                print("  Outliers :")
+                for r in outliers:
+                    print(f"    {r['asset']:15s} Grade {r['grade']} ({r['total_score']})  "
+                          f"timeframe={r['timeframe']}")
+                print(f"\n  Actions requises :")
+                print(f"    1. Re-tester en {majority_tf} :")
+                print(f"       uv run python -m scripts.optimize --strategy {strat_name} "
+                      f"--symbols {symbols_csv} --force-timeframe {majority_tf}")
+                print(f"    2. Exclure :")
+                print(f"       uv run python -m scripts.optimize --strategy {strat_name} "
+                      f"--apply --exclude {symbols_csv}")
+                print(f"    3. Forcer (exclut les outliers silencieusement) :")
+                print(f"       uv run python -m scripts.optimize --strategy {strat_name} "
+                      f"--apply --ignore-tf-conflicts")
+                print(f"\n  Aucune modification effectuée.\n")
+                # Supprimer le backup créé inutilement
+                if backup_path.exists():
+                    backup_path.unlink()
+                return {
+                    "changed": False,
+                    "blocked": True,
+                    "reason": "tf_conflict",
+                    "majority_tf": majority_tf,
+                    "tf_outliers": outlier_symbols,
+                    "applied": [],
+                    "removed": [],
+                    "excluded": [],
+                    "grades": {},
+                    "backup": None,
+                    "assets_added": [],
+                }
+
+            if outliers and ignore_tf_conflicts:
+                outlier_assets = {r["asset"] for r in outliers}
+                eligible = [r for r in eligible if r["asset"] not in outlier_assets]
+                print(f"  ℹ️  {len(outliers)} outliers timeframe exclus (--ignore-tf-conflicts)")
+
         added = []
         updated = []
         removed = []
         unchanged = []
 
-        # Assets éligibles (Grade A/B) → écrire best_params
-        eligible_assets = set()
+        # Bug fix 2 : retirer du YAML les assets exclus sans résultat DB
+        # (les assets exclus qui ONT un résultat DB sont traités plus bas
+        # par le loop "Grade C/D/F" — pas de double-comptage)
+        if exclude_symbols:
+            result_asset_set = {r["asset"] for r in results}
+            for sym in exclude_symbols:
+                if sym in old_per_asset and sym not in result_asset_set:
+                    del old_per_asset[sym]
+                    removed.append(f"{sym} (exclu via --exclude)")
+                    all_removed.append(sym)
+
+        # 3. Écrire new_per_asset depuis les éligibles (filtrés)
+        eligible_assets = {r["asset"] for r in eligible}
+        for r in eligible:
+            asset = r["asset"]
+            all_grades[asset] = r["grade"]
+            old_params = old_per_asset.get(asset, {})
+            new_params = r["best_params"]
+            new_per_asset[asset] = new_params
+
+            if asset not in old_per_asset:
+                added.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
+                all_applied.append(asset)
+            elif not _params_equal(old_params, new_params):
+                updated.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
+                all_applied.append(asset)
+            else:
+                unchanged.append(asset)
+
+        # Grade C/D/F (ou exclus explicitement) → retrait implicite
         for r in results:
             asset = r["asset"]
             all_grades[asset] = r["grade"]
-            if r["grade"] in ("A", "B"):
-                eligible_assets.add(asset)
-                old_params = old_per_asset.get(asset, {})
-                new_params = r["best_params"]
-                new_per_asset[asset] = new_params
-
-                if asset not in old_per_asset:
-                    added.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
-                    all_applied.append(asset)
-                elif old_params != new_params:
-                    updated.append(f"{asset} (Grade {r['grade']}, score {r['total_score']})")
-                    all_applied.append(asset)
-                else:
-                    unchanged.append(asset)
-            else:
-                # Grade C/D/F → ne pas inclure (retrait implicite)
+            if asset not in eligible_assets:
                 if asset in old_per_asset:
-                    removed.append(f"{asset} (Grade {r['grade']})")
+                    if exclude_symbols and asset in exclude_symbols:
+                        removed.append(f"{asset} (exclu via --exclude, Grade {r['grade']})")
+                    else:
+                        removed.append(f"{asset} (Grade {r['grade']})")
                     all_removed.append(asset)
                 else:
                     all_excluded.append(asset)
 
-        # Assets dans per_asset mais sans résultat DB → conserver (pas de données pour décider)
+        # Assets dans per_asset sans résultat DB → conserver
         for asset, params in old_per_asset.items():
             if asset not in eligible_assets and asset not in {r["asset"] for r in results}:
-                new_per_asset[asset] = params  # Conserver
+                new_per_asset[asset] = params
 
         strat_data["per_asset"] = new_per_asset if new_per_asset else {}
         data[strat_name] = strat_data
@@ -639,7 +749,7 @@ def apply_from_db(
             continue
 
         for r in results:
-            mark = "OK" if r["grade"] in ("A", "B") else "X"
+            mark = "OK" if r["asset"] in eligible_assets else "X"
             print(f"    {r['asset']:<12s} Grade {r['grade']} ({r['total_score']}) {mark}")
 
         if added:
@@ -749,9 +859,29 @@ async def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Affichage détaillé")
     parser.add_argument("--config-dir", type=str, default="config", help="Répertoire de config")
     parser.add_argument("--exchange", type=str, default=None, help="Exchange source des candles (défaut: binance)")
+    parser.add_argument(
+        "--force-timeframe", type=str, default=None,
+        help="Forcer le timeframe WFO (ex: 1h). Override la grid.",
+    )
+    parser.add_argument(
+        "--symbols", type=str, default=None,
+        help="Liste de symbols séparés par virgule (ex: BCH/USDT,BNB/USDT)",
+    )
+    parser.add_argument(
+        "--exclude", type=str, default=None,
+        help="Assets à exclure de --apply (CSV). Ex: BCH/USDT,BNB/USDT",
+    )
+    parser.add_argument(
+        "--ignore-tf-conflicts", action="store_true", default=False,
+        help="Forcer --apply en ignorant les outliers timeframe (les exclut silencieusement)",
+    )
     args = parser.parse_args()
 
     setup_logging(level="INFO")
+
+    # Mutex : --symbol, --symbols et --all-symbols sont exclusifs
+    if sum(bool(x) for x in [args.symbol, args.symbols, args.all_symbols]) > 1:
+        parser.error("Utilisez --symbol, --symbols OU --all-symbols (pas plusieurs à la fois)")
 
     if args.check_data:
         await check_data(args.config_dir)
@@ -766,11 +896,22 @@ async def main() -> None:
     ]
 
     # --apply standalone (sans optimisation préalable)
-    if args.apply and not args.all and not args.symbol and not args.all_symbols:
+    if args.apply and not args.all and not args.symbol and not args.all_symbols and not args.symbols:
+        exclude_list = [s.strip() for s in args.exclude.split(",")] if args.exclude else None
         if args.strategy:
-            apply_from_db([args.strategy], args.config_dir)
+            result = apply_from_db(
+                [args.strategy], args.config_dir,
+                exclude_symbols=exclude_list,
+                ignore_tf_conflicts=args.ignore_tf_conflicts,
+            )
         else:
-            apply_from_db(available_strategies, args.config_dir)
+            result = apply_from_db(
+                available_strategies, args.config_dir,
+                exclude_symbols=exclude_list,
+                ignore_tf_conflicts=args.ignore_tf_conflicts,
+            )
+        if result.get("blocked"):
+            sys.exit(1)
         return
 
     # Déterminer quoi optimiser
@@ -792,10 +933,12 @@ async def main() -> None:
         strategies = [args.strategy]
         if args.all_symbols:
             target_symbols = symbols
+        elif args.symbols:
+            target_symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
         elif args.symbol:
             target_symbols = [args.symbol]
         else:
-            logger.error("Spécifier --symbol ou --all-symbols")
+            logger.error("Spécifier --symbol, --symbols ou --all-symbols")
             return
     else:
         parser.print_help()
@@ -864,6 +1007,12 @@ async def main() -> None:
                 print(f"  Tous les assets sont déjà terminés pour {strat}. Rien à faire.\n")
                 continue
 
+        # Construire params_override pour --force-timeframe
+        force_tf_override: dict | None = None
+        if args.force_timeframe:
+            force_tf_override = {"timeframe": [args.force_timeframe]}
+            logger.info("Timeframe forcé à [{}] pour tous les symbols", args.force_timeframe)
+
         for sym in run_symbols:
             logger.info("Optimisation {} × {} ...", strat, sym)
             try:
@@ -871,6 +1020,7 @@ async def main() -> None:
                     strat, sym, args.config_dir, args.verbose,
                     all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
                     exchange=args.exchange,
+                    params_override=force_tf_override,
                 )
                 all_reports.append(report)
                 symbol_results[sym] = report.recommended_params
@@ -895,7 +1045,14 @@ async def main() -> None:
     if args.apply:
         run_strategies = list({r.strategy_name for r in all_reports})
         if run_strategies:
-            apply_from_db(run_strategies, args.config_dir)
+            exclude_list = [s.strip() for s in args.exclude.split(",")] if args.exclude else None
+            result = apply_from_db(
+                run_strategies, args.config_dir,
+                exclude_symbols=exclude_list,
+                ignore_tf_conflicts=args.ignore_tf_conflicts,
+            )
+            if result.get("blocked"):
+                sys.exit(1)
         else:
             logger.warning("Aucun résultat à appliquer")
 

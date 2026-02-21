@@ -617,11 +617,15 @@ async def get_optimization_heatmap(
 @router.post("/apply")
 async def apply_optimization_params(
     strategy_name: str | None = Query(default=None, description="Stratégie (ou toutes si omis)"),
+    ignore_tf_conflicts: bool = Query(default=False, description="Exclure silencieusement les outliers timeframe"),
+    exclude: str | None = Query(default=None, description="Assets à exclure (CSV, ex: BCH/USDT,BNB/USDT)"),
 ) -> dict:
     """Applique les paramètres Grade A/B dans config/strategies.yaml.
 
     Lit les résultats is_latest=1 en DB, écrit per_asset pour les Grade A/B,
     retire les Grade C/D/F.
+
+    Returns 409 si conflit de timeframe détecté (sauf si ignore_tf_conflicts=true).
 
     Returns:
         {
@@ -646,7 +650,24 @@ async def apply_optimization_params(
     else:
         strategy_names = list(STRATEGY_REGISTRY.keys())
 
-    result = apply_from_db(strategy_names)
+    exclude_list = [s.strip() for s in exclude.split(",")] if exclude else None
+    result = apply_from_db(
+        strategy_names,
+        exclude_symbols=exclude_list,
+        ignore_tf_conflicts=ignore_tf_conflicts,
+    )
+
+    if result.get("blocked"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "tf_conflict",
+                "message": "Conflit de timeframe détecté — apply bloqué",
+                "majority_tf": result.get("majority_tf"),
+                "tf_outliers": result.get("tf_outliers", []),
+            },
+        )
+
     return result
 
 

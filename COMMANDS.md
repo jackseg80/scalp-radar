@@ -165,6 +165,37 @@ foreach ($s in @("ADA/USDT","AAVE/USDT","ARB/USDT","AVAX/USDT","BCH/USDT","BNB/U
 uv run python -m scripts.optimize --all --apply
 ```
 
+### Flags Sprint 37 — Timeframe Coherence Guard
+
+| Flag | Description |
+| ---- | ----------- |
+| `--force-timeframe 1h` | Restreint la grid WFO à un seul TF (override `param_grids.yaml`) |
+| `--symbols A,B,C` | Optimise plusieurs assets séparés par virgule (mutex avec `--symbol` / `--all-symbols`) |
+| `--exclude A,B` | Exclut des assets de `--apply` (les retire du YAML s'ils y sont) |
+| `--ignore-tf-conflicts` | Force `--apply` en excluant silencieusement les outliers TF |
+
+**Workflow résolution conflit timeframe** (affiché automatiquement si `--apply` détecte un outlier) :
+
+```powershell
+# 1. Voir les outliers → --apply affiche le message bloquant avec les 3 actions
+uv run python -m scripts.optimize --strategy grid_atr --apply
+
+# 2a. Re-tester les outliers en 1h (recommandé)
+uv run python -m scripts.optimize --strategy grid_atr --symbols BCH/USDT,BNB/USDT --force-timeframe 1h
+
+# 2b. Exclure les outliers et appliquer
+uv run python -m scripts.optimize --strategy grid_atr --apply --exclude BCH/USDT,BNB/USDT
+
+# 2c. Forcer (exclut les outliers silencieusement, sans re-tester)
+uv run python -m scripts.optimize --strategy grid_atr --apply --ignore-tf-conflicts
+
+# Portfolio backtest — bloque si un runner a un timeframe ≠ 1h (TimeframeConflictError)
+# Affiche les assets conflictuels + suggestions --force-timeframe
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 365
+```
+
+---
+
 ### Reprendre un WFO interrompu (--resume)
 
 Skippe les assets déjà en DB (`is_latest=1`) — utile après un crash OOM/segfault.

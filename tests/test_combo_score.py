@@ -97,104 +97,144 @@ def test_oos_is_ratio_thresholds():
     assert classify_oos_is_ratio(0.0) == "red"
 
 
-# ─── Test 4 : regime_analysis utilise le best scored combo ──────────────
+# ─── Test 4 : regime_analysis croise toutes les fenêtres OOS (Hotfix 37c) ──
 
 def test_regime_analysis_uses_best_scored_combo():
-    """Vérifier que le combo sélectionné pour regime_analysis est celui
-    avec le meilleur combo_score (pas le Sharpe max)."""
+    """Hotfix 37c : regime_analysis croise window_results × window_regimes directement.
 
-    # Simuler 2 combos dans combo_accumulator avec window_regimes
-    combo_a_params = {"ma_period": 7, "num_levels": 3}
-    combo_b_params = {"ma_period": 14, "num_levels": 5}
-    key_a = json.dumps(combo_a_params, sort_keys=True)
-    key_b = json.dumps(combo_b_params, sort_keys=True)
+    L'ancienne implémentation utilisait combo_accumulator.get(recommended_key)
+    qui retournait quasi-vide (le combo médian n'est testé que dans 0-1 fenêtre).
+    La nouvelle itère sur toutes les fenêtres OOS → tous les régimes sont couverts.
+    """
+    import math
+    from types import SimpleNamespace
 
-    # Combo A : Sharpe max (8.0) mais faible consistance + peu de trades
-    combo_accumulator = {
-        key_a: [
-            {"is_sharpe": 10.0, "is_return_pct": 20, "is_trades": 10,
-             "oos_sharpe": 8.0, "oos_return_pct": 15, "oos_trades": 8, "window_idx": 0},
-            {"is_sharpe": 9.0, "is_return_pct": 18, "is_trades": 12,
-             "oos_sharpe": None, "oos_return_pct": None, "oos_trades": None, "window_idx": 1},
-            {"is_sharpe": 11.0, "is_return_pct": 22, "is_trades": 10,
-             "oos_sharpe": 8.5, "oos_return_pct": 16, "oos_trades": 8, "window_idx": 2},
-        ],
-        # Combo B : Sharpe plus bas (3.0) mais haute consistance + beaucoup de trades
-        key_b: [
-            {"is_sharpe": 4.0, "is_return_pct": 10, "is_trades": 80,
-             "oos_sharpe": 3.0, "oos_return_pct": 8, "oos_trades": 70, "window_idx": 0},
-            {"is_sharpe": 3.5, "is_return_pct": 9, "is_trades": 85,
-             "oos_sharpe": 2.8, "oos_return_pct": 7, "oos_trades": 75, "window_idx": 1},
-            {"is_sharpe": 4.2, "is_return_pct": 11, "is_trades": 90,
-             "oos_sharpe": 3.2, "oos_return_pct": 9, "oos_trades": 80, "window_idx": 2},
-        ],
-    }
+    import numpy as np
 
+    # 3 fenêtres OOS avec 3 régimes distincts
     window_regimes = [
         {"regime": "bull", "return_pct": 15.0, "max_dd_pct": -5.0},
         {"regime": "range", "return_pct": 2.0, "max_dd_pct": -8.0},
         {"regime": "bear", "return_pct": -12.0, "max_dd_pct": -20.0},
     ]
+    window_results = [
+        SimpleNamespace(oos_sharpe=3.0, oos_net_return_pct=8.0),   # bull
+        SimpleNamespace(oos_sharpe=2.8, oos_net_return_pct=7.0),   # range
+        SimpleNamespace(oos_sharpe=3.2, oos_net_return_pct=9.0),   # bear
+    ]
 
-    # Construire combo_results (même logique que walk_forward.py)
-    import numpy as np
-
-    combo_results = []
-    for params_key, window_data in combo_accumulator.items():
-        params = json.loads(params_key)
-        oos_sharpes = [d["oos_sharpe"] for d in window_data if d["oos_sharpe"] is not None]
-        oos_trades_list = [d["oos_trades"] for d in window_data if d["oos_trades"] is not None]
-        n_oos_positive = sum(1 for s in oos_sharpes if s > 0)
-        consistency_c = n_oos_positive / len(oos_sharpes) if oos_sharpes else 0.0
-        avg_oos = float(np.nanmean(oos_sharpes)) if oos_sharpes else 0.0
-        total_trades = sum(oos_trades_list) if oos_trades_list else 0
-
-        combo_results.append({
-            "params": params,
-            "params_key": params_key,
-            "oos_sharpe": avg_oos,
-            "consistency": consistency_c,
-            "oos_trades": total_trades,
-            "is_best": False,
+    # Reproduire la logique de walk_forward.py (Hotfix 37c)
+    regime_groups: dict[str, list] = {}
+    for i, w in enumerate(window_results):
+        if i >= len(window_regimes):
+            break
+        regime = window_regimes[i]["regime"]
+        oos_sharpe_val = w.oos_sharpe if not math.isnan(w.oos_sharpe) else None
+        regime_groups.setdefault(regime, []).append({
+            "oos_sharpe": oos_sharpe_val,
+            "oos_return_pct": w.oos_net_return_pct,
         })
 
-    # Sélectionner le best combo par combo_score
-    best_combo = max(
-        combo_results,
-        key=lambda c: combo_score(c["oos_sharpe"], c["consistency"], c["oos_trades"]),
-    )
-    best_combo["is_best"] = True
-    recommended = best_combo["params"]
-    recommended_key = json.dumps(recommended, sort_keys=True)
-
-    # Combo B devrait être sélectionné (haute consistance + volume)
-    assert recommended == combo_b_params, (
-        f"Le best combo devrait être B ({combo_b_params}), pas A ({combo_a_params})"
-    )
-
-    # Vérifier que regime_analysis utilise le combo B
-    best_window_data = combo_accumulator.get(recommended_key, [])
-    assert len(best_window_data) == 3  # Combo B a 3 fenêtres
-
-    # Construire regime_analysis sur combo B
-    regime_groups = {}
-    for wd in best_window_data:
-        w_idx = wd.get("window_idx", -1)
-        if 0 <= w_idx < len(window_regimes):
-            regime = window_regimes[w_idx]["regime"]
-            regime_groups.setdefault(regime, []).append(wd)
-
-    # Combo B a des données dans les 3 régimes (bull, range, bear)
-    assert len(regime_groups) == 3
-    assert "bull" in regime_groups
-    assert "range" in regime_groups
-    assert "bear" in regime_groups
-
-    # Chaque régime a des trades > 0 (pas des 0% partout)
+    regime_analysis = {}
     for regime, entries in regime_groups.items():
         oos_sharpes = [e["oos_sharpe"] for e in entries if e["oos_sharpe"] is not None]
-        assert len(oos_sharpes) > 0, f"Régime {regime} n'a pas de données OOS"
-        assert all(s > 0 for s in oos_sharpes), f"Régime {regime} a des Sharpe <= 0"
+        oos_returns = [e["oos_return_pct"] for e in entries if e["oos_return_pct"] is not None]
+        n_positive = sum(1 for s in oos_sharpes if s > 0)
+        regime_analysis[regime] = {
+            "n_windows": len(entries),
+            "avg_oos_sharpe": round(float(np.nanmean(oos_sharpes)), 4) if oos_sharpes else 0.0,
+            "consistency": round(n_positive / len(oos_sharpes), 4) if oos_sharpes else 0.0,
+            "avg_return_pct": round(float(np.mean(oos_returns)), 4) if oos_returns else 0.0,
+        }
+
+    # Les 3 régimes sont couverts (auparavant : 0 car combo_accumulator lookup vide)
+    assert len(regime_analysis) == 3
+    assert "bull" in regime_analysis
+    assert "range" in regime_analysis
+    assert "bear" in regime_analysis
+
+    # Chaque régime a exactement 1 fenêtre avec des données OOS > 0
+    for regime_name, data in regime_analysis.items():
+        assert data["n_windows"] == 1, f"Régime {regime_name} : {data['n_windows']} fenêtres (attendu 1)"
+        assert data["avg_oos_sharpe"] > 0, f"Régime {regime_name} : Sharpe <= 0"
+
+
+def test_regime_analysis_uses_all_windows():
+    """Hotfix 37c : 6 fenêtres → 4 régimes distincts, avec agrégation correcte.
+
+    Vérifie que toutes les fenêtres sont utilisées (pas seulement 1 combo) :
+    - bull×2 : moyenne Sharpe = 2.8, consistance 100%
+    - bear×2 : moyenne Sharpe = 0.1 (0.5 + -0.3), consistance 50%
+    - range×1 : 1 fenêtre
+    - crash×1 : oos_sharpe=NaN → avg=0.0
+    """
+    import math
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    window_regimes = [
+        {"regime": "bull"},
+        {"regime": "range"},
+        {"regime": "bear"},
+        {"regime": "bull"},
+        {"regime": "crash"},
+        {"regime": "bear"},
+    ]
+    window_results = [
+        SimpleNamespace(oos_sharpe=2.5, oos_net_return_pct=6.0),           # bull
+        SimpleNamespace(oos_sharpe=1.8, oos_net_return_pct=3.0),           # range
+        SimpleNamespace(oos_sharpe=0.5, oos_net_return_pct=1.0),           # bear
+        SimpleNamespace(oos_sharpe=3.1, oos_net_return_pct=8.0),           # bull
+        SimpleNamespace(oos_sharpe=float("nan"), oos_net_return_pct=-15.0),  # crash
+        SimpleNamespace(oos_sharpe=-0.3, oos_net_return_pct=-2.0),         # bear
+    ]
+
+    # Reproduire la logique de walk_forward.py (Hotfix 37c)
+    regime_groups: dict[str, list] = {}
+    for i, w in enumerate(window_results):
+        if i >= len(window_regimes):
+            break
+        regime = window_regimes[i]["regime"]
+        oos_sharpe_val = w.oos_sharpe if not math.isnan(w.oos_sharpe) else None
+        regime_groups.setdefault(regime, []).append({
+            "oos_sharpe": oos_sharpe_val,
+            "oos_return_pct": w.oos_net_return_pct,
+        })
+
+    regime_analysis = {}
+    for regime, entries in regime_groups.items():
+        oos_sharpes = [e["oos_sharpe"] for e in entries if e["oos_sharpe"] is not None]
+        oos_returns = [e["oos_return_pct"] for e in entries if e["oos_return_pct"] is not None]
+        n_positive = sum(1 for s in oos_sharpes if s > 0)
+        regime_analysis[regime] = {
+            "n_windows": len(entries),
+            "avg_oos_sharpe": round(float(np.nanmean(oos_sharpes)), 4) if oos_sharpes else 0.0,
+            "consistency": round(n_positive / len(oos_sharpes), 4) if oos_sharpes else 0.0,
+            "avg_return_pct": round(float(np.mean(oos_returns)), 4) if oos_returns else 0.0,
+        }
+
+    # 4 régimes distincts détectés
+    assert len(regime_analysis) == 4, (
+        f"Attendu 4 régimes, obtenu {len(regime_analysis)}: {list(regime_analysis.keys())}"
+    )
+
+    # bull : 2 fenêtres, sharpe moyen = (2.5 + 3.1) / 2 = 2.8, consistance 100%
+    assert regime_analysis["bull"]["n_windows"] == 2
+    assert regime_analysis["bull"]["avg_oos_sharpe"] == pytest.approx(2.8, abs=0.01)
+    assert regime_analysis["bull"]["consistency"] == 1.0
+
+    # bear : 2 fenêtres (0.5 et -0.3), sharpe moyen = 0.1, consistance 50%
+    assert regime_analysis["bear"]["n_windows"] == 2
+    assert regime_analysis["bear"]["avg_oos_sharpe"] == pytest.approx(0.1, abs=0.01)
+    assert regime_analysis["bear"]["consistency"] == 0.5
+
+    # range : 1 fenêtre
+    assert regime_analysis["range"]["n_windows"] == 1
+
+    # crash : 1 fenêtre, oos_sharpe=NaN filtré → avg=0.0
+    assert regime_analysis["crash"]["n_windows"] == 1
+    assert regime_analysis["crash"]["avg_oos_sharpe"] == 0.0
 
 
 # ─── Test 5 : Consistance impacte le grade ──────────────────────────────

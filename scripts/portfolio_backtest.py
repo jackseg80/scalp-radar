@@ -24,6 +24,7 @@ from loguru import logger
 from backend.backtesting.portfolio_engine import (
     PortfolioBacktester,
     PortfolioResult,
+    TimeframeConflictError,
     format_portfolio_report,
 )
 from backend.core.config import get_config
@@ -296,7 +297,33 @@ async def main(args: argparse.Namespace) -> None:
     start = end - timedelta(days=days)
 
     t0 = time.monotonic()
-    result = await backtester.run(start, end, db_path=args.db)
+    try:
+        result = await backtester.run(start, end, db_path=args.db)
+    except TimeframeConflictError as e:
+        print(f"\n  ❌  TIMEFRAME CONFLICT — portfolio backtest ANNULÉ\n")
+        print(f"  {len(e.mismatched)} runner(s) incompatible(s) "
+              f"(portfolio = {e.expected_tf}) :\n")
+        for key, tf in e.mismatched:
+            print(f"    {key} (WFO timeframe = {tf})")
+        bad_strats = sorted({key.split(":", 1)[0] for key, _ in e.mismatched})
+        print(f"\n  💡 Corrigez avec --force-timeframe :")
+        for strat in bad_strats:
+            strat_bads = sorted({
+                key.split(":", 1)[1] for key, _ in e.mismatched
+                if key.startswith(strat + ":")
+            })
+            print(f"     uv run python -m scripts.optimize --strategy {strat} "
+                  f"--symbols {','.join(strat_bads)} "
+                  f"--force-timeframe {e.expected_tf}")
+        if e.valid_keys:
+            valid_assets = sorted({
+                k.split(":", 1)[1] if ":" in k else k
+                for k in e.valid_keys
+            })
+            print(f"\n  Ou relancez sans les assets conflictuels :")
+            print(f"     --assets {','.join(valid_assets)}")
+        print()
+        sys.exit(1)
     duration = time.monotonic() - t0
 
     # Sauvegarder en DB si demandé
