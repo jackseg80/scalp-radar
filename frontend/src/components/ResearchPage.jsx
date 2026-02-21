@@ -632,7 +632,12 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
                   <td>{r.oos_is_ratio?.toFixed(2) ?? 'N/A'}</td>
                   <td>{r.dsr?.toFixed(2) ?? 'N/A'}</td>
                   <td>{r.param_stability?.toFixed(2) ?? 'N/A'}</td>
-                  <td>{new Date(r.created_at).toLocaleDateString('fr-FR')}</td>
+                  <td>
+                    {new Date(r.created_at).toLocaleDateString('fr-FR')}
+                    <span style={{ fontSize: '0.75em', color: '#888', marginLeft: '4px' }}>
+                      {new Date(r.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </td>
                 </tr>
               ))
             )}
