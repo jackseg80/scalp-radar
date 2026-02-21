@@ -86,6 +86,7 @@ class RunPortfolioRequest(BaseModel):
     exchange: str = "binance"
     kill_switch_pct: float = 45.0
     kill_switch_window: int = 24
+    leverage: int | None = None  # None = utilise le leverage de strategies.yaml
     label: str | None = None
 
 
@@ -284,6 +285,7 @@ async def _run_backtest(db_path: str, body: RunPortfolioRequest, job_id: str) ->
             exchange=body.exchange,
             kill_switch_pct=body.kill_switch_pct,
             kill_switch_window_hours=body.kill_switch_window,
+            leverage=body.leverage,
         )
 
         end = datetime.now(timezone.utc)

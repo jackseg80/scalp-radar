@@ -29,6 +29,7 @@ _LIST_COLUMNS = (
     "period_days",
     "assets",
     "exchange",
+    "leverage",
     "final_equity",
     "total_return_pct",
     "total_trades",
@@ -84,6 +85,7 @@ def _result_to_row(
         "period_days": result.period_days,
         "assets": json.dumps(result.assets),
         "exchange": exchange,
+        "leverage": result.leverage,
         "kill_switch_pct": kill_switch_pct,
         "kill_switch_window_hours": kill_switch_window_hours,
         "final_equity": result.final_equity,
@@ -113,7 +115,7 @@ def _result_to_row(
 _INSERT_SQL = """
     INSERT INTO portfolio_backtests (
         strategy_name, initial_capital, n_assets, period_days, assets,
-        exchange, kill_switch_pct, kill_switch_window_hours,
+        exchange, leverage, kill_switch_pct, kill_switch_window_hours,
         final_equity, total_return_pct, total_trades, win_rate,
         realized_pnl, force_closed_pnl,
         max_drawdown_pct, max_drawdown_date, max_drawdown_duration_hours,
@@ -123,7 +125,7 @@ _INSERT_SQL = """
         created_at, duration_seconds, label
     ) VALUES (
         :strategy_name, :initial_capital, :n_assets, :period_days, :assets,
-        :exchange, :kill_switch_pct, :kill_switch_window_hours,
+        :exchange, :leverage, :kill_switch_pct, :kill_switch_window_hours,
         :final_equity, :total_return_pct, :total_trades, :win_rate,
         :realized_pnl, :force_closed_pnl,
         :max_drawdown_pct, :max_drawdown_date, :max_drawdown_duration_hours,

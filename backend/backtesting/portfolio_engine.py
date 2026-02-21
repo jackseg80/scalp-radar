@@ -170,6 +170,7 @@ class PortfolioBacktester:
         kill_switch_pct: float = 45.0,
         kill_switch_window_hours: int = 24,
         multi_strategies: list[tuple[str, list[str]]] | None = None,
+        leverage: int | None = None,
     ) -> None:
         self._config = config
         self._initial_capital = initial_capital
@@ -177,6 +178,7 @@ class PortfolioBacktester:
         self._exchange = exchange
         self._kill_switch_pct = kill_switch_pct
         self._kill_switch_window_hours = kill_switch_window_hours
+        self._leverage_override = leverage  # None = utilise le leverage de strategies.yaml
 
         # Multi-stratégie : liste de (strategy_name, [symbols])
         if multi_strategies:
@@ -384,7 +386,7 @@ class PortfolioBacktester:
 
         runners: dict[str, GridStrategyRunner] = {}
         for runner_key, symbol, strategy in runner_entries:
-            leverage = getattr(strategy._config, "leverage", 15)
+            leverage = self._leverage_override if self._leverage_override is not None else getattr(strategy._config, "leverage", 15)
             gpm_config = PositionManagerConfig(
                 leverage=leverage,
                 maker_fee=self._config.risk.fees.maker_percent / 100,

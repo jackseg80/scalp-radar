@@ -423,6 +423,7 @@ class Database:
                 ON portfolio_backtests(created_at);
         """)
         await self._migrate_portfolio_strategy_name()
+        await self._migrate_portfolio_leverage()
 
     async def _migrate_portfolio_strategy_name(self) -> None:
         """Migration idempotente : ajoute strategy_name à portfolio_backtests si absent."""
@@ -439,6 +440,22 @@ class Database:
         )
         await self._conn.commit()
         logger.info("Migration portfolio_backtests : colonne strategy_name ajoutée")
+
+    async def _migrate_portfolio_leverage(self) -> None:
+        """Migration idempotente : ajoute leverage à portfolio_backtests si absent."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(portfolio_backtests)")
+        columns = await cursor.fetchall()
+        if not columns:
+            return
+        col_names = [col[1] for col in columns]
+        if "leverage" in col_names:
+            return
+        await self._conn.execute(
+            "ALTER TABLE portfolio_backtests ADD COLUMN leverage INTEGER DEFAULT 6"
+        )
+        await self._conn.commit()
+        logger.info("Migration portfolio_backtests : colonne leverage ajoutée")
 
     # ─── CANDLES ────────────────────────────────────────────────────────────
 

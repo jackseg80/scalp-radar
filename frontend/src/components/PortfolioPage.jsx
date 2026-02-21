@@ -32,6 +32,7 @@ function MetricsGrid({ run }) {
     { label: 'Max drawdown', value: `${run.max_drawdown_pct.toFixed(1)}%`, negative: run.max_drawdown_pct < -5 },
     { label: 'Margin peak', value: `${(run.peak_margin_ratio * 100).toFixed(0)}%` },
     { label: 'Kill switch', value: run.kill_switch_triggers },
+    { label: 'Levier', value: run.leverage ? `${run.leverage}x` : '—' },
     { label: 'P&L réalisé', value: `${run.realized_pnl >= 0 ? '+' : ''}${run.realized_pnl.toFixed(0)} $`, positive: run.realized_pnl >= 0 },
   ]
   return (
@@ -117,6 +118,7 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
     }
   }, [setSelectedAssetsArray])
   const [killSwitchPct, setKillSwitchPct] = usePersistedState('portfolio-killswitch', 30)
+  const [leverage, setLeverage] = usePersistedState('portfolio-leverage', null)  // null = auto depuis strategies.yaml
   const [label, setLabel] = usePersistedState('portfolio-label', '')
 
   // Sélection runs (persisté)
@@ -247,6 +249,7 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
           ? Array.from(selectedAssets)
           : null,
         kill_switch_pct: killSwitchPct,
+        leverage: leverage || null,
         label: overrides.label || label || activePreset || undefined,
       }
       const res = await fetch(`${API}/api/portfolio/run`, {
@@ -263,7 +266,7 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
       alert('Erreur réseau: ' + e.message)
       setIsRunning(false)
     }
-  }, [capital, days, assetsMode, selectedAssets, killSwitchPct, label, activePreset, selectedStrategy])
+  }, [capital, days, assetsMode, selectedAssets, killSwitchPct, leverage, label, activePreset, selectedStrategy])
 
   // Supprimer un run
   const deleteRun = useCallback(async (id, e) => {
@@ -394,6 +397,21 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
               min={5} max={50} step={5} />
           </div>
 
+          {/* Leverage */}
+          <div className="pf-form-group">
+            <label>Levier{leverage ? ` — ${leverage}x` : ' — auto (YAML)'}</label>
+            <div className="pf-row">
+              <input type="range" className="pf-input" style={{ padding: 0, height: 6 }}
+                min={1} max={20} value={leverage || 6}
+                onChange={e => setLeverage(+e.target.value)} />
+              <button
+                style={{ fontSize: 11, padding: '2px 6px', marginLeft: 4, cursor: 'pointer' }}
+                onClick={() => setLeverage(null)}
+                title="Réinitialiser (utilise le levier de strategies.yaml)"
+              >auto</button>
+            </div>
+          </div>
+
           {/* Assets mode */}
           <div className="pf-form-group">
             <label>Assets</label>
@@ -479,7 +497,7 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
                 <div>
                   <div className="run-label">{run.label || `Run #${run.id}`}</div>
                   <div className="run-meta">
-                    {run.initial_capital.toLocaleString()}$ | {run.n_assets} assets | {run.period_days}j
+                    {run.initial_capital.toLocaleString()}$ | {run.n_assets} assets | {run.period_days}j{run.leverage ? ` | ${run.leverage}x` : ''}
                   </div>
                 </div>
                 <span className={`run-pnl ${run.total_return_pct >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
