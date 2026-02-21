@@ -319,14 +319,19 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
     return backtests.filter(b => !b.strategy_name || b.strategy_name === selectedStrategy)
   }, [backtests, selectedStrategy])
 
-  // Assets disponibles pour la sélection (extraits des presets)
+  // Assets disponibles : watched_symbols de la stratégie en priorité, sinon presets
   const allAssets = useMemo(() => {
+    const fromWs = wsData?.strategies?.[selectedStrategy]?.watched_symbols
+    if (fromWs && fromWs.length > 0) return [...fromWs].sort()
     const set = new Set()
     for (const p of presets) {
       if (p.assets) p.assets.forEach(a => set.add(a))
     }
     return Array.from(set).sort()
-  }, [presets])
+  }, [presets, wsData, selectedStrategy])
+
+  // Collapse des runs précédents (réduit par défaut)
+  const [runsCollapsed, setRunsCollapsed] = useState(true)
 
   return (
     <div className="portfolio-page">
@@ -478,42 +483,50 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
 
           <div className="divider" />
 
-          {/* Runs précédents */}
-          <h4>Runs précédents ({filteredBacktests.length})</h4>
-          <div className="runs-history">
-            {filteredBacktests.map(run => (
-              <div
-                key={run.id}
-                className={`run-item ${selectedId === run.id ? 'selected' : ''}`}
-                onClick={() => setSelectedId(run.id)}
-              >
-                <input
-                  type="checkbox"
-                  className="run-compare-check"
-                  checked={compareIds.has(run.id)}
-                  onChange={e => toggleCompare(run.id, e)}
-                  title="Comparer"
-                />
-                <div>
-                  <div className="run-label">{run.label || `Run #${run.id}`}</div>
-                  <div className="run-meta">
-                    {run.initial_capital.toLocaleString()}$ | {run.n_assets} assets | {run.period_days}j{run.leverage ? ` | ${run.leverage}x` : ''}
+          {/* Runs précédents (collapsible) */}
+          <h4
+            className="runs-header"
+            onClick={() => setRunsCollapsed(v => !v)}
+          >
+            <span>Runs précédents ({filteredBacktests.length})</span>
+            <span className="runs-collapse-icon">{runsCollapsed ? '▶' : '▼'}</span>
+          </h4>
+          {!runsCollapsed && (
+            <div className="runs-history">
+              {filteredBacktests.map(run => (
+                <div
+                  key={run.id}
+                  className={`run-item ${selectedId === run.id ? 'selected' : ''}`}
+                  onClick={() => setSelectedId(run.id)}
+                >
+                  <input
+                    type="checkbox"
+                    className="run-compare-check"
+                    checked={compareIds.has(run.id)}
+                    onChange={e => toggleCompare(run.id, e)}
+                    title="Comparer"
+                  />
+                  <div>
+                    <div className="run-label">{run.label || `Run #${run.id}`}</div>
+                    <div className="run-meta">
+                      {run.initial_capital.toLocaleString()}$ | {run.n_assets} assets | {run.period_days}j{run.leverage ? ` | ${run.leverage}x` : ''}
+                    </div>
                   </div>
+                  <span className={`run-pnl ${run.total_return_pct >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                    {run.total_return_pct >= 0 ? '+' : ''}{run.total_return_pct.toFixed(1)}%
+                  </span>
+                  <button className="run-delete" onClick={e => deleteRun(run.id, e)} title="Supprimer">
+                    &times;
+                  </button>
                 </div>
-                <span className={`run-pnl ${run.total_return_pct >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
-                  {run.total_return_pct >= 0 ? '+' : ''}{run.total_return_pct.toFixed(1)}%
-                </span>
-                <button className="run-delete" onClick={e => deleteRun(run.id, e)} title="Supprimer">
-                  &times;
-                </button>
-              </div>
-            ))}
-            {filteredBacktests.length === 0 && (
-              <div className="muted" style={{ fontSize: 12, textAlign: 'center', padding: 12 }}>
-                Aucun run sauvegardé
-              </div>
-            )}
-          </div>
+              ))}
+              {filteredBacktests.length === 0 && (
+                <div className="muted" style={{ fontSize: 12, textAlign: 'center', padding: 12 }}>
+                  Aucun run sauvegardé
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ─── Résultats (droite) ─── */}
