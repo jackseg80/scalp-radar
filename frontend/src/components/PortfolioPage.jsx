@@ -445,7 +445,7 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
             className="pf-forward-btn"
             onClick={() => launchBacktest({ days: 365, label: `${selectedStrategy}_forward_365` })}
             disabled={isRunning || !selectedStrategy}
-            title="Lance un backtest 365 jours avec les parametres A/B appliques"
+            title="Lance un backtest 365 jours avec les parametres actuels de strategies.yaml (appliquer les A/B depuis la page Recherche au prealable)"
           >
             {'\u26A1'} Forward Test 365j
           </button>
