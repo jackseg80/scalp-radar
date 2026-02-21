@@ -86,6 +86,13 @@ async def lifespan(app: FastAPI):
     app.state.engine = engine
     app.state.config = config
 
+    # 3b. CandleUpdater (daily backfill)
+    from backend.core.candle_updater import CandleUpdater
+
+    candle_updater = CandleUpdater(config, db, ws_broadcast=ws_manager.broadcast)
+    await candle_updater.start()
+    app.state.candle_updater = candle_updater
+
     # 4. Simulator + Arena (avec crash recovery)
     simulator: Simulator | None = None
     state_manager: StateManager | None = None
@@ -222,6 +229,10 @@ async def lifespan(app: FastAPI):
         await simulator.stop()
     if engine:
         await engine.stop()
+
+    # CandleUpdater : arrêter la boucle quotidienne
+    if hasattr(app.state, "candle_updater") and app.state.candle_updater:
+        await app.state.candle_updater.stop()
 
     # JobManager : arrêter le worker loop
     if hasattr(app.state, "job_manager") and app.state.job_manager:

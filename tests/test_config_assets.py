@@ -77,3 +77,41 @@ def test_all_per_asset_symbols_in_assets(strategies_config, asset_symbols):
             if sym not in asset_symbols:
                 orphans.append(f"{strat_name}.per_asset.{sym}")
     assert not orphans, f"Références orphelines dans strategies.yaml :\n" + "\n".join(f"  - {o}" for o in orphans)
+
+
+# ─── Timeframes ──────────────────────────────────────────────────────────
+
+TOP6_ASSETS = {"BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "LINK/USDT", "XRP/USDT"}
+
+
+def test_timeframes_all_have_1h_4h_1d(assets_config):
+    """Tous les 21 assets ont au moins [1h, 4h, 1d] dans leurs timeframes."""
+    required = {"1h", "4h", "1d"}
+    for asset in assets_config["assets"]:
+        tfs = set(asset["timeframes"])
+        missing = required - tfs
+        assert not missing, f"{asset['symbol']} manque timeframes: {missing}"
+
+
+def test_timeframes_top6_have_5m_15m(assets_config):
+    """Les 6 assets top ont aussi 5m et 15m."""
+    for asset in assets_config["assets"]:
+        if asset["symbol"] in TOP6_ASSETS:
+            tfs = set(asset["timeframes"])
+            assert "5m" in tfs, f"{asset['symbol']} manque 5m"
+            assert "15m" in tfs, f"{asset['symbol']} manque 15m"
+
+
+def test_timeframes_no_1m(assets_config):
+    """Aucun asset n'a 1m dans ses timeframes."""
+    for asset in assets_config["assets"]:
+        assert "1m" not in asset["timeframes"], f"{asset['symbol']} a encore 1m!"
+
+
+def test_timeframes_others_no_5m_15m(assets_config):
+    """Les 15 assets hors top 6 n'ont PAS 5m ni 15m."""
+    for asset in assets_config["assets"]:
+        if asset["symbol"] not in TOP6_ASSETS:
+            tfs = set(asset["timeframes"])
+            assert "5m" not in tfs, f"{asset['symbol']} a 5m (ne devrait pas)"
+            assert "15m" not in tfs, f"{asset['symbol']} a 15m (ne devrait pas)"

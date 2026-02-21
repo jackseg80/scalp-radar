@@ -1,10 +1,12 @@
-"""Routes DataEngine — monitoring per-symbol."""
+"""Routes DataEngine — monitoring per-symbol + backfill candles."""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
@@ -50,3 +52,45 @@ async def data_status(request: Request) -> dict:
         "stale": stale,
         "symbols": symbols,
     }
+
+
+@router.get("/candle-status")
+async def candle_status(request: Request) -> dict:
+    """Retourne l'état des données historiques par asset/exchange."""
+    updater = getattr(request.app.state, "candle_updater", None)
+    if updater is None:
+        return {"running": False, "assets": {}}
+    return await updater.get_status()
+
+
+@router.post("/backfill")
+async def trigger_backfill(request: Request) -> JSONResponse:
+    """Déclenche un backfill en background.
+
+    Body optionnel: { "exchanges": ["binance","bitget"], "timeframes": ["1h"] }
+    """
+    updater = getattr(request.app.state, "candle_updater", None)
+    if updater is None:
+        return JSONResponse(
+            {"status": "error", "message": "CandleUpdater non disponible"},
+            status_code=503,
+        )
+
+    if updater.is_running:
+        return JSONResponse(
+            {"status": "already_running"},
+            status_code=409,
+        )
+
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    exchanges = body.get("exchanges")
+    timeframes = body.get("timeframes")
+
+    asyncio.create_task(updater.run_backfill(exchanges=exchanges, timeframes=timeframes))
+
+    return JSONResponse({"status": "started"}, status_code=202)

@@ -2638,12 +2638,47 @@ si le silence est global. Résultat : un symbol mort reste mort jusqu'à interve
 
 **Tests** : 1 test modifié → **1559 passants**, 0 régression.
 
+### Sprint Auto-Update Candles — CandleUpdater quotidien + bouton frontend (21 février 2026)
+
+**But** : Automatiser la mise à jour des candles historiques (daily 03:00 UTC) et permettre un backfill manuel depuis le dashboard.
+
+**Backend** :
+- `backend/core/candle_updater.py` (NOUVEAU) — classe `CandleUpdater` : boucle quotidienne 03:00 UTC, backfill à la demande, progression via WebSocket broadcast, réutilise `fetch_symbol_timeframe()` de `scripts/fetch_history.py`
+- `backend/core/database.py` — +`get_candle_stats()` : stats MIN/MAX/COUNT par (symbol, tf, exchange), détection `is_stale` (>2h)
+- `backend/api/data_routes.py` — +`GET /api/data/candle-status` (état données par asset/exchange) + `POST /api/data/backfill` (déclenche backfill en background, 202/409)
+- `backend/api/server.py` — CandleUpdater intégré dans lifespan (start/stop)
+
+**Frontend** :
+- `frontend/src/components/CandleStatus.jsx` + `.css` (NOUVEAU) — tableau récapitulatif par asset (Binance/Bitget jours + dernière candle), bouton "Mettre à jour", barre de progression WS
+- `frontend/src/components/OverviewPage.jsx` — +CollapsibleCard "Données historiques" (fermé par défaut)
+
+**Tests** : 8 nouveaux (get_candle_stats vide/plein, backfill guard, broadcast progress, daily loop, 3 endpoints API) → **1578 passants**, 0 régression.
+
+### Hotfix Nettoyage Timeframes — Suppression 1m + ajout 4h/1d (21 février 2026)
+
+**But** : Optimiser les timeframes dans `assets.yaml` — supprimer le 1m inutilisé, ajouter 4h et 1d pour l'analyse multi-TF.
+
+**Nouvelle répartition** :
+- **Tous les 21 assets** : `[1h, 4h, 1d]` (essentiels pour grid strategies + analyse)
+- **Top 6** (BTC, ETH, SOL, DOGE, LINK, XRP) : ajout `[5m, 15m]` → `[5m, 15m, 1h, 4h, 1d]` (prévision réactivation scalp/swing)
+- **1m supprimé** de tous les assets (aucune stratégie active ne l'utilise)
+
+**Changements** :
+- `config/assets.yaml` — timeframes mis à jour pour les 21 assets
+- `backend/core/candle_updater.py` — `run_backfill()` utilise `asset.timeframes` depuis config (plus de `["1h"]` hardcodé)
+- `backend/core/config.py` — +`backfill_enabled: bool = True` dans `SecretsConfig` (env var `BACKFILL_ENABLED`, désactive le cron quotidien si false)
+- `tests/test_config_assets.py` — +4 tests timeframes (all_have_1h_4h_1d, top6_have_5m_15m, no_1m, others_no_5m_15m)
+
+**Impact DataEngine** : 21×4=84 flux WS → 6×5+15×3=75 flux (suppression 1m = le plus lourd en volume)
+
+**Tests** : 4 nouveaux → **1582 passants**, 0 régression.
+
 ---
 
 ## ÉTAT ACTUEL (21 février 2026)
 
-- **1570 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume**
+- **1582 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, SUI, BCH, BNB, AAVE, ARB, OP — 6 low-volume retirés : ENJ, SUSHI, IMX, SAND, AR, APE)

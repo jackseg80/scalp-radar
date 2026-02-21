@@ -584,6 +584,38 @@ class Database:
             for row in rows
         ]
 
+    async def get_candle_stats(
+        self, symbol: str, timeframe: str, exchange: str = "binance",
+    ) -> dict:
+        """Retourne les stats des candles pour un (symbol, tf, exchange)."""
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            """SELECT MIN(timestamp) as first_candle,
+                      MAX(timestamp) as last_candle,
+                      COUNT(*) as candle_count
+               FROM candles
+               WHERE symbol = ? AND timeframe = ? AND exchange = ?""",
+            (symbol, timeframe, exchange),
+        )
+        row = await cursor.fetchone()
+        if row and row["candle_count"] > 0:
+            first = datetime.fromisoformat(row["first_candle"])
+            last = datetime.fromisoformat(row["last_candle"])
+            return {
+                "first_candle": first.isoformat(),
+                "last_candle": last.isoformat(),
+                "candle_count": row["candle_count"],
+                "days_available": (last - first).days,
+                "is_stale": (datetime.now(tz=timezone.utc) - last).total_seconds() > 7200,
+            }
+        return {
+            "first_candle": None,
+            "last_candle": None,
+            "candle_count": 0,
+            "days_available": 0,
+            "is_stale": True,
+        }
+
     # ─── SIGNALS ────────────────────────────────────────────────────────────
 
     async def insert_signal(self, signal: Signal, source: str = "backtest") -> None:

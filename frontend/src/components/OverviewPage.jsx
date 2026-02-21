@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useStrategyContext } from '../contexts/StrategyContext'
 import ActivePositions from './ActivePositions'
+import CandleStatus from './CandleStatus'
 import CollapsibleCard from './CollapsibleCard'
 
 function formatPnl(value) {
@@ -93,6 +94,14 @@ export default function OverviewPage({ wsData }) {
         storageKey="overview-positions"
       >
         <ActivePositions wsData={wsData} />
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        title="Donnees historiques"
+        defaultOpen={false}
+        storageKey="overview-candles"
+      >
+        <CandleStatus wsData={wsData} />
       </CollapsibleCard>
     </>
   )

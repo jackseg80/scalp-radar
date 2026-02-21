@@ -580,6 +580,9 @@ class SecretsConfig(BaseSettings):
     sync_api_key: str = ""  # SYNC_API_KEY, secret partagé local ↔ serveur
     sync_enabled: bool = False  # SYNC_ENABLED, désactivé par défaut
 
+    # Backfill automatique quotidien
+    backfill_enabled: bool = True  # BACKFILL_ENABLED, cron 03:00 UTC
+
 
 # ─── APP CONFIG (agrégation) ────────────────────────────────────────────────
 
