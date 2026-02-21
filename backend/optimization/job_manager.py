@@ -25,6 +25,9 @@ from backend.optimization import STRATEGY_REGISTRY
 # Limite globale : max pending jobs dans la queue
 MAX_PENDING_JOBS = 5
 
+# Max jobs WFO en parallèle (chacun dans son propre subprocess)
+MAX_CONCURRENT_JOBS = 2
+
 # Timeout global par job (secondes) — protège le worker loop si un WFO bloque
 JOB_TIMEOUT_SECONDS = 3600  # 1h max par job
 
@@ -67,6 +70,8 @@ class JobManager:
         self._ws_broadcast = ws_broadcast
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
+        self._job_tasks: set[asyncio.Task] = set()  # tasks running jobs
+        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
         self._cancel_events: dict[str, threading.Event] = {}
         self._running_procs: dict[str, Any] = {}  # subprocess.Popen instances
         self._running = False
@@ -258,11 +263,12 @@ class JobManager:
     # ─── Worker loop (Bloc C — stub pour l'instant) ───────────────────────
 
     async def _worker_loop(self) -> None:
-        """Boucle FIFO : dépile un job, l'exécute, repeat.
+        """Boucle FIFO : dépile les jobs et les lance en parallèle.
 
-        Implémentation complète dans le Bloc C.
+        Max MAX_CONCURRENT_JOBS simultanés via un sémaphore.
+        Chaque job tourne dans son propre subprocess isolé.
         """
-        logger.info("Worker loop démarré")
+        logger.info("Worker loop démarré (max {} jobs parallèles)", MAX_CONCURRENT_JOBS)
         try:
             while self._running:
                 try:
@@ -281,9 +287,23 @@ class JobManager:
                     )
                     continue
 
-                await self._run_job(job)
+                # Lancer le job dans une task parallèle (limité par sémaphore)
+                task = asyncio.create_task(self._run_job_limited(job))
+                self._job_tasks.add(task)
+                task.add_done_callback(self._job_tasks.discard)
         except asyncio.CancelledError:
+            # Attendre que les jobs en cours se terminent proprement
+            if self._job_tasks:
+                logger.info("Worker loop arrêté, {} job(s) en cours d'annulation", len(self._job_tasks))
+                for t in self._job_tasks:
+                    t.cancel()
+                await asyncio.gather(*self._job_tasks, return_exceptions=True)
             logger.info("Worker loop arrêté")
+
+    async def _run_job_limited(self, job: OptimizationJob) -> None:
+        """Wrapper qui acquiert le sémaphore avant de lancer le job."""
+        async with self._semaphore:
+            await self._run_job(job)
 
     async def _run_job(self, job: OptimizationJob) -> None:
         """Exécute un job WFO complet.
