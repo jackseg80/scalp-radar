@@ -2797,10 +2797,31 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
-## ÉTAT ACTUEL (21 février 2026)
+### Hotfix Warmup Simplification — Supprimer _warmup_position_symbols ✅
 
-- **1648 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d**
+**Problème** : Le warmup tracking (`_warmup_position_symbols`) bloquait les TradeEvents par symbol jusqu'au premier close paper, créant une divergence paper↔live (Executor ne voyait pas les opens du côté paper tant que la position n'était pas fermée). Les protections existantes (MarginGuard 70%, kill switch 45%, max positions, correlation groups) couvrent déjà les risques de mass entry au restart.
+
+**Fix** :
+
+- `__init__()` : suppression de `_warmup_position_symbols: set[str]`
+- `_end_warmup()` : suppression du snapshot warmup symbols + log associé (−10 lignes)
+- `_emit_open_event()` : `if symbol in _warmup_position_symbols` → `if self._is_warming_up: return` (−5 lignes)
+- `_emit_close_event()` : idem sans le `discard()` (−5 lignes)
+
+**Résultat** : paper et live parfaitement synchronisés, zéro divergence au restart, code simplifié.
+
+**Piège** : `on_candle()` appelle `_end_warmup()` automatiquement si `candle_age <= 2h` — les tests `on_candle()` en warmup doivent utiliser une bougie ancienne (`ts = now - 3h`).
+
+**Fichiers** : `backend/backtesting/simulator.py`, `tests/test_hotfix_35.py`, `tests/test_hotfix_36.py`
+
+**Tests** : remplacement de `TestWarmupPositionTracking` par `TestIsWarmingUpGuard` dans les deux fichiers (29/29), **1667 tests passants**, 0 régression.
+
+---
+
+## ÉTAT ACTUEL (22 février 2026)
+
+- **1667 tests passants**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Hotfix Warmup Simplification**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, SUI, BCH, BNB, AAVE, ARB, OP — 6 low-volume retirés : ENJ, SUSHI, IMX, SAND, AR, APE)
@@ -2820,6 +2841,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 - **Hotfix 37b** : `_params_equal()` (normalisation int/float) + suppression explicite des assets exclus déjà dans YAML sans résultat DB ; 4 tests
 - **Hotfix 37c** : `regime_analysis` croise directement `window_results × window_regimes` (remplace lookup `combo_accumulator.get(recommended_key)` qui retournait quasi-vide) ; 1 test
 - **Hotfix 37d** : `apply_from_db()` synchronise `best_params["timeframe"]` avec la colonne DB (corrige stale 4h dans JSON alors que colonne = 1h) ; 1 test
+- **Sprint 38 Shallow Validation Penalty** : pénalité `n_windows` sur le score brut du grading (≥24 → 0, 18-23 → -10, 12-17 → -20, <12 → -25), `GradeResult` dataclass (grade/score/is_shallow/raw_score), `--regrade` CLI (recalcule grades is_latest sans relancer WFO), badge ⚠ shallow frontend ResearchPage, 13 tests
 - **Prochaine étape** : Déployer les fixes P0+P1 sur le serveur, valider le comportement live, choisir le leverage optimal grid_boltrend et déployer en paper trading
 
 ### Résultats Portfolio Backtest — Validation Finale
