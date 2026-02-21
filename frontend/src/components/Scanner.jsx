@@ -235,8 +235,8 @@ export default function Scanner({ wsData }) {
               const direction = getDirection(asset.indicators, gridInfo)
               const changePct = asset.change_pct
               const gradeInfo = gradesLookup[asset.symbol]
-              // Asset surveillé par la stratégie mais sans position ouverte
-              const isInactive = !!strategyFilter && !!watchedSymbols && !inPositionSymbols.has(asset.symbol)
+              // Asset grisé seulement s'il y a au moins une position ouverte ET que cet asset n'en a pas
+              const isInactive = !!strategyFilter && !!watchedSymbols && inPositionSymbols.size > 0 && !inPositionSymbols.has(asset.symbol)
 
               return (
                 <Fragment key={asset.symbol}>
