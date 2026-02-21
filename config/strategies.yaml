@@ -207,7 +207,7 @@ grid_atr:
   sl_percent: 20.0
   sides:
   - long
-  leverage: 6
+  leverage: 7
   weight: 0.2
   per_asset:
     AAVE/USDT:
