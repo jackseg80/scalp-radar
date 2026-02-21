@@ -68,7 +68,7 @@ class JobManager:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
         self._cancel_events: dict[str, threading.Event] = {}
-        self._running_procs: dict[str, asyncio.subprocess.Process] = {}
+        self._running_procs: dict[str, Any] = {}  # subprocess.Popen instances
         self._running = False
         self._main_loop: asyncio.AbstractEventLoop | None = None
 
@@ -201,7 +201,7 @@ class JobManager:
             if event:
                 event.set()
             proc = self._running_procs.get(job_id)
-            if proc and proc.returncode is None:
+            if proc and proc.poll() is None:
                 try:
                     proc.terminate()
                 except Exception:
@@ -435,81 +435,95 @@ class JobManager:
     ) -> int | None:
         """Lance le WFO dans un subprocess isolé (segfault-safe).
 
+        Utilise subprocess.Popen (compatible SelectorEventLoop Windows)
+        au lieu de asyncio.create_subprocess_exec (nécessite ProactorEventLoop).
+
         Si numpy/numba provoque un segfault, seul ce subprocess meurt.
         Le serveur FastAPI (processus parent) survit et marque le job failed.
 
         Returns:
             result_id (int) si succès, None si échec
         """
+        import subprocess
         import sys
 
         worker_script = Path(__file__).parent.parent.parent / "scripts" / "wfo_worker.py"
 
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, str(worker_script),
-            "--job-id", job.id,
-            "--db-path", str(self._db_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        proc = subprocess.Popen(
+            [sys.executable, str(worker_script),
+             "--job-id", job.id,
+             "--db-path", str(self._db_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         self._running_procs[job.id] = proc
         logger.debug("WFO subprocess lancé (PID {})", proc.pid)
 
-        result_id: int | None = None
-        error_msg: str | None = None
-
-        try:
-            # Lire stdout en streaming : chaque ligne est un JSON de progression
+        def _monitor_stdout() -> tuple[int | None, str | None, bool]:
+            """Lit stdout, met à jour DB + WS en temps réel depuis le thread."""
+            _result_id: int | None = None
+            _error_msg: str | None = None
+            _cancelled = False
             assert proc.stdout is not None
-            while True:
-                line = await proc.stdout.readline()
+            for raw_line in proc.stdout:
+                line = raw_line.decode(errors="replace").strip()
                 if not line:
-                    break  # EOF = subprocess terminé
-
-                # Check annulation demandée depuis cancel_job()
-                if cancel_event.is_set():
-                    proc.terminate()
-                    raise asyncio.CancelledError("Annulé par l'utilisateur")
-
+                    continue
                 try:
-                    data = json.loads(line.decode().strip())
-                except (json.JSONDecodeError, UnicodeDecodeError):
+                    data = json.loads(line)
+                except json.JSONDecodeError:
                     continue
 
                 msg_type = data.get("type")
                 if msg_type == "progress":
                     pct = float(data.get("pct", 0))
                     phase = str(data.get("phase", ""))
-                    # Update DB (sync) + broadcast WS (async, on est dans l'event loop)
-                    await asyncio.to_thread(
-                        self._update_job_progress_sync, job.id, pct, phase
-                    )
-                    await self._broadcast_progress(job, "running", pct, phase)
+                    # Update DB (sync, OK dans ce thread)
+                    self._update_job_progress_sync(job.id, pct, phase)
+                    # Broadcast WS via main event loop (thread-safe)
+                    if self._main_loop and self._ws_broadcast:
+                        asyncio.run_coroutine_threadsafe(
+                            self._broadcast_progress(job, "running", pct, phase),
+                            self._main_loop,
+                        )
                 elif msg_type == "done":
-                    result_id = data.get("result_id")
+                    _result_id = data.get("result_id")
                 elif msg_type == "error":
-                    error_msg = data.get("message", "Erreur inconnue")
+                    _error_msg = data.get("message", "Erreur inconnue")
+
+                # Check annulation entre chaque ligne
+                if cancel_event.is_set():
+                    proc.terminate()
+                    _cancelled = True
+                    break
+
+            return _result_id, _error_msg, _cancelled
+
+        try:
+            # Monitoring stdout dans un thread (blocking I/O)
+            result_id, error_msg, cancelled = await asyncio.to_thread(_monitor_stdout)
+
+            if cancelled:
+                raise asyncio.CancelledError("Annulé par l'utilisateur")
 
         finally:
             self._running_procs.pop(job.id, None)
             # Attendre que le subprocess se termine (max 15s)
             try:
-                await asyncio.wait_for(proc.wait(), timeout=15.0)
-            except asyncio.TimeoutError:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
                 logger.warning("WFO subprocess (PID {}) ne se termine pas, kill forcé", proc.pid)
                 proc.kill()
-                await proc.wait()
+                proc.wait()
 
         returncode = proc.returncode
         if returncode not in (0, 2) and result_id is None:
-            # Lire stderr pour le message d'erreur
-            assert proc.stderr is not None
+            stderr_str = ""
             try:
-                stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=2.0)
-                stderr_str = stderr_bytes.decode(errors="replace")[:500]
-            except asyncio.TimeoutError:
-                stderr_str = "(stderr timeout)"
-
+                assert proc.stderr is not None
+                stderr_str = proc.stderr.read().decode(errors="replace")[:500]
+            except Exception:
+                pass
             msg = error_msg or f"WFO subprocess exit {returncode}: {stderr_str}"
             raise RuntimeError(msg)
 
