@@ -1,8 +1,5 @@
 FROM python:3.12-slim AS base
 
-# curl nécessaire pour le healthcheck Docker
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
-
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -12,9 +9,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# Copier le code
+# Copier le code (config/ monté en volume au runtime)
 COPY backend/ backend/
-COPY config/ config/
 COPY scripts/ scripts/
 
 EXPOSE 8000
