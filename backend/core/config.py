@@ -574,6 +574,7 @@ class SecretsConfig(BaseSettings):
     # Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
     selector_bypass_at_boot: bool | None = None  # Override risk.yaml si défini dans .env
     force_strategies: str | None = None  # FORCE_STRATEGIES, comma-separated (ex: "grid_atr,grid_trend")
+    active_strategies: str | None = None  # ACTIVE_STRATEGIES, comma-separated (ex: "grid_atr,grid_boltrend")
 
     # Sync WFO local → serveur
     sync_server_url: str = ""  # SYNC_SERVER_URL, ex: "http://192.168.1.200:8000"
@@ -656,6 +657,20 @@ class AppConfig:
                 strategies,
             )
 
+        # ACTIVE_STRATEGIES : filtre les stratégies activées au runtime
+        self._active_strategies: list[str] = []
+        if self.secrets.active_strategies is not None:
+            self._active_strategies = [
+                s.strip()
+                for s in self.secrets.active_strategies.split(",")
+                if s.strip()
+            ]
+            if self._active_strategies:
+                logger.info(
+                    "Config: ACTIVE_STRATEGIES filtré par .env: {}",
+                    self._active_strategies,
+                )
+
         # Validations croisées
         self._validate_cross_config()
 
@@ -665,6 +680,11 @@ class AppConfig:
             self.exchange.name,
             self.secrets.enable_websocket,
         )
+
+    @property
+    def active_strategies(self) -> list[str]:
+        """Liste des stratégies autorisées. Vide = toutes les enabled."""
+        return self._active_strategies
 
     def _validate_cross_config(self) -> None:
         """Validations qui croisent plusieurs fichiers de config."""

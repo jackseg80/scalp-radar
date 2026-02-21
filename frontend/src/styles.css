@@ -786,3 +786,19 @@ tr:last-child td { border-bottom: none; }
   font-size: 11px;
   padding: 2px 0;
 }
+
+/* Circuit breaker badge (Sprint 36a) */
+.circuit-breaker-badge {
+  color: var(--red);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border: 1px solid var(--red);
+  border-radius: 3px;
+  margin-left: 6px;
+  animation: blink 2s ease-in-out infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0.4; }
+}

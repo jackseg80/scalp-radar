@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from backend.core.config import AppConfig
+
+logger = logging.getLogger(__name__)
 from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
 from backend.strategies.boltrend import BolTrendStrategy
@@ -87,5 +91,17 @@ def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
         strategies.append(GridTrendStrategy(strats.grid_trend))
     if strats.grid_boltrend.enabled:
         strategies.append(GridBolTrendStrategy(strats.grid_boltrend))
+
+    # Filtre ACTIVE_STRATEGIES (env var)
+    if config.active_strategies:
+        before = len(strategies)
+        strategies = [s for s in strategies if s.name in config.active_strategies]
+        skipped = before - len(strategies)
+        if skipped > 0:
+            logger.info(
+                "Factory: %d stratégie(s) skippée(s) par ACTIVE_STRATEGIES (gardé: %s)",
+                skipped,
+                [s.name for s in strategies],
+            )
 
     return strategies

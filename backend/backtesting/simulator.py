@@ -196,6 +196,41 @@ class LiveStrategyRunner:
         # Sprint 5a : queue d'événements pour l'Executor (drainée par le Simulator)
         self._pending_events: list[Any] = []
 
+        # Circuit breaker — désactive le runner après trop de crashes
+        self._crash_times: list[float] = []
+        self._circuit_breaker_open: bool = False
+        self._CIRCUIT_BREAKER_MAX_CRASHES: int = 3
+        self._CIRCUIT_BREAKER_WINDOW_SECONDS: float = 600.0  # 10 minutes
+
+        # Sprint 34a : signal erreur pour Telegram via Simulator
+        self._last_indicator_error: tuple[str, str] | None = None
+
+    def _record_crash(self, symbol: str, error: Exception) -> None:
+        """Enregistre un crash et déclenche le circuit breaker si seuil atteint."""
+        import time as _time
+
+        now = _time.monotonic()
+        self._crash_times.append(now)
+        self._crash_times = [
+            t for t in self._crash_times
+            if now - t < self._CIRCUIT_BREAKER_WINDOW_SECONDS
+        ]
+
+        crash_count = len(self._crash_times)
+        logger.error(
+            "[{}] Runner crash #{} sur {}: {}",
+            self.name, crash_count, symbol, error,
+        )
+
+        if crash_count >= self._CIRCUIT_BREAKER_MAX_CRASHES:
+            self._circuit_breaker_open = True
+            logger.critical(
+                "[{}] CIRCUIT BREAKER OUVERT — runner désactivé après {} crashes en {}s. "
+                "Redémarrage du container nécessaire pour réactiver.",
+                self.name, self._CIRCUIT_BREAKER_MAX_CRASHES,
+                int(self._CIRCUIT_BREAKER_WINDOW_SECONDS),
+            )
+
     @property
     def name(self) -> str:
         return self._strategy.name
@@ -206,9 +241,20 @@ class LiveStrategyRunner:
 
     async def on_candle(self, symbol: str, timeframe: str, candle: Candle) -> None:
         """Traitement d'une nouvelle candle."""
+        if self._circuit_breaker_open:
+            return
+
         if self._kill_switch_triggered:
             return
 
+        try:
+            await self._on_candle_inner(symbol, timeframe, candle)
+        except Exception as e:
+            self._record_crash(symbol, e)
+            self._last_indicator_error = (symbol, f"CRASH on_candle: {e}")
+
+    async def _on_candle_inner(self, symbol: str, timeframe: str, candle: Candle) -> None:
+        """Corps interne de on_candle — séparé pour circuit breaker."""
         # 1. Les indicateurs sont déjà à jour (mis à jour par le Simulator avant l'appel)
 
         # 2. Récupérer les indicateurs
@@ -501,6 +547,8 @@ class LiveStrategyRunner:
             "equity": round(equity, 2),
             "initial_capital": self._initial_capital,
             "assets_with_positions": assets_with_positions,
+            "circuit_breaker": self._circuit_breaker_open,
+            "crash_count": len(self._crash_times),
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:
@@ -612,6 +660,39 @@ class GridStrategyRunner:
 
         # Funding costs tracking (approximation 0.01% par settlement)
         self._total_funding_cost: float = 0.0
+
+        # Circuit breaker — désactive le runner après trop de crashes
+        self._crash_times: list[float] = []
+        self._circuit_breaker_open: bool = False
+        self._CIRCUIT_BREAKER_MAX_CRASHES: int = 3
+        self._CIRCUIT_BREAKER_WINDOW_SECONDS: float = 600.0  # 10 minutes
+
+    def _record_crash(self, symbol: str, error: Exception) -> None:
+        """Enregistre un crash et déclenche le circuit breaker si seuil atteint."""
+        import time as _time
+
+        now = _time.monotonic()
+        self._crash_times.append(now)
+        # Garder seulement les crashes dans la fenêtre
+        self._crash_times = [
+            t for t in self._crash_times
+            if now - t < self._CIRCUIT_BREAKER_WINDOW_SECONDS
+        ]
+
+        crash_count = len(self._crash_times)
+        logger.error(
+            "[{}] Runner crash #{} sur {}: {}",
+            self.name, crash_count, symbol, error,
+        )
+
+        if crash_count >= self._CIRCUIT_BREAKER_MAX_CRASHES:
+            self._circuit_breaker_open = True
+            logger.critical(
+                "[{}] CIRCUIT BREAKER OUVERT — runner désactivé après {} crashes en {}s. "
+                "Redémarrage du container nécessaire pour réactiver.",
+                self.name, self._CIRCUIT_BREAKER_MAX_CRASHES,
+                int(self._CIRCUIT_BREAKER_WINDOW_SECONDS),
+            )
 
     def _get_sl_percent(self, symbol: str) -> float:
         """Résout le sl_percent pour un symbol (avec override per_asset)."""
@@ -800,9 +881,22 @@ class GridStrategyRunner:
         self, symbol: str, timeframe: str, candle: Candle
     ) -> None:
         """Traitement d'une nouvelle candle — logique grid."""
+        if self._circuit_breaker_open:
+            return
+
         if self._kill_switch_triggered:
             return
 
+        try:
+            await self._on_candle_inner(symbol, timeframe, candle)
+        except Exception as e:
+            self._record_crash(symbol, e)
+            self._last_indicator_error = (symbol, f"CRASH on_candle: {e}")
+
+    async def _on_candle_inner(
+        self, symbol: str, timeframe: str, candle: Candle
+    ) -> None:
+        """Corps interne de on_candle — séparé pour circuit breaker."""
         # Filtre per_asset : skip si symbol n'est pas dans la whitelist
         if self._per_asset_keys and symbol not in self._per_asset_keys:
             return
@@ -1366,6 +1460,8 @@ class GridStrategyRunner:
             "watched_symbols": sorted(self._per_asset_keys) if self._per_asset_keys else [],
             "leverage": self._leverage,
             "is_warming_up": self._is_warming_up,
+            "circuit_breaker": self._circuit_breaker_open,
+            "crash_count": len(self._crash_times),
         }
 
     def get_trades(self) -> list[tuple[str, TradeResult]]:
@@ -1930,6 +2026,18 @@ class Simulator:
                     "Simulator: erreur runner '{}': {}",
                     runner.name, e,
                 )
+
+            # Sprint 36a : alerte Telegram si circuit breaker vient de s'ouvrir
+            if getattr(runner, '_circuit_breaker_open', False) and self._notifier:
+                try:
+                    from backend.alerts.notifier import AnomalyType
+                    await self._notifier.notify_anomaly(
+                        AnomalyType.CIRCUIT_BREAKER,
+                        f"[{runner.name}] CIRCUIT BREAKER — runner désactivé après "
+                        f"{runner._CIRCUIT_BREAKER_MAX_CRASHES} crashes",
+                    )
+                except Exception:
+                    pass
 
             # Sprint 34a : forward erreurs compute_live_indicators → Telegram
             alert = getattr(runner, '_last_indicator_error', None)

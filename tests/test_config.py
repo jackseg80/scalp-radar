@@ -128,3 +128,53 @@ class TestConfigValidation:
         env_file.write_text("FORCE_STRATEGIES=\n")
         config = AppConfig(config_dir=config_dir, env_file=str(env_file))
         assert config.risk.adaptive_selector.force_strategies == []
+
+    # ─── ACTIVE_STRATEGIES (Sprint 36a) ──────────────────────────────────────
+
+    def test_active_strategies_env_single(self, config_dir, tmp_path):
+        """ACTIVE_STRATEGIES=grid_atr filtre les stratégies."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("ACTIVE_STRATEGIES=grid_atr\n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.active_strategies == ["grid_atr"]
+
+    def test_active_strategies_env_multiple(self, config_dir, tmp_path):
+        """ACTIVE_STRATEGIES avec plusieurs stratégies."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("ACTIVE_STRATEGIES=grid_atr,grid_boltrend\n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.active_strategies == ["grid_atr", "grid_boltrend"]
+
+    def test_active_strategies_env_not_set(self, config_dir):
+        """Sans ACTIVE_STRATEGIES, liste vide (= toutes les enabled)."""
+        config = AppConfig(config_dir=config_dir, env_file=None)
+        assert config.active_strategies == []
+
+    def test_active_strategies_env_whitespace(self, config_dir, tmp_path):
+        """Gestion des espaces et virgules trailing."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("ACTIVE_STRATEGIES= grid_atr , grid_boltrend , \n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        assert config.active_strategies == ["grid_atr", "grid_boltrend"]
+
+    def test_active_strategies_filters_factory(self, config_dir, tmp_path):
+        """ACTIVE_STRATEGIES filtre les stratégies dans get_enabled_strategies."""
+        from backend.strategies.factory import get_enabled_strategies
+
+        # vwap_rsi est enabled dans la config de test
+        env_file = tmp_path / ".env"
+        env_file.write_text("ACTIVE_STRATEGIES=vwap_rsi\n")
+        config = AppConfig(config_dir=config_dir, env_file=str(env_file))
+        strategies = get_enabled_strategies(config)
+        names = [s.name for s in strategies]
+        assert names == ["vwap_rsi"]
+
+    def test_active_strategies_empty_filters_nothing(self, config_dir):
+        """Sans ACTIVE_STRATEGIES, toutes les enabled sont retournées."""
+        from backend.strategies.factory import get_enabled_strategies
+
+        config = AppConfig(config_dir=config_dir, env_file=None)
+        strategies = get_enabled_strategies(config)
+        # vwap_rsi est la seule enabled dans la config de test
+        assert len(strategies) >= 1
+        assert "vwap_rsi" in [s.name for s in strategies]

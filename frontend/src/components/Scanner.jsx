@@ -185,6 +185,11 @@ export default function Scanner({ wsData }) {
               <> — x{wsData.strategies[strategyFilter].leverage}</>
             )}
             {watchedSymbols && <> — {watchedSymbols.size} assets</>}
+            {wsData?.strategies?.[strategyFilter]?.circuit_breaker && (
+              <span className="circuit-breaker-badge" title={`${wsData.strategies[strategyFilter].crash_count} crashes`}>
+                DISABLED
+              </span>
+            )}
           </div>
         )}
 

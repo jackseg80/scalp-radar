@@ -27,6 +27,7 @@ class AnomalyType(str, Enum):
     KILL_SWITCH_LIVE = "kill_switch_live"
     SL_PLACEMENT_FAILED = "sl_placement_failed"
     INDICATOR_ERROR = "indicator_error"
+    CIRCUIT_BREAKER = "circuit_breaker"
 
 
 # Messages formatés par type d'anomalie
@@ -39,6 +40,7 @@ _ANOMALY_MESSAGES = {
     AnomalyType.KILL_SWITCH_LIVE: "Kill switch LIVE déclenché",
     AnomalyType.SL_PLACEMENT_FAILED: "Placement SL échoué — close market déclenché",
     AnomalyType.INDICATOR_ERROR: "Erreur compute_live_indicators",
+    AnomalyType.CIRCUIT_BREAKER: "Circuit breaker déclenché — runner désactivé",
 }
 
 
@@ -52,6 +54,7 @@ _ANOMALY_COOLDOWNS: dict[AnomalyType, int] = {
     AnomalyType.KILL_SWITCH_GLOBAL: 3600,        # 1h
     AnomalyType.KILL_SWITCH_LIVE: 3600,          # 1h
     AnomalyType.INDICATOR_ERROR: 3600,            # 1h — erreur persistante
+    AnomalyType.CIRCUIT_BREAKER: 3600,            # 1h — ne se résout que par restart
 }
 _DEFAULT_COOLDOWN = 600  # 10 min pour tout type non listé
 

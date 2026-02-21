@@ -2709,12 +2709,35 @@ Correction bug guard : `_simulate_grid_funding` et `_simulate_grid_boltrend` ava
 
 **Tests** : 23 nouveaux dans `tests/test_backtest_audit.py` (12 audit initial + 8 Part A + 3 Part B) → **1604 passants**, 0 régression.
 
+### Sprint 36a — ACTIVE_STRATEGIES + Circuit Breaker Runner Isolation (21 février 2026)
+
+**But** : Durcir l'isolation des runners avant le multi-executor (Sprint 36b). Contrôler quelles stratégies tournent via env var, et désactiver automatiquement un runner qui crash en boucle.
+
+**Étape 1 — ACTIVE_STRATEGIES env var** :
+
+- `SecretsConfig.active_strategies: str | None` — nouvelle env var `ACTIVE_STRATEGIES`, comma-separated (ex: `grid_atr,grid_boltrend`)
+- `AppConfig.active_strategies` property — parse la chaîne, retourne `list[str]` (vide = toutes les enabled)
+- `get_enabled_strategies()` dans `factory.py` — filtre APRÈS construction de la liste si `config.active_strategies` est non-vide
+- Différence avec `FORCE_STRATEGIES` : `ACTIVE_STRATEGIES` filtre à la Factory (les stratégies non listées ne sont jamais créées), tandis que `FORCE_STRATEGIES` bypass les checks de performance du Selector (les stratégies sont créées mais forcées comme éligibles)
+- `.env.example` documenté
+
+**Étape 2 — Circuit Breaker Runner** :
+
+- `GridStrategyRunner` et `LiveStrategyRunner` : attributs `_crash_times`, `_circuit_breaker_open`, constantes `_CIRCUIT_BREAKER_MAX_CRASHES=3`, `_CIRCUIT_BREAKER_WINDOW_SECONDS=600`
+- `_record_crash(symbol, error)` : enregistre le crash, purge la fenêtre, déclenche le circuit breaker si 3+ crashes en 10 min
+- `on_candle()` refactoré : guard `if _circuit_breaker_open: return`, try/except global délègue à `_on_candle_inner()`
+- `get_status()` enrichi : `circuit_breaker: bool`, `crash_count: int`
+- `_dispatch_candle()` : alerte Telegram `AnomalyType.CIRCUIT_BREAKER` (cooldown 1h) quand le circuit breaker s'ouvre
+- Frontend : badge "DISABLED" clignotant dans Scanner.jsx quand circuit breaker actif
+
+**Tests** : 17 nouveaux (11 circuit breaker + 6 ACTIVE_STRATEGIES) → **1624 passants**, 0 régression.
+
 ---
 
 ## ÉTAT ACTUEL (21 février 2026)
 
-- **1604 tests**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest**
+- **1624 tests**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, SUI, BCH, BNB, AAVE, ARB, OP — 6 low-volume retirés : ENJ, SUSHI, IMX, SAND, AR, APE)
