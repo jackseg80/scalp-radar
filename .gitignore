@@ -51,5 +51,6 @@ Thumbs.db
 
 # Misc
 *.bak
+*.bak.*
 *.tmp
 nul
