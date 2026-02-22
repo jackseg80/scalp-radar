@@ -1121,6 +1121,8 @@ class GridStrategyRunner:
                         for p in positions_list
                     )
                     if total_margin_used + margin_per_level > pos_raw * max_margin_ratio:
+                        _h = getattr(self, "_on_skip_local", None)
+                        if callable(_h): _h(symbol)
                         continue  # Skip ce niveau, pas assez de marge
 
                     # Global margin guard (Sprint 24a) — portfolio backtest seulement
@@ -1134,6 +1136,8 @@ class GridStrategyRunner:
                             for p in positions_list
                         )
                         if global_margin + margin_per_level > portfolio_cap * max_margin_ratio:
+                            _h = getattr(self, "_on_skip_global", None)
+                            if callable(_h): _h(symbol)
                             continue  # Skip — marge globale dépasserait le seuil
 
                     pos_capital = margin_per_level * num_levels
@@ -1158,6 +1162,8 @@ class GridStrategyRunner:
                                 continue
                             self._capital -= margin_used
                         self._positions.setdefault(symbol, []).append(position)
+                        _h = getattr(self, "_on_position_opened", None)
+                        if callable(_h): _h(symbol)
                         logger.info(
                             "[{}] GRID {} level {} @ {:.2f} ({}) — {}/{} positions "
                             "(marge={:.2f}, capital={:.2f})",
