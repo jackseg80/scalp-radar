@@ -176,11 +176,14 @@ class TestCloseGridCancelsAllOrders:
             "quantity": 0.001, "entry_price": 50_000.0, "sl_price": 45_000.0,
         })
 
-        # Simuler 3 ordres ouverts sur Bitget (SL courant + 2 orphelins)
-        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
-            {"id": "sl_old_1", "symbol": futures_sym},
-            {"id": "sl_orphan_2", "symbol": futures_sym},
-            {"id": "sl_orphan_3", "symbol": futures_sym},
+        # Simuler 3 ordres normaux + 0 trigger sur Bitget
+        executor._exchange.fetch_open_orders = AsyncMock(side_effect=[
+            [  # 1er appel : ordres normaux
+                {"id": "sl_old_1", "symbol": futures_sym},
+                {"id": "sl_orphan_2", "symbol": futures_sym},
+                {"id": "sl_orphan_3", "symbol": futures_sym},
+            ],
+            [],  # 2e appel : trigger orders (aucun)
         ])
 
         # Close order retourne un fill
@@ -192,8 +195,8 @@ class TestCloseGridCancelsAllOrders:
         event = _make_close_event(exit_reason="tp_global")
         await executor._close_grid_cycle(event)
 
-        # Vérifier que fetch_open_orders a été appelé
-        executor._exchange.fetch_open_orders.assert_called_once_with(
+        # Vérifier que fetch_open_orders a été appelé (normaux + triggers)
+        executor._exchange.fetch_open_orders.assert_any_call(
             futures_sym, params={"type": "swap"},
         )
 
@@ -313,9 +316,10 @@ class TestUpdateSlCancelsPrevious:
             side_effect=Exception("order not found"),
         )
 
-        # fetch_open_orders retourne l'ancien SL (orphelin)
-        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
-            {"id": "sl_stuck_1", "symbol": futures_sym},
+        # fetch_open_orders retourne l'ancien SL (orphelin) sur normaux, rien sur triggers
+        executor._exchange.fetch_open_orders = AsyncMock(side_effect=[
+            [{"id": "sl_stuck_1", "symbol": futures_sym}],  # normaux
+            [],  # trigger orders
         ])
 
         # create_order pour le nouveau SL — doit réussir après le fallback
@@ -337,8 +341,8 @@ class TestUpdateSlCancelsPrevious:
 
         await executor._update_grid_sl(futures_sym, state)
 
-        # fetch_open_orders appelé en fallback
-        executor._exchange.fetch_open_orders.assert_called_once_with(
+        # fetch_open_orders appelé en fallback (normaux + triggers)
+        executor._exchange.fetch_open_orders.assert_any_call(
             futures_sym, params={"type": "swap"},
         )
 
@@ -362,9 +366,10 @@ class TestHandleSlCleansOrphans:
             "quantity": 0.001, "entry_price": 50_000.0, "sl_price": 45_000.0,
         })
 
-        # 1 orphelin restant après exécution du SL courant
-        executor._exchange.fetch_open_orders = AsyncMock(return_value=[
-            {"id": "sl_orphan_old", "symbol": futures_sym},
+        # 1 orphelin normal + 0 trigger restant après exécution du SL courant
+        executor._exchange.fetch_open_orders = AsyncMock(side_effect=[
+            [{"id": "sl_orphan_old", "symbol": futures_sym}],  # normaux
+            [],  # trigger orders
         ])
 
         await executor._handle_grid_sl_executed(
@@ -378,3 +383,64 @@ class TestHandleSlCleansOrphans:
 
         # Grid state nettoyé
         assert futures_sym not in executor._grid_states
+
+
+class TestCancelAllIncludesTriggers:
+    """_cancel_all_open_orders inclut les trigger orders (SL Bitget)."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_includes_trigger_orders(self):
+        """fetch_open_orders appelé 2x (normal + stop=True), cancel avec params stop."""
+        executor = _make_executor()
+        futures_sym = "BTC/USDT:USDT"
+
+        executor._exchange.fetch_open_orders = AsyncMock(side_effect=[
+            [],  # normaux : aucun
+            [
+                {"id": "sl_trigger_1", "symbol": futures_sym},
+                {"id": "sl_trigger_2", "symbol": futures_sym},
+            ],  # triggers
+        ])
+
+        count = await executor._cancel_all_open_orders(futures_sym)
+
+        # fetch_open_orders appelé 2 fois
+        assert executor._exchange.fetch_open_orders.call_count == 2
+        executor._exchange.fetch_open_orders.assert_any_call(
+            futures_sym, params={"type": "swap"},
+        )
+        executor._exchange.fetch_open_orders.assert_any_call(
+            futures_sym, params={"type": "swap", "stop": True},
+        )
+
+        # cancel_order appelé avec params stop pour les triggers
+        executor._exchange.cancel_order.assert_any_call(
+            "sl_trigger_1", futures_sym, params={"stop": True},
+        )
+        executor._exchange.cancel_order.assert_any_call(
+            "sl_trigger_2", futures_sym, params={"stop": True},
+        )
+        assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_cancel_trigger_failure_doesnt_break_normal_orders(self):
+        """Si fetch trigger orders échoue, les ordres normaux sont quand même annulés."""
+        executor = _make_executor()
+        futures_sym = "BTC/USDT:USDT"
+
+        call_count = 0
+
+        async def fetch_side(sym, params=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [{"id": "normal_1", "symbol": futures_sym}]
+            raise Exception("trigger orders endpoint not available")
+
+        executor._exchange.fetch_open_orders = AsyncMock(side_effect=fetch_side)
+
+        count = await executor._cancel_all_open_orders(futures_sym)
+
+        # L'ordre normal doit avoir été annulé malgré l'échec des triggers
+        executor._exchange.cancel_order.assert_called_once_with("normal_1", futures_sym)
+        assert count == 1

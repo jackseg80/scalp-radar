@@ -1358,12 +1358,15 @@ class Executor:
         await self._notifier.notify_live_sl_failed(futures_sym, state.strategy_name)
 
     async def _cancel_all_open_orders(self, futures_sym: str) -> int:
-        """Annule TOUS les ordres ouverts (trigger, SL, TP) pour un symbol.
+        """Annule TOUS les ordres ouverts (limit + trigger) pour un symbol.
 
         Utilisé à la fermeture d'un cycle grid pour nettoyer les éventuels
         ordres trigger orphelins (anciens SL dont le cancel a échoué).
+        Sur Bitget, les trigger orders (SL) requièrent un endpoint séparé.
         """
         cancelled = 0
+
+        # 1. Ordres normaux (limit, market)
         try:
             open_orders = await self._exchange.fetch_open_orders(
                 futures_sym, params={"type": "swap"},
@@ -1377,12 +1380,33 @@ class Executor:
                         "Executor: échec cancel ordre {} sur {}: {}",
                         order.get("id"), futures_sym, e,
                     )
-            if cancelled:
-                logger.info(
-                    "Executor: {} ordre(s) annulé(s) pour {}", cancelled, futures_sym,
-                )
         except Exception as e:
             logger.error("Executor: échec fetch_open_orders {}: {}", futures_sym, e)
+
+        # 2. Trigger orders (SL trigger) — endpoint séparé sur Bitget
+        try:
+            trigger_orders = await self._exchange.fetch_open_orders(
+                futures_sym, params={"type": "swap", "stop": True},
+            )
+            for order in trigger_orders:
+                try:
+                    await self._exchange.cancel_order(
+                        order["id"], futures_sym,
+                        params={"stop": True},
+                    )
+                    cancelled += 1
+                except Exception as e:
+                    logger.warning(
+                        "Executor: échec cancel trigger {} sur {}: {}",
+                        order.get("id"), futures_sym, e,
+                    )
+        except Exception as e:
+            logger.error("Executor: échec fetch trigger orders {}: {}", futures_sym, e)
+
+        if cancelled:
+            logger.info(
+                "Executor: {} ordre(s) annulé(s) pour {}", cancelled, futures_sym,
+            )
         return cancelled
 
     async def _close_grid_cycle(self, event: TradeEvent) -> None:
