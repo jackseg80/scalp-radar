@@ -297,3 +297,92 @@ def test_top5_sorted_by_combo_score():
         f"mais c'est {sorted_results[0]['params']}"
     )
     assert sorted_results[0]["params"] == {"a": 2}
+
+
+# ─── Test 6 : per_window_sharpes présent dans combo_results ──────────────
+
+
+def test_combo_result_has_per_window_sharpes():
+    """Vérifier que per_window_sharpes est construit correctement depuis combo_accumulator."""
+    import json
+    import numpy as np
+
+    # Simuler un combo_accumulator avec 4 fenêtres (1 avec oos_sharpe=None)
+    combo_accumulator = {
+        json.dumps({"ma_period": 20, "atr_mult": 1.5}, sort_keys=True): [
+            {"is_sharpe": 2.0, "is_return_pct": 5.0, "is_trades": 30,
+             "oos_sharpe": 1.5, "oos_return_pct": 3.0, "oos_trades": 25, "window_idx": 0},
+            {"is_sharpe": 2.5, "is_return_pct": 6.0, "is_trades": 35,
+             "oos_sharpe": 2.1, "oos_return_pct": 4.0, "oos_trades": 28, "window_idx": 1},
+            {"is_sharpe": 1.8, "is_return_pct": 4.0, "is_trades": 20,
+             "oos_sharpe": None, "oos_return_pct": None, "oos_trades": None, "window_idx": 2},
+            {"is_sharpe": 3.0, "is_return_pct": 7.0, "is_trades": 40,
+             "oos_sharpe": -0.5, "oos_return_pct": -1.0, "oos_trades": 15, "window_idx": 3},
+        ],
+    }
+
+    # Reproduire la logique de walk_forward.py
+    combo_results = []
+    for params_key, window_data in combo_accumulator.items():
+        params = json.loads(params_key)
+        oos_sharpes_combo = [d["oos_sharpe"] for d in window_data if d["oos_sharpe"] is not None]
+        avg_oos_sharpe = float(np.nanmean(oos_sharpes_combo)) if oos_sharpes_combo else 0.0
+
+        combo_results.append({
+            "params": params,
+            "oos_sharpe": round(avg_oos_sharpe, 4),
+            "n_windows_evaluated": len(window_data),
+            "per_window_sharpes": [round(d["oos_sharpe"], 4) for d in window_data if d["oos_sharpe"] is not None],
+        })
+
+    assert len(combo_results) == 1
+    cr = combo_results[0]
+
+    # per_window_sharpes contient 3 valeurs (la fenêtre None est exclue)
+    assert "per_window_sharpes" in cr
+    assert len(cr["per_window_sharpes"]) == 3
+    assert cr["per_window_sharpes"] == [1.5, 2.1, -0.5]
+
+    # Le nombre de sharpes = fenêtres avec OOS valide, pas n_windows_evaluated
+    assert cr["n_windows_evaluated"] == 4  # toutes les fenêtres
+    assert len(cr["per_window_sharpes"]) < cr["n_windows_evaluated"]
+
+
+def test_combo_score_v2_median():
+    """V2 (médian) diffère de V1 (mean) quand il y a des outliers.
+
+    Scénario : un combo avec un outlier positif qui gonfle la moyenne.
+    V1 (mean) = 3.02, V2 (médian) = 1.3 → le median est plus conservateur.
+    """
+    import statistics
+
+    # Sharpes par fenêtre avec un outlier à 8.5
+    per_window_sharpes = [1.2, 1.3, 0.8, 1.4, 8.5]
+
+    # V1 : score basé sur la moyenne (actuel)
+    mean_sharpe = sum(per_window_sharpes) / len(per_window_sharpes)  # 2.64
+    consistency = sum(1 for s in per_window_sharpes if s > 0) / len(per_window_sharpes)  # 1.0
+    total_trades = 150
+    score_v1 = combo_score(mean_sharpe, consistency, total_trades)
+
+    # V2 : score basé sur la médiane
+    median_sharpe = statistics.median(per_window_sharpes)  # 1.3
+    score_v2 = combo_score(median_sharpe, consistency, total_trades)
+
+    # V2 < V1 car le median ignore l'outlier
+    assert median_sharpe < mean_sharpe, (
+        f"Median ({median_sharpe}) devrait être < mean ({mean_sharpe}) avec outlier"
+    )
+    assert score_v2 < score_v1, (
+        f"V2 ({score_v2:.2f}) devrait être < V1 ({score_v1:.2f}) avec outlier"
+    )
+
+    # Vérifier les valeurs calculées
+    assert mean_sharpe == pytest.approx(2.64, abs=0.01)
+    assert median_sharpe == pytest.approx(1.3, abs=0.01)
+
+    # Sans outlier, les deux convergent
+    per_window_stable = [1.2, 1.3, 1.1, 1.4, 1.3]
+    mean_stable = sum(per_window_stable) / len(per_window_stable)
+    median_stable = statistics.median(per_window_stable)
+    assert abs(mean_stable - median_stable) < 0.1

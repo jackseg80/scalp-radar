@@ -75,6 +75,7 @@ def _create_tables(db_path: str) -> None:
             oos_is_ratio REAL,
             is_best INTEGER DEFAULT 0,
             n_windows_evaluated INTEGER,
+            per_window_sharpes TEXT,
             FOREIGN KEY (optimization_result_id) REFERENCES optimization_results(id)
         );
         CREATE INDEX IF NOT EXISTS idx_combo_opt_id ON wfo_combo_results(optimization_result_id);

@@ -70,6 +70,7 @@ def temp_db(tmp_path):
             oos_is_ratio REAL,
             is_best INTEGER DEFAULT 0,
             n_windows_evaluated INTEGER,
+            per_window_sharpes TEXT,
             FOREIGN KEY (optimization_result_id) REFERENCES optimization_results(id)
         );
     """)

@@ -326,6 +326,7 @@ class Database:
                 ON optimization_jobs(created_at);
         """)
         await self._create_sprint14b_tables()
+        await self._migrate_combo_per_window_sharpes()
 
     async def _create_sprint14b_tables(self) -> None:
         """Tables Sprint 14b : résultats détaillés de chaque combo WFO."""
@@ -346,6 +347,7 @@ class Database:
                 oos_is_ratio REAL,
                 is_best INTEGER DEFAULT 0,
                 n_windows_evaluated INTEGER,
+                per_window_sharpes TEXT,
                 FOREIGN KEY (optimization_result_id) REFERENCES optimization_results(id)
             );
 
@@ -354,6 +356,21 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_combo_best
                 ON wfo_combo_results(is_best) WHERE is_best = 1;
         """)
+
+    async def _migrate_combo_per_window_sharpes(self) -> None:
+        """Migration : ajouter per_window_sharpes à wfo_combo_results."""
+        assert self._conn is not None
+        columns = await self._conn.execute_fetchall("PRAGMA table_info(wfo_combo_results)")
+        if not columns:
+            return
+        col_names = [col[1] for col in columns]
+        if "per_window_sharpes" in col_names:
+            return
+        await self._conn.execute(
+            "ALTER TABLE wfo_combo_results ADD COLUMN per_window_sharpes TEXT"
+        )
+        await self._conn.commit()
+        logger.info("Migration wfo_combo_results : colonne per_window_sharpes ajoutée")
 
     async def _create_simulator_trades_table(self) -> None:
         """Table pour les trades du simulateur (paper trading)."""

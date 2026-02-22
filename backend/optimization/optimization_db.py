@@ -633,14 +633,16 @@ def save_combo_results_sync(db_path: str, result_id: int, combo_results: list[di
                 _sanitize_json_value(cr.get("oos_is_ratio")),
                 1 if cr.get("is_best") else 0,
                 cr.get("n_windows_evaluated"),
+                json.dumps(cr["per_window_sharpes"]) if cr.get("per_window_sharpes") is not None else None,
             )
             for cr in combo_results
         ]
         conn.executemany(
             """INSERT INTO wfo_combo_results
                (optimization_result_id, params, oos_sharpe, oos_return_pct, oos_trades,
-                oos_win_rate, is_sharpe, is_return_pct, is_trades, consistency, oos_is_ratio, is_best, n_windows_evaluated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                oos_win_rate, is_sharpe, is_return_pct, is_trades, consistency, oos_is_ratio, is_best,
+                n_windows_evaluated, per_window_sharpes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             data,
         )
         conn.commit()
@@ -663,17 +665,21 @@ async def get_combo_results_async(db_path: str, result_id: int) -> list[dict]:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
             """SELECT params, oos_sharpe, oos_return_pct, oos_trades, oos_win_rate,
-                      is_sharpe, is_return_pct, is_trades, consistency, oos_is_ratio, is_best, n_windows_evaluated
+                      is_sharpe, is_return_pct, is_trades, consistency, oos_is_ratio, is_best,
+                      n_windows_evaluated, per_window_sharpes
                FROM wfo_combo_results
                WHERE optimization_result_id = ?
                ORDER BY oos_sharpe DESC""",
             (result_id,),
         )
         rows = await cursor.fetchall()
-        return [
-            {**dict(row), "params": json.loads(row["params"])}
-            for row in rows
-        ]
+        results = []
+        for row in rows:
+            d = {**dict(row), "params": json.loads(row["params"])}
+            pws = row["per_window_sharpes"]
+            d["per_window_sharpes"] = json.loads(pws) if pws else None
+            results.append(d)
+        return results
 
 
 # ─── Strategy Summary (Sprint 36) ────────────────────────────────────────
