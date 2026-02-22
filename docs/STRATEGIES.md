@@ -126,6 +126,18 @@ L'ATR rend les enveloppes **adaptatives** : en haute volatilité, les niveaux s'
 - Piégé en bear market soutenu sans recovery (le prix ne revient pas à la SMA)
 - 7/21 assets avec Sharpe négatif sur les 90 derniers jours en conditions bear
 
+#### Note sur le SL max (Sprint 38)
+
+La grille de recherche WFO pour grid_atr est contrainte à `sl_percent ≤ 25%` (retiré 30% de la grille).
+
+Avec les régimes de marché correctement analysés (Hotfix 37c), le WFO tend à sélectionner des SL très larges (30%) pour survivre aux crashes inclus dans les fenêtres OOS. 10/21 assets plafonnaient à SL=30%, ce qui :
+
+- dégrade le ratio rendement/drawdown (worst-case SL loss 38.9% du capital par asset)
+- rapproche le worst SL du kill switch global (45%)
+- sélectionne des params "survivants" plutôt que "performants"
+
+La contrainte à 25% est un compromis validé en portfolio backtest 365j : DD -26.4% vs -33.3% avec SL=30%, pour un rendement quasi-identique (+43.6%). Worst SL réduit de 38.9% → 31.8%.
+
 ---
 
 ### 2. grid_trend — Trend Following DCA
@@ -764,6 +776,7 @@ Workflow A/B test — on isole l'impact d'une seule variable :
 - **Jamais de raccourci** : ne pas sauter d'étape, même si "ça a l'air évident"
 - **Un changement à la fois** : ne pas tester un nouveau paramètre ET un nouveau leverage simultanément
 - **Grade minimum** : seuls les Grade A et B passent en portfolio/paper/live
+- **Shallow validation** : le grade reçoit une pénalité si le WFO a peu de fenêtres (< 24 = ⚠ shallow). Pénalités : 18-23 → -10pts, 12-17 → -20pts, < 12 → -25pts. Un score parfait avec 15 fenêtres tombe en B. Recalculable via `--regrade --strategy <name>`.
 - **Timeframe unifié** : tous les Grade A/B d'une stratégie doivent avoir le même timeframe (1h pour le portfolio/paper/live). Un outlier 4h ou 1d ne produit aucun trade en portfolio malgré un Grade A.
 - **Backward compat** : tout nouveau paramètre a un défaut qui préserve le comportement existant
 - **Données fraîches** : toujours `fetch_history` avant un WFO important pour avoir les dernières candles

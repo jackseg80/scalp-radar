@@ -81,6 +81,11 @@ class WFOResult:
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 
+# Audit Sprint 38 : testé 4 variantes de scoring (median, low-consistency, blend P25).
+# Résultat : 20/21 assets sélectionnent le même combo → le scoring est stable.
+# La régression de rendement post-fix régimes vient des données WFO, pas du scoring.
+# TODO futur : persister per_window_sharpes dans wfo_combo_results pour permettre
+# les variantes V2 (median) et V4 (blend P25) sans re-run.
 def combo_score(oos_sharpe: float, consistency: float, total_trades: int) -> float:
     """Score composite pour sélectionner le meilleur combo WFO.
 
