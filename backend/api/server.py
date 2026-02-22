@@ -163,6 +163,12 @@ async def lifespan(app: FastAPI):
         await sync_live_to_paper(executor, simulator)
         await executor.start_exit_monitor()
 
+        # Phase 1 : entrées autonomes — Executor reçoit chaque candle APRÈS le Simulator
+        # INVARIANT : simulator.start() a déjà enregistré son callback (index 0).
+        # L'Executor sera callback[1] → get_runner_context() retourne des indicateurs à jour.
+        engine.on_candle(executor._on_candle)
+        logger.info("Executor: entrées autonomes câblées sur DataEngine")
+
         # Hotfix 35 : enregistrer executor dans StateManager pour sauvegarde périodique
         if state_manager is not None:
             state_manager.set_executor(executor, risk_mgr)

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from backend.alerts.notifier import Notifier
     from backend.core.config import AppConfig
     from backend.core.data_engine import DataEngine
+    from backend.core.models import Candle
     from backend.execution.adaptive_selector import AdaptiveSelector
     from backend.execution.risk_manager import LiveRiskManager
     from backend.strategies.base_grid import BaseGridStrategy
@@ -192,6 +193,11 @@ class Executor:
         self._simulator: Any = None  # Simulator — source unique indicateurs
         self._strategies: dict[str, BaseGridStrategy] = {}
         self._exit_check_task: asyncio.Task[None] | None = None
+
+        # Phase 1 : entrées autonomes
+        self._pending_levels: set[str] = set()  # "{futures_sym}:{level}" anti double-trigger
+        self._pending_notional: float = 0.0  # Marge engagée pas encore reconciliée
+        self._balance_bootstrapped: bool = False  # True après 1er fetch_balance réussi
 
     # ─── Properties ────────────────────────────────────────────────────
 
@@ -390,6 +396,10 @@ class Executor:
                     )
 
             self._exchange_balance = new_total
+            # Phase 1 : reset pending tracking après reconciliation balance
+            self._balance_bootstrapped = True
+            if not self._pending_levels:
+                self._pending_notional = 0.0
             return new_total
         except Exception as e:
             logger.warning("Executor: échec refresh balance: {}", e)
@@ -405,6 +415,25 @@ class Executor:
             # P1 Audit : snapshot pour kill switch global live (drawdown 24h)
             if new_balance is not None:
                 self._risk_manager.record_balance_snapshot(new_balance)
+
+    # ─── Balance bootstrap ──────────────────────────────────────────────
+
+    async def _ensure_balance(self) -> float:
+        """Retourne le solde Bitget disponible, avec fetch si pas encore initialisé."""
+        if not self._balance_bootstrapped or self._exchange_balance is None:
+            try:
+                balance_info = await self._exchange.fetch_balance({"type": "swap"})
+                self._exchange_balance = float(
+                    balance_info.get("total", {}).get("USDT", 0),
+                )
+                self._balance_bootstrapped = True
+                logger.info(
+                    "Executor: balance bootstrappée: {:.2f} USDT", self._exchange_balance,
+                )
+            except Exception as e:
+                logger.warning("Executor: échec bootstrap balance: {}", e)
+                return 0.0
+        return max((self._exchange_balance or 0.0) - self._pending_notional, 0.0)
 
     # ─── Setup ─────────────────────────────────────────────────────────
 
@@ -515,6 +544,193 @@ class Executor:
             except Exception as e:
                 logger.error("Executor: erreur check exit {}: {}", futures_sym, e)
 
+    # ─── Entrées autonomes (Phase 1) ─────────────────────────────────────
+
+    async def _on_candle(self, symbol: str, timeframe: str, candle: Candle) -> None:
+        """Évalue les entrées grid sur chaque candle (autonome, sans dépendre du paper)."""
+        if not self._running or not self._connected:
+            return
+
+        for strategy_name, strategy in self._strategies.items():
+            strat_tf = getattr(strategy._config, "timeframe", "1h")
+            if timeframe != strat_tf:
+                continue
+
+            futures_sym = to_futures_symbol(symbol)
+
+            # Skip si grille pleine
+            existing_state = self._grid_states.get(futures_sym)
+            filled_levels: set[int] = set()
+            if existing_state:
+                filled_levels = {p.level for p in existing_state.positions}
+                if len(existing_state.positions) >= strategy.max_positions:
+                    continue
+
+            # SOURCE UNIQUE : lire les indicateurs depuis le runner paper
+            ctx = (
+                self._simulator.get_runner_context(strategy_name, symbol)
+                if self._simulator
+                else None
+            )
+            if ctx is None:
+                logger.debug(
+                    "Executor entry: pas de contexte pour {} {} — skip",
+                    strategy_name, symbol,
+                )
+                continue
+
+            # Vérifier que les indicateurs essentiels sont présents
+            tf_indicators = ctx.indicators.get(strat_tf, {})
+            if not tf_indicators.get("sma") or not tf_indicators.get("close"):
+                logger.debug(
+                    "Executor entry: indicateurs incomplets pour {} {}, skip",
+                    strategy_name, symbol,
+                )
+                continue
+
+            # Remplacer le capital par le solde Bitget réel
+            available_balance = await self._ensure_balance()
+            if available_balance <= 0:
+                logger.debug("Executor entry: balance <= 0, skip {}", symbol)
+                continue
+
+            from backend.strategies.base import StrategyContext
+
+            ctx = StrategyContext(
+                symbol=ctx.symbol,
+                timestamp=ctx.timestamp,
+                candles=ctx.candles,
+                indicators=ctx.indicators,
+                current_position=ctx.current_position,
+                capital=available_balance,
+                config=ctx.config,
+                extra_data=ctx.extra_data,
+            )
+
+            # Construire GridState depuis les positions LIVE
+            grid_state = self._live_state_to_grid_state(futures_sym)
+
+            # Évaluer la grille
+            try:
+                levels = strategy.compute_grid(ctx, grid_state)
+            except Exception as e:
+                logger.error(
+                    "Executor entry: erreur compute_grid {} {}: {}",
+                    strategy_name, symbol, e,
+                )
+                continue
+
+            if not levels:
+                continue
+
+            grid_leverage = self._get_grid_leverage(strategy_name)
+
+            # Vérifier quels niveaux sont touchés par cette candle
+            for level in levels:
+                if level.index in filled_levels:
+                    continue
+
+                # Anti double-trigger
+                pending_key = f"{futures_sym}:{level.index}"
+                if pending_key in self._pending_levels:
+                    continue
+
+                triggered = False
+                if level.direction == Direction.LONG:
+                    triggered = candle.low <= level.entry_price
+                else:
+                    triggered = candle.high >= level.entry_price
+
+                if not triggered:
+                    continue
+
+                # Calculer la quantity (BUG 1 fix — _open_grid_position attend qty > 0)
+                quantity = (
+                    level.size_fraction * available_balance * grid_leverage
+                ) / level.entry_price
+                quantity = self._round_quantity(quantity, futures_sym)
+                if quantity <= 0:
+                    continue
+
+                # Marquer comme pending AVANT l'appel async
+                self._pending_levels.add(pending_key)
+                level_margin = level.size_fraction * available_balance
+                self._pending_notional += level_margin
+
+                event = TradeEvent(
+                    event_type=TradeEventType.OPEN,
+                    strategy_name=strategy_name,
+                    symbol=symbol,
+                    direction=level.direction,
+                    entry_price=level.entry_price,
+                    quantity=quantity,
+                    tp_price=0,
+                    sl_price=0,
+                    score=0,
+                    timestamp=candle.timestamp,
+                    market_regime=tf_indicators.get("regime", "unknown"),
+                )
+
+                try:
+                    await self._open_grid_position(event)
+                except Exception as e:
+                    logger.error(
+                        "Executor entry: erreur {} {} level {}: {}",
+                        level.direction, futures_sym, level.index, e,
+                    )
+                finally:
+                    self._pending_levels.discard(pending_key)
+
+    # ─── GridState factory ────────────────────────────────────────────────
+
+    def _live_state_to_grid_state(
+        self, futures_sym: str, current_price: float | None = None,
+    ) -> GridState:
+        """Construit un GridState depuis les positions live.
+
+        Factorisé pour être partagé entre _check_grid_exit() et _on_candle().
+        """
+        from backend.strategies.base_grid import GridPosition, GridState
+
+        state = self._grid_states.get(futures_sym)
+        if not state or not state.positions:
+            return GridState(
+                positions=[], avg_entry_price=0, total_quantity=0,
+                total_notional=0, unrealized_pnl=0,
+            )
+
+        grid_positions = [
+            GridPosition(
+                level=p.level,
+                direction=Direction(state.direction),
+                entry_price=p.entry_price,
+                quantity=p.quantity,
+                entry_time=p.entry_time,
+                entry_fee=getattr(p, "entry_fee", 0.0),
+            )
+            for p in state.positions
+        ]
+
+        total_qty = state.total_quantity
+        avg_entry = state.avg_entry_price
+        total_notional = avg_entry * total_qty
+
+        unrealized = 0.0
+        if current_price is not None and total_qty > 0:
+            direction = Direction(state.direction)
+            if direction == Direction.LONG:
+                unrealized = (current_price - avg_entry) * total_qty
+            else:
+                unrealized = (avg_entry - current_price) * total_qty
+
+        return GridState(
+            positions=grid_positions,
+            avg_entry_price=avg_entry,
+            total_quantity=total_qty,
+            total_notional=total_notional,
+            unrealized_pnl=unrealized,
+        )
+
     async def _check_grid_exit(self, futures_sym: str) -> None:
         """Vérifie si un cycle grid doit être fermé.
 
@@ -559,37 +775,11 @@ class Executor:
 
         current_close = tf_indicators["close"]
 
-        # Construire le GridState
-        from backend.strategies.base_grid import GridPosition, GridState
-
-        grid_positions = [
-            GridPosition(
-                level=p.level,
-                direction=Direction(state.direction),
-                entry_price=p.entry_price,
-                quantity=p.quantity,
-                entry_time=p.entry_time,
-                entry_fee=getattr(p, "entry_fee", 0.0),
-            )
-            for p in state.positions
-        ]
-
-        total_qty = state.total_quantity
-        avg_entry = state.avg_entry_price
-        total_notional = avg_entry * total_qty
+        # Construire le GridState (méthode factorisée Phase 1)
+        grid_state = self._live_state_to_grid_state(futures_sym, current_close)
+        avg_entry = grid_state.avg_entry_price
+        total_qty = grid_state.total_quantity
         direction = Direction(state.direction)
-        if direction == Direction.LONG:
-            unrealized = (current_close - avg_entry) * total_qty
-        else:
-            unrealized = (avg_entry - current_close) * total_qty
-
-        grid_state = GridState(
-            positions=grid_positions,
-            avg_entry_price=avg_entry,
-            total_quantity=total_qty,
-            total_notional=total_notional,
-            unrealized_pnl=unrealized,
-        )
 
         # ── PRIX TEMPS RÉEL : candle en cours du DataEngine ──
         # Permet de détecter un TP touché intra-candle (comme check_global_tp_sl

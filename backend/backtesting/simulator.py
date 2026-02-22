@@ -473,6 +473,14 @@ class LiveStrategyRunner:
             extra_data=extra_data,
         )
 
+    def update_indicators_only(
+        self, symbol: str, timeframe: str, candle: Candle,
+    ) -> None:
+        """No-op pour LiveStrategyRunner (pas de close_buffer interne).
+
+        Existe pour duck-typing avec GridStrategyRunner.update_indicators_only().
+        """
+
     def get_status(self) -> dict:
         # Champs unrealized pour cohérence avec GridStrategyRunner
         unrealized_pnl = 0.0
@@ -1263,6 +1271,22 @@ class GridStrategyRunner:
             config=self._config,
         )
 
+    def update_indicators_only(
+        self, symbol: str, timeframe: str, candle: Candle,
+    ) -> None:
+        """Met à jour le close_buffer/SMA sans évaluer de trades.
+
+        Appelé par _dispatch_candle quand le kill switch global est actif.
+        L'Executor live lit ces données via get_runner_context() / build_context().
+        """
+        if timeframe != self._strategy_tf:
+            return
+        if symbol not in self._close_buffer:
+            self._close_buffer[symbol] = deque(
+                maxlen=max(self._ma_period + 20, 50),
+            )
+        self._close_buffer[symbol].append(candle.close)
+
     def get_grid_positions(self) -> list[dict]:
         """Retourne les positions grid ouvertes pour le dashboard."""
         result = []
@@ -1870,15 +1894,21 @@ class Simulator:
         if not self._running or not self._indicator_engine:
             return
 
-        # Kill switch global : plus aucun dispatch
-        if self._global_kill_switch:
-            return
-
-        # Mettre à jour les indicateurs (une seule fois pour tous les runners)
+        # TOUJOURS mettre à jour les indicateurs (même si kill switch actif).
+        # L'Executor live lit ces indicateurs via get_runner_context().
         self._indicator_engine.update(symbol, timeframe, candle)
 
         # Invalider le cache conditions à chaque bougie (indicateurs changent)
         self._conditions_cache = None
+
+        # Kill switch global : indicateurs à jour, mais pas de trades paper.
+        # On met à jour les close_buffers des runners pour que build_context()
+        # retourne des SMA fraîches à l'Executor.
+        if self._global_kill_switch:
+            for runner in self._runners:
+                if hasattr(runner, "update_indicators_only"):
+                    runner.update_indicators_only(symbol, timeframe, candle)
+            return
 
         # Snapshot positions AVANT dispatch (détection collision)
         positions_before: dict[str, set[str]] = {
