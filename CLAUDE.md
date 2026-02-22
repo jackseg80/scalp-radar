@@ -18,6 +18,10 @@ and presents results via a real-time dashboard.
   - **IMPORTANT pour Claude Code** : Mettre à jour ce fichier après chaque plan de sprint complété
   - Ajouter les résultats, leçons apprises, bugs corrigés dans la section du sprint concerné
   - Mettre à jour "ÉTAT ACTUEL" avec le nouveau nombre de tests et la prochaine étape
+- **[docs/plans/](docs/plans/)** — Plans de sprint archivés (1 fichier par sprint)
+  - **IMPORTANT pour Claude Code** : Copier le plan dans `docs/plans/sprint-{n}-{nom}.md` à chaque fin de sprint (avant ou avec le commit final)
+- **[docs/audit/](docs/audit/)** — Rapports d'audit (fees, grid states, etc.)
+  - **IMPORTANT pour Claude Code** : Créer un fichier `docs/audit/audit-{sujet}-{YYYYMMDD}.md` après chaque audit, avec résumé exécutif, méthodologie, résultats et conclusions
   - **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 16 stratégies de trading (logique, paramètres, exemples)
   - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Architecture runtime, flux de données, boot/shutdown, persistence
   - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI, requêtes DB, déploiement, méthodologie
@@ -75,7 +79,8 @@ scalp-radar/
 ├── frontend/                     # React + Vite (32 components: Scanner, Heatmap, Explorer, Research, Portfolio, Diagnostic, etc.)
 ├── tests/                        # pytest (voir ROADMAP.md pour le décompte actuel)
 ├── scripts/                      # backfill_candles, fetch_history, fetch_funding, fetch_oi, run_backtest, optimize, parity_check, reset_simulator, sync_to_server, portfolio_backtest
-└── docs/plans/                   # Sprint plans 1-34b archivés
+├── docs/plans/                   # Sprint plans archivés (1 fichier Markdown par sprint)
+└── docs/audit/                   # Rapports d'audit (audit-{sujet}-{YYYYMMDD}.md)
 ```
 
 ## Trading Strategies (16 implémentées)
