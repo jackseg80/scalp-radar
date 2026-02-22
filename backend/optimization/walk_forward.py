@@ -81,19 +81,36 @@ class WFOResult:
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 
-# Audit Sprint 38 : testé 4 variantes de scoring (median, low-consistency, blend P25).
-# Résultat : 20/21 assets sélectionnent le même combo → le scoring est stable.
-# La régression de rendement post-fix régimes vient des données WFO, pas du scoring.
-# per_window_sharpes persisté dans wfo_combo_results pour les variantes V2/V4.
-def combo_score(oos_sharpe: float, consistency: float, total_trades: int) -> float:
+# CRITICAL FIX Sprint 38b : window_factor corrige un biais de sélection dans le 2-pass WFO.
+# Les combos fine (générées par _fine_grid_around_top) sont spécifiques à chaque fenêtre
+# et n'apparaissent que dans 1-5 fenêtres sur 30 dans le combo_accumulator.
+# Sans window_factor, elles gagnaient le scoring avec consistency triviale (1/1 = 100%).
+# Impact mesuré : grid_atr +43.6% → +57.7%, DD -26.4% → -24.1%.
+# Audit Sprint 38 : 4 variantes de scoring testées, 20/21 assets identiques → formule stable.
+# per_window_sharpes persisté dans wfo_combo_results pour les variantes V2/V4 futures.
+def combo_score(
+    oos_sharpe: float,
+    consistency: float,
+    total_trades: int,
+    n_windows: int | None = None,
+    max_windows: int | None = None,
+) -> float:
     """Score composite pour sélectionner le meilleur combo WFO.
 
     Favorise les combos à haute consistance ET volume de trades,
     plutôt que le simple max(oos_sharpe).
+
+    window_factor pénalise les combos évalués sur peu de fenêtres OOS
+    (typique du 2-pass coarse/fine où certains combos ne survivent que
+    dans 1-5 fenêtres sur 30). Ratio n_windows/max_windows, plafonné à 1.0.
     """
     sharpe = max(oos_sharpe, 0.0)
     trade_factor = min(1.0, total_trades / 100)
-    return sharpe * (0.4 + 0.6 * consistency) * trade_factor
+    if n_windows is not None and max_windows is not None and max_windows > 0:
+        window_factor = min(1.0, n_windows / max_windows)
+    else:
+        window_factor = 1.0
+    return sharpe * (0.4 + 0.6 * consistency) * trade_factor * window_factor
 
 
 def _load_param_grids(config_path: str = "config/param_grids.yaml") -> dict[str, Any]:
@@ -929,9 +946,13 @@ class WalkForwardOptimizer:
 
             # Sélection du best combo par score composite (consistance + volume)
             if combo_results:
+                max_win = max(c["n_windows_evaluated"] for c in combo_results)
                 best_combo = max(
                     combo_results,
-                    key=lambda c: combo_score(c["oos_sharpe"], c["consistency"], c["oos_trades"]),
+                    key=lambda c: combo_score(
+                        c["oos_sharpe"], c["consistency"], c["oos_trades"],
+                        n_windows=c["n_windows_evaluated"], max_windows=max_win,
+                    ),
                 )
                 best_combo["is_best"] = True
                 recommended = best_combo["params"]
@@ -956,7 +977,10 @@ class WalkForwardOptimizer:
 
             # Trier par combo_score décroissant → le #1 = best combo sélectionné
             combo_results.sort(
-                key=lambda c: combo_score(c["oos_sharpe"], c["consistency"], c["oos_trades"]),
+                key=lambda c: combo_score(
+                    c["oos_sharpe"], c["consistency"], c["oos_trades"],
+                    n_windows=c["n_windows_evaluated"], max_windows=max_win,
+                ),
                 reverse=True,
             )
 

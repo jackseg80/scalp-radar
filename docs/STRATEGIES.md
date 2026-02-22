@@ -138,6 +138,10 @@ Avec les régimes de marché correctement analysés (Hotfix 37c), le WFO tend à
 
 La contrainte à 25% est un compromis validé en portfolio backtest 365j : DD -26.4% vs -33.3% avec SL=30%, pour un rendement quasi-identique (+43.6%). Worst SL réduit de 38.9% → 31.8%.
 
+#### Note sur le window_factor (Sprint 38b)
+
+Le `combo_score` inclut un `window_factor = min(1.0, n_windows / max_windows)` qui pénalise les combos évaluées sur peu de fenêtres OOS. Ce facteur est critique pour le 2-pass WFO : les combos fine (générées autour du top 20 de chaque fenêtre) sont spécifiques à chaque fenêtre et n'apparaissent que dans 1-5 fenêtres sur 30. Sans window_factor, ces combos gagnaient le scoring avec une consistency triviale (1/1 = 100%). Le fix a amélioré le rendement portfolio de +43.6% → +57.7% tout en réduisant le drawdown de -26.4% → -24.1%.
+
 ---
 
 ### 2. grid_trend — Trend Following DCA
@@ -395,6 +399,8 @@ Réutilise 100% du code de `envelope_dca`. Seuls le nom (`"envelope_dca_short"`)
 **Statut** : `enabled: true`, `live_eligible: false`. Paper trading actif sur 6 assets (BTC, ETH, DOGE, DYDX, LINK, SAND) avec leverage 8x.
 
 **Résultats WFO** : Grade B (83/100), Sharpe +1.58 (post-Hotfix 33a). Bugs corrigés : TP inverse via `get_tp_price()` retournant NaN (Hotfix 33a), exit_price/fees fast engine (Hotfix 33b), divergence fast/event réduite à 2.62%.
+
+**Statut Sprint 38b — Mise en pause** : après correction du biais de sélection (`window_factor`), seuls 2 assets sur 21 atteignent Grade B (BTC, DYDX). Les 7 Grade B antérieurs avaient une consistency apparente de 100% sur 3-5 fenêtres (biais trivial), tombée à 62-77% réels sur 30 fenêtres. DSR = 0/15 sur tous les assets (trop peu de trades par OOS window). Portfolio 2 assets non viable (+7.4%, DD -38.6%). Stratégie mise en pause — à revisiter quand plus de données disponibles.
 
 ---
 

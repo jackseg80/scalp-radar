@@ -386,3 +386,36 @@ def test_combo_score_v2_median():
     mean_stable = sum(per_window_stable) / len(per_window_stable)
     median_stable = statistics.median(per_window_stable)
     assert abs(mean_stable - median_stable) < 0.1
+
+
+# ─── Tests window_factor ─────────────────────────────────────────────────
+
+
+def test_window_factor_penalizes_low_windows():
+    """Combo évaluée sur 1/30 fenêtres perd face à une combo 30/30 malgré Sharpe 2.7x plus élevé."""
+    # Combo A : sharpe 8.0, 1/30 fenêtres
+    score_a = combo_score(8.0, 1.0, 200, n_windows=1, max_windows=30)
+    # Combo B : sharpe 3.0, 30/30 fenêtres
+    score_b = combo_score(3.0, 0.9, 200, n_windows=30, max_windows=30)
+    assert score_b > score_a, f"B ({score_b:.2f}) devrait battre A ({score_a:.2f})"
+
+
+def test_window_factor_no_penalty_full_windows():
+    """30/30 fenêtres → window_factor = 1.0, pas de pénalité."""
+    score_with = combo_score(5.0, 0.9, 200, n_windows=30, max_windows=30)
+    score_without = combo_score(5.0, 0.9, 200)
+    assert score_with == score_without
+
+
+def test_window_factor_backward_compat():
+    """Sans n_windows → même résultat qu'avant."""
+    score_old = combo_score(5.0, 0.9, 200)
+    score_none = combo_score(5.0, 0.9, 200, n_windows=None, max_windows=None)
+    assert score_old == score_none
+
+
+def test_window_factor_proportional():
+    """15/30 = 0.5x, 30/30 = 1.0x → ratio 2.0."""
+    score_half = combo_score(5.0, 0.9, 200, n_windows=15, max_windows=30)
+    score_full = combo_score(5.0, 0.9, 200, n_windows=30, max_windows=30)
+    assert score_full / score_half == pytest.approx(2.0, abs=0.01)

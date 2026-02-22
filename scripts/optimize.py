@@ -419,9 +419,13 @@ def _print_report(
     # TOP 5 COMBOS (score composite)
     if combo_results:
         from backend.optimization.walk_forward import combo_score
+        max_win = max((c.get("n_windows_evaluated", 1) for c in combo_results), default=1)
         top5 = sorted(
             combo_results,
-            key=lambda c: combo_score(c.get("oos_sharpe", 0), c.get("consistency", 0), c.get("oos_trades", 0)),
+            key=lambda c: combo_score(
+                c.get("oos_sharpe", 0), c.get("consistency", 0), c.get("oos_trades", 0),
+                n_windows=c.get("n_windows_evaluated"), max_windows=max_win,
+            ),
             reverse=True,
         )[:5]
         print(f"\n  TOP 5 COMBOS (score composite)")

@@ -81,12 +81,15 @@ export function buildDiagnosticText({ strategy, asset, selectedRun, combos, regi
 
   // ─── TOP 5 COMBOS (score composite) ───
   lines.push('\u2500\u2500\u2500 TOP 5 COMBOS (score composite) \u2500\u2500\u2500')
-  // Même formule que backend combo_score(): sharpe × (0.4 + 0.6 × consistency) × min(1, trades/50)
+  // Même formule que backend combo_score(): sharpe × (0.4 + 0.6 × consistency) × min(1, trades/100) × window_factor
+  const maxWin = Math.max(...combos.map(c => c.n_windows_evaluated ?? 1), 1)
   const comboScore = (c) => {
     const s = Math.max(c.oos_sharpe ?? 0, 0)
     const cons = c.consistency ?? 0
     const trades = c.oos_trades ?? 0
-    return s * (0.4 + 0.6 * cons) * Math.min(1, trades / 50)
+    const nWin = c.n_windows_evaluated ?? maxWin
+    const windowFactor = Math.min(1, nWin / maxWin)
+    return s * (0.4 + 0.6 * cons) * Math.min(1, trades / 100) * windowFactor
   }
   const sorted = [...combos].sort((a, b) => comboScore(b) - comboScore(a))
   const top5 = sorted.slice(0, 5)
