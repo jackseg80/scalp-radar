@@ -3,10 +3,11 @@
 Usage:
     uv run python -m scripts.audit_fees
     uv run python -m scripts.audit_fees --days 7 -v
+    uv run python -m scripts.audit_fees --debug       # dump 3 raw trades JSON
 """
 
 import argparse
-import sqlite3
+import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,8 @@ class TradeAudit:
     order_id: str
     trade_id: str
     side: str           # buy / sell
-    order_type: str     # market / limit / unknown
+    order_type: str     # market / limit / unknown (from ccxt type field)
+    taker_or_maker: str # taker / maker / unknown (from ccxt takerOrMaker)
     notional: float     # price x quantity (USDT)
     fee_paid: float     # fee absolue USDT
     fee_rate: float     # fee_paid / notional
@@ -104,14 +106,41 @@ def fetch_trades_for_symbol(
     return all_trades
 
 
+def _detect_taker_or_maker(trade: dict) -> str:
+    """Detect taker/maker from ccxt unified trade structure.
+
+    Priority:
+    1. ccxt ``takerOrMaker`` field (most reliable)
+    2. Bitget raw ``info.side`` containing 'Taker'/'Maker'
+    3. Fallback to 'taker' (conservative)
+    """
+    # 1. Standard ccxt field
+    tom = trade.get("takerOrMaker")
+    if tom in ("taker", "maker"):
+        return tom
+
+    # 2. Bitget raw info
+    info = trade.get("info") or {}
+    raw_side = str(info.get("side", ""))
+    if "maker" in raw_side.lower():
+        return "maker"
+    if "taker" in raw_side.lower():
+        return "taker"
+
+    # 3. Conservative fallback
+    return "taker"
+
+
 def fetch_all_trades(
     exchange: ccxt.bitget,
     symbols: list[str],
     since_ms: int,
     verbose: bool = False,
+    debug: bool = False,
 ) -> list[TradeAudit]:
     """Fetch tous les trades pour les symbols actifs."""
     result: list[TradeAudit] = []
+    debug_dumped = 0
 
     for symbol in symbols:
         swap = _resolve_swap_symbol(exchange, symbol)
@@ -126,12 +155,19 @@ def fetch_all_trades(
                 logger.info(f"{symbol}: {len(raw)} fills")
 
             for t in raw:
+                # --debug : dump first 3 raw trades
+                if debug and debug_dumped < 3:
+                    print(f"\n  === RAW TRADE #{debug_dumped + 1} ({symbol}) ===")
+                    print(json.dumps(t, indent=2, default=str))
+                    debug_dumped += 1
+
                 fee_obj = t.get("fee") or {}
                 fee_cost = float(fee_obj.get("cost", 0) or 0)
                 fee_cur = fee_obj.get("currency", "USDT") or "USDT"
                 price = float(t["price"])
                 amount = float(t["amount"])
                 notional = float(t.get("cost", 0) or 0) or price * amount
+                taker_or_maker = _detect_taker_or_maker(t)
 
                 result.append(TradeAudit(
                     symbol=symbol,
@@ -139,6 +175,7 @@ def fetch_all_trades(
                     trade_id=str(t["id"]),
                     side=t["side"],
                     order_type=(t.get("type") or "unknown").lower(),
+                    taker_or_maker=taker_or_maker,
                     notional=notional,
                     fee_paid=fee_cost,
                     fee_rate=fee_cost / notional if notional > 0 else 0.0,
@@ -154,32 +191,12 @@ def fetch_all_trades(
     return result
 
 
-def fetch_simulation_trades(days: int) -> list[dict]:
-    """Trades simulation depuis la DB locale (pour comparaison slippage)."""
-    db_path = Path("data/scalp_radar.db")
-    if not db_path.exists():
-        return []
-
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            """SELECT symbol, direction, entry_price, exit_price,
-                      entry_time, exit_time, strategy_name, exit_reason
-               FROM simulation_trades
-               WHERE entry_time >= ?
-               ORDER BY entry_time""",
-            (since_str,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        logger.warning(f"DB simulation_trades: {e}")
-        return []
-    finally:
-        conn.close()
+def _model_rate(t: TradeAudit, taker_rate: float, maker_rate: float) -> float:
+    """Return the model fee rate for a trade based on taker/maker detection."""
+    if t.taker_or_maker == "maker":
+        return maker_rate
+    # taker or unknown -> conservative (taker)
+    return taker_rate
 
 
 # ---------------------------------------------------------------------------
@@ -191,12 +208,7 @@ def _pct(v: float) -> str:
     return f"{v * 100:.4f}%"
 
 
-def print_report(
-    trades: list[TradeAudit],
-    config,
-    sim_trades: list[dict],
-    days: int,
-) -> None:
+def print_report(trades: list[TradeAudit], config) -> None:
     W = 65
 
     # Model values (already in %, e.g. 0.02 means 0.02%)
@@ -206,7 +218,6 @@ def print_report(
 
     maker_rate = maker_pct / 100   # 0.0002
     taker_rate = taker_pct / 100   # 0.0006
-    slip_rate = slip_pct / 100     # 0.0005
 
     # --- Header ---
     ts_range = [t.timestamp for t in trades]
@@ -214,9 +225,9 @@ def print_report(
     date_to = datetime.fromtimestamp(max(ts_range) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
     symbols_seen = sorted({t.symbol for t in trades})
 
-    market = [t for t in trades if t.order_type == "market"]
-    limit_ = [t for t in trades if t.order_type == "limit"]
-    other = [t for t in trades if t.order_type not in ("market", "limit")]
+    takers = [t for t in trades if t.taker_or_maker == "taker"]
+    makers = [t for t in trades if t.taker_or_maker == "maker"]
+    unknowns = [t for t in trades if t.taker_or_maker not in ("taker", "maker")]
 
     # Check for non-USDT fee currencies
     non_usdt = {t.fee_currency for t in trades if t.fee_currency != "USDT"}
@@ -233,10 +244,10 @@ def print_report(
     print(f"  Periode analysee      : {date_from} -> {date_to}")
     print(f"  Trades (fills) total  : {len(trades)}")
     print(f"  Assets couverts       : {len(symbols_seen)}")
-    print(f"    - Market orders     : {len(market)}")
-    print(f"    - Limit orders      : {len(limit_)}")
-    if other:
-        print(f"    - Autres            : {len(other)} ({', '.join({t.order_type for t in other})})")
+    print(f"    - Taker fills       : {len(takers)}")
+    print(f"    - Maker fills       : {len(makers)}")
+    if unknowns:
+        print(f"    - Inconnu (->taker) : {len(unknowns)}")
     if non_usdt:
         print(f"  !! Fees en devise non-USDT detectees : {non_usdt}")
 
@@ -250,30 +261,30 @@ def print_report(
     print(header)
     print(sep)
 
-    if market:
-        rates = [t.fee_rate * 100 for t in market]
+    if takers:
+        rates = [t.fee_rate * 100 for t in takers]
         avg = mean(rates)
         med = median(rates)
         ecart = ((avg - taker_pct) / taker_pct) * 100
-        print(f"  {'Market':<15}| {taker_pct:>7.3f}% | {avg:>9.4f}% | {med:>9.4f}% | {ecart:>+6.0f}%")
+        print(f"  {'Taker':<15}| {taker_pct:>7.3f}% | {avg:>9.4f}% | {med:>9.4f}% | {ecart:>+6.0f}%")
     else:
-        print(f"  {'Market':<15}| {taker_pct:>7.3f}% | {'N/A':>10} | {'N/A':>10} | {'N/A':>7}")
+        print(f"  {'Taker':<15}| {taker_pct:>7.3f}% | {'N/A':>10} | {'N/A':>10} | {'N/A':>7}")
 
-    if limit_:
-        rates = [t.fee_rate * 100 for t in limit_]
+    if makers:
+        rates = [t.fee_rate * 100 for t in makers]
         avg = mean(rates)
         med = median(rates)
         ecart = ((avg - maker_pct) / maker_pct) * 100
-        print(f"  {'Limit':<15}| {maker_pct:>7.3f}% | {avg:>9.4f}% | {med:>9.4f}% | {ecart:>+6.0f}%")
+        print(f"  {'Maker':<15}| {maker_pct:>7.3f}% | {avg:>9.4f}% | {med:>9.4f}% | {ecart:>+6.0f}%")
     else:
-        print(f"  {'Limit':<15}| {maker_pct:>7.3f}% | {'N/A':>10} | {'N/A':>10} | {'N/A':>7}")
+        print(f"  {'Maker':<15}| {maker_pct:>7.3f}% | {'N/A':>10} | {'N/A':>10} | {'N/A':>7}")
 
     print()
 
-    # Global fee totals
+    # Global fee totals — model uses taker_rate or maker_rate based on detection
     total_fee_real = sum(t.fee_paid for t in trades)
     total_fee_model = sum(
-        t.notional * (taker_rate if t.order_type == "market" else maker_rate)
+        t.notional * _model_rate(t, taker_rate, maker_rate)
         for t in trades
     )
     total_notional = sum(t.notional for t in trades)
@@ -306,7 +317,7 @@ def print_report(
         notional = sum(t.notional for t in st)
         fee_real = sum(t.fee_paid for t in st)
         fee_model = sum(
-            t.notional * (taker_rate if t.order_type == "market" else maker_rate)
+            t.notional * _model_rate(t, taker_rate, maker_rate)
             for t in st
         )
         short = sym.replace("/USDT", "")
@@ -316,71 +327,10 @@ def print_report(
     print()
     print(f"  --- SLIPPAGE {'-' * (W - 16)}")
     print()
-
-    if not sim_trades:
-        print("  Aucun trade simulation en DB pour comparaison slippage.")
-        print(f"  Modele backtest : {slip_pct:.2f}%")
-    else:
-        # Match Bitget fills <-> simulation trades by symbol + time window (5 min)
-        matched_slippages: dict[str, list[float]] = {}
-        used_sim: set[int] = set()  # indices already matched
-
-        for bt in trades:
-            bt_time = datetime.fromtimestamp(bt.timestamp / 1000, tz=timezone.utc)
-
-            for idx, st in enumerate(sim_trades):
-                if idx in used_sim:
-                    continue
-                if st["symbol"] != bt.symbol:
-                    continue
-
-                try:
-                    raw_t = st["entry_time"]
-                    st_time = datetime.fromisoformat(raw_t.replace("Z", "+00:00"))
-                    if st_time.tzinfo is None:
-                        st_time = st_time.replace(tzinfo=timezone.utc)
-                except Exception:
-                    continue
-
-                if abs((bt_time - st_time).total_seconds()) < 300:
-                    signal_price = st["entry_price"]
-                    if signal_price and signal_price > 0:
-                        slip = abs(bt.fill_price - signal_price) / signal_price * 100
-                        matched_slippages.setdefault(bt.symbol, []).append(slip)
-                        used_sim.add(idx)
-                    break
-
-        total_matched = sum(len(v) for v in matched_slippages.values())
-
-        if total_matched > 0:
-            print(f"  Trades matches sim<->Bitget : {total_matched}")
-            print()
-            print(f"  {'Asset':<14}| {'Match':>5} | {'Slip. moy':>10} | {'Slip. max':>10} | {'Modele':>8}")
-            print(f"  {'':->13}|{'':->7}|{'':->12}|{'':->12}|{'':->10}")
-
-            all_slips: list[float] = []
-            for sym in sorted(matched_slippages):
-                slips = matched_slippages[sym]
-                all_slips.extend(slips)
-                short = sym.replace("/USDT", "")
-                print(
-                    f"  {short:<14}| {len(slips):>5} | "
-                    f"{mean(slips):>9.3f}% | {max(slips):>9.3f}% | "
-                    f"{slip_pct:>7.2f}%"
-                )
-
-            print()
-            avg_slip = mean(all_slips)
-            slip_ecart = ((avg_slip / 100 - slip_rate) / slip_rate * 100) if slip_rate else 0
-            print(f"  Slippage moyen global  : {avg_slip:.3f}%")
-            print(f"  Modele backtest        : {slip_pct:.2f}%")
-            print(f"  Ecart                  : {slip_ecart:+.0f}%")
-        else:
-            print("  Aucun match trouve entre trades sim et Bitget (fenetre 5 min).")
-            print(f"  Modele backtest slippage : {slip_pct:.2f}%")
-
-    # === DETAIL FILLS (verbose) ===
-    # skipped here, verbose details logged during fetch
+    print(f"  Modele backtest       : {slip_pct:.2f}%")
+    print("  Non mesurable avec les donnees actuelles.")
+    print("  Methode recommandee : comparer les logs Executor")
+    print("  (lignes 'slippage detected') sur 2-4 semaines.")
 
     # === VERDICT ===
     print()
@@ -399,11 +349,11 @@ def print_report(
         estimated_impact = total_fee_real - total_fee_model
         if estimated_impact > 0:
             print(f"      Impact estime (sur {len(trades)} fills) : {estimated_impact:+.4f} USDT")
-        if market:
-            rec = mean(t.fee_rate * 100 for t in market)
+        if takers:
+            rec = mean(t.fee_rate * 100 for t in takers)
             print(f"      Recommandation : augmenter taker_fee a {rec:.3f}% dans risk.yaml")
-        if limit_:
-            rec = mean(t.fee_rate * 100 for t in limit_)
+        if makers:
+            rec = mean(t.fee_rate * 100 for t in makers)
             print(f"      Recommandation : ajuster maker_fee a {rec:.3f}% dans risk.yaml")
 
     print()
@@ -419,6 +369,7 @@ def main():
     )
     parser.add_argument("--days", type=int, default=30, help="Jours d'historique (defaut 30)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Details par symbol")
+    parser.add_argument("--debug", action="store_true", help="Dump 3 premiers trades bruts (JSON)")
     args = parser.parse_args()
 
     from backend.core.config import get_config
@@ -446,8 +397,16 @@ def main():
     since_ms = int(since.timestamp() * 1000)
     logger.info(f"Fetch trades depuis {since.strftime('%Y-%m-%d')} ({args.days}j)...")
 
-    trades = fetch_all_trades(exchange, symbols, since_ms, args.verbose)
+    trades = fetch_all_trades(exchange, symbols, since_ms, args.verbose, args.debug)
     logger.info(f"{len(trades)} fills recuperes")
+
+    if args.debug:
+        # Distribution taker/maker
+        from collections import Counter
+        tom_counts = Counter(t.taker_or_maker for t in trades)
+        type_counts = Counter(t.order_type for t in trades)
+        logger.info(f"takerOrMaker: {dict(tom_counts)}")
+        logger.info(f"order_type:   {dict(type_counts)}")
 
     # 4. Minimum sample check
     if len(trades) < 10:
@@ -459,20 +418,16 @@ def main():
             for t in trades:
                 short = t.symbol.replace("/USDT", "")
                 print(
-                    f"    {t.datetime_str}  {short:<6} {t.side:<4} {t.order_type:<7} "
+                    f"    {t.datetime_str}  {short:<6} {t.side:<4} "
+                    f"{t.taker_or_maker:<6} "
                     f"notional={t.notional:.2f}$  fee={t.fee_paid:.4f}$  "
                     f"rate={t.fee_rate * 100:.4f}%"
                 )
         print()
         return
 
-    # 5. Simulation trades for slippage
-    sim_trades = fetch_simulation_trades(args.days)
-    if sim_trades:
-        logger.info(f"{len(sim_trades)} trades simulation en DB pour slippage")
-
-    # 6. Report
-    print_report(trades, config, sim_trades, args.days)
+    # 5. Report
+    print_report(trades, config)
 
 
 if __name__ == "__main__":
