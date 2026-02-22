@@ -2818,10 +2818,41 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
+### Phase 1 — Entrées Autonomes Executor ✅
+
+**Objectif** : L'Executor évalue `compute_grid()` à chaque candle live et ouvre les niveaux DCA dont le prix OHLC est dans la zone d'entrée — indépendamment des TradeEvents du Simulator paper.
+
+**Principe "Source Unique de Vérité"** : L'Executor lit les indicateurs depuis le Simulator via `get_runner_context()` (couplage lecture seule). Il ne crée jamais son propre `IncrementalIndicatorEngine`.
+
+**Invariant callback** : Simulator = callback[0], Executor = callback[1] dans `DataEngine._callbacks`. Les indicateurs sont toujours frais quand `_on_candle()` s'exécute.
+
+**Fix kill switch simulator** : `indicator_engine.update()` déplacé avant le check `_global_kill_switch` dans `_dispatch_candle()` — les indicateurs se mettent à jour même quand le paper est stoppé. `update_indicators_only()` préserve le `_close_buffer` / SMA des runners.
+
+**Corrections vs plan original (6 bugs)** :
+- BUG 1 : `quantity=0` dans TradeEvent → calculée avant : `size_fraction × balance × leverage / entry_price`
+- BUG 2 : Champs inexistants `grid_level`, `grid_levels_total`, `grid_size_fraction` → supprimés du TradeEvent
+- BUG 3 : `self._balance` → `self._exchange_balance` (attribut réel)
+- BUG 4 : `_reconcile()` inexistant → reset `_pending_notional` dans `refresh_balance()`
+- BUG 5 : Staleness check inopérant (`ctx.timestamp = now` → toujours négatif) → supprimé
+- BUG 6 : `extra_data` perdu lors de la reconstruction StrategyContext → ajouté explicitement
+
+**Mécanique anti double-trigger** :
+- `_pending_levels: set[str]` — clé `"{futures_sym}:{level_index}"` ajoutée avant l'appel async, retirée dans `finally`
+- `_pending_notional: float` — marge engagée déduite de `_ensure_balance()` pendant l'async
+- Guard dans `refresh_balance()` : `if not self._pending_levels: self._pending_notional = 0.0`
+
+**Séparation responsabilités** : `_pending_notional` = garde-fou décisionnel (avant l'ordre) ; `_open_grid_position.pre_trade_check` + Bitget = garde-fou exécution (au moment de l'ordre).
+
+**Fichiers** : `backend/execution/executor.py`, `backend/backtesting/simulator.py`, `backend/api/server.py`
+
+**Tests** : 29 nouveaux (24 `test_executor_entry.py` + 5 `test_simulator_kill_switch_indicators.py`), **1696 tests passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (22 février 2026)
 
-- **1667 tests passants**, 0 régression
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Hotfix Warmup Simplification**
+- **1696 tests passants**, 0 régression
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, SUI, BCH, BNB, AAVE, ARB, OP — 6 low-volume retirés : ENJ, SUSHI, IMX, SAND, AR, APE)
