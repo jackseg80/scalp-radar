@@ -660,32 +660,6 @@ class Executor:
         )
         await self._close_grid_cycle(synthetic_event)
 
-    # ─── Event Handler (callback du Simulator) ─────────────────────────
-
-    async def handle_event(self, event: TradeEvent) -> None:
-        """Appelé par le Simulator via callback quand le runner trade."""
-        if not self._running or not self._connected:
-            return
-
-        is_grid = self._is_grid_strategy(event.strategy_name)
-
-        if event.event_type == TradeEventType.OPEN:
-            # Gate OPEN via AdaptiveSelector (si configuré)
-            if self._selector and not self._selector.is_allowed(
-                event.strategy_name, event.symbol,
-            ):
-                return
-            if is_grid:
-                await self._open_grid_position(event)
-            else:
-                await self._open_position(event)
-        elif event.event_type == TradeEventType.CLOSE:
-            # CLOSE passe toujours (on doit pouvoir fermer)
-            if is_grid:
-                await self._close_grid_cycle(event)
-            else:
-                await self._close_position(event)
-
     # ─── Ouverture de position ─────────────────────────────────────────
 
     async def _open_position(self, event: TradeEvent) -> None:

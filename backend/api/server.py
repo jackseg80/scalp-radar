@@ -154,7 +154,6 @@ async def lifespan(app: FastAPI):
                     await notifier.notify_reconciliation(msg)
 
         await selector.start()
-        simulator.set_trade_event_callback(executor.handle_event)
 
         # Exit monitor autonome : sync live→paper + surveillance TP/SL indépendante
         executor.set_data_engine(engine)

@@ -193,9 +193,6 @@ class LiveStrategyRunner:
             initial_capital=self._initial_capital,
         )
 
-        # Sprint 5a : queue d'événements pour l'Executor (drainée par le Simulator)
-        self._pending_events: list[Any] = []
-
         # Circuit breaker — désactive le runner après trop de crashes
         self._crash_times: list[float] = []
         self._circuit_breaker_open: bool = False
@@ -351,8 +348,6 @@ class LiveStrategyRunner:
                         signal.entry_price,
                         signal.score,
                     )
-                    # Sprint 5a : notifier l'Executor
-                    self._emit_open_event(symbol, signal)
 
     def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
         """Enregistre un trade et vérifie le kill switch."""
@@ -390,10 +385,6 @@ class LiveStrategyRunner:
             except RuntimeError:
                 _save_trade_to_db_sync(self._db_path, self.name, symbol, trade)
 
-        # Sprint 5a : notifier l'Executor
-        if symbol:
-            self._emit_close_event(symbol, trade)
-
         # Kill switch
         session_loss_pct = abs(min(0, self._stats.net_pnl)) / self._initial_capital * 100
         max_session = self._config.risk.kill_switch.max_session_loss_percent
@@ -406,46 +397,6 @@ class LiveStrategyRunner:
                 "[{}] KILL SWITCH : perte session {:.1f}% >= {:.1f}%",
                 self.name, session_loss_pct, max_session,
             )
-
-    # ─── Sprint 5a : émission d'événements pour l'Executor ───────────
-
-    def _emit_open_event(self, symbol: str, signal: Any) -> None:
-        """Crée un TradeEvent OPEN et l'ajoute à la queue."""
-        from backend.execution.executor import TradeEvent, TradeEventType
-
-        self._pending_events.append(TradeEvent(
-            event_type=TradeEventType.OPEN,
-            strategy_name=self.name,
-            symbol=symbol,
-            direction=signal.direction.value,
-            entry_price=signal.entry_price,
-            quantity=self._position.quantity if self._position else 0,
-            tp_price=signal.tp_price,
-            sl_price=signal.sl_price,
-            score=signal.score,
-            timestamp=self._position.entry_time if self._position else datetime.now(tz=timezone.utc),
-            market_regime=self._current_regime.value,
-        ))
-
-    def _emit_close_event(self, symbol: str, trade: TradeResult) -> None:
-        """Crée un TradeEvent CLOSE et l'ajoute à la queue."""
-        from backend.execution.executor import TradeEvent, TradeEventType
-
-        self._pending_events.append(TradeEvent(
-            event_type=TradeEventType.CLOSE,
-            strategy_name=self.name,
-            symbol=symbol,
-            direction=trade.direction.value,
-            entry_price=trade.entry_price,
-            quantity=trade.quantity,
-            tp_price=0,
-            sl_price=0,
-            score=0,
-            timestamp=trade.exit_time,
-            market_regime=trade.market_regime.value,
-            exit_reason=trade.exit_reason,
-            exit_price=trade.exit_price,
-        ))
 
     def restore_state(self, state: dict) -> None:
         """Restaure l'état du runner depuis un snapshot sauvegardé."""
@@ -606,9 +557,6 @@ class GridStrategyRunner:
             capital=self._capital,
             initial_capital=self._initial_capital,
         )
-
-        # Sprint 5a : queue d'événements pour l'Executor (drainée par le Simulator)
-        self._pending_events: list[Any] = []
 
         # Sprint 25 : queue d'événements pour le journal d'activité
         self._pending_journal_events: list[dict] = []
@@ -1058,7 +1006,6 @@ class GridStrategyRunner:
                     self._record_trade(trade, symbol)
                 self._positions[symbol] = []
                 if not self._is_warming_up:
-                    self._emit_close_event(symbol, trade)
                     self._pending_journal_events.append({
                         "timestamp": trade.exit_time.isoformat(),
                         "strategy_name": self.name,
@@ -1191,7 +1138,6 @@ class GridStrategyRunner:
                             self._capital,
                         )
                         if not self._is_warming_up:
-                            self._emit_open_event(symbol, level, position)
                             self._pending_journal_events.append({
                                 "timestamp": position.entry_time.isoformat(),
                                 "strategy_name": self.name,
@@ -1269,52 +1215,6 @@ class GridStrategyRunner:
                 "[{}] KILL SWITCH GRID : perte session {:.1f}% >= {:.1f}%",
                 self.name, session_loss_pct, max_session,
             )
-
-    def _emit_open_event(
-        self, symbol: str, level: GridLevel, position: GridPosition
-    ) -> None:
-        """Crée un TradeEvent OPEN pour un niveau de grille."""
-        if self._is_warming_up:
-            return
-
-        from backend.execution.executor import TradeEvent, TradeEventType
-
-        self._pending_events.append(TradeEvent(
-            event_type=TradeEventType.OPEN,
-            strategy_name=self.name,
-            symbol=symbol,
-            direction=position.direction.value,
-            entry_price=position.entry_price,
-            quantity=position.quantity,
-            tp_price=0.0,
-            sl_price=0.0,
-            score=0.0,
-            timestamp=position.entry_time,
-            market_regime=self._current_regime.value,
-        ))
-
-    def _emit_close_event(self, symbol: str, trade: TradeResult) -> None:
-        """Crée un TradeEvent CLOSE pour la fermeture grid globale."""
-        if self._is_warming_up:
-            return
-
-        from backend.execution.executor import TradeEvent, TradeEventType
-
-        self._pending_events.append(TradeEvent(
-            event_type=TradeEventType.CLOSE,
-            strategy_name=self.name,
-            symbol=symbol,
-            direction=trade.direction.value,
-            entry_price=trade.entry_price,
-            quantity=trade.quantity,
-            tp_price=0.0,
-            sl_price=0.0,
-            score=0.0,
-            timestamp=trade.exit_time,
-            market_regime=self._current_regime.value,
-            exit_reason=trade.exit_reason,
-            exit_price=trade.exit_price,
-        ))
 
     def restore_state(self, state: dict) -> None:
         """Restaure l'état du runner depuis un snapshot sauvegardé.
@@ -1466,7 +1366,6 @@ class Simulator:
         self._runners: list[LiveStrategyRunner | GridStrategyRunner] = []
         self._indicator_engine: IncrementalIndicatorEngine | None = None
         self._running = False
-        self._trade_event_callback: Callable | None = None
         self._orphan_closures: list[OrphanClosure] = []
         self._collision_warnings: list[dict] = []
 
@@ -1482,10 +1381,6 @@ class Simulator:
         self._kill_switch_reason: dict | None = None
         self._notifier: Any = None
         self._warmup_ended_at: datetime | None = None
-
-    def set_trade_event_callback(self, callback: Callable) -> None:
-        """Enregistre le callback de l'Executor pour recevoir les TradeEvent."""
-        self._trade_event_callback = callback
 
     def set_notifier(self, notifier: Any) -> None:
         """Injecte le Notifier pour les alertes kill switch global."""
@@ -2028,17 +1923,6 @@ class Simulator:
                     )
                 except Exception:
                     pass  # Telegram down ne doit pas bloquer le dispatch
-
-            # Sprint 5a : drain pending_events vers l'Executor (swap atomique)
-            if self._trade_event_callback and runner._pending_events:
-                events, runner._pending_events = runner._pending_events, []
-                for event in events:
-                    try:
-                        await self._trade_event_callback(event)
-                    except Exception as e:
-                        logger.error(
-                            "Simulator: erreur callback trade event: {}", e,
-                        )
 
             # Sprint 25 : drain journal events vers la DB
             if self._db and hasattr(runner, "_pending_journal_events") and runner._pending_journal_events:

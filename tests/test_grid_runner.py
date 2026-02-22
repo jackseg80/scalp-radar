@@ -159,8 +159,6 @@ class TestGridRunnerInit:
         runner = _make_grid_runner()
         assert runner._position is None
         assert runner._position_symbol is None
-        assert isinstance(runner._pending_events, list)
-
     def test_name_property(self):
         runner = _make_grid_runner()
         assert runner.name == "envelope_dca"
@@ -457,28 +455,6 @@ class TestGridRunnerOnCandle:
         assert len(runner._positions.get("BTC/USDT", [])) == 0
         assert runner._capital == 0.0
 
-    @pytest.mark.asyncio
-    async def test_pending_events_trade_event_format(self):
-        """Les events émis sont des TradeEvent, pas des dicts."""
-        strategy = _make_mock_strategy()
-        strategy.compute_grid.return_value = [
-            GridLevel(index=0, entry_price=95_000.0, direction=Direction.LONG, size_fraction=0.5),
-        ]
-        runner = _make_grid_runner(strategy=strategy)
-        _fill_buffer(runner, n=10, base_close=100_000.0)
-        # Hotfix 36 : cooldown passé — simuler warm-up terminé il y a longtemps
-        runner._warmup_ended_at = datetime.now(tz=timezone.utc) - timedelta(hours=4)
-
-        candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
-        await runner.on_candle("BTC/USDT", "1h", candle)
-
-        assert len(runner._pending_events) == 1
-        event = runner._pending_events[0]
-        # Vérifier que c'est un TradeEvent (pas un dict)
-        from backend.execution.executor import TradeEvent
-        assert isinstance(event, TradeEvent)
-        assert event.event_type.value == "open"
-        assert event.symbol == "BTC/USDT"
 
 
 # ─── Tests State Persistence ─────────────────────────────────────────────────
@@ -1053,8 +1029,6 @@ class TestGridRunnerWarmup:
         )
         await runner.on_candle("BTC/USDT", "1h", candle)
 
-        # Pas d'événements Executor pendant warm-up
-        assert len(runner._pending_events) == 0
 
     @pytest.mark.asyncio
     async def test_restore_state_keeps_warmup(self):

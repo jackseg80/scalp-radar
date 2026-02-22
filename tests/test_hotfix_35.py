@@ -129,79 +129,8 @@ def _fill_buffer(runner: GridStrategyRunner, symbol: str = "BTC/USDT", n: int = 
         runner._close_buffer[symbol].append(98_000.0 + i * 100)
 
 
-# ─── Bug A : is_warming_up guard ──────────────────────────────────────────────
-
-
-class TestIsWarmingUpGuard35:
-    """Tests du guard is_warming_up dans _emit_open/close_event()."""
-
-    def test_emit_open_blocked_during_warmup(self):
-        """_emit_open_event supprime l'event pendant le warm-up."""
-        runner = _make_grid_runner()
-        runner._is_warming_up = True
-
-        pos = MagicMock()
-        pos.direction.value = "LONG"
-        pos.entry_price = 95_000.0
-        pos.quantity = 0.01
-        pos.entry_time = datetime.now(tz=timezone.utc)
-        level = MagicMock()
-
-        runner._emit_open_event("BTC/USDT", level, pos)
-
-        assert len(runner._pending_events) == 0, "Event doit être supprimé pendant le warm-up"
-
-    def test_emit_open_passes_after_warmup(self):
-        """_emit_open_event émet normalement après le warm-up."""
-        runner = _make_grid_runner()
-        # _is_warming_up=False déjà positionné par _make_grid_runner
-
-        pos = MagicMock()
-        pos.direction.value = "LONG"
-        pos.entry_price = 95_000.0
-        pos.quantity = 0.01
-        pos.entry_time = datetime.now(tz=timezone.utc)
-        level = MagicMock()
-
-        with patch("backend.execution.executor.TradeEvent"):
-            runner._emit_open_event("BTC/USDT", level, pos)
-
-        assert len(runner._pending_events) == 1, "Event doit être émis après le warm-up"
-
-    def test_emit_close_blocked_during_warmup(self):
-        """_emit_close_event supprime l'event pendant le warm-up."""
-        runner = _make_grid_runner()
-        runner._is_warming_up = True
-
-        trade = MagicMock()
-        trade.direction.value = "LONG"
-        trade.entry_price = 95_000.0
-        trade.quantity = 0.01
-        trade.exit_time = datetime.now(tz=timezone.utc)
-        trade.exit_reason = "tp"
-        trade.exit_price = 100_000.0
-
-        runner._emit_close_event("BTC/USDT", trade)
-
-        assert len(runner._pending_events) == 0, "Event CLOSE doit être supprimé pendant le warm-up"
-
-    def test_emit_close_passes_after_warmup(self):
-        """_emit_close_event émet normalement après le warm-up."""
-        runner = _make_grid_runner()
-        # _is_warming_up=False déjà positionné par _make_grid_runner
-
-        trade = MagicMock()
-        trade.direction.value = "LONG"
-        trade.entry_price = 95_000.0
-        trade.quantity = 0.01
-        trade.exit_time = datetime.now(tz=timezone.utc)
-        trade.exit_reason = "sl_global"
-        trade.exit_price = 90_000.0
-
-        with patch("backend.execution.executor.TradeEvent"):
-            runner._emit_close_event("BTC/USDT", trade)
-
-        assert len(runner._pending_events) == 1, "Event CLOSE doit être émis après le warm-up"
+class TestWarmupGuard35:
+    """Tests du warm-up guard dans GridStrategyRunner."""
 
     def test_end_warmup_sets_flag_and_timestamp(self):
         """_end_warmup() désactive is_warming_up et définit _warmup_ended_at."""
@@ -226,7 +155,7 @@ class TestIsWarmingUpGuard35:
 
     @pytest.mark.asyncio
     async def test_paper_positions_open_during_warmup(self):
-        """Les positions paper s'ouvrent pendant le warm-up, events Executor bloqués.
+        """Les positions paper s'ouvrent pendant le warm-up.
 
         On utilise une bougie ancienne (age > 2h) pour que on_candle() ne déclenche
         pas _end_warmup() automatiquement.
@@ -250,30 +179,6 @@ class TestIsWarmingUpGuard35:
 
         positions = runner._positions.get("BTC/USDT", [])
         assert len(positions) == 1, "Position paper doit s'ouvrir même pendant warm-up"
-        assert len(runner._pending_events) == 0, "Event Executor bloqué pendant warm-up"
-
-    @pytest.mark.asyncio
-    async def test_events_emitted_after_warmup(self):
-        """Les events Executor sont émis normalement après le warm-up."""
-        level = GridLevel(
-            index=0,
-            entry_price=95_000.0,
-            direction=Direction.LONG,
-            size_fraction=0.33,
-        )
-        strategy = _make_mock_strategy(grid_levels=[level])
-        runner = _make_grid_runner(strategy=strategy)
-        # _is_warming_up=False déjà positionné par _make_grid_runner
-
-        _fill_buffer(runner)
-
-        # Bougie récente → warmup déjà terminé, events émis normalement
-        candle = _make_candle(close=96_000.0, low=94_500.0, high=97_000.0)
-        with patch("backend.execution.executor.TradeEvent") as mock_event:
-            mock_event.return_value = MagicMock()
-            await runner.on_candle("BTC/USDT", "1h", candle)
-
-        assert len(runner._pending_events) == 1, "Event émis après warm-up"
 
 
 # ─── Bug B : Max grids Executor ───────────────────────────────────────────────

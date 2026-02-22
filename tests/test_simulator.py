@@ -400,7 +400,6 @@ class TestSimulator:
         runner.name = "mock"
         runner.on_candle = AsyncMock()
         runner._stats = RunnerStats(capital=10_000.0, initial_capital=10_000.0)
-        runner._pending_events = []
         runner._position = None
         runner._position_symbol = None
         sim._runners = [runner]
@@ -989,7 +988,6 @@ def _make_simulator_with_runners(
         runner._kill_switch_triggered = False
         runner._position = None
         runner._position_symbol = None
-        runner._pending_events = []
         runner.is_kill_switch_triggered = False
         runners.append(runner)
 
@@ -1110,8 +1108,6 @@ class TestGlobalKillSwitch:
         mono._kill_switch_triggered = False
         mono._position = None
         mono._position_symbol = None
-        mono._pending_events = []
-
         # Un GridStrategyRunner mock
         grid = MagicMock(spec=GridStrategyRunner)
         grid.name = "grid_dca"
@@ -1122,8 +1118,6 @@ class TestGlobalKillSwitch:
         grid._positions = {}
         grid._position = None
         grid._position_symbol = None
-        grid._pending_events = []
-
         sim._runners = [mono, grid]
 
         # Snapshot au pic (20k total)
