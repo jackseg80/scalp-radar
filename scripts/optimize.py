@@ -823,6 +823,38 @@ def apply_from_db(
         print("\n  Aucun changement détecté — strategies.yaml inchangé")
         backup_path.unlink()  # Supprimer le backup inutile
 
+    # Sync assets.yaml : retirer les assets absents de TOUT per_asset
+    assets_removed_from_yaml: list[str] = []
+    if assets_yaml_path.exists():
+        # Collecter l'union des assets de TOUTES les stratégies ayant per_asset
+        all_per_asset_symbols: set[str] = set()
+        for strat_key, strat_val in data.items():
+            if isinstance(strat_val, dict):
+                pa = strat_val.get("per_asset")
+                if pa and isinstance(pa, dict):
+                    all_per_asset_symbols.update(pa.keys())
+
+        if all_per_asset_symbols:
+            with open(assets_yaml_path, encoding="utf-8") as f:
+                assets_data = yaml.safe_load(f) or {}
+            original_assets = assets_data.get("assets", [])
+            filtered_assets = []
+            for asset_entry in original_assets:
+                if asset_entry["symbol"] in all_per_asset_symbols:
+                    filtered_assets.append(asset_entry)
+                else:
+                    assets_removed_from_yaml.append(asset_entry["symbol"])
+
+            if assets_removed_from_yaml:
+                assets_data["assets"] = filtered_assets
+                assets_bak = assets_yaml_path.with_name(f"assets.yaml.bak.{ts}")
+                if not assets_bak.exists():
+                    shutil.copy2(str(assets_yaml_path), str(assets_bak))
+                with open(assets_yaml_path, "w", encoding="utf-8") as f:
+                    yaml.dump(assets_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                print(f"\n  Assets retirés de assets.yaml : {', '.join(assets_removed_from_yaml)}"
+                      f" (aucune stratégie active)")
+
     print()
     return {
         "changed": changed,
@@ -832,6 +864,7 @@ def apply_from_db(
         "grades": all_grades,
         "backup": backup_name,
         "assets_added": assets_added,
+        "assets_removed": assets_removed_from_yaml,
     }
 
 
