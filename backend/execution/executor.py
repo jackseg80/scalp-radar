@@ -199,6 +199,9 @@ class Executor:
         self._pending_notional: float = 0.0  # Marge engagée pas encore reconciliée
         self._balance_bootstrapped: bool = False  # True après 1er fetch_balance réussi
 
+        # Phase 2 : cooldown anti-churning
+        self._last_close_time: dict[str, datetime] = {}  # {futures_sym: timestamp}
+
     # ─── Properties ────────────────────────────────────────────────────
 
     @property
@@ -558,6 +561,21 @@ class Executor:
 
             futures_sym = to_futures_symbol(symbol)
 
+            # Phase 2 : cooldown anti-churning
+            raw_cd = getattr(strategy._config, "cooldown_candles", 0)
+            cooldown = raw_cd if isinstance(raw_cd, (int, float)) else 0
+            if cooldown > 0 and futures_sym not in self._grid_states:
+                if futures_sym in self._last_close_time:
+                    from backend.strategies.base_grid import TF_SECONDS
+                    tf_seconds = TF_SECONDS.get(strat_tf, 3600)
+                    elapsed = (candle.timestamp - self._last_close_time[futures_sym]).total_seconds()
+                    if elapsed < cooldown * tf_seconds:
+                        logger.debug(
+                            "Executor entry: {} en cooldown ({:.0f}s/{:.0f}s), skip",
+                            futures_sym, elapsed, cooldown * tf_seconds,
+                        )
+                        continue
+
             # Skip si grille pleine
             existing_state = self._grid_states.get(futures_sym)
             filled_levels: set[int] = set()
@@ -730,6 +748,11 @@ class Executor:
             total_notional=total_notional,
             unrealized_pnl=unrealized,
         )
+
+    def _record_grid_close(self, futures_sym: str) -> None:
+        """Enregistre le close pour le cooldown anti-churning."""
+        self._last_close_time[futures_sym] = datetime.now(tz=timezone.utc)
+        logger.debug("Executor: cooldown enregistré pour {}", futures_sym)
 
     async def _check_grid_exit(self, futures_sym: str) -> None:
         """Vérifie si un cycle grid doit être fermé.
@@ -1330,6 +1353,7 @@ class Executor:
             logger.critical("Executor: ÉCHEC close urgence grid: {}", e)
 
         self._risk_manager.unregister_position(futures_sym)
+        self._record_grid_close(futures_sym)
         del self._grid_states[futures_sym]
         await self._notifier.notify_live_sl_failed(futures_sym, state.strategy_name)
 
@@ -1405,6 +1429,7 @@ class Executor:
             except Exception as e:
                 logger.error("Executor: échec close grid {}: {}", futures_sym, e)
                 self._risk_manager.unregister_position(futures_sym)
+                self._record_grid_close(futures_sym)
                 del self._grid_states[futures_sym]
                 return
         else:
@@ -1451,6 +1476,7 @@ class Executor:
         )
 
         # 6. Cleanup
+        self._record_grid_close(futures_sym)
         del self._grid_states[futures_sym]
 
         # 7. Sync fermeture vers le runner paper (même prix, même moment)
@@ -1511,6 +1537,7 @@ class Executor:
         # Nettoyer les éventuels ordres trigger orphelins restants
         await self._cancel_all_open_orders(futures_sym)
 
+        self._record_grid_close(futures_sym)
         del self._grid_states[futures_sym]
 
         # Sync SL vers le runner paper
@@ -1990,6 +2017,7 @@ class Executor:
                 "Executor: grid {} fermée pendant downtime, net={:+.2f}",
                 futures_sym, net_pnl,
             )
+            self._record_grid_close(futures_sym)
             del self._grid_states[futures_sym]
 
     async def _cancel_orphan_orders(self) -> None:
@@ -2342,11 +2370,17 @@ class Executor:
                 ],
             }
 
+        # Phase 2 : cooldown anti-churning
+        last_close_times_data = {
+            sym: ts.isoformat() for sym, ts in self._last_close_time.items()
+        }
+
         return {
             "positions": positions_data,
             "grid_states": grid_states_data,
             "risk_manager": self._risk_manager.get_state(),
             "order_history": list(self._order_history),
+            "last_close_times": last_close_times_data,
         }
 
     def restore_positions(self, state: dict[str, Any]) -> None:
@@ -2413,6 +2447,13 @@ class Executor:
         self._order_history = deque(order_history, maxlen=200)
         if order_history:
             logger.info("Executor: {} ordres restaurés dans l'historique", len(order_history))
+
+        # Phase 2 : cooldown anti-churning
+        for sym, ts_str in state.get("last_close_times", {}).items():
+            try:
+                self._last_close_time[sym] = datetime.fromisoformat(ts_str)
+            except (ValueError, TypeError):
+                pass
 
     # ─── Grid helpers ───────────────────────────────────────────────────
 

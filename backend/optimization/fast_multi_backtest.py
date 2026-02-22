@@ -1150,6 +1150,16 @@ def run_multi_backtest_from_cache(
 
     Retourne (params, sharpe, net_return_pct, profit_factor, n_trades).
     """
+    # Phase 2 : warning cooldown non implémenté dans le fast engine
+    cooldown = params.get("cooldown_candles", 0)
+    if cooldown > 0:
+        import warnings
+        warnings.warn(
+            f"cooldown_candles={cooldown} non implémenté dans le fast engine — "
+            "résultats de backtest optimistes (pas de cooldown)",
+            stacklevel=2,
+        )
+
     if strategy_name == "envelope_dca":
         trade_pnls, trade_returns, final_capital = _simulate_envelope_dca(
             cache, params, bt_config, direction=1,

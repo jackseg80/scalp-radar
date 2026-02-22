@@ -610,6 +610,9 @@ class GridStrategyRunner:
 
         self._warmup_ended_at: datetime | None = None  # set dans _end_warmup()
 
+        # Phase 2 : cooldown anti-churning — timestamp du dernier close par symbol
+        self._last_close_time: dict[str, datetime] = {}
+
         # Funding costs tracking (approximation 0.01% par settlement)
         self._total_funding_cost: float = 0.0
 
@@ -645,6 +648,10 @@ class GridStrategyRunner:
                 self.name, self._CIRCUIT_BREAKER_MAX_CRASHES,
                 int(self._CIRCUIT_BREAKER_WINDOW_SECONDS),
             )
+
+    def _record_close(self, symbol: str, close_timestamp: datetime) -> None:
+        """Enregistre le timestamp du dernier close pour le cooldown anti-churning."""
+        self._last_close_time[symbol] = close_timestamp
 
     def _get_sl_percent(self, symbol: str) -> float:
         """Résout le sl_percent pour un symbol (avec override per_asset)."""
@@ -813,6 +820,13 @@ class GridStrategyRunner:
                 entry_fee=gp["entry_fee"],
             )
             self._positions.setdefault(symbol, []).append(pos)
+
+        # Phase 2 : restaurer cooldown anti-churning
+        for sym, ts_str in state.get("last_close_times", {}).items():
+            try:
+                self._last_close_time[sym] = datetime.fromisoformat(ts_str)
+            except (ValueError, TypeError):
+                pass
 
         # Log diagnostic positions restaurées
         total_restored = sum(len(p) for p in self._positions.values())
@@ -1012,6 +1026,7 @@ class GridStrategyRunner:
                     self._trades.append((symbol, trade))
                 else:
                     self._record_trade(trade, symbol)
+                    self._record_close(symbol, candle.timestamp)
                 self._positions[symbol] = []
                 if not self._is_warming_up:
                     self._pending_journal_events.append({
@@ -1038,6 +1053,17 @@ class GridStrategyRunner:
         # Uniquement quand aucune position ouverte (ne touche pas les grilles existantes)
         if not positions and not self._should_allow_new_grid(symbol):
             return
+
+        # Phase 2 : cooldown anti-churning — bloquer si close récent
+        if not positions:
+            raw_cd = getattr(self._strategy._config, "cooldown_candles", 0)
+            cooldown = raw_cd if isinstance(raw_cd, (int, float)) else 0
+            if cooldown > 0 and symbol in self._last_close_time:
+                from backend.strategies.base_grid import TF_SECONDS
+                tf_seconds = TF_SECONDS.get(self._strategy_tf, 3600)
+                elapsed = (candle.timestamp - self._last_close_time[symbol]).total_seconds()
+                if elapsed < cooldown * tf_seconds:
+                    return
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
         effective_max = self._get_num_levels(symbol)
@@ -2496,6 +2522,7 @@ class Simulator:
             runner._capital += trade.net_pnl + margin_to_return
             runner._realized_pnl += trade.net_pnl
             runner._positions[symbol] = []
+            runner._record_close(symbol, trade.exit_time)
             runner._stats.total_trades += 1
             runner._trades.append((symbol, trade))
             if trade.net_pnl >= 0:

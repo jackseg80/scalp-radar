@@ -116,6 +116,13 @@ class StateManager:
                 if all_grid_positions:
                     runner_state["grid_positions"] = all_grid_positions
 
+            # Phase 2 : cooldown anti-churning timestamps
+            close_times = getattr(runner, "_last_close_time", {})
+            if isinstance(close_times, dict) and close_times:
+                runner_state["last_close_times"] = {
+                    sym: ts.isoformat() for sym, ts in close_times.items()
+                }
+
             state["runners"][runner.name] = runner_state
 
         # Écriture atomique (offloaded dans un thread pour ne pas bloquer l'event loop)

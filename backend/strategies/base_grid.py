@@ -16,6 +16,9 @@ from typing import Any
 from backend.core.models import Candle, Direction
 from backend.strategies.base import BaseStrategy, OpenPosition, StrategyContext, StrategySignal
 
+# Mapping timeframe → secondes, partagé par toutes les stratégies grid
+TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+
 
 @dataclass
 class GridLevel:

@@ -17,9 +17,7 @@ from backend.core.config import GridBolTrendConfig
 from backend.core.indicators import atr, bollinger_bands, sma
 from backend.core.models import Candle, Direction
 from backend.strategies.base import StrategyContext
-from backend.strategies.base_grid import BaseGridStrategy, GridLevel, GridState
-
-_TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+from backend.strategies.base_grid import BaseGridStrategy, GridLevel, GridState, TF_SECONDS
 
 
 class GridBolTrendStrategy(BaseGridStrategy):
@@ -223,7 +221,7 @@ class GridBolTrendStrategy(BaseGridStrategy):
         # Time-based stop loss
         if self._config.max_hold_candles > 0:
             first_entry = min(p.entry_time for p in grid_state.positions)
-            tf_secs = _TF_SECONDS.get(self._config.timeframe, 3600)
+            tf_secs = TF_SECONDS.get(self._config.timeframe, 3600)
             candles_held = int((ctx.timestamp - first_entry).total_seconds() / tf_secs)
             if candles_held >= self._config.max_hold_candles:
                 avg_e = grid_state.avg_entry_price
