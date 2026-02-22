@@ -42,6 +42,81 @@ def _get_current_prices(engine) -> dict:
     return prices
 
 
+def _merge_live_grids_into_state(grid_state: dict, exec_status: dict) -> None:
+    """Merge les positions live dans grid_state, remplaçant les paper pour les stratégies live.
+
+    Sprint 39 : le grid_state résultant contient un mix paper + live.
+    Les positions live (source="live") écrasent les paper du même strategy:symbol.
+    Les positions paper de stratégies non-live restent avec source="paper".
+    """
+    exec_grid = exec_status.get("executor_grid_state")
+    if not exec_grid or not exec_grid.get("grid_positions"):
+        # Pas de grids live — tagger tout comme paper
+        for g in grid_state.get("grid_positions", {}).values():
+            g.setdefault("source", "paper")
+        return
+
+    gp = grid_state.setdefault("grid_positions", {})
+
+    # Déterminer les stratégies live
+    live_strategies = set()
+    for g in exec_grid["grid_positions"].values():
+        live_strategies.add(g.get("strategy_name", ""))
+
+    # Supprimer les entrées paper des stratégies live (évite doublons)
+    keys_to_remove = [
+        k for k, g in gp.items() if g.get("strategy", "") in live_strategies
+    ]
+    for k in keys_to_remove:
+        del gp[k]
+
+    # Tagger les paper restantes
+    for g in gp.values():
+        g.setdefault("source", "paper")
+
+    # Ajouter les entrées live converties au format paper
+    for key, g in exec_grid["grid_positions"].items():
+        spot_sym = g.get("symbol", "")
+        if ":" in spot_sym:
+            spot_sym = spot_sym.split(":")[0]
+        gp[key] = {
+            "symbol": spot_sym,
+            "strategy": g.get("strategy_name", ""),
+            "direction": g.get("direction", ""),
+            "levels_open": g.get("levels", 0),
+            "levels_max": g.get("levels_max", 3),
+            "avg_entry": g.get("entry_price", 0),
+            "current_price": g.get("current_price"),
+            "unrealized_pnl": g.get("unrealized_pnl", 0),
+            "unrealized_pnl_pct": g.get("unrealized_pnl_pct", 0),
+            "tp_price": g.get("tp_price"),
+            "sl_price": g.get("sl_price"),
+            "tp_distance_pct": g.get("tp_distance_pct"),
+            "sl_distance_pct": g.get("sl_distance_pct"),
+            "margin_used": g.get("margin_used", 0),
+            "leverage": g.get("leverage", 6),
+            "duration_hours": g.get("duration_hours"),
+            "source": "live",
+            "positions": g.get("positions", []),
+        }
+
+    # Recalculer le summary
+    all_grids = list(gp.values())
+    grid_state["summary"] = {
+        "total_positions": sum(
+            g.get("levels_open", g.get("levels", 0)) for g in all_grids
+        ),
+        "total_assets": len(all_grids),
+        "total_margin_used": round(
+            sum(g.get("margin_used", 0) for g in all_grids), 2,
+        ),
+        "total_unrealized_pnl": round(
+            sum(g.get("unrealized_pnl", 0) for g in all_grids), 2,
+        ),
+        "capital_available": grid_state.get("summary", {}).get("capital_available", 0),
+    }
+
+
 def _build_update_data(simulator, arena, executor, engine) -> dict:
     """Construit le payload update standard (extrait pour lisibilité)."""
     data: dict = {"type": "update"}
@@ -66,7 +141,11 @@ def _build_update_data(simulator, arena, executor, engine) -> dict:
         ]
 
     if executor is not None:
-        data["executor"] = executor.get_status()
+        exec_status = executor.get_status()
+        data["executor"] = exec_status
+        # Sprint 39 : merger positions live dans grid_state
+        if "grid_state" in data:
+            _merge_live_grids_into_state(data["grid_state"], exec_status)
 
     if engine is not None:
         data["prices"] = _get_current_prices(engine)

@@ -1,7 +1,7 @@
 /**
  * ActivePositions — Bandeau des positions ouvertes au-dessus du Scanner.
  * Props : wsData
- * Affiche positions grid (agrégées par asset) + positions mono (paper/live).
+ * Sprint 39 : colonne unique, badge LIVE/PAPER dynamique, grids mergées dans grid_state.
  */
 import { useState } from 'react'
 import { formatPrice } from '../utils/format'
@@ -15,20 +15,21 @@ function formatPnl(value) {
 
 export default function ActivePositions({ wsData }) {
   const simPositions = wsData?.simulator_positions || []
-  const execPositions = wsData?.executor?.positions || (wsData?.executor?.position ? [wsData.executor.position] : [])
+  // Filtrer les grids des positions executor (elles sont dans grid_state mergé)
+  const execMonoPositions = (wsData?.executor?.positions || []).filter(p => p.type !== 'grid')
   const killSwitch = wsData?.kill_switch || false
   const prices = wsData?.prices || {}
   const gridState = wsData?.grid_state || null
 
   const [expandedGrid, setExpandedGrid] = useState(null)
 
-  // Positions mono (filtrer les grid qui sont affichées séparément)
+  // Positions mono paper (filtrer les grid qui sont affichées séparément)
   const monoSimPositions = simPositions.filter(p => p.type !== 'grid')
 
   const hasGrids = gridState?.summary?.total_positions > 0
-  const hasPaper = monoSimPositions.length > 0 || hasGrids
-  const hasLive = execPositions.length > 0
-  const hasPositions = hasPaper || hasLive
+  const hasMonoSim = monoSimPositions.length > 0
+  const hasMonoLive = execMonoPositions.length > 0
+  const hasPositions = hasGrids || hasMonoSim || hasMonoLive
 
   return (
     <div className="active-positions-banner">
@@ -58,34 +59,26 @@ export default function ActivePositions({ wsData }) {
             </div>
           )}
 
-          {/* Colonnes PAPER | LIVE */}
+          {/* Colonne unique : grids (paper+live) + mono positions */}
           <div className="positions-columns">
-            {/* Colonne PAPER */}
-            {hasPaper && (
-              <div className="positions-col">
-                <div className="positions-col-header">PAPER</div>
-                {hasGrids && (
-                  <GridList
-                    gridState={gridState}
-                    expandedGrid={expandedGrid}
-                    onToggle={(symbol) => setExpandedGrid(prev => prev === symbol ? null : symbol)}
-                  />
-                )}
-                {monoSimPositions.map((pos, i) => (
-                  <PositionRow key={`sim-${i}`} pos={pos} source="PAPER" currentPrice={prices[pos.symbol]?.last} />
-                ))}
-              </div>
-            )}
-
-            {/* Colonne LIVE */}
-            {hasLive && (
-              <div className="positions-col">
-                <div className="positions-col-header positions-col-header--live">LIVE</div>
-                {execPositions.map((pos, i) => (
-                  <PositionRow key={`live-${i}`} pos={pos} source="LIVE" currentPrice={prices[pos.symbol]?.last} />
-                ))}
-              </div>
-            )}
+            <div className="positions-col">
+              {hasGrids && (
+                <GridList
+                  gridState={gridState}
+                  expandedGrid={expandedGrid}
+                  onToggle={(symbol) => setExpandedGrid(prev => prev === symbol ? null : symbol)}
+                />
+              )}
+              {monoSimPositions.map((pos, i) => (
+                <PositionRow key={`sim-${i}`} pos={pos} source="PAPER" currentPrice={prices[pos.symbol]?.last} />
+              ))}
+              {execMonoPositions.map((pos, i) => {
+                const spotSymbol = (pos.symbol || '').split(':')[0]
+                return (
+                  <PositionRow key={`live-${i}`} pos={pos} source="LIVE" currentPrice={prices[spotSymbol]?.last} />
+                )
+              })}
+            </div>
           </div>
         </>
       )}
@@ -137,12 +130,17 @@ function GridList({ gridState, expandedGrid, onToggle }) {
                 SL {g.sl_distance_pct.toFixed(1)}%
               </span>
             )}
-            <span className="badge badge-simulation" style={{ fontSize: 9, marginLeft: 'auto' }}>
-              PAPER
+            {g.duration_hours != null && (
+              <span className="text-xs muted">
+                {g.duration_hours >= 24 ? `${(g.duration_hours / 24).toFixed(1)}j` : `${g.duration_hours.toFixed(0)}h`}
+              </span>
+            )}
+            <span className={`badge ${g.source === 'live' ? 'badge-active' : 'badge-simulation'}`} style={{ fontSize: 9, marginLeft: 'auto' }}>
+              {g.source === 'live' ? 'LIVE' : 'PAPER'}
             </span>
           </div>
 
-          {/* Détail déplié : positions individuelles */}
+          {/* Détail déplié : positions individuelles avec P&L */}
           {expandedGrid === `${g.strategy}:${g.symbol}` && (
             <div className="grid-detail-row">
               {(g.positions || []).map(p => (
@@ -152,6 +150,11 @@ function GridList({ gridState, expandedGrid, onToggle }) {
                   </span>
                   <span className="mono text-xs">@ {formatPrice(p.entry_price)}</span>
                   <span className="text-xs muted">qty: {p.quantity}</span>
+                  {p.pnl_usd != null && (
+                    <span className={`mono text-xs ${p.pnl_usd >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                      {p.pnl_usd >= 0 ? '+' : ''}{p.pnl_usd.toFixed(2)}$
+                    </span>
+                  )}
                   <span className="text-xs muted">{new Date(p.entry_time).toLocaleString()}</span>
                 </div>
               ))}

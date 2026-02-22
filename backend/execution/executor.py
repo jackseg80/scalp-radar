@@ -2284,35 +2284,16 @@ class Executor:
             if pos_info is None:
                 pos_info = info
 
-        for gs in self._grid_states.values():
-            notional = gs.avg_entry_price * gs.total_quantity
-            info = {
-                "symbol": gs.symbol,
-                "direction": gs.direction,
-                "entry_price": gs.avg_entry_price,
-                "quantity": gs.total_quantity,
-                "sl_price": gs.sl_price,
-                "tp_price": 0.0,
-                "strategy_name": gs.strategy_name,
-                "type": "grid",
-                "levels": len(gs.positions),
-                "levels_max": self._get_grid_num_levels(gs.strategy_name),
-                "leverage": gs.leverage,
-                "notional": notional,
-                "entry_time": gs.opened_at.isoformat(),
-                "positions": [
-                    {
-                        "level": p.level,
-                        "entry_price": p.entry_price,
-                        "quantity": p.quantity,
-                        "entry_time": p.entry_time.isoformat(),
-                    }
-                    for p in gs.positions
-                ],
-            }
+        # Grids enrichies (Sprint 39)
+        executor_grids: dict[str, dict[str, Any]] = {}
+        for futures_sym, gs in self._grid_states.items():
+            info = self._enrich_grid_position(futures_sym, gs)
             positions_list.append(info)
             if pos_info is None:
                 pos_info = info
+            # Clé format paper : strategy:spot_symbol
+            spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+            executor_grids[f"{gs.strategy_name}:{spot_sym}"] = info
 
         result: dict[str, Any] = {
             "enabled": self.is_enabled,
@@ -2322,6 +2303,24 @@ class Executor:
             "positions": positions_list,
             "risk_manager": self._risk_manager.get_status(),
         }
+
+        # Grid state au format paper-compatible (Sprint 39)
+        if executor_grids:
+            result["executor_grid_state"] = {
+                "grid_positions": executor_grids,
+                "summary": {
+                    "total_positions": sum(
+                        g.get("levels", 0) for g in executor_grids.values()
+                    ),
+                    "total_assets": len(executor_grids),
+                    "total_margin_used": round(
+                        sum(g.get("margin_used", 0) for g in executor_grids.values()), 2,
+                    ),
+                    "total_unrealized_pnl": round(
+                        sum(g.get("unrealized_pnl", 0) for g in executor_grids.values()), 2,
+                    ),
+                },
+            }
 
         if self._selector:
             result["selector"] = self._selector.get_status()
@@ -2495,6 +2494,138 @@ class Executor:
         if strat_config and hasattr(strat_config, "leverage"):
             return strat_config.leverage
         return 6
+
+    # ─── Enrichissement métriques live (Sprint 39) ───────────────────────
+
+    def _enrich_grid_position(
+        self, futures_sym: str, gs: GridLiveState,
+    ) -> dict[str, Any]:
+        """Enrichit un GridLiveState avec métriques temps réel (prix, P&L, TP/SL).
+
+        Suit le même pattern que _check_grid_exit() pour les indicateurs.
+        Matche le format de Simulator.get_grid_state() pour compatibilité frontend.
+        Graceful degradation : si DataEngine/Simulator absents, champs enrichis = None/0.
+        """
+        import math
+
+        spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+        strategy = self._strategies.get(gs.strategy_name)
+
+        avg_entry = gs.avg_entry_price
+        total_qty = gs.total_quantity
+        notional = avg_entry * total_qty
+        leverage = gs.leverage if gs.leverage > 0 else 6
+        margin = notional / leverage if leverage > 0 else 0.0
+        levels_max = self._get_grid_num_levels(gs.strategy_name)
+
+        # Durée
+        now = datetime.now(tz=timezone.utc)
+        duration_hours = round((now - gs.opened_at).total_seconds() / 3600, 1)
+
+        # Prix courant depuis DataEngine (fallback multi-TF)
+        current_price: float | None = None
+        if self._data_engine is not None:
+            buffers = getattr(self._data_engine, "_buffers", {})
+            symbol_buffers = buffers.get(spot_sym, {})
+            for tf in ("1m", "5m", "15m", "1h"):
+                tf_candles = symbol_buffers.get(tf, [])
+                if tf_candles:
+                    current_price = tf_candles[-1].close
+                    break
+
+        # P&L non réalisé via GridState existant
+        grid_state = self._live_state_to_grid_state(futures_sym, current_price)
+        unrealized_pnl = round(grid_state.unrealized_pnl, 2)
+        unrealized_pnl_pct = round(
+            unrealized_pnl / margin * 100 if margin > 0 else 0.0, 2,
+        )
+
+        # TP/SL depuis stratégie + contexte runner paper
+        tp_price: float | None = None
+        sl_price: float | None = None
+
+        if strategy is not None and self._simulator is not None:
+            ctx = self._simulator.get_runner_context(gs.strategy_name, spot_sym)
+            if ctx is not None:
+                strategy_tf = getattr(strategy._config, "timeframe", "1h")
+                tf_indicators = ctx.indicators.get(strategy_tf, {})
+
+                raw_tp = strategy.get_tp_price(grid_state, tf_indicators)
+                raw_sl = strategy.get_sl_price(grid_state, tf_indicators)
+
+                if not math.isnan(raw_tp):
+                    tp_price = round(raw_tp, 6)
+                if not math.isnan(raw_sl):
+                    sl_price = round(raw_sl, 6)
+
+        # Fallback SL depuis l'ordre exchange
+        if sl_price is None and gs.sl_price > 0:
+            sl_price = gs.sl_price
+
+        # Distances
+        tp_distance_pct: float | None = None
+        sl_distance_pct: float | None = None
+        if current_price and current_price > 0:
+            if tp_price is not None:
+                tp_distance_pct = round(
+                    (tp_price - current_price) / current_price * 100, 2,
+                )
+            if sl_price is not None:
+                sl_distance_pct = round(
+                    (sl_price - current_price) / current_price * 100, 2,
+                )
+
+        # P&L par niveau
+        direction = Direction(gs.direction)
+        per_level: list[dict[str, Any]] = []
+        for p in gs.positions:
+            level_pnl: float | None = None
+            level_pnl_pct: float | None = None
+            if current_price is not None and current_price > 0:
+                if direction == Direction.LONG:
+                    level_pnl = (current_price - p.entry_price) * p.quantity
+                else:
+                    level_pnl = (p.entry_price - current_price) * p.quantity
+                level_margin = (p.entry_price * p.quantity) / leverage if leverage > 0 else 0.0
+                level_pnl_pct = (
+                    round(level_pnl / level_margin * 100, 2) if level_margin > 0 else 0.0
+                )
+                level_pnl = round(level_pnl, 2)
+
+            per_level.append({
+                "level": p.level,
+                "entry_price": p.entry_price,
+                "quantity": p.quantity,
+                "entry_time": p.entry_time.isoformat(),
+                "direction": gs.direction,
+                "pnl_usd": level_pnl,
+                "pnl_pct": level_pnl_pct,
+            })
+
+        return {
+            "symbol": gs.symbol,
+            "direction": gs.direction,
+            "entry_price": avg_entry,
+            "quantity": total_qty,
+            "sl_price": sl_price if sl_price is not None else gs.sl_price,
+            "tp_price": tp_price if tp_price is not None else 0.0,
+            "strategy_name": gs.strategy_name,
+            "type": "grid",
+            "levels": len(gs.positions),
+            "levels_max": levels_max,
+            "leverage": leverage,
+            "notional": round(notional, 2),
+            "entry_time": gs.opened_at.isoformat(),
+            # Champs enrichis (Sprint 39)
+            "current_price": current_price,
+            "unrealized_pnl": unrealized_pnl,
+            "unrealized_pnl_pct": unrealized_pnl_pct,
+            "tp_distance_pct": tp_distance_pct,
+            "sl_distance_pct": sl_distance_pct,
+            "margin_used": round(margin, 2),
+            "duration_hours": duration_hours,
+            "positions": per_level,
+        }
 
     def _get_grid_num_levels(self, strategy_name: str) -> int:
         """Récupère le num_levels depuis la config stratégie."""

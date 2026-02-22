@@ -8,6 +8,8 @@
  *  - executor.mode === 'paper' → PAPER ONLY (stratégie paper sélectionnée)
  *  - executor.enabled === true → LIVE (mode normal)
  *  - executor.enabled === false && !mode → OFF (executor inactif)
+ *
+ * Sprint 39 : P&L backend, TP/SL distances, durée, P&L par niveau.
  */
 import { useState } from 'react'
 import Tooltip from './Tooltip'
@@ -154,9 +156,9 @@ export default function ExecutorPanel({ wsData }) {
           {positionsOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {positions.map((pos, idx) => {
-                // Symbole spot pour le prix live : BTC/USDT:USDT → BTC/USDT
+                // Prix : préférer backend (enrichi), fallback WS prices
                 const spotSymbol = (pos.symbol || '').split(':')[0]
-                const currentPrice = wsData?.prices?.[spotSymbol]?.last
+                const currentPrice = pos.current_price ?? wsData?.prices?.[spotSymbol]?.last
                 return <PositionCard key={pos.symbol || idx} position={pos} currentPrice={currentPrice} />
               })}
             </div>
@@ -236,17 +238,23 @@ function PositionCard({ position, currentPrice }) {
   const isLong = position.direction === 'LONG'
   const leverage = position.leverage ?? null
   const notional = position.notional ?? null
-  const margin = (notional != null && leverage != null && leverage > 0)
-    ? notional / leverage
-    : null
+  const margin = position.margin_used ?? (
+    (notional != null && leverage != null && leverage > 0) ? notional / leverage : null
+  )
 
-  // P&L non réalisé
-  let unrealizedPnl = null
-  if (currentPrice != null && position.entry_price != null && position.quantity != null) {
+  // P&L : préférer backend (enrichi), fallback client-side
+  let unrealizedPnl = position.unrealized_pnl ?? null
+  if (unrealizedPnl == null && currentPrice != null && position.entry_price != null && position.quantity != null) {
     unrealizedPnl = isLong
       ? (currentPrice - position.entry_price) * position.quantity
       : (position.entry_price - currentPrice) * position.quantity
   }
+  const unrealizedPnlPct = position.unrealized_pnl_pct ?? null
+
+  const tpPrice = position.tp_price
+  const tpDistPct = position.tp_distance_pct
+  const slDistPct = position.sl_distance_pct
+  const durationHours = position.duration_hours
 
   return (
     <div className="executor-position">
@@ -263,6 +271,11 @@ function PositionCard({ position, currentPrice }) {
               x{leverage}
             </span>
           )}
+          {position.type === 'grid' && (
+            <span className="badge" style={{ fontSize: 9, padding: '1px 6px', background: 'var(--surface)', color: 'var(--text-dim)' }}>
+              {position.levels}/{position.levels_max}
+            </span>
+          )}
           <span className={`badge ${isLong ? 'badge-long' : 'badge-short'}`}>
             {position.direction}
           </span>
@@ -270,33 +283,65 @@ function PositionCard({ position, currentPrice }) {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <PosRow label="Entrée" value={formatPrice(position.entry_price)} />
-        {position.sl_price != null && (
-          <PosRow label="Stop Loss" value={formatPrice(position.sl_price)} color="var(--red)" />
+        {currentPrice != null && (
+          <PosRow label="Prix actuel" value={formatPrice(currentPrice)} />
         )}
-        {position.tp_price != null && (
+        {position.sl_price != null && position.sl_price > 0 && (
           <PosRow
-            label="Take Profit"
-            value={position.tp_price === 0 ? 'SMA dynamique' : formatPrice(position.tp_price)}
-            color="var(--accent)"
+            label="Stop Loss"
+            value={`${formatPrice(position.sl_price)}${slDistPct != null ? ` (${slDistPct > 0 ? '+' : ''}${slDistPct.toFixed(1)}%)` : ''}`}
+            color="var(--red)"
           />
         )}
-        {position.quantity != null && (
-          <PosRow label="Quantité" value={position.quantity} />
-        )}
+        <PosRow
+          label="Take Profit"
+          value={
+            tpPrice && tpPrice > 0
+              ? `${formatPrice(tpPrice)}${tpDistPct != null ? ` (${tpDistPct > 0 ? '+' : ''}${tpDistPct.toFixed(1)}%)` : ''}`
+              : 'SMA dynamique'
+          }
+          color="var(--accent)"
+        />
         {notional != null && (
           <PosRow label="Notionnel" value={`${notional.toFixed(2)} USDT`} />
         )}
         {margin != null && (
-          <PosRow label="Marge" value={`${margin.toFixed(2)} USDT`} />
+          <PosRow label="Marge" value={`${Number(margin).toFixed(2)} USDT`} />
         )}
         {unrealizedPnl != null && (
           <PosRow
             label="P&L latent"
-            value={`${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}$`}
+            value={`${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}$${unrealizedPnlPct != null ? ` (${unrealizedPnlPct >= 0 ? '+' : ''}${unrealizedPnlPct.toFixed(1)}%)` : ''}`}
             color={unrealizedPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
           />
         )}
+        {durationHours != null && (
+          <PosRow
+            label="Durée"
+            value={durationHours >= 24 ? `${(durationHours / 24).toFixed(1)}j` : `${durationHours.toFixed(1)}h`}
+          />
+        )}
       </div>
+
+      {/* P&L par niveau pour les grids */}
+      {position.type === 'grid' && position.positions?.length > 0 && (
+        <div style={{ marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 4 }}>
+          <div className="text-xs muted" style={{ marginBottom: 2 }}>Niveaux</div>
+          {position.positions.map(p => (
+            <div key={p.level} className="flex-between" style={{ fontSize: 10, padding: '1px 0' }}>
+              <span className="muted">Niv.{p.level + 1} @ {formatPrice(p.entry_price)}</span>
+              {p.pnl_usd != null && (
+                <span className={`mono ${p.pnl_usd >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                  {p.pnl_usd >= 0 ? '+' : ''}{p.pnl_usd.toFixed(2)}$
+                  {p.pnl_pct != null && (
+                    <span className="muted"> ({p.pnl_pct >= 0 ? '+' : ''}{p.pnl_pct.toFixed(1)}%)</span>
+                  )}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
