@@ -159,6 +159,7 @@ def _simulate_grid_common(
     taker_fee = bt_config.taker_fee
     maker_fee = bt_config.maker_fee
     slippage_pct = bt_config.slippage_pct
+    max_dd_threshold = bt_config.max_wfo_drawdown_pct / 100
     n = cache.n_candles
 
     trade_pnls: list[float] = []
@@ -174,6 +175,9 @@ def _simulate_grid_common(
     hwm = 0.0  # High Water Mark (LONG) ou Low Water Mark (SHORT)
     neutral_zone = False
     first_entry_idx = -1  # candle index de la première ouverture du cycle
+
+    # Guard max drawdown WFO
+    peak_capital = capital
 
     # Funding settlement mask (00:00, 08:00, 16:00 UTC)
     funding_rates = cache.funding_rates_1h
@@ -314,14 +318,11 @@ def _simulate_grid_common(
                         exit_price = cache.closes[i]
 
             if exit_reason is not None:
-                # trail_stop, sl_global, time_stop → taker fee + slippage
-                # tp_global → maker fee, pas de slippage
-                if exit_reason == "tp_global":
-                    fee = maker_fee
-                    slip = 0.0
-                else:
-                    fee = taker_fee
-                    slip = slippage_pct
+                # Tous les exits = taker fee + slippage (market order en live)
+                # Le TP dynamique (retour SMA) est détecté sur la candle puis
+                # exécuté via market order par l'executor → pas un limit order
+                fee = taker_fee
+                slip = slippage_pct
 
                 # Restaurer la marge verrouillée
                 margin_to_return = sum(
@@ -336,6 +337,11 @@ def _simulate_grid_common(
                 positions = []
                 hwm = 0.0
                 first_entry_idx = -1
+                # Guard max drawdown WFO — arrêt si peak → capital chute de >80%
+                if capital > peak_capital:
+                    peak_capital = capital
+                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > max_dd_threshold:
+                    break
                 continue
 
         # 2. Funding costs aux settlements 8h
@@ -562,13 +568,9 @@ def _simulate_grid_range(
                     exit_price = sl_price
 
                 if exit_reason is not None:
-                    # Fee model : TP = maker (limit, 0 slippage), SL = taker + slippage
-                    if exit_reason == "tp":
-                        fee = maker_fee
-                        slip = 0.0
-                    else:
-                        fee = taker_fee
-                        slip = slippage_pct
+                    # Tous les exits = taker fee + slippage (market order en live)
+                    fee = taker_fee
+                    slip = slippage_pct
 
                     # Gross PnL sur prix brut (pas d'actual_exit)
                     if direction == 1:

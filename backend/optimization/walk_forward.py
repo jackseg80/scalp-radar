@@ -501,6 +501,7 @@ class WalkForwardOptimizer:
         oos_window_days = opt_config.get("oos_window_days", oos_window_days)
         step_days = opt_config.get("step_days", step_days)
         metric = opt_config.get("metric", metric)
+        embargo_days: int = 0
 
         # Per-strategy WFO config override (section `wfo:` dans param_grids.yaml)
         strategy_grids_wfo = self._grids.get(strategy_name, {}).get("wfo", {})
@@ -508,6 +509,7 @@ class WalkForwardOptimizer:
             is_window_days = strategy_grids_wfo.get("is_days", is_window_days)
             oos_window_days = strategy_grids_wfo.get("oos_days", oos_window_days)
             step_days = strategy_grids_wfo.get("step_days", step_days)
+            embargo_days = strategy_grids_wfo.get("embargo_days", 0)
         max_workers_cfg = opt_config.get("max_workers")
         if max_workers is None:
             max_workers = max_workers_cfg
@@ -604,7 +606,8 @@ class WalkForwardOptimizer:
 
         # Construire les fenêtres
         windows = self._build_windows(
-            data_start, data_end, is_window_days, oos_window_days, step_days
+            data_start, data_end, is_window_days, oos_window_days, step_days,
+            embargo_days=embargo_days,
         )
         logger.info("{} fenêtres WFO", len(windows))
 
@@ -656,6 +659,8 @@ class WalkForwardOptimizer:
             "slippage_pct": bt_config.slippage_pct,
             "high_vol_slippage_mult": bt_config.high_vol_slippage_mult,
             "max_risk_per_trade": bt_config.max_risk_per_trade,
+            "max_margin_ratio": bt_config.max_margin_ratio,
+            "max_wfo_drawdown_pct": bt_config.max_wfo_drawdown_pct,
         }
 
         # Optimisation par fenêtre
@@ -1043,15 +1048,22 @@ class WalkForwardOptimizer:
         is_days: int,
         oos_days: int,
         step_days: int,
+        embargo_days: int = 0,
     ) -> list[tuple[datetime, datetime, datetime, datetime]]:
-        """Construit les fenêtres IS+OOS glissantes."""
+        """Construit les fenêtres IS+OOS glissantes.
+
+        Args:
+            embargo_days: Tampon entre la fin IS et le début OOS.
+                Couvre les positions grid ouvertes en fin de fenêtre IS
+                (durée moyenne 3-7j). Défaut 0 = rétrocompatiblilité.
+        """
         windows = []
         current_start = data_start
 
         while True:
             is_start = current_start
             is_end = is_start + timedelta(days=is_days)
-            oos_start = is_end
+            oos_start = is_end + timedelta(days=embargo_days)
             oos_end = oos_start + timedelta(days=oos_days)
 
             if oos_end > data_end:

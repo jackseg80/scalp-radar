@@ -387,6 +387,7 @@ class TestRegimeFilterIntegration:
         bt._multi_strategies = [("grid_atr", ["BTC/USDT", "ETH/USDT"])]
         bt._assets = ["BTC/USDT", "ETH/USDT"]
         bt._exchange = "binance"
+        bt._leverage_override = None  # ajouté lors des améliorations CLI portfolio
 
         regime_profiles = {
             "grid_atr": {

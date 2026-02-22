@@ -12,8 +12,8 @@ ASSETS_YAML = ROOT / "config" / "assets.yaml"
 STRATEGIES_YAML = ROOT / "config" / "strategies.yaml"
 
 REMOVED_ASSETS = {"ENJ/USDT", "SUSHI/USDT", "IMX/USDT", "SAND/USDT", "AR/USDT", "APE/USDT", "XTZ/USDT", "JUP/USDT"}
-NEW_ASSETS = {"XRP/USDT", "SUI/USDT", "BCH/USDT", "BNB/USDT", "AAVE/USDT", "ARB/USDT", "OP/USDT"}
-EXPECTED_COUNT = 21
+NEW_ASSETS = {"XRP/USDT", "BCH/USDT", "BNB/USDT", "AAVE/USDT", "ARB/USDT", "OP/USDT"}
+EXPECTED_COUNT = 20
 
 
 @pytest.fixture(scope="module")
@@ -34,7 +34,7 @@ def asset_symbols(assets_config):
 
 
 def test_assets_count(assets_config):
-    """Le fichier doit contenir exactement 21 assets."""
+    """Le fichier doit contenir exactement 20 assets."""
     count = len(assets_config["assets"])
     assert count == EXPECTED_COUNT, f"Attendu {EXPECTED_COUNT} assets, trouvé {count}"
 
@@ -46,7 +46,7 @@ def test_no_removed_assets(asset_symbols):
 
 
 def test_new_assets_present(asset_symbols):
-    """Les 7 nouveaux assets doivent être présents."""
+    """Les 6 nouveaux assets doivent être présents."""
     missing = NEW_ASSETS - asset_symbols
     assert not missing, f"Nouveaux assets absents : {missing}"
 

@@ -42,6 +42,8 @@ class BacktestConfig:
     slippage_pct: float = 0.0005  # 0.05%
     high_vol_slippage_mult: float = 2.0
     max_risk_per_trade: float = 0.02  # 2%
+    max_margin_ratio: float = 0.70   # 70% — aligné avec risk.yaml (margin guard WFO)
+    max_wfo_drawdown_pct: float = 80.0  # Guard DD max — arrêt si capital chute de 80% du peak
 
 
 @dataclass

@@ -378,7 +378,7 @@ class TestStaleBackoff:
 class TestConfigAssets:
 
     def test_config_no_xtz_jup(self):
-        """XTZ/USDT et JUP/USDT ne sont plus dans assets.yaml, 21 assets (après ajout 7 nouveaux)."""
+        """XTZ/USDT et JUP/USDT ne sont plus dans assets.yaml, 20 assets (SUI/USDT retiré Grade C)."""
         import yaml
 
         with open("config/assets.yaml") as f:
@@ -387,7 +387,8 @@ class TestConfigAssets:
         symbols = [a["symbol"] for a in data["assets"]]
         assert "XTZ/USDT" not in symbols, "XTZ/USDT encore présent"
         assert "JUP/USDT" not in symbols, "JUP/USDT encore présent"
-        assert len(symbols) == 21, f"Attendu 21 assets, trouvé {len(symbols)}"
+        assert "SUI/USDT" not in symbols, "SUI/USDT encore présent (retiré Grade C)"
+        assert len(symbols) == 20, f"Attendu 20 assets, trouvé {len(symbols)}"
 
 
 # ─── Test route prefix ────────────────────────────────────────────────────

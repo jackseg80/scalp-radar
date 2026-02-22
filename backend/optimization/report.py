@@ -88,6 +88,7 @@ class FinalReport:
     n_distinct_combos: int
     shallow: bool = False
     raw_score: int = 0
+    fee_sensitivity: dict[str, float] | None = None  # scenario → Sharpe re-simulé
 
 
 @dataclass
@@ -717,6 +718,50 @@ def _validate_leverage_sl(strategy_name: str, params: dict) -> list[str]:
     return warnings
 
 
+# ─── Fee Sensitivity Analysis ──────────────────────────────────────────────
+
+# Multiplicateurs de fees par scénario (relatif au nominal 0.06%/0.05%)
+_FEE_SCENARIOS: dict[str, dict[str, float]] = {
+    "nominal":  {"fee_mult": 1.0,    "slip_mult": 1.0},
+    "degraded": {"fee_mult": 4 / 3,  "slip_mult": 2.0},   # 0.06→0.08%, 0.05→0.10%
+    "stress":   {"fee_mult": 5 / 3,  "slip_mult": 4.0},   # 0.06→0.10%, 0.05→0.20%
+}
+
+
+def _fee_sensitivity_analysis(trades: list[TradeResult]) -> dict[str, float]:
+    """Calcule le Sharpe OOS re-simulé pour 3 scénarios de fees.
+
+    Utilise les champs fee_cost et slippage_cost de chaque trade pour scaler
+    les frais alternatifs. Ne touche pas au grading — diagnostic uniquement.
+    """
+    if len(trades) < 5:
+        return {}
+
+    results: dict[str, float] = {}
+    for scenario, mults in _FEE_SCENARIOS.items():
+        capital = 10_000.0
+        returns: list[float] = []
+        for trade in trades:
+            adj_net = (
+                trade.gross_pnl
+                - trade.fee_cost * mults["fee_mult"]
+                - trade.slippage_cost * mults["slip_mult"]
+            )
+            if capital > 0:
+                returns.append(adj_net / capital)
+            capital += adj_net
+
+        if len(returns) < 2:
+            results[scenario] = 0.0
+            continue
+
+        arr = np.array(returns)
+        std = float(np.std(arr))
+        results[scenario] = float(np.mean(arr) / std) if std > 0 else 0.0
+
+    return results
+
+
 # ─── Build FinalReport ─────────────────────────────────────────────────────
 
 
@@ -845,6 +890,17 @@ def build_final_report(
     leverage_warnings = _validate_leverage_sl(wfo.strategy_name, wfo.recommended_params)
     warnings.extend(leverage_warnings)
 
+    # Fee sensitivity analysis (diagnostic uniquement — ne touche pas au grade)
+    fee_sensitivity = _fee_sensitivity_analysis(wfo.all_oos_trades)
+    if fee_sensitivity:
+        degraded_sharpe = fee_sensitivity.get("degraded", 0.0)
+        nominal_sharpe = fee_sensitivity.get("nominal", 0.0)
+        if degraded_sharpe < 0.5 and nominal_sharpe >= 0.5:
+            warnings.append(
+                f"Sensible aux frais : Sharpe nominal={nominal_sharpe:.2f} "
+                f"→ degraded={degraded_sharpe:.2f} (fees +33%, slip ×2)"
+            )
+
     return FinalReport(
         strategy_name=wfo.strategy_name,
         symbol=wfo.symbol,
@@ -873,4 +929,5 @@ def build_final_report(
         n_distinct_combos=wfo.n_distinct_combos,
         shallow=grade_result.is_shallow,
         raw_score=grade_result.raw_score,
+        fee_sensitivity=fee_sensitivity if fee_sensitivity else None,
     )

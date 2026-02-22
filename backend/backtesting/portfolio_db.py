@@ -311,6 +311,7 @@ def save_portfolio_from_payload_sync(db_path: str, payload: dict) -> str:
             "period_days": payload["period_days"],
             "assets": payload["assets"],
             "exchange": payload.get("exchange", "binance"),
+            "leverage": payload.get("leverage"),
             "kill_switch_pct": payload.get("kill_switch_pct", 45.0),
             "kill_switch_window_hours": payload.get("kill_switch_window_hours", 24),
             "final_equity": payload["final_equity"],
