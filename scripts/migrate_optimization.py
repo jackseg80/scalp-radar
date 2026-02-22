@@ -99,7 +99,7 @@ async def migrate_json_files(
                 overfit_data = data.get("overfitting", {})
                 val_data = data.get("validation", {})
 
-                _, total_score = compute_grade(
+                _result = compute_grade(
                     oos_is_ratio=wfo_data.get("oos_is_ratio", 0.0),
                     mc_p_value=overfit_data.get("mc_p_value", 1.0),
                     dsr=overfit_data.get("dsr", 0.0),
@@ -107,6 +107,7 @@ async def migrate_json_files(
                     bitget_transfer=val_data.get("transfer_ratio", 0.0),
                     mc_underpowered=overfit_data.get("mc_underpowered", False),
                 )
+                total_score = _result.score
 
             created_at = datetime.fromisoformat(timestamp_str)
 

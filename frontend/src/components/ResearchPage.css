@@ -14,6 +14,15 @@
   border: 1px solid #9a3412;
 }
 
+/* Shallow validation badge */
+.shallow-badge {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.75em;
+  color: #f59e0b;
+  cursor: help;
+}
+
 /* Modale conflit timeframe */
 .tf-conflict-modal {
   position: fixed;

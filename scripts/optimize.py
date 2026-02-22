@@ -466,7 +466,11 @@ def _print_report(
     print(f"  Volume divergence    : {vol_str}")
 
     print(f"\n  {'=' * 25}")
-    print(f"  GRADE : {report.grade}")
+    if report.shallow:
+        penalty = report.raw_score - report.total_score
+        print(f"  GRADE : {report.grade}  ⚠ SHALLOW ({report.wfo_n_windows} fenêtres, raw: {report.raw_score}, pénalité: -{penalty})")
+    else:
+        print(f"  GRADE : {report.grade} (score: {report.total_score})")
     print(f"  LIVE ELIGIBLE : {'Oui' if report.live_eligible else 'Non'}")
     print(f"  {'=' * 25}")
 
@@ -844,6 +848,137 @@ def _get_done_assets(strategy_name: str, db_path: str = "data/scalp_radar.db") -
         return set()
 
 
+def _get_best_combo_trades(conn: "sqlite3.Connection", result_id: int) -> int:
+    """Extrait oos_trades du best combo dans wfo_combo_results."""
+    try:
+        cursor = conn.execute(
+            "SELECT oos_trades FROM wfo_combo_results "
+            "WHERE optimization_result_id = ? AND is_best = 1 LIMIT 1",
+            (result_id,),
+        )
+        row = cursor.fetchone()
+        return row[0] if row and row[0] else 0
+    except Exception:
+        # Table inexistante ou erreur → fallback
+        return 0
+
+
+def _regrade_from_db(strategy_name: str, config_dir: str = "config") -> None:
+    """Relit les résultats is_latest=1 et recalcule les grades avec la formule actuelle."""
+    import json
+    import sqlite3
+
+    from backend.optimization.report import compute_grade
+
+    config = get_config(config_dir)
+    db_url = config.secrets.database_url
+    db_path = db_url[10:] if db_url.startswith("sqlite:///") else "data/scalp_radar.db"
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT r.id, r.asset, r.grade, r.total_score, r.n_windows,
+                      r.oos_is_ratio, r.consistency, r.dsr, r.param_stability,
+                      r.monte_carlo_pvalue, r.mc_underpowered,
+                      r.validation_summary, r.wfo_windows
+               FROM optimization_results r
+               WHERE r.strategy_name = ? AND r.is_latest = 1
+               ORDER BY r.asset""",
+            (strategy_name,),
+        ).fetchall()
+    except Exception as exc:
+        print(f"Erreur DB : {exc}")
+        conn.close()
+        return
+
+    if not rows:
+        print(f"Aucun résultat is_latest=1 pour {strategy_name}")
+        conn.close()
+        return
+
+    print(f"\n{'=' * 72}")
+    print(f"  REGRADE {strategy_name.upper()} ({len(rows)} assets)")
+    print(f"{'=' * 72}")
+    print(f"  {'Asset':<15s} {'Old':>4s} {'New':>4s} {'OldS':>5s} {'NewS':>5s} {'RawS':>5s} {'Win':>4s}  Shallow")
+    print(f"  {'─' * 64}")
+
+    changes = 0
+    skipped = 0
+    for row in rows:
+        asset = row["asset"]
+
+        # Vérifier métriques clés
+        if row["oos_is_ratio"] is None:
+            logger.warning("  {} : oos_is_ratio manquant → skip", asset)
+            skipped += 1
+            continue
+
+        # Parse validation_summary JSON
+        val_summary = {}
+        if row["validation_summary"]:
+            try:
+                val_summary = json.loads(row["validation_summary"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        bitget_trades = val_summary.get("bitget_trades", 0)
+        transfer_significant = val_summary.get("transfer_significant", True)
+        transfer_ratio = val_summary.get("transfer_ratio", 0.0)
+
+        # total_trades : best combo → wfo_windows sum → 0
+        best_combo_trades = _get_best_combo_trades(conn, row["id"])
+        if best_combo_trades == 0:
+            wfo_windows_json = row["wfo_windows"]
+            if wfo_windows_json:
+                try:
+                    windows_data = json.loads(wfo_windows_json)
+                    windows = windows_data.get("windows", []) if isinstance(windows_data, dict) else windows_data
+                    best_combo_trades = sum(w.get("oos_trades", 0) for w in windows if isinstance(w, dict))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        result = compute_grade(
+            oos_is_ratio=row["oos_is_ratio"] or 0.0,
+            mc_p_value=row["monte_carlo_pvalue"] if row["monte_carlo_pvalue"] is not None else 1.0,
+            dsr=row["dsr"] or 0.0,
+            stability=row["param_stability"] or 0.0,
+            bitget_transfer=transfer_ratio or 0.0,
+            mc_underpowered=bool(row["mc_underpowered"]),
+            total_trades=best_combo_trades,
+            consistency=row["consistency"] or 1.0,
+            transfer_significant=transfer_significant,
+            bitget_trades=bitget_trades or 0,
+            n_windows=row["n_windows"],
+        )
+
+        old_grade = row["grade"]
+        old_score = int(row["total_score"] or 0)
+        changed = (result.grade != old_grade or result.score != old_score)
+        penalty = result.raw_score - result.score
+        shallow_str = f"-{penalty}pts" if result.is_shallow and penalty > 0 else ""
+        mark = " *" if changed else ""
+
+        print(
+            f"  {asset:<15s} {old_grade:>4s} {result.grade:>4s} "
+            f"{int(old_score):>5d} {result.score:>5d} {result.raw_score:>5d} "
+            f"{row['n_windows'] or 0:>4d}  {shallow_str:<10s}{mark}"
+        )
+
+        if changed:
+            conn.execute(
+                "UPDATE optimization_results SET grade = ?, total_score = ? WHERE id = ?",
+                (result.grade, result.score, row["id"]),
+            )
+            changes += 1
+
+    conn.commit()
+    conn.close()
+
+    print(f"\n  {changes} grade(s) mis à jour sur {len(rows)} assets"
+          f"{f' ({skipped} skippé(s))' if skipped else ''}.")
+    print()
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Optimisation des paramètres de stratégies")
     parser.add_argument("--strategy", type=str, help="Stratégie à optimiser (ex: vwap_rsi)")
@@ -875,6 +1010,10 @@ async def main() -> None:
         "--ignore-tf-conflicts", action="store_true", default=False,
         help="Forcer --apply en ignorant les outliers timeframe (les exclut silencieusement)",
     )
+    parser.add_argument(
+        "--regrade", action="store_true",
+        help="Recalculer les grades is_latest=1 avec la formule actuelle (shallow penalty). Requiert --strategy.",
+    )
     args = parser.parse_args()
 
     setup_logging(level="INFO")
@@ -882,6 +1021,16 @@ async def main() -> None:
     # Mutex : --symbol, --symbols et --all-symbols sont exclusifs
     if sum(bool(x) for x in [args.symbol, args.symbols, args.all_symbols]) > 1:
         parser.error("Utilisez --symbol, --symbols OU --all-symbols (pas plusieurs à la fois)")
+
+    # --regrade : recalcul des grades sans relancer le WFO
+    if args.regrade:
+        if not args.strategy:
+            parser.error("--regrade requiert --strategy")
+        if any([args.apply, args.symbol, args.all_symbols, args.resume,
+                args.all, args.symbols]):
+            parser.error("--regrade est incompatible avec --apply, --symbol, --symbols, --all-symbols, --all, --resume")
+        _regrade_from_db(args.strategy, args.config_dir)
+        return
 
     if args.check_data:
         await check_data(args.config_dir)
@@ -1038,7 +1187,8 @@ async def main() -> None:
     print(f"{'=' * 55}")
     for r in all_reports:
         elig = "OK LIVE" if r.live_eligible else "X"
-        print(f"  {r.strategy_name:<12s} x {r.symbol:<12s} : Grade {r.grade} {elig}")
+        shallow_mark = " [SHALLOW]" if r.shallow else ""
+        print(f"  {r.strategy_name:<12s} x {r.symbol:<12s} : Grade {r.grade}{shallow_mark} {elig}")
     print()
 
     # Apply (après optimisation : relire depuis la DB fraîche)

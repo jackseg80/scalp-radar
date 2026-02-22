@@ -164,7 +164,7 @@ grid_atr:
     atr_multiplier_start: [1.0, 1.5, 2.0, 2.5, 3.0]
     atr_multiplier_step: [0.5, 1.0, 1.5]
     num_levels: [2, 3, 4]
-    sl_percent: [15.0, 20.0, 25.0, 30.0]
+    sl_percent: [15.0, 20.0, 25.0]
 
 # Grid Range ATR : 2160 combos (4×3×5×2×3×3×2)
 grid_range_atr:

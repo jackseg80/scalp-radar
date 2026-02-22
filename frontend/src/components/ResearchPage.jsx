@@ -272,6 +272,9 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
           <h2>{detail.strategy_name} × {detail.asset}</h2>
           <div className="detail-meta">
             <span className={`grade-badge grade-${detail.grade}`}>{detail.grade}</span>
+            {detail.n_windows != null && detail.n_windows < 24 && (
+              <span className="shallow-badge" title={`Validation partielle (${detail.n_windows} fenêtres < 24)`}>⚠</span>
+            )}
             <span className="score">Score: {detail.total_score}/100</span>
             <span className="date">{new Date(detail.created_at).toLocaleString('fr-FR')}</span>
           </div>
@@ -702,6 +705,9 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
                   </td>
                   <td>
                     <span className={`grade-badge grade-${r.grade}`}>{r.grade}</span>
+                    {r.n_windows != null && r.n_windows < 24 && (
+                      <span className="shallow-badge" title={`Validation partielle (${r.n_windows} fenêtres < 24)`}>⚠</span>
+                    )}
                   </td>
                   <td>{r.total_score}</td>
                   <td>{r.oos_sharpe?.toFixed(2) ?? 'N/A'}</td>

@@ -86,6 +86,18 @@ class FinalReport:
     live_eligible: bool
     warnings: list[str]
     n_distinct_combos: int
+    shallow: bool = False
+    raw_score: int = 0
+
+
+@dataclass
+class GradeResult:
+    """Résultat du grading avec pénalité shallow."""
+
+    grade: str        # Lettre finale (A-F) après pénalité + caps
+    score: int        # Score final après pénalité shallow (cap trades ne modifie PAS le score)
+    is_shallow: bool  # True si n_windows < 24
+    raw_score: int    # Score brut avant pénalité
 
 
 # ─── Grading ───────────────────────────────────────────────────────────────
@@ -102,7 +114,8 @@ def compute_grade(
     consistency: float = 1.0,
     transfer_significant: bool = True,
     bitget_trades: int = 0,
-) -> tuple[str, int]:
+    n_windows: int | None = None,
+) -> GradeResult:
     """Calcule le grade A-F et le score numérique 0-100.
 
     Barème (100 pts) :
@@ -113,10 +126,20 @@ def compute_grade(
         Stabilité       10 pts
         Bitget transfer 15 pts
 
+    Pénalité shallow validation (soustraite du score brut) :
+        ≥ 24 fenêtres : 0 pts
+        18–23          : -10 pts
+        12–17          : -20 pts
+        < 12           : -25 pts
+
     Garde-fou trades : < 30 trades → plafond C, < 50 trades → plafond B.
+    Note : le cap trades modifie la lettre, pas le score.
+
+    Args:
+        n_windows: Nombre de fenêtres WFO. None = pas de pénalité (backward compat).
 
     Returns:
-        (grade, score) — ex: ("B", 72)
+        GradeResult avec grade, score, is_shallow, raw_score.
     """
     score = 0
     breakdown: dict[str, int] = {}
@@ -192,6 +215,21 @@ def compute_grade(
         breakdown["bitget_transfer"] = min(breakdown["bitget_transfer"], 8)
 
     score = sum(breakdown.values())
+    raw_score = score
+
+    # Pénalité shallow validation (n_windows insuffisantes)
+    shallow_penalty = 0
+    if n_windows is not None:
+        if n_windows >= 24:
+            shallow_penalty = 0
+        elif n_windows >= 18:
+            shallow_penalty = 10
+        elif n_windows >= 12:
+            shallow_penalty = 20
+        else:
+            shallow_penalty = 25
+        score = max(0, score - shallow_penalty)
+    is_shallow = n_windows is not None and n_windows < 24
 
     # Déterminer la lettre
     if score >= 85:
@@ -219,10 +257,12 @@ def compute_grade(
                 grade = max_grade
 
     logger.info(
-        "compute_grade: {} ({}/100, trades={}{}) — oos_is={:.2f}→{}/20, "
+        "compute_grade: {} ({}/100{}, trades={}{}) — oos_is={:.2f}→{}/20, "
         "mc_p={:.3f}(underpow={})→{}/20, dsr={:.2f}→{}/15, "
         "consistency={:.2f}→{}/20, stability={:.2f}→{}/10, bitget={:.2f}→{}/15",
-        grade, score, total_trades,
+        grade, score,
+        f" raw={raw_score} shallow=-{shallow_penalty} n_win={n_windows}" if shallow_penalty > 0 else "",
+        total_trades,
         f" cap {grade_before_cap}→{grade}" if grade != grade_before_cap else "",
         oos_is_ratio, breakdown["oos_is_ratio"],
         mc_p_value, mc_underpowered, breakdown["monte_carlo"],
@@ -232,7 +272,7 @@ def compute_grade(
         bitget_transfer, breakdown["bitget_transfer"],
     )
 
-    return (grade, score)
+    return GradeResult(grade=grade, score=score, is_shallow=is_shallow, raw_score=raw_score)
 
 
 # ─── Validation Bitget ─────────────────────────────────────────────────────
@@ -703,7 +743,7 @@ def build_final_report(
     if best_combo_trades == 0:
         best_combo_trades = len(wfo.all_oos_trades)
 
-    grade, total_score = compute_grade(
+    grade_result = compute_grade(
         oos_is_ratio=wfo.oos_is_ratio,
         mc_p_value=overfit.monte_carlo.p_value,
         dsr=overfit.dsr.dsr,
@@ -714,7 +754,10 @@ def build_final_report(
         consistency=wfo.consistency_rate,
         transfer_significant=validation.transfer_significant,
         bitget_trades=validation.bitget_trades,
+        n_windows=len(wfo.windows),
     )
+    grade = grade_result.grade
+    total_score = grade_result.score
 
     warnings: list[str] = []
     if best_combo_trades < 30:
@@ -791,6 +834,13 @@ def build_final_report(
                 f"Résultats à confirmer avec plus de données"
             )
 
+    # Shallow validation warning
+    if grade_result.is_shallow:
+        penalty = grade_result.raw_score - grade_result.score
+        warnings.append(
+            f"Shallow validation ({len(wfo.windows)} fenêtres < 24) — pénalité -{penalty} pts"
+        )
+
     # Validation leverage × SL en cross margin
     leverage_warnings = _validate_leverage_sl(wfo.strategy_name, wfo.recommended_params)
     warnings.extend(leverage_warnings)
@@ -821,4 +871,6 @@ def build_final_report(
         live_eligible=grade in ("A", "B"),
         warnings=warnings,
         n_distinct_combos=wfo.n_distinct_combos,
+        shallow=grade_result.is_shallow,
+        raw_score=grade_result.raw_score,
     )

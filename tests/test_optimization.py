@@ -374,105 +374,104 @@ class TestConvergence:
 
 class TestGrading:
     def test_grade_a(self):
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
         )
-        assert grade == "A"
-        assert score == 100
+        assert result.grade == "A"
+        assert result.score == 100
+        assert result.is_shallow is False
+        assert result.raw_score == 100
 
     def test_grade_f(self):
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.1, mc_p_value=0.5, dsr=0.3,
             stability=0.2, bitget_transfer=0.1,
             consistency=0.0,
         )
-        assert grade == "F"
-        assert score == 0
+        assert result.grade == "F"
+        assert result.score == 0
 
     def test_grade_c(self):
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.45, mc_p_value=0.08, dsr=0.85,
             stability=0.65, bitget_transfer=0.35,
         )
-        assert grade in ("C", "D")  # ~55 points
+        assert result.grade in ("C", "D")  # ~55 points
 
     def test_grade_boundary_b(self):
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.55, mc_p_value=0.03, dsr=0.92,
             stability=0.70, bitget_transfer=0.40,
         )
-        assert grade in ("B", "C")
+        assert result.grade in ("B", "C")
 
     def test_grade_mc_underpowered(self):
         """mc_underpowered=True → 10/20 pts MC (neutre), pas de pénalité."""
-        # Même params que test_grade_a, mais avec underpowered au lieu de mc_p < 0.05
-        grade_underpowered, score_underpowered = compute_grade(
+        r_underpowered = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             mc_underpowered=True,
         )
-        # Sans underpowered, mc_p=0.50 donnerait 0/20 pts → grade plus bas
-        grade_penalized, score_penalized = compute_grade(
+        r_penalized = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             mc_underpowered=False,
         )
         # underpowered donne 10 pts de plus que pénalisé (0 → 10)
-        assert grade_underpowered < grade_penalized  # "A" < "B" alphabétiquement = meilleur grade
-        # Vérifier que underpowered ne bloque pas un bon grade
-        assert grade_underpowered in ("A", "B")
+        assert r_underpowered.grade < r_penalized.grade  # "A" < "B" alphabétiquement = meilleur grade
+        assert r_underpowered.grade in ("A", "B")
 
     def test_grade_capped_at_c_under_30_trades(self):
         """6 trades OOS, score 100 → Grade C (pas A)."""
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             total_trades=6,
         )
-        assert score == 100  # Score brut inchangé
-        assert grade == "C"  # Plafonné à C
+        assert result.score == 100  # Score brut inchangé
+        assert result.grade == "C"  # Plafonné à C
 
     def test_grade_capped_at_b_under_50_trades(self):
         """40 trades OOS, score 100 → Grade B (pas A)."""
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             total_trades=40,
         )
-        assert score == 100
-        assert grade == "B"  # Plafonné à B
+        assert result.score == 100
+        assert result.grade == "B"  # Plafonné à B
 
     def test_grade_not_capped_above_50_trades(self):
         """100 trades OOS, score 100 → Grade A (pas de plafond)."""
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             total_trades=100,
         )
-        assert score == 100
-        assert grade == "A"
+        assert result.score == 100
+        assert result.grade == "A"
 
     def test_grade_transfer_not_significant(self):
         """transfer_significant=False → 10/15 au lieu de 15/15, score 95, grade A."""
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
             stability=0.85, bitget_transfer=0.60,
             transfer_significant=False,
         )
-        assert score == 95  # 10/15 au lieu de 15/15
-        assert grade == "A"
+        assert result.score == 95  # 10/15 au lieu de 15/15
+        assert result.grade == "A"
 
     def test_grade_few_bitget_trades(self):
         """bitget_transfer=0.90, bitget_trades=7 → capped à 8/15."""
-        grade, score = compute_grade(
+        result = compute_grade(
             oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
             stability=0.85, bitget_transfer=0.90,
             bitget_trades=7,
         )
         # 20 + 20 + 15 + 20 + 10 + 8 (capped de 15 à 8) = 93
-        assert score == 93
-        assert grade == "A"
+        assert result.score == 93
+        assert result.grade == "A"
 
 
 # ─── Tests Bootstrap CI ──────────────────────────────────────────────────

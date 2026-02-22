@@ -249,15 +249,15 @@ def test_consistency_impacts_grade():
     from backend.optimization.report import compute_grade
 
     # Cas parfait SAUF consistance = 68%
-    grade, score = compute_grade(
+    result = compute_grade(
         oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
         stability=0.85, bitget_transfer=0.60,
         consistency=0.68,
     )
-    assert score < 100, f"Score {score} devrait être < 100 avec consistency=68%"
+    assert result.score < 100, f"Score {result.score} devrait être < 100 avec consistency=68%"
     # 68% → ≥60% bracket → 8/20 pts, score = 20+20+15+8+10+15 = 88
-    assert score == 88
-    assert grade == "A"  # 88 ≥ 85
+    assert result.score == 88
+    assert result.grade == "A"  # 88 ≥ 85
 
 
 def test_top5_sorted_by_combo_score():
