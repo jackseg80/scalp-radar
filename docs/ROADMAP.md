@@ -2875,10 +2875,35 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
+### Audit #5 — Grid States vs Bitget (22 février 2026)
+
+**But** : Créer un script de vérification de cohérence entre l'état local (`executor_state.json`) et les positions réelles sur Bitget (`fetch_positions`), pour détecter les positions orphelines, fantômes et désynchronisations entre deux boots.
+
+**Livrable** : `scripts/audit_grid_states.py` — script read-only en 5 phases :
+
+1. **Phase 1** — Lecture état local via `executor_state.json` (`--mode file`) ou API live (`--mode api`)
+2. **Phase 2** — Fetch positions Bitget (ccxt sync, `defaultType=swap`)
+3. **Phase 3** — Fetch ordres SL ouverts par symbol (rate limit 0.3s)
+4. **Phase 4** — Comparaison avec 5 types de divergences :
+   - **FANTOME** : position locale absente sur Bitget (exit monitor check une position inexistante)
+   - **ORPHELINE** : position Bitget absente localement (position sans SL ni exit monitor)
+   - **DESYNC** : quantité (>0.1%) ou prix (>0.5%) incohérents
+   - **SL_MANQUANT** : `sl_order_id` absent des ordres ouverts Bitget
+   - **SL_ORPHELIN** : ordre SL ouvert sans position active associée
+5. **Phase 5** — Rapport structuré (résumé, détail par symbol, status SL, verdict)
+
+**Contraintes** : read-only (aucune modification d'état), fallback ASCII pour les icônes (Windows cp1252 compatible), loguru, 0.3s entre appels SL.
+
+**Résultat de validation** : exécuté localement → 3 positions "orphelines" détectées (CRV, DYDX, GALA sur Bitget, `executor_state.json` local périmé du 13 février) — comportement attendu car le bot tourne sur le serveur. Sur serveur, il faut utiliser `--mode api` ou copier le state file à jour.
+
+**Fichiers** : `scripts/audit_grid_states.py`
+
+---
+
 ## ÉTAT ACTUEL (22 février 2026)
 
 - **1728 tests passants**, 0 régression (+12 Sprint 39)
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + **Sprint 39 Métriques Live Enrichies**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + **Audit #5 Grid States vs Bitget**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, SUI, BCH, BNB, AAVE, ARB, OP — 6 low-volume retirés : ENJ, SUSHI, IMX, SAND, AR, APE)
@@ -2902,6 +2927,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 - **Sprint 38b Window Factor Fix** : biais de sélection critique dans le 2-pass WFO — les combos fine (générées par `_fine_grid_around_top`) n'apparaissent que dans 1-5 fenêtres sur 30 dans le `combo_accumulator` mais gagnaient le scoring avec consistency triviale (1/1 = 100%). Fix : `window_factor = min(1.0, n_windows / max_windows)` dans `combo_score()`. Impact grid_atr : Return +43.6% → +57.7% (+14.1pp), Max DD -26.4% → -24.1%, perdants 4 → 1, ratio rendement/DD 1.65 → 2.39. Impact grid_boltrend : stratégie mise en pause (7 Grade B → 2, portfolio 2 assets non viable +7.4% DD -38.6%). Persistance `per_window_sharpes` dans `wfo_combo_results` pour variantes V2/V4 futures. Fix frontend `ExportDiagnostic` trades/50 → trades/100. 6 nouveaux tests (1687 total).
 - **Sprint 39 Métriques Live Enrichies** : `_enrich_grid_position()` dans Executor (prix DataEngine, P&L via `_live_state_to_grid_state()`, TP/SL depuis runner paper, distances %, durée, P&L par niveau), `executor_grid_state` dans `get_status()`, `_merge_live_grids_into_state()` WS (paper masqués pour stratégies live, badge source LIVE/PAPER), ActivePositions colonne unique avec badge dynamique, ExecutorPanel PositionCard enrichi (P&L backend, TP/SL distances, durée, niveaux grid). 12 tests.
 - **Prochaine étape** : Sprint 8 Backtest Dashboard (non implémenté depuis Sprint 1) ou audit Phase 3 Executor (réconciliation live↔paper post-cooldown, métriques P&L réel vs estimé)
+- **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
 
