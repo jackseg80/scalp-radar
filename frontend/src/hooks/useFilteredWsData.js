@@ -43,11 +43,20 @@ export default function useFilteredWsData(wsData, strategyFilter) {
     const isStrategyLive = wsData.executor?.enabled &&
       (wsData.executor?.selector?.allowed_strategies || []).includes(strategyFilter)
 
+    // Données per-strategy du backend (exchange_balance, risk_manager, executor_grid_state propres à ce sous-compte)
+    const strategyExecData = wsData.executor?.per_strategy?.[strategyFilter]
+
     // Données du runner paper pour enrichir l'affichage
     const strategyData = filteredStrategies[strategyFilter]
     const filteredExecutor = isStrategyLive
-      // Stratégie live : garder l'executor mais filtrer les positions
-      ? { ...wsData.executor, positions: filteredPositions }
+      // Stratégie live : remplacer les champs agrégés par les données per-strategy du sous-compte
+      ? {
+          ...wsData.executor,
+          positions: filteredPositions,
+          exchange_balance: strategyExecData?.exchange_balance ?? wsData.executor?.exchange_balance,
+          risk_manager: strategyExecData?.risk_manager ?? wsData.executor?.risk_manager,
+          ...(strategyExecData?.executor_grid_state && { executor_grid_state: strategyExecData.executor_grid_state }),
+        }
       // Stratégie paper : objet enrichi avec infos du runner (watched_symbols, positions, warming_up)
       : {
           enabled: false,

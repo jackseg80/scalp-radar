@@ -58,6 +58,13 @@ def _make_mock_executor(
         "strategy_name": strategy_name,
         "positions": positions or [],
         "executor_grid_state": None,
+        "risk_manager": {
+            "session_pnl": 0.0,
+            "kill_switch": False,
+            "open_positions_count": 1,
+            "total_orders": 3,
+            "initial_capital": exchange_balance,
+        },
     }
     ex.get_status.return_value = status
     ex.get_state_for_persistence.return_value = {"positions": [], "grid_states": {}}
@@ -248,6 +255,35 @@ class TestExecutorManager:
         assert "per_strategy" in status
         assert "grid_atr" in status["per_strategy"]
         assert "grid_boltrend" in status["per_strategy"]
+
+    def test_get_status_includes_per_strategy(self):
+        """per_strategy[name] contient exchange_balance et risk_manager par sous-compte."""
+        mgr = ExecutorManager()
+
+        ex1 = _make_mock_executor("grid_atr", exchange_balance=632.0)
+        ex2 = _make_mock_executor("grid_boltrend", exchange_balance=1000.0)
+        rm1 = _make_mock_risk_manager(kill_switch=True, session_pnl=-353.37)
+        rm2 = _make_mock_risk_manager(kill_switch=False, session_pnl=0.0)
+
+        mgr.add("grid_atr", ex1, rm1)
+        mgr.add("grid_boltrend", ex2, rm2)
+
+        status = mgr.get_status()
+        per = status["per_strategy"]
+
+        # exchange_balance per-strategy (non agrégée)
+        assert per["grid_atr"]["exchange_balance"] == 632.0
+        assert per["grid_boltrend"]["exchange_balance"] == 1000.0
+
+        # risk_manager per-strategy (kill_switch et session_pnl propres à chaque sous-compte)
+        assert "risk_manager" in per["grid_atr"]
+        assert per["grid_atr"]["risk_manager"]["kill_switch"] is False  # depuis le mock executor
+        assert per["grid_boltrend"]["risk_manager"]["kill_switch"] is False
+
+        # Le niveau agrégé est correct (somme des 2)
+        assert status["exchange_balance"] == 1632.0
+        # risk_manager agrégé : kill_switch = OR des 2 risk_managers (rm1.is_kill_switch_triggered=True)
+        assert status["risk_manager"]["kill_switch"] is True
 
     def test_manager_is_enabled_any(self):
         """is_enabled = True si au moins un executor est enabled."""
