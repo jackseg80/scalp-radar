@@ -13,6 +13,8 @@ Réponses aux 5 questions clés :
 
 from __future__ import annotations
 
+import asyncio
+import bisect
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -357,12 +359,13 @@ class PortfolioBacktester:
         start: datetime,
         end: datetime,
     ) -> dict[str, list[Candle]]:
-        """Charge les candles 1h pour tous les assets."""
+        """Charge les candles 1h pour tous les assets en parallèle."""
+        all_candles = await asyncio.gather(*[
+            db.get_candles(symbol, "1h", start, end, limit=1_000_000, exchange=self._exchange)
+            for symbol in self._assets
+        ])
         result: dict[str, list[Candle]] = {}
-        for symbol in self._assets:
-            candles = await db.get_candles(
-                symbol, "1h", start, end, limit=1_000_000, exchange=self._exchange
-            )
+        for symbol, candles in zip(self._assets, all_candles):
             if candles:
                 result[symbol] = candles
                 logger.info(
@@ -479,11 +482,14 @@ class PortfolioBacktester:
         lookback_td = timedelta(days=lookback_days)
 
         # Assigner un régime à chaque snapshot via lookback BTC
+        btc_ts = [c.timestamp for c in btc_candles]  # index trié une seule fois
         snap_regimes: list[str] = []
         for snap in snapshots:
             end_dt = snap.timestamp
             start_dt = end_dt - lookback_td
-            window = [c for c in btc_candles if start_dt <= c.timestamp <= end_dt]
+            i_start = bisect.bisect_left(btc_ts, start_dt)
+            i_end = bisect.bisect_right(btc_ts, end_dt)
+            window = btc_candles[i_start:i_end]
             if len(window) < 3:
                 snap_regimes.append("range")
             else:
@@ -822,8 +828,10 @@ class PortfolioBacktester:
                     current_ts = snap.timestamp
 
                     window_start_equity = snap.total_equity
-                    for prev_snap in reversed(snapshots[:-1]):
-                        if (current_ts - prev_snap.timestamp).total_seconds() > window_hours * 3600:
+                    window_secs = window_hours * 3600
+                    for j in range(len(snapshots) - 2, -1, -1):
+                        prev_snap = snapshots[j]
+                        if (current_ts - prev_snap.timestamp).total_seconds() > window_secs:
                             break
                         window_start_equity = prev_snap.total_equity
 
