@@ -769,3 +769,79 @@ cd ~/scalp-radar && bash deploy.sh --clean
 docker compose logs backend --tail 20 | grep "runner"
 curl -s http://localhost:8000/health | python3 -m json.tool
 ```
+
+---
+
+## 19. Scripts d'Audit & Analyse
+
+Scripts d'analyse ponctuelle. Ne font aucune modification — lecture seule.
+
+### Analyser une régression WFO (compare les 2 derniers runs)
+
+```powershell
+# grid_atr avec levier 7 et kill switch 45%
+uv run python -m scripts.analyze_wfo_regression --strategy grid_atr --leverage 7 --kill-switch 45
+
+# Spécifier les assets à approfondir (deep dive)
+uv run python -m scripts.analyze_wfo_regression --strategy grid_atr --losers NEAR/USDT DOGE/USDT
+```
+
+Sortie : diff paramétrique, analyse par régime, risque SL, recommandations.
+
+### Auditer le scoring WFO (compare 4 formules combo_score)
+
+```powershell
+uv run python -m scripts.audit_combo_score --strategy grid_atr > data/analysis/combo_score_audit.txt
+uv run python -m scripts.audit_combo_score --strategy grid_boltrend
+```
+
+Sortie : changements best combo, déltas Grade/Score pour chaque variante.
+
+### Vérifier l'alignement des fees Bitget vs modèle backtest
+
+```powershell
+# Derniers 7 jours avec détail par symbol
+uv run python -m scripts.audit_fees --days 7 -v
+
+# Dump JSON des 3 premiers trades bruts (debug)
+uv run python -m scripts.audit_fees --days 30 --debug
+```
+
+### Auditer la cohérence grid_states vs Bitget (fantômes, orphelins, SL manquants)
+
+```powershell
+# Via API (serveur en cours — recommandé)
+uv run python -m scripts.audit_grid_states --mode api -v
+
+# Via fichier JSON local (serveur arrêté)
+uv run python -m scripts.audit_grid_states --mode file --state-file data/executor_state.json
+```
+
+### Vérifier le sizing avant déploiement live (validation minimums Bitget)
+
+```powershell
+# Lit config/strategies.yaml et .env automatiquement
+uv run python scripts/check_live_sizing.py
+```
+
+Affiche capital/levels, quantité, notional, warning margin worst-case par asset.
+
+### Comparer les performances WFO avant/après un re-run
+
+```powershell
+uv run python scripts/compare_wfo.py
+```
+
+Sortie : tableau Grade/Score/Sharpe/Consistency delta (vert=amélioration, rouge=régression).
+
+### Diagnostiquer la marge portfolio (skips par margin guard)
+
+```powershell
+# Analyse grid_atr 365 jours, levier 7 vs 6 (référence)
+uv run python -m scripts.diagnose_margin --strategy grid_atr --leverage 7 --days 365
+
+# grid_boltrend 90 jours
+uv run python -m scripts.diagnose_margin --strategy grid_boltrend --leverage 8 --days 90
+```
+
+Sortie : skip counts par asset/guard, timeline margin utilization, comparaison leverages.
