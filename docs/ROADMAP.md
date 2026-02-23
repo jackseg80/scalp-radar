@@ -2902,7 +2902,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (23 février 2026)
 
-- **1753 tests passants**, 0 régression (+4 Hotfix DATA_STALE Exit Monitor)
+- **1763 tests passants**, 0 régression (+10 Analyse Régime Portfolio)
 - **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + **Sprint 40 WFO Robustesse**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
@@ -2948,6 +2948,20 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - Frontend `PortfolioPage` : composant `BenchmarkBTC` (retour BTC, DD BTC, Sharpe BTC, badge alpha vert/rouge) + overlay courbe BTC en tirets ambrés sur l'equity curve (mode normalisé % automatique) + support `dashed` dans `EquityCurveSVG`
   - CLI : section "Benchmark BTC Buy-Hold" + "Alpha vs BTC" avec verdict OUTPERFORME/SOUS-PERFORME dans `format_portfolio_report()`
   - **12 nouveaux tests** : calc_btc_benchmark (basic, flat, drawdown, subsampling, insufficient data, alpha), PortfolioResult fields, format_report (avec/sans), DB save/load, null when absent, list columns → **1765 tests**
+- **Analyse Performance par Régime (Portfolio)** :
+  - **Contexte** : savoir si grid_atr est rentable/perdant par régime de marché pour ajuster le leverage dynamiquement
+  - `_classify_regime()` extraite de `walk_forward.py` vers `metrics.py` (source unique, réimportée par walk_forward)
+  - `PortfolioResult.regime_analysis` : nouveau champ optionnel `dict | None` (backward compat)
+  - `PortfolioBacktester._compute_regime_analysis()` : pour chaque snapshot, classifie le régime BTC via lookback 30j, agrège return/DD/P&L par régime
+  - Max DD calculé par **blocs consécutifs** de même régime (pas sur les snapshots éparpillés)
+  - Section "Performance par régime" dans `format_portfolio_report()` (skip si absent, régimes vides omis)
+  - DB : colonne `regime_analysis TEXT` via migration idempotente `_migrate_portfolio_regime_analysis()`
+  - **Résultats** (grid_atr 14 assets 7x, 1130j) :
+    - **RANGE (83%)** : +141%, DD -7.8%, alpha +110% vs BTC — sweet spot
+    - **BULL (15%)** : +55%, DD -0.1%, mais alpha -73% vs BTC (grid ne capte pas la directionalité)
+    - **BEAR (2%)** : +0.9%, résilient, alpha neutre
+    - Recommandation leverage dynamique : 7x range, 5-6x bull, 3-4x bear, stop crash
+  - **10 nouveaux tests** (5 TestClassifyRegime + 5 TestComputeRegimeAnalysis) → **1763 tests**
 - **Prochaine étape** : Sprint 8 Backtest Dashboard (non implémenté depuis Sprint 1) ou déploiement WFO grid_multi_tf (embargo + taker fee maintenant en place)
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
