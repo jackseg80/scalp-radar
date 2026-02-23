@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
     # 1. Database
     db = Database()
     await db.init()
+    db.start_maintenance_loop()
     app.state.db = db
     app.state.start_time = datetime.now(tz=timezone.utc)
 
