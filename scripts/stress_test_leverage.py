@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -298,13 +299,13 @@ def _run_single(
     capital: float,
     db_path: str,
     exchange: str,
-) -> dict | None:
+) -> tuple[dict | None, list[str]]:
     """Lance un portfolio backtest dans un subprocess isolé.
 
-    Chaque run tourne dans un process Python séparé pour survivre aux
-    segfaults aléatoires (numpy + CPython 3.13 heap corruption).
-    Retry automatique jusqu'à MAX_RETRIES tentatives.
+    Retourne (résultat, lignes_log) — les prints sont bufferisés pour
+    éviter l'interleaving lors de l'exécution parallèle.
     """
+    log_lines: list[str] = []
     args = [
         sys.executable, "-c", _SUBPROCESS_SCRIPT,
         strategy_name,
@@ -343,29 +344,28 @@ def _run_single(
                     raw["days"] = resolved_days
                     raw["window_start"] = start_dt.date().isoformat()
                     raw["window_end"] = end_dt.date().isoformat()
-                    return raw
+                    return raw, log_lines
 
             # Pas de JSON trouvé
             logger.error(
                 "Pas de résultat JSON pour {}@{}x / {}j",
                 strategy_name, leverage, resolved_days,
             )
-            return None
+            return None, log_lines
 
         # Crash (segfault, etc.)
         suffix = f" (tentative {attempt}/{MAX_RETRIES})"
         if proc.stderr:
-            # Afficher les dernières lignes de stderr (traceback faulthandler)
             stderr_lines = proc.stderr.strip().splitlines()
             for line in stderr_lines[-10:]:
-                print(f"         | {line}")
+                log_lines.append(f"         | {line}")
         if attempt < MAX_RETRIES:
             logger.warning(
-                "Crash {}@{}x / {}j (exit {}){} -> retry dans 3s",
+                "Crash {}@{}x / {}j (exit {}){} -> retry dans 1s",
                 strategy_name, leverage, resolved_days,
                 proc.returncode, suffix,
             )
-            print(f"         -> CRASH (exit {proc.returncode}), retry {attempt + 1}/{MAX_RETRIES}...")
+            log_lines.append(f"         -> CRASH (exit {proc.returncode}), retry {attempt + 1}/{MAX_RETRIES}...")
             time.sleep(1)  # Cooldown avant retry
         else:
             logger.error(
@@ -374,7 +374,7 @@ def _run_single(
                 MAX_RETRIES, proc.returncode,
             )
 
-    return None
+    return None, log_lines
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +713,12 @@ Exemples :
         action="store_true",
         help="Sauter les runs déjà présents dans le CSV (auto-resume après crash).",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Runs parallèles simultanés (défaut: 4)",
+    )
 
     args = parser.parse_args()
 
@@ -805,7 +811,7 @@ Exemples :
     skippable = sum(1 for s, l, d, _, _ in run_specs if (s, l, d) in existing_keys)
     actual_runs = total_runs - skippable
     print(f"\n  {total_runs} runs planifies | {actual_runs} à lancer | capital={args.capital:,.0f}$ | KS=DESACTIVE(99%)")
-    print(f"  Mode subprocess isolé (retry auto {MAX_RETRIES}x par run)")
+    print(f"  Mode subprocess isolé (retry auto {MAX_RETRIES}x) | {args.workers} workers parallèles")
     print()
 
     # --- Exécution ---
@@ -813,55 +819,68 @@ Exemples :
     t_global = time.monotonic()
     completed = 0
 
-    for run_idx, (strat_name, lev, resolved_days, start_dt, end_dt_run) in enumerate(
-        run_specs, 1
-    ):
-        # Skip si déjà dans le CSV
+    # Afficher les SKIPs upfront
+    for run_idx, (strat_name, lev, resolved_days, start_dt, end_dt_run) in enumerate(run_specs, 1):
         if (strat_name, lev, resolved_days) in existing_keys:
             print(f"  [{run_idx:2d}/{total_runs}] {strat_name} @ {lev}x / {resolved_days}j  SKIP (déjà en CSV)")
-            continue
 
-        # Calcul ETA
-        elapsed = time.monotonic() - t_global
-        if completed > 0 and elapsed > 0:
-            avg = elapsed / completed
-            remaining = avg * (actual_runs - completed)
-            eta_str = f" - ETA ~{remaining:.0f}s"
-        else:
-            eta_str = ""
+    # Construire la liste des runs à exécuter
+    to_run = [
+        (run_idx, strat_name, lev, resolved_days, start_dt, end_dt_run)
+        for run_idx, (strat_name, lev, resolved_days, start_dt, end_dt_run) in enumerate(run_specs, 1)
+        if (strat_name, lev, resolved_days) not in existing_keys
+    ]
 
-        print(
-            f"  [{run_idx:2d}/{total_runs}] {strat_name} @ {lev}x / "
-            f"{resolved_days}j  ({start_dt.date()} -> {end_dt_run.date()})"
-            f"{eta_str}",
-            flush=True,
-        )
-
-        row = _run_single(
-            strategy_name=strat_name,
-            leverage=lev,
-            resolved_days=resolved_days,
-            start_dt=start_dt,
-            end_dt=end_dt_run,
+    def _run_worker(item: tuple) -> tuple:
+        idx, sname, lev_, rdays, sdt, edt = item
+        row, log_lines = _run_single(
+            strategy_name=sname,
+            leverage=lev_,
+            resolved_days=rdays,
+            start_dt=sdt,
+            end_dt=edt,
             capital=args.capital,
             db_path=args.db,
             exchange=args.exchange,
         )
+        return idx, sname, lev_, rdays, sdt, edt, row, log_lines
 
-        completed += 1
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = [executor.submit(_run_worker, item) for item in to_run]
 
-        if row is not None:
-            all_rows.append(row)
-            ret_str = _fmt_pct(row["total_return_pct"])
-            dd_str = _fmt_pct(row["max_drawdown_pct"], plus=False)
-            liq_str = "LIQD!" if row["was_liquidated"] else f"Liq={row['min_liq_dist_pct']:.0f}%"
+        for future in as_completed(futures):
+            run_idx, strat_name, lev, resolved_days, start_dt, end_dt_run, row, log_lines = future.result()
+            completed += 1
+
+            elapsed = time.monotonic() - t_global
+            if completed > 1 and elapsed > 0:
+                avg = elapsed / completed
+                remaining = avg * (actual_runs - completed)
+                eta_str = f" - ETA ~{remaining:.0f}s"
+            else:
+                eta_str = ""
+
             print(
-                f"         -> Return={ret_str}  DD={dd_str}  "
-                f"Calmar={row['calmar']:.2f}  {liq_str}  "
-                f"Trades={row['total_trades']}"
+                f"  [{run_idx:2d}/{total_runs}] {strat_name} @ {lev}x / "
+                f"{resolved_days}j  ({start_dt.date()} -> {end_dt_run.date()})"
+                f"{eta_str}",
+                flush=True,
             )
-        else:
-            print(f"         -> ERREUR (run ignore apres {MAX_RETRIES} tentatives)")
+            for line in log_lines:
+                print(line)
+
+            if row is not None:
+                all_rows.append(row)
+                ret_str = _fmt_pct(row["total_return_pct"])
+                dd_str = _fmt_pct(row["max_drawdown_pct"], plus=False)
+                liq_str = "LIQD!" if row["was_liquidated"] else f"Liq={row['min_liq_dist_pct']:.0f}%"
+                print(
+                    f"         -> Return={ret_str}  DD={dd_str}  "
+                    f"Calmar={row['calmar']:.2f}  {liq_str}  "
+                    f"Trades={row['total_trades']}"
+                )
+            else:
+                print(f"         -> ERREUR (run ignore apres {MAX_RETRIES} tentatives)")
 
     total_elapsed = time.monotonic() - t_global
     print(f"\n  Terminé en {total_elapsed:.0f}s ({total_runs} runs)")
