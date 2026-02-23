@@ -698,16 +698,33 @@ class MyStrategy(BaseStrategy):
 
 ## Validation Workflow
 
-### A. Nouvelle stratégie
+### A. Nouvelle stratégie (ou re-validation complète)
 
 Pipeline complète, chaque étape doit être validée avant de passer à la suivante :
 
 ```text
+0. Calcul leverage initial (AVANT le WFO)
+   └─ Aucun WFO nécessaire — calcul purement mathématique
+   └─ Inputs : param_grids.yaml (SL_max, num_levels_max),
+               risk.yaml (kill_switch_pct, max_margin_ratio)
+   └─ Formules :
+       - Plancher conservateur : kill_switch / (SL_max × margin_guard)
+         Ex: 45% / (25% × 70%) = 2.57 → arrondi 3x
+       - Plafond agressif : 80% / (SL_max × avg_margin_usage)
+         Ex: 80% / (25% × 50%) = 6.4 → arrondi 6x
+       - Fourchette typique : [3x, 6x]
+   └─ Critère : choisir dans la fourchette selon tolérance au risque
+   └─ Écrire le leverage choisi dans strategies.yaml AVANT l'étape 1
+   └─ Note : si la stratégie fait du SHORT (grid_multi_tf, grid_range_atr),
+             considérer le risque de short squeeze → rester dans le bas
+             de la fourchette
+
 1. Implémentation
    └─ Stratégie + fast engine + tests (parité, signaux, registry)
 
 2. WFO mono-coin (21 assets)
    └─ uv run python -m scripts.optimize --strategy <name> --all-assets
+   └─ Le WFO utilise le leverage de strategies.yaml (fixé à l'étape 0)
    └─ Critère : Grade A ou B sur ≥ 5 assets
 
 2b. Cohérence timeframe (OBLIGATOIRE avant --apply)
@@ -723,9 +740,14 @@ Pipeline complète, chaque étape doit être validée avant de passer à la suiv
    └─ uv run python -m scripts.portfolio_backtest --strategy <name> --days auto
    └─ Critère : Return > 0, Max DD < -35%, Sharpe > 0.5
 
-4. Stress test leverage
+4. Stress test leverage (CONFIRMATION, pas exploration)
    └─ uv run python -m scripts.stress_test_leverage --strategy <name>
-   └─ Critère : Liq distance > 50%, KS@45 = 0, Calmar optimal
+   └─ But : confirmer que le leverage choisi à l'étape 0 tient
+   └─ Tester leverage_choisi ± 1x (ex: si 6x choisi, tester 5x, 6x, 7x)
+   └─ Critères : Liq distance > 50%, KS@45 = 0, W-SL < kill_switch - 5%
+   └─ Si le stress test recommande un leverage différent de ±2x
+     par rapport à l'étape 0 → revenir à l'étape 0, ajuster,
+     et re-WFO (rare mais nécessaire)
 
 5. Paper trading (≥ 2 semaines, idéalement 1 mois)
    └─ Déployer sur le serveur avec enabled: true
@@ -767,18 +789,26 @@ Workflow A/B test — on isole l'impact d'une seule variable :
 ### C. Changement de leverage ou risk params
 
 ```text
-1. Stress test leverage multi-fenêtre
-   └─ uv run python -m scripts.stress_test_leverage --leverages 2,4,6,8
-   └─ Critères : Liq > 50%, DD < -40%, KS@45 = 0, meilleur Calmar
+1. Recalculer la fourchette théorique (Étape 0 de Workflow A)
+   └─ Vérifier que le nouveau leverage est dans la fourchette
 
-2. Portfolio backtest au leverage choisi
+2. Stress test leverage multi-fenêtre
+   └─ uv run python -m scripts.stress_test_leverage --leverages <ancien>,<nouveau>
+   └─ Critères : Liq > 50%, DD < -40%, KS@45 = 0, W-SL < kill_switch - 5%
+
+3. Si le leverage change de ±2x par rapport à l'actuel :
+   └─ Re-WFO obligatoire (le best combo peut changer)
+   └─ Sinon : portfolio backtest seul suffit
+
+4. Portfolio backtest au leverage choisi
    └─ uv run python -m scripts.portfolio_backtest --leverage <N>
 
-3. Paper trading validation
+5. Paper trading validation
 ```
 
 ### Règles générales
 
+- **Leverage first** : toujours fixer le leverage AVANT le WFO. Le WFO lit le leverage depuis `strategies.yaml` et optimise en conséquence. Un WFO fait à 3x peut sélectionner des combos dangereux à 7x (SL large × leverage élevé → dépassement kill switch).
 - **Jamais de raccourci** : ne pas sauter d'étape, même si "ça a l'air évident"
 - **Un changement à la fois** : ne pas tester un nouveau paramètre ET un nouveau leverage simultanément
 - **Grade minimum** : seuls les Grade A et B passent en portfolio/paper/live
