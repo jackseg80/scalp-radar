@@ -189,6 +189,7 @@ class Executor:
         self._balance_refresh_interval: int = 300  # 5 minutes
         self._order_history: deque[dict] = deque(maxlen=200)  # Sprint 32
         self._leverage_applied: dict[str, int] = {}  # futures_sym → leverage au boot
+        self._leverage_divergent: dict[str, tuple[int, int]] = {}  # futures_sym → (actuel, cible)
 
         # Exit monitor autonome (Sprint Executor Autonome)
         self._data_engine: DataEngine | None = None
@@ -369,6 +370,22 @@ class Executor:
             if self._selector:
                 self._selector.set_active_symbols(active_symbols)
 
+            # 3b. Résumé divergences leverage au boot
+            n_configured = len(active_symbols)
+            n_divergent = len(self._leverage_divergent)
+            logger.info(
+                "{}: {} assets configurés, {} leverage OK, {} positions avec leverage divergent (gardé ancien leverage)",
+                self._log_prefix, n_configured, n_configured - n_divergent, n_divergent,
+            )
+            if self._leverage_divergent:
+                details = ", ".join(
+                    f"{sym.split(':')[0]} ({act}x\u2192{tgt}x)"
+                    for sym, (act, tgt) in self._leverage_divergent.items()
+                )
+                await self._notifier.notify_leverage_divergence(
+                    self._strategy_name or "Executor", details,
+                )
+
             # 4. Réconciliation au boot
             await self._reconcile_on_boot()
 
@@ -495,15 +512,26 @@ class Executor:
     ) -> None:
         """Set leverage et margin mode, seulement s'il n'y a pas de position ouverte."""
         positions = await self._fetch_positions_safe(futures_symbol)
-        has_open = any(
-            float(p.get("contracts", 0)) > 0 for p in positions
-        )
+        open_positions = [p for p in positions if float(p.get("contracts", 0)) > 0]
+        has_open = bool(open_positions)
 
         if leverage is None:
             leverage = self._config.risk.position.default_leverage
         margin_mode = self._config.risk.margin.mode  # "cross" ou "isolated"
 
         if has_open:
+            # Détecter divergence entre leverage en cours et leverage config
+            for p in open_positions:
+                actual_lev = p.get("leverage")
+                if actual_lev is not None:
+                    actual_lev = int(float(actual_lev))
+                    if actual_lev != leverage:
+                        self._leverage_divergent[futures_symbol] = (actual_lev, leverage)
+                        spot_sym = futures_symbol.split(":")[0]
+                        logger.warning(
+                            "{}: DIVERGENCE LEVERAGE — {} position ouverte à {}x, config = {}x",
+                            self._log_prefix, spot_sym, actual_lev, leverage,
+                        )
             logger.warning(
                 "Executor: position ouverte détectée — leverage/margin inchangés",
             )

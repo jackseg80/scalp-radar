@@ -229,3 +229,16 @@ class Notifier:
             await self._telegram.send_message(
                 f"<b>Réconciliation</b>\n{result}"
             )
+
+    async def notify_leverage_divergence(self, strategy: str, details: str) -> None:
+        """Notifie une divergence de leverage détectée au boot.
+
+        Envoyé sans throttle car c'est un événement ponctuel au démarrage.
+        """
+        logger.warning(
+            "Notifier: divergence leverage [{}] — {}", strategy, details,
+        )
+        if self._telegram:
+            await self._telegram.send_message(
+                f"<b>Divergence leverage</b> [{strategy}]\n{details}"
+            )
