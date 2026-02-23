@@ -187,8 +187,8 @@ class DataEngine:
     # ─── LIFECYCLE ──────────────────────────────────────────────────────────
 
     # Batching pour éviter le rate limit Bitget (code 30006) lors des souscriptions
-    _SUBSCRIBE_BATCH_SIZE = 5   # symbols par batch (réduit pour éviter rate limit)
-    _SUBSCRIBE_BATCH_DELAY = 2.0  # secondes entre les batchs (augmenté pour Bitget)
+    _SUBSCRIBE_BATCH_SIZE = 3   # symbols par batch (réduit pour éviter rate limit)
+    _SUBSCRIBE_BATCH_DELAY = 3.0  # secondes entre les batchs (augmenté pour Bitget)
 
     async def start(self) -> None:
         """Démarre les connexions WebSocket avec staggering anti-rate-limit."""
@@ -507,9 +507,9 @@ class DataEngine:
                             len(stale), ", ".join(stale_names),
                         )
 
-                        # Auto-guérison — relancer les symbols stale > 10 min (avec backoff)
+                        # Auto-guérison — relancer les symbols stale > 5 min (avec backoff)
                         for sym, age in stale:
-                            if age is not None and age <= 600:
+                            if age is not None and age <= 300:
                                 continue  # Pas encore assez longtemps
 
                             # Skip les symbols abandonnés

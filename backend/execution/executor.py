@@ -832,7 +832,8 @@ class Executor:
         # Permet de détecter un TP touché intra-candle (comme check_global_tp_sl
         # du backtest qui compare le HIGH). Le close de la candle en cours reflète
         # le dernier tick reçu via WebSocket.
-        current_price = current_close  # fallback : close bougie fermée
+        _PRICE_STALE_THRESHOLD_S = 120  # >2 min sans données WS = prix suspect
+        current_price = current_close  # fallback : close bougie 1h fermée
         if self._data_engine is not None:
             buffers = getattr(self._data_engine, "_buffers", {})
             symbol_buffers = buffers.get(spot_sym, {})
@@ -840,7 +841,49 @@ class Executor:
             for tf in ("1m", "5m", "15m", "1h"):
                 tf_candles = symbol_buffers.get(tf, [])
                 if tf_candles:
-                    current_price = tf_candles[-1].close
+                    last_candle = tf_candles[-1]
+                    candle_ts = last_candle.timestamp
+                    now_utc = datetime.now(tz=timezone.utc)
+                    if candle_ts.tzinfo is None:
+                        candle_ts = candle_ts.replace(tzinfo=timezone.utc)
+                    candle_age_s = (now_utc - candle_ts).total_seconds()
+
+                    if candle_age_s <= _PRICE_STALE_THRESHOLD_S:
+                        current_price = last_candle.close
+                    else:
+                        # Prix stale (WS silencieux) → fallback fetch_ticker REST
+                        logger.warning(
+                            "Exit monitor: prix {} stale ({:.0f}s > {}s) — fallback fetch_ticker",
+                            futures_sym, candle_age_s, _PRICE_STALE_THRESHOLD_S,
+                        )
+                        if self._exchange is not None:
+                            try:
+                                ticker = await self._exchange.fetch_ticker(futures_sym)
+                                rest_price = ticker.get("last") or ticker.get("close")
+                                if rest_price and float(rest_price) > 0:
+                                    current_price = float(rest_price)
+                                    logger.debug(
+                                        "Exit monitor: prix REST {} = {:.6f}",
+                                        futures_sym, current_price,
+                                    )
+                                else:
+                                    logger.error(
+                                        "Exit monitor: fetch_ticker {} retourne prix invalide — skip exit",
+                                        futures_sym,
+                                    )
+                                    return
+                            except Exception as ticker_err:
+                                logger.error(
+                                    "Exit monitor: fetch_ticker {} échoué ({}) — skip exit",
+                                    futures_sym, ticker_err,
+                                )
+                                return
+                        else:
+                            logger.error(
+                                "Exit monitor: prix {} stale et exchange indisponible — skip exit",
+                                futures_sym,
+                            )
+                            return
                     break
 
         # ── CHECK TP/SL INTRA-CANDLE ──

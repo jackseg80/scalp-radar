@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -441,6 +441,7 @@ class TestExitAutonomous:
         # DataEngine buffer : candle 1m en cours avec close=101 (au-dessus du TP)
         candle_mock = MagicMock()
         candle_mock.close = 101.0
+        candle_mock.timestamp = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
         data_engine = MagicMock()
         data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
         executor._data_engine = data_engine
@@ -472,6 +473,7 @@ class TestExitAutonomous:
         # DataEngine buffer : candle 1m en cours avec close=99 (toujours sous le TP)
         candle_mock = MagicMock()
         candle_mock.close = 99.0
+        candle_mock.timestamp = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
         data_engine = MagicMock()
         data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
         executor._data_engine = data_engine
@@ -480,6 +482,105 @@ class TestExitAutonomous:
         await executor._check_grid_exit("BTC/USDT:USDT")
 
         executor._close_grid_cycle.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stale_price_fallback_to_rest(self):
+        """Candle buffer stale (>120s) → fetch_ticker REST appelé, exit procède avec le prix REST."""
+        executor = _make_executor()
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state(entry_price=50000.0)
+        executor._simulator = _make_simulator_ctx(close=98.0, sma=100.0)
+        strategy = _make_strategy(should_close_result=None, tp_price=105.0, sl_price=40.0)
+        executor._strategies = {"grid_atr": strategy}
+
+        # Candle stale : timestamp vieux de 200 secondes
+        candle_mock = MagicMock()
+        candle_mock.close = 98.0
+        candle_mock.timestamp = datetime.now(tz=timezone.utc) - timedelta(seconds=200)
+        data_engine = MagicMock()
+        data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
+        executor._data_engine = data_engine
+
+        # fetch_ticker retourne 106 → au-dessus du TP 105 → doit fermer
+        executor._exchange.fetch_ticker = AsyncMock(return_value={"last": 106.0})
+        executor._close_grid_cycle = AsyncMock()
+
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        executor._exchange.fetch_ticker.assert_called_once_with("BTC/USDT:USDT")
+        executor._close_grid_cycle.assert_called_once()
+        event = executor._close_grid_cycle.call_args[0][0]
+        assert event.exit_reason == "tp_global"
+        assert event.exit_price == 106.0  # prix REST, pas le stale 98.0
+
+    @pytest.mark.asyncio
+    async def test_stale_price_rest_fails_skip_exit(self):
+        """Candle stale ET fetch_ticker échoue → exit skippé (ne pas agir sur prix faux)."""
+        executor = _make_executor()
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state(entry_price=50000.0)
+        executor._simulator = _make_simulator_ctx(close=98.0, sma=100.0)
+        strategy = _make_strategy(should_close_result=None, tp_price=105.0, sl_price=40.0)
+        executor._strategies = {"grid_atr": strategy}
+
+        candle_mock = MagicMock()
+        candle_mock.close = 98.0
+        candle_mock.timestamp = datetime.now(tz=timezone.utc) - timedelta(seconds=200)
+        data_engine = MagicMock()
+        data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
+        executor._data_engine = data_engine
+
+        # fetch_ticker lève une exception (réseau coupé)
+        executor._exchange.fetch_ticker = AsyncMock(side_effect=Exception("connection error"))
+        executor._close_grid_cycle = AsyncMock()
+
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        executor._close_grid_cycle.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stale_price_no_exchange_skip_exit(self):
+        """Candle stale ET exchange=None → exit skippé."""
+        executor = _make_executor()
+        executor._exchange = None
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state(entry_price=50000.0)
+        executor._simulator = _make_simulator_ctx(close=98.0, sma=100.0)
+        strategy = _make_strategy(should_close_result=None, tp_price=105.0, sl_price=40.0)
+        executor._strategies = {"grid_atr": strategy}
+
+        candle_mock = MagicMock()
+        candle_mock.close = 98.0
+        candle_mock.timestamp = datetime.now(tz=timezone.utc) - timedelta(seconds=200)
+        data_engine = MagicMock()
+        data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
+        executor._data_engine = data_engine
+
+        executor._close_grid_cycle = AsyncMock()
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        executor._close_grid_cycle.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fresh_price_no_ticker_call(self):
+        """Candle fraîche (<120s) → fetch_ticker REST pas appelé (régression)."""
+        executor = _make_executor()
+        executor._grid_states["BTC/USDT:USDT"] = _make_grid_state(entry_price=50000.0)
+        executor._simulator = _make_simulator_ctx(close=98.0, sma=100.0)
+        strategy = _make_strategy(should_close_result=None, tp_price=float("nan"), sl_price=float("nan"))
+        executor._strategies = {"grid_atr": strategy}
+
+        # Candle fraîche : timestamp il y a 30 secondes
+        candle_mock = MagicMock()
+        candle_mock.close = 98.0
+        candle_mock.timestamp = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
+        data_engine = MagicMock()
+        data_engine._buffers = {"BTC/USDT": {"1m": [candle_mock]}}
+        executor._data_engine = data_engine
+
+        executor._exchange.fetch_ticker = AsyncMock()
+        executor._close_grid_cycle = AsyncMock()
+
+        await executor._check_grid_exit("BTC/USDT:USDT")
+
+        executor._exchange.fetch_ticker.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════

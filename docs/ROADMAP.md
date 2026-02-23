@@ -2900,9 +2900,9 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
-## ÉTAT ACTUEL (22 février 2026)
+## ÉTAT ACTUEL (23 février 2026)
 
-- **1739 tests passants**, 0 régression (+13 Sprint 40a/40b)
+- **1753 tests passants**, 0 régression (+4 Hotfix DATA_STALE Exit Monitor)
 - **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + **Sprint 40 WFO Robustesse**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
@@ -2933,6 +2933,11 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **#4 Fee sensitivity** : `_fee_sensitivity_analysis()` dans `report.py` — 3 scénarios (nominal/degraded/stress), champ `fee_sensitivity` dans `FinalReport`, warning si Sharpe degraded < 0.5. +7 tests (fee_sensitivity)
   - **#5 Guard max DD -80%** : tracker peak_capital dans `_simulate_grid_common`, `break` si drawdown > `max_wfo_drawdown_pct` (80%). Champ dans `BacktestConfig` + `risk.yaml` + propagé `walk_forward.py`. +6 tests (dd_guard)
   - **Total** : +53 tests (1739 total), 2 échecs pre-existants event-loop (test_executor_boot_leverage, non régressifs)
+- **Hotfix DATA_STALE Exit Monitor** (23 fév 2026) — Guard prix stale + rate-limit WS :
+  - **P0** : `_check_grid_exit()` vérifie l'âge de la candle buffer ; si > 120s → fallback `fetch_ticker()` REST ; si REST échoue → skip exit (ne rien faire sur prix faux). Corrige les faux SL/TP sur XRP, BCH, BNB, AAVE, OP dont le WS tombe ~5 min.
+  - **P1** : Seuil restart symbol stale `data_engine.py` : 600s → 300s (relance après 5 min au lieu de 10 min)
+  - **P2** : `_SUBSCRIBE_BATCH_SIZE` 5 → 3, `_SUBSCRIBE_BATCH_DELAY` 2.0s → 3.0s (moins de pression rate-limit Bitget au boot)
+  - **4 tests** : stale→REST ok, stale→REST échoue (skip), stale→exchange=None (skip), fraîche→pas de REST (1753 total)
 - **Prochaine étape** : Sprint 8 Backtest Dashboard (non implémenté depuis Sprint 1) ou déploiement WFO grid_multi_tf (embargo + taker fee maintenant en place)
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
@@ -3079,7 +3084,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 1550 passants, 0 régression
+- **Tests** : 1753 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
