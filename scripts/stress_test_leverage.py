@@ -328,7 +328,7 @@ def _run_single(
                 args,
                 capture_output=True,
                 text=True,
-                timeout=1200,  # 20 min max par run
+                timeout=2400,  # 40 min max par run (grid_multi_tf 1130j ~1000s avec compétition CPU)
                 cwd=os.getcwd(),
             )
         except subprocess.TimeoutExpired:
