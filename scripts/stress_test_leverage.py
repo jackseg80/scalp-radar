@@ -21,7 +21,6 @@ import argparse
 import asyncio
 import csv
 import faulthandler
-import gc
 import json
 import math
 import os
@@ -259,11 +258,7 @@ async def _run():
         kill_switch_pct=99.0,
         kill_switch_window_hours=ks_window_hours,
     )
-    gc.disable()
-    try:
-        result = await backtester.run(start=start_dt, end=end_dt, db_path=db_path)
-    finally:
-        gc.enable()
+    result = await backtester.run(start=start_dt, end=end_dt, db_path=db_path)
     return result
 
 result = asyncio.run(_run())
@@ -291,7 +286,7 @@ row = {
 print("__RESULT_JSON__" + json.dumps(row))
 '''
 
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 
 
 def _run_single(
@@ -371,7 +366,7 @@ def _run_single(
                 proc.returncode, suffix,
             )
             print(f"         -> CRASH (exit {proc.returncode}), retry {attempt + 1}/{MAX_RETRIES}...")
-            time.sleep(3)  # Cooldown avant retry
+            time.sleep(1)  # Cooldown avant retry
         else:
             logger.error(
                 "Échec définitif {}@{}x / {}j après {} tentatives (exit {})",

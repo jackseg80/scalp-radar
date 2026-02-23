@@ -2997,7 +2997,7 @@ Supprime les fichiers state JSON avant redémarrage. À utiliser quand le format
 Sandbox Bitget cassé (ccxt issue #25523) → support complètement retiré du code. Mainnet only avec capital minimal = sandbox de fait.
 
 ### 7. ProcessPoolExecutor sur Windows
-Instable (bug JIT Python 3.13 + surchauffe CPU i9-14900HX laptop). Solution : batches de 20 tasks + 2s cooldown entre lots. 4 workers = bon compromis (8 = seulement 1.5x plus rapide mais double la chaleur). `max_tasks_per_child=50`, fallback séquentiel automatique.
+Config optimale après BIOS update i9-14900HX : `max_workers=8`, `batch_size=50`, `cooldown=0.5s`, `max_tasks_per_child=200`. Fallback séquentiel automatique conservé. Bug JIT Python 3.13 toujours présent → `PYTHON_JIT=0` conservé (non lié au CPU).
 
 ### 8. scipy Interdit
 Chaque import dans un worker coûte ~200MB. Utiliser `math.erf` à la place pour la CDF normale (DSR).

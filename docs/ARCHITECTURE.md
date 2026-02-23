@@ -361,7 +361,7 @@ Optimisé pour la vitesse (100-1000× plus rapide que le backtester standard) :
 
 1. **Pré-calcul** : IndicatorCache calcule tous les indicateurs sur tout le dataset (vectorisé numpy)
 2. **Boucle** : itère les candles, check les niveaux de grille, accumule les trades
-3. **Pas d'async** : pur Python synchrone, exécuté dans ProcessPoolExecutor (4 workers)
+3. **Pas d'async** : pur Python synchrone, exécuté dans ProcessPoolExecutor (8 workers)
 4. **Numba JIT** (optionnel) : accélère 5-10× les boucles indicateurs + trades
 
 ```

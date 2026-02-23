@@ -634,9 +634,7 @@ class WalkForwardOptimizer:
         else:
             coarse_grid = full_grid
 
-        # 4 workers = bon compromis performance/thermique sur laptop
-        # (8 workers = seulement ~1.5x plus rapide mais double la charge thermique)
-        n_workers = max_workers or min(os.cpu_count() or 4, 4)
+        n_workers = max_workers or min(os.cpu_count() or 8, 8)
         n_distinct_combos = len(coarse_grid)
 
         # Backtest config
@@ -1268,8 +1266,8 @@ class WalkForwardOptimizer:
         Retourne (résultats obtenus, combos restantes non traitées).
         Si le pool crash ou timeout, les résultats des lots terminés sont conservés.
         """
-        batch_size = 20  # 20 tasks par lot
-        batch_timeout = 300  # 5 min max par lot de 20
+        batch_size = 50  # 50 tasks par lot
+        batch_timeout = 120  # 2 min max par lot de 50
         total = len(grid)
 
         results: list[_ISResult] = []
@@ -1282,7 +1280,7 @@ class WalkForwardOptimizer:
                 max_workers=n_workers,
                 initializer=_init_worker,
                 initargs=(candles_serialized, strategy_name, symbol, bt_config_dict, main_tf, extra_data_map),
-                max_tasks_per_child=50,
+                max_tasks_per_child=200,
             ) as pool:
                 for batch_idx in range(n_batches):
                     # Check annulation entre les lots
@@ -1337,9 +1335,8 @@ class WalkForwardOptimizer:
                             f.cancel()
                         break
 
-                    # Cooldown entre lots (anti-surchauffe CPU)
                     if batch_idx < n_batches - 1:
-                        time.sleep(2)
+                        time.sleep(0.5)
 
         except (BrokenExecutor, OSError) as exc:
             logger.warning(

@@ -266,7 +266,7 @@ Sprint 8 (Backtest Dashboard) planifié mais non implémenté.
 - Deux chemins params : optimisation (grid explicite) vs production (`_resolve_param` per_asset)
 - scipy retiré (remplacé par `math.erf`) — évite MemoryError ProcessPoolExecutor
 - Fallback séquentiel automatique si multiprocessing crashe sur Windows
-- Workers limités à 4 (`min(cpu_count, 4)`), `max_tasks_per_child=50`
+- `max_workers=8`, `batch_size=50`, `max_tasks_per_child=200` (BIOS update i9-14900HX résolu)
 
 **Fast Engine (Sprint 9) :**
 - IndicatorCache pré-calculé (toutes variantes du grid)
