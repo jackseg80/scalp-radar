@@ -1,8 +1,8 @@
 """Stress test leverage multi-fenêtre.
 
-Lance N portfolio backtests pour grid_atr et grid_boltrend avec différents
-leverages et fenêtres temporelles, puis génère un rapport comparatif pour
-choisir le leverage optimal de chaque stratégie.
+Lance N portfolio backtests pour grid_atr, grid_boltrend et grid_multi_tf avec
+différents leverages et fenêtres temporelles, puis génère un rapport comparatif
+pour choisir le leverage optimal de chaque stratégie.
 
 Kill switch DÉSACTIVÉ (99%) pendant les runs pour voir le vrai max drawdown.
 L'analyse KS est effectuée a posteriori aux seuils 30%/45%/60%.
@@ -52,6 +52,10 @@ DEFAULT_MATRIX: dict[str, dict[str, Any]] = {
         "days": ["auto", 180, 90],
     },
     "grid_atr": {
+        "leverages": [2, 4, 6, 8],
+        "days": ["auto", 180],
+    },
+    "grid_multi_tf": {
         "leverages": [2, 4, 6, 8],
         "days": ["auto", 180],
     },
@@ -661,7 +665,7 @@ Exemples :
         "--strategy",
         type=str,
         default=None,
-        help="Stratégie unique (défaut: toutes — grid_atr + grid_boltrend)",
+        help="Stratégie unique (défaut: toutes — grid_atr + grid_boltrend + grid_multi_tf)",
     )
     parser.add_argument(
         "--leverages",
