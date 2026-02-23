@@ -29,7 +29,7 @@ from loguru import logger
 
 from backend.backtesting.engine import BacktestConfig, BacktestResult, run_backtest_single
 from backend.backtesting.extra_data_builder import build_extra_data_map
-from backend.backtesting.metrics import calculate_metrics
+from backend.backtesting.metrics import _classify_regime, calculate_metrics
 from backend.core.database import Database
 from backend.core.models import Candle, TimeFrame
 from backend.core.position_manager import TradeResult
@@ -253,80 +253,6 @@ def _slice_candles(
     """Extrait les candles dans [start, end)."""
     return [c for c in candles if start <= c.timestamp < end]
 
-
-
-def _classify_regime(candles: list[Candle]) -> dict[str, Any]:
-    """Classifie le régime de marché d'une période OOS.
-
-    Ordre d'évaluation : Crash (prioritaire) → Bull → Bear → Range.
-
-    Critères :
-    - Crash : max drawdown > 30% survenant en < 14 jours
-    - Bull : rendement fenêtre > +20%
-    - Bear : rendement fenêtre < -20%
-    - Range : ni bull ni bear (rendement entre -20% et +20%)
-    """
-    if len(candles) < 2:
-        return {"regime": "range", "return_pct": 0.0, "max_dd_pct": 0.0}
-
-    closes = [c.close for c in candles]
-    timestamps = [c.timestamp for c in candles]
-    return_pct = (closes[-1] - closes[0]) / closes[0] * 100
-
-    # Max drawdown global
-    peak = closes[0]
-    max_dd = 0.0
-    for close in closes:
-        if close > peak:
-            peak = close
-        dd = (close - peak) / peak * 100
-        if dd < max_dd:
-            max_dd = dd
-
-    # Fast crash detection : peak-to-trough > 30% en ≤ 14 jours
-    # Algorithme O(n) : sliding window maximum via deque
-    from collections import deque
-
-    is_crash = False
-    max_seconds = 14 * 86400
-    peak_deque: deque[int] = deque()
-
-    for i in range(len(closes)):
-        ts_i = timestamps[i].timestamp()
-
-        # Retirer les éléments hors fenêtre de 14 jours
-        while peak_deque and (ts_i - timestamps[peak_deque[0]].timestamp()) > max_seconds:
-            peak_deque.popleft()
-
-        # Retirer les éléments plus petits que le courant (ne seront jamais le max)
-        while peak_deque and closes[peak_deque[-1]] <= closes[i]:
-            peak_deque.pop()
-
-        peak_deque.append(i)
-
-        # Le max dans la fenêtre glissante est closes[peak_deque[0]]
-        local_peak = closes[peak_deque[0]]
-        if local_peak > 0:
-            dd_14d = (closes[i] - local_peak) / local_peak * 100
-            if dd_14d < -30:
-                is_crash = True
-                break
-
-    # Classification (crash prioritaire)
-    if is_crash:
-        regime = "crash"
-    elif return_pct > 20:
-        regime = "bull"
-    elif return_pct < -20:
-        regime = "bear"
-    else:
-        regime = "range"
-
-    return {
-        "regime": regime,
-        "return_pct": round(return_pct, 2),
-        "max_dd_pct": round(max_dd, 2),
-    }
 
 
 # ─── Worker pool avec initializer (candles chargées 1 fois par worker) ─────

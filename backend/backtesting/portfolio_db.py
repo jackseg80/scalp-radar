@@ -120,6 +120,7 @@ def _result_to_row(
         "btc_benchmark_sharpe": bm["sharpe_ratio"] if bm else None,
         "btc_equity_curve": json.dumps(bm["equity_curve"]) if bm else None,
         "alpha_vs_btc": result.alpha_vs_btc if bm else None,
+        "regime_analysis": json.dumps(result.regime_analysis) if result.regime_analysis else None,
     }
 
 
@@ -135,7 +136,8 @@ _INSERT_SQL = """
         equity_curve, per_asset_results,
         created_at, duration_seconds, label,
         btc_benchmark_return_pct, btc_benchmark_max_dd_pct, btc_benchmark_sharpe,
-        btc_equity_curve, alpha_vs_btc
+        btc_equity_curve, alpha_vs_btc,
+        regime_analysis
     ) VALUES (
         :strategy_name, :initial_capital, :n_assets, :period_days, :assets,
         :exchange, :leverage, :kill_switch_pct, :kill_switch_window_hours,
@@ -147,7 +149,8 @@ _INSERT_SQL = """
         :equity_curve, :per_asset_results,
         :created_at, :duration_seconds, :label,
         :btc_benchmark_return_pct, :btc_benchmark_max_dd_pct, :btc_benchmark_sharpe,
-        :btc_equity_curve, :alpha_vs_btc
+        :btc_equity_curve, :alpha_vs_btc,
+        :regime_analysis
     )
 """
 
@@ -249,6 +252,9 @@ async def get_backtest_by_id_async(
         )
         d["btc_equity_curve"] = (
             json.loads(d["btc_equity_curve"]) if d.get("btc_equity_curve") else []
+        )
+        d["regime_analysis"] = (
+            json.loads(d["regime_analysis"]) if d.get("regime_analysis") else None
         )
         return d
 

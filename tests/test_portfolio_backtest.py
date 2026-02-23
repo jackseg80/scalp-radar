@@ -1821,3 +1821,194 @@ class TestBtcBenchmark:
         )
         report = format_portfolio_report(result)
         assert "Benchmark BTC" not in report
+
+
+# ---------------------------------------------------------------------------
+# Régime de marché — classification et analyse
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyRegime:
+    """_classify_regime est maintenant dans metrics.py (extrait de walk_forward)."""
+
+    def test_imported_from_metrics(self):
+        """_classify_regime est importable depuis backend.backtesting.metrics."""
+        from backend.backtesting.metrics import _classify_regime  # noqa: F401
+
+    def test_bull_regime(self):
+        """Rendement > +20% → bull."""
+        from backend.backtesting.metrics import _classify_regime
+
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        candles = [
+            _make_candle(100.0 * (1 + 0.25 * i / 9), ts + timedelta(days=i))
+            for i in range(10)
+        ]
+        result = _classify_regime(candles)
+        assert result["regime"] == "bull"
+        assert result["return_pct"] > 20
+
+    def test_bear_regime(self):
+        """Rendement < -20% → bear."""
+        from backend.backtesting.metrics import _classify_regime
+
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        candles = [
+            _make_candle(100.0 * (1 - 0.25 * i / 9), ts + timedelta(days=i))
+            for i in range(10)
+        ]
+        result = _classify_regime(candles)
+        assert result["regime"] == "bear"
+        assert result["return_pct"] < -20
+
+    def test_range_regime(self):
+        """Rendement entre -20% et +20% sans crash → range."""
+        from backend.backtesting.metrics import _classify_regime
+
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        candles = [
+            _make_candle(100.0, ts + timedelta(days=i))
+            for i in range(10)
+        ]
+        result = _classify_regime(candles)
+        assert result["regime"] == "range"
+
+    def test_insufficient_candles(self):
+        """Moins de 2 candles → range par défaut."""
+        from backend.backtesting.metrics import _classify_regime
+
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        result = _classify_regime([_make_candle(100.0, ts)])
+        assert result["regime"] == "range"
+        assert result["return_pct"] == 0.0
+
+
+class TestComputeRegimeAnalysis:
+    """_compute_regime_analysis dans PortfolioBacktester."""
+
+    def _make_snap(self, equity: float, ts: datetime) -> PortfolioSnapshot:
+        return PortfolioSnapshot(
+            timestamp=ts,
+            total_equity=equity,
+            total_capital=equity,
+            total_realized_pnl=0.0,
+            total_unrealized_pnl=0.0,
+            total_margin_used=0.0,
+            margin_ratio=0.0,
+            n_open_positions=0,
+            n_assets_with_positions=0,
+        )
+
+    def test_returns_none_on_empty_candles(self):
+        """Sans candles BTC → None (pas de crash)."""
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        snaps = [self._make_snap(10_000.0, ts + timedelta(days=i)) for i in range(5)]
+        result = PortfolioBacktester._compute_regime_analysis(snaps, [])
+        assert result is None
+
+    def test_returns_none_on_single_snapshot(self):
+        """Un seul snapshot → None (pas de calcul inter-snapshots)."""
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        candles = [
+            _make_candle(50_000.0, ts + timedelta(days=i))
+            for i in range(40)
+        ]
+        snaps = [self._make_snap(10_000.0, ts + timedelta(days=20))]
+        result = PortfolioBacktester._compute_regime_analysis(snaps, candles)
+        assert result is None
+
+    def test_regime_analysis_structure(self):
+        """L'analyse contient les clés attendues pour au moins un régime."""
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        # BTC flat → range
+        btc_candles = [
+            _make_candle(50_000.0, ts + timedelta(days=i), symbol="BTC/USDT")
+            for i in range(60)
+        ]
+        # Portfolio qui monte progressivement
+        equities = [10_000.0 + 100 * i for i in range(10)]
+        snaps = [
+            self._make_snap(eq, ts + timedelta(days=30 + i * 2))
+            for i, eq in enumerate(equities)
+        ]
+        result = PortfolioBacktester._compute_regime_analysis(snaps, btc_candles)
+        assert result is not None
+        assert "lookback_days" in result
+        # Au moins un régime doit être présent
+        regimes_present = [k for k in result if k != "lookback_days"]
+        assert len(regimes_present) >= 1
+        # Vérifier la structure du premier régime
+        first_reg = result[regimes_present[0]]
+        assert "days" in first_reg
+        assert "pct_time" in first_reg
+        assert "cum_return_pct" in first_reg
+        assert "max_dd_pct" in first_reg
+        assert "avg_pnl_day" in first_reg
+
+    def test_regime_in_report(self):
+        """format_portfolio_report affiche la section régimes si regime_analysis est défini."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["BTC/USDT"],
+            final_equity=11_000.0,
+            total_return_pct=10.0,
+            total_trades=5,
+            win_rate=60.0,
+            realized_pnl=1_000.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-5.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.2,
+            peak_open_positions=2,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+            regime_analysis={
+                "lookback_days": 30,
+                "range": {
+                    "days": 80.0,
+                    "pct_time": 89.0,
+                    "cum_return_pct": 9.5,
+                    "max_dd_pct": -4.0,
+                    "avg_pnl_day": 0.012,
+                    "n_intervals": 12,
+                },
+            },
+        )
+        report = format_portfolio_report(result)
+        assert "Performance par régime" in report
+        assert "RANGE" in report
+        assert "+9.5%" in report
+
+    def test_no_regime_section_when_none(self):
+        """Sans regime_analysis → pas de section dans le rapport."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["BTC/USDT"],
+            final_equity=10_500.0,
+            total_return_pct=5.0,
+            total_trades=5,
+            win_rate=50.0,
+            realized_pnl=500.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-3.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.2,
+            peak_open_positions=2,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+            regime_analysis=None,
+        )
+        report = format_portfolio_report(result)
+        assert "Performance par régime" not in report

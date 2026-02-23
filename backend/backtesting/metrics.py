@@ -6,12 +6,15 @@ max drawdown (% et duree), fee drag, breakdown par regime de marche.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Any
 
 import numpy as np
 
 from backend.backtesting.engine import BacktestResult
+from backend.core.models import Candle
 from backend.core.position_manager import TradeResult
 
 
@@ -312,3 +315,73 @@ def format_metrics_table(metrics: BacktestMetrics, title: str = "") -> str:
         lines.append(f"  {'=' * 50}")
 
     return "\n".join(lines)
+
+
+# ─── Classification de régime de marché ─────────────────────────────────────
+
+def _classify_regime(candles: list[Candle]) -> dict[str, Any]:
+    """Classifie le régime de marché d'une période.
+
+    Ordre d'évaluation : Crash (prioritaire) → Bull → Bear → Range.
+
+    Critères :
+    - Crash : max drawdown > 30% survenant en < 14 jours
+    - Bull  : rendement fenêtre > +20%
+    - Bear  : rendement fenêtre < -20%
+    - Range : rendement entre -20% et +20%
+    """
+    if len(candles) < 2:
+        return {"regime": "range", "return_pct": 0.0, "max_dd_pct": 0.0}
+
+    closes = [c.close for c in candles]
+    timestamps = [c.timestamp for c in candles]
+    return_pct = (closes[-1] - closes[0]) / closes[0] * 100
+
+    # Max drawdown global
+    peak = closes[0]
+    max_dd = 0.0
+    for close in closes:
+        if close > peak:
+            peak = close
+        dd = (close - peak) / peak * 100
+        if dd < max_dd:
+            max_dd = dd
+
+    # Fast crash detection : peak-to-trough > 30% en ≤ 14 jours
+    # Algorithme O(n) : sliding window maximum via deque
+    is_crash = False
+    max_seconds = 14 * 86400
+    peak_deque: deque[int] = deque()
+
+    for i in range(len(closes)):
+        ts_i = timestamps[i].timestamp()
+
+        while peak_deque and (ts_i - timestamps[peak_deque[0]].timestamp()) > max_seconds:
+            peak_deque.popleft()
+        while peak_deque and closes[peak_deque[-1]] <= closes[i]:
+            peak_deque.pop()
+
+        peak_deque.append(i)
+
+        local_peak = closes[peak_deque[0]]
+        if local_peak > 0:
+            dd_14d = (closes[i] - local_peak) / local_peak * 100
+            if dd_14d < -30:
+                is_crash = True
+                break
+
+    # Classification (crash prioritaire)
+    if is_crash:
+        regime = "crash"
+    elif return_pct > 20:
+        regime = "bull"
+    elif return_pct < -20:
+        regime = "bear"
+    else:
+        regime = "range"
+
+    return {
+        "regime": regime,
+        "return_pct": round(return_pct, 2),
+        "max_dd_pct": round(max_dd, 2),
+    }

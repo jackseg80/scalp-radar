@@ -22,6 +22,7 @@ from typing import Any, Callable
 import numpy as np
 from loguru import logger
 
+from backend.backtesting.metrics import _classify_regime
 from backend.backtesting.simulator import GridStrategyRunner, RunnerStats
 from backend.core.config import AppConfig
 from backend.core.database import Database
@@ -141,6 +142,11 @@ class PortfolioResult:
     # Benchmark BTC buy-hold (même période, même capital initial)
     btc_benchmark: dict | None = None  # {return_pct, max_drawdown_pct, sharpe_ratio, final_equity, entry_price, exit_price}
     alpha_vs_btc: float = 0.0  # total_return_pct - btc_return_pct
+
+    # Performance par régime de marché (calculé depuis BTC/USDT 1h + snapshots)
+    # {regime: {days, pct_time, cum_return_pct, max_dd_pct, avg_pnl_day, n_intervals}}
+    # None si BTC candles indisponibles sur la période.
+    regime_analysis: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +325,14 @@ class PortfolioBacktester:
         # 5. Force-close positions restantes (skip si liquidé — tout est déjà à 0)
         force_closed_trades = self._force_close_all(runners)
 
-        # 6. Build result
+        # 6. Analyse par régime (best-effort : skip sans log si BTC indisponible)
+        regime_analysis: dict | None = None
+        try:
+            regime_analysis = self._compute_regime_analysis(snapshots, btc_candles)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Regime analysis skipped : {}", exc)
+
+        # 7. Build result
         period_days = (end - start).days
         runner_keys = list(runners.keys())
         return self._build_result(
@@ -331,6 +344,7 @@ class PortfolioBacktester:
             period_days,
             liquidation_event=liquidation_event,
             btc_benchmark=btc_benchmark,
+            regime_analysis=regime_analysis,
         )
 
     # ------------------------------------------------------------------
@@ -439,6 +453,112 @@ class PortfolioBacktester:
             "exit_price": round(exit_p, 2),
             "equity_curve": equity_curve,
         }
+
+    @staticmethod
+    def _compute_regime_analysis(
+        snapshots: list[PortfolioSnapshot],
+        btc_candles: list[Candle],
+        lookback_days: int = 30,
+    ) -> dict | None:
+        """Analyse la performance du portfolio par régime de marché.
+
+        Pour chaque snapshot, classifie le régime BTC sur les 'lookback_days'
+        jours précédents, puis agrège return/DD/P&L par régime.
+
+        Le max DD est calculé par blocs consécutifs de même régime pour
+        éviter les biais dus aux snapshots éparpillés dans le temps.
+
+        Retourne None si les candles BTC sont insuffisantes (< 3 points).
+        """
+        if len(btc_candles) < 3 or len(snapshots) < 2:
+            return None
+
+        from datetime import timedelta
+
+        REGIMES = ["bull", "bear", "range", "crash"]
+        lookback_td = timedelta(days=lookback_days)
+
+        # Assigner un régime à chaque snapshot via lookback BTC
+        snap_regimes: list[str] = []
+        for snap in snapshots:
+            end_dt = snap.timestamp
+            start_dt = end_dt - lookback_td
+            window = [c for c in btc_candles if start_dt <= c.timestamp <= end_dt]
+            if len(window) < 3:
+                snap_regimes.append("range")
+            else:
+                info = _classify_regime(window)
+                snap_regimes.append(info["regime"])
+
+        # ── Métriques par régime ──────────────────────────────────────
+        # Returns inter-snapshots et jours assignés au régime du point de départ
+        regime_intervals: dict[str, list[dict]] = {r: [] for r in REGIMES}
+        total_days = 0.0
+
+        for i in range(1, len(snapshots)):
+            prev, curr = snapshots[i - 1], snapshots[i]
+            reg = snap_regimes[i - 1]
+            days = (curr.timestamp - prev.timestamp).total_seconds() / 86400
+            if days <= 0:
+                continue
+            total_days += days
+            pnl = curr.total_equity - prev.total_equity
+            ret = pnl / prev.total_equity * 100 if prev.total_equity > 0 else 0.0
+            regime_intervals[reg].append({
+                "days": days,
+                "pnl": pnl,
+                "ret": ret,
+                "equity_end": curr.total_equity,
+            })
+
+        # Max DD par blocs consécutifs de même régime
+        def _max_dd_consecutive(snaps: list[PortfolioSnapshot], regimes: list[str], target: str) -> float:
+            worst = 0.0
+            i = 0
+            while i < len(snaps):
+                if regimes[i] != target:
+                    i += 1
+                    continue
+                # Début d'un bloc consécutif
+                block: list[float] = []
+                while i < len(snaps) and regimes[i] == target:
+                    block.append(snaps[i].total_equity)
+                    i += 1
+                # Calculer DD sur ce bloc
+                peak = block[0]
+                for e in block:
+                    if e > peak:
+                        peak = e
+                    if peak > 0:
+                        d = (e - peak) / peak * 100
+                        if d < worst:
+                            worst = d
+            return worst
+
+        # Construire le résultat par régime (skip ceux sans données)
+        result: dict = {"lookback_days": lookback_days}
+        for reg in REGIMES:
+            intervals = regime_intervals[reg]
+            if not intervals:
+                continue
+            days = sum(iv["days"] for iv in intervals)
+            # Return cumulé (produit des (1 + ret_i/100))
+            cum = 1.0
+            for iv in intervals:
+                cum *= (1 + iv["ret"] / 100)
+            cum_return = (cum - 1) * 100
+            avg_pnl_day = sum(iv["pnl"] for iv in intervals) / days if days > 0 else 0.0
+            max_dd = _max_dd_consecutive(snapshots, snap_regimes, reg)
+            result[reg] = {
+                "days": round(days, 1),
+                "pct_time": round(days / total_days * 100, 1) if total_days > 0 else 0.0,
+                "cum_return_pct": round(cum_return, 2),
+                "max_dd_pct": round(max_dd, 2),
+                "avg_pnl_day": round(avg_pnl_day, 4),
+                "n_intervals": len(intervals),
+            }
+
+        return result if len(result) > 1 else None  # > 1 car lookback_days est toujours là
 
     # ------------------------------------------------------------------
     # Création des runners
@@ -960,6 +1080,7 @@ class PortfolioBacktester:
         period_days: int,
         liquidation_event: dict | None = None,
         btc_benchmark: dict | None = None,
+        regime_analysis: dict | None = None,
     ) -> PortfolioResult:
         """Construit le PortfolioResult final."""
         # P&L
@@ -1074,6 +1195,7 @@ class PortfolioBacktester:
             leverage=leverage,
             btc_benchmark=btc_benchmark,
             alpha_vs_btc=alpha_vs_btc,
+            regime_analysis=regime_analysis,
         )
 
 
@@ -1183,6 +1305,34 @@ def format_portfolio_report(result: PortfolioResult) -> str:
             f"    {key:{col_w}s}  {trades:4d} trades{fc_label:6s}  "
             f"WR {wr:5.1f}%  P&L {pnl:+9.2f} $"
         )
+
+    # Performance par régime de marché
+    ra = result.regime_analysis
+    if ra:
+        lookback = ra.get("lookback_days", 30)
+        lines.append("")
+        lines.append(f"  --- Performance par régime (BTC lookback {lookback}j) ---")
+        hdr = f"  {'Régime':<8}  {'Jours':>6}  {'%Temps':>7}  {'Return':>9}  {'Max DD':>8}  {'P&L/jour':>10}"
+        lines.append(hdr)
+        lines.append("  " + "-" * 56)
+        REGIME_ORDER = ["bull", "bear", "range", "crash"]
+        REGIME_LABEL = {"bull": "BULL", "bear": "BEAR", "range": "RANGE", "crash": "CRASH"}
+        for reg in REGIME_ORDER:
+            rd = ra.get(reg)
+            if rd is None:
+                continue
+            days = rd["days"]
+            pct = rd["pct_time"]
+            ret = rd["cum_return_pct"]
+            mdd = rd["max_dd_pct"]
+            pnl_d = rd["avg_pnl_day"]
+            ret_s = f"{ret:+.1f}%"
+            mdd_s = f"{mdd:.1f}%"
+            pnl_s = f"{pnl_d:+.4f}$"
+            lines.append(
+                f"  {REGIME_LABEL[reg]:<8}  {days:>6.0f}  {pct:>6.1f}%  "
+                f"{ret_s:>9}  {mdd_s:>8}  {pnl_s:>10}"
+            )
 
     lines.append("")
     lines.append(sep)
