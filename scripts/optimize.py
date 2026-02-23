@@ -10,6 +10,7 @@ Lancement :
     uv run python -m scripts.optimize --apply --strategy envelope_dca
     uv run python -m scripts.optimize --apply  (toutes les stratégies)
     uv run python -m scripts.optimize --strategy vwap_rsi --symbol BTC/USDT -v
+    uv run python -m scripts.optimize --all-symbols --subprocess  (résistant aux crashes)
 """
 
 from __future__ import annotations
@@ -24,8 +25,11 @@ import argparse
 import asyncio
 import itertools
 import math as _math
+import json
+import subprocess
 import sys
 import threading
+import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -900,6 +904,131 @@ def _get_best_combo_trades(conn: "sqlite3.Connection", result_id: int) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Subprocess isolation (résistance aux crashes numpy/Numba)
+# ---------------------------------------------------------------------------
+
+_MAX_RETRIES_SUBPROCESS = 2
+
+_OPTIMIZE_SUBPROCESS_SCRIPT = r'''"""Subprocess worker : un seul run d'optimisation (strategy × symbol)."""
+import asyncio, json, os, sys
+os.environ.setdefault("PYTHON_JIT", "0")
+sys.path.insert(0, os.getcwd())
+
+# Rediriger stdout → stderr pour que tous les print() (rapport, phases) soient
+# visibles dans le terminal parent. Seul __RESULT_JSON__ passe par stdout réel.
+_real_stdout = sys.stdout
+sys.stdout = sys.stderr
+
+from scripts.optimize import run_optimization
+from backend.core.logging_setup import setup_logging
+setup_logging(level="INFO")
+
+strategy_name = sys.argv[1]
+symbol        = sys.argv[2]
+config_dir    = sys.argv[3]
+exchange      = sys.argv[4] if sys.argv[4] != "None" else None
+force_tf      = sys.argv[5] if sys.argv[5] != "None" else None
+verbose       = sys.argv[6].lower() == "true"
+
+params_override = {"timeframe": [force_tf]} if force_tf else None
+
+async def _run():
+    return await run_optimization(
+        strategy_name, symbol, config_dir,
+        verbose=verbose,
+        exchange=exchange,
+        params_override=params_override,
+    )
+
+report, result_id = asyncio.run(_run())
+
+out = {
+    "strategy_name": report.strategy_name,
+    "symbol":        report.symbol,
+    "grade":         report.grade,
+    "total_score":   report.total_score,
+    "live_eligible": report.live_eligible,
+    "shallow":       report.shallow,
+    "recommended_params": report.recommended_params,
+    "result_id":     result_id,
+}
+sys.stdout = _real_stdout
+print("__RESULT_JSON__" + json.dumps(out))
+'''
+
+
+def _run_subprocess_optimization(
+    strat: str,
+    sym: str,
+    config_dir: str,
+    exchange: str | None,
+    force_timeframe: str | None,
+    verbose: bool,
+) -> dict | None:
+    """Lance une optimisation (strategy × symbol) dans un subprocess isolé.
+
+    Retry automatique jusqu'à _MAX_RETRIES_SUBPROCESS tentatives.
+    Retourne un dict résumé, ou None si échec définitif.
+
+    Avantages vs mode direct :
+    - Crash numpy/segfault = ce subprocess seul meurt, pas tout l'orchestrateur
+    - Auto-retry : évite de relancer manuellement après un crash aléatoire
+    - Résultat sauvegardé en DB dans le subprocess → compatible --resume
+    - Output WFO live visible dans le terminal (stderr hérité)
+    """
+    args_list = [
+        sys.executable, "-c", _OPTIMIZE_SUBPROCESS_SCRIPT,
+        strat, sym, config_dir,
+        str(exchange), str(force_timeframe), str(verbose),
+    ]
+
+    for attempt in range(1, _MAX_RETRIES_SUBPROCESS + 1):
+        try:
+            proc = subprocess.run(
+                args_list,
+                stdout=subprocess.PIPE,  # capturer le __RESULT_JSON__
+                stderr=None,             # hériter du terminal → output live visible
+                text=True,
+                timeout=7200,            # 2h max par run
+                cwd=os.getcwd(),
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Timeout {}×{} (tentative {}/{})",
+                strat, sym, attempt, _MAX_RETRIES_SUBPROCESS,
+            )
+            if attempt < _MAX_RETRIES_SUBPROCESS:
+                time.sleep(5)
+            continue
+
+        if proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                if line.startswith("__RESULT_JSON__"):
+                    return json.loads(line[len("__RESULT_JSON__"):])
+            logger.warning("Pas de JSON résultat pour {}×{} (run OK)", strat, sym)
+            return {
+                "strategy_name": strat, "symbol": sym, "grade": "?",
+                "total_score": 0, "live_eligible": False, "shallow": False,
+                "recommended_params": {}, "result_id": None,
+            }
+
+        # Crash (segfault = -11 Linux, -1073741819 Windows, etc.)
+        if attempt < _MAX_RETRIES_SUBPROCESS:
+            logger.warning(
+                "Crash {}×{} (exit {}, tentative {}/{}) → retry dans 5s",
+                strat, sym, proc.returncode, attempt, _MAX_RETRIES_SUBPROCESS,
+            )
+            time.sleep(5)
+        else:
+            logger.error(
+                "Échec définitif {}×{} après {} tentatives (exit {})",
+                strat, sym, _MAX_RETRIES_SUBPROCESS, proc.returncode,
+            )
+
+    return None
+
+
 def _regrade_from_db(strategy_name: str, config_dir: str = "config") -> None:
     """Relit les résultats is_latest=1 et recalcule les grades avec la formule actuelle."""
     import json
@@ -1051,6 +1180,17 @@ async def main() -> None:
         "--regrade", action="store_true",
         help="Recalculer les grades is_latest=1 avec la formule actuelle (shallow penalty). Requiert --strategy.",
     )
+    parser.add_argument(
+        "--subprocess",
+        action="store_true",
+        default=False,
+        help=(
+            "Lancer chaque (strategy × symbol) dans un subprocess Python isolé. "
+            "Résistant aux crashes numpy/segfault : seul le run en cours meurt, "
+            "les suivants continuent. Retry auto x2. Compatible --resume. "
+            "Recommandé avec --all ou --all-symbols."
+        ),
+    )
     args = parser.parse_args()
 
     setup_logging(level="INFO")
@@ -1167,6 +1307,8 @@ async def main() -> None:
 
     # Exécution
     all_reports: list[FinalReport] = []
+    all_result_dicts: list[dict] = []   # mode --subprocess
+    all_failed_pairs: list[str] = []    # mode --subprocess : paires en échec définitif
 
     # Résoudre db_path une seule fois pour --resume
     _db_path_for_resume: str | None = None
@@ -1201,36 +1343,58 @@ async def main() -> None:
 
         for sym in run_symbols:
             logger.info("Optimisation {} × {} ...", strat, sym)
-            try:
-                report, result_id = await run_optimization(
-                    strat, sym, args.config_dir, args.verbose,
-                    all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
-                    exchange=args.exchange,
-                    params_override=force_tf_override,
+            if args.subprocess:
+                result_dict = _run_subprocess_optimization(
+                    strat, sym, args.config_dir, args.exchange,
+                    force_timeframe=args.force_timeframe,
+                    verbose=args.verbose,
                 )
-                all_reports.append(report)
-                symbol_results[sym] = report.recommended_params
-            except Exception as exc:
-                logger.error(
-                    "ERREUR {} × {} : {} — on continue avec les suivants",
-                    strat, sym, exc,
-                )
-                import traceback
-                traceback.print_exc()
+                if result_dict is not None:
+                    all_result_dicts.append(result_dict)
+                else:
+                    all_failed_pairs.append(f"{strat}×{sym}")
+            else:
+                try:
+                    report, result_id = await run_optimization(
+                        strat, sym, args.config_dir, args.verbose,
+                        all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
+                        exchange=args.exchange,
+                        params_override=force_tf_override,
+                    )
+                    all_reports.append(report)
+                    symbol_results[sym] = report.recommended_params
+                except Exception as exc:
+                    logger.error(
+                        "ERREUR {} × {} : {} — on continue avec les suivants",
+                        strat, sym, exc,
+                    )
+                    import traceback
+                    traceback.print_exc()
 
     # Recapitulatif
     print(f"\n{'=' * 55}")
     print("  Recapitulatif")
     print(f"{'=' * 55}")
-    for r in all_reports:
-        elig = "OK LIVE" if r.live_eligible else "X"
-        shallow_mark = " [SHALLOW]" if r.shallow else ""
-        print(f"  {r.strategy_name:<12s} x {r.symbol:<12s} : Grade {r.grade}{shallow_mark} {elig}")
+    if args.subprocess:
+        for r in all_result_dicts:
+            elig = "OK LIVE" if r.get("live_eligible") else "X"
+            shallow_mark = " [SHALLOW]" if r.get("shallow") else ""
+            print(f"  {r['strategy_name']:<12s} x {r['symbol']:<12s} : Grade {r.get('grade', '?')}{shallow_mark} {elig}")
+        if all_failed_pairs:
+            print(f"\n  Échecs définitifs ({len(all_failed_pairs)}) : {', '.join(all_failed_pairs)}")
+    else:
+        for r in all_reports:
+            elig = "OK LIVE" if r.live_eligible else "X"
+            shallow_mark = " [SHALLOW]" if r.shallow else ""
+            print(f"  {r.strategy_name:<12s} x {r.symbol:<12s} : Grade {r.grade}{shallow_mark} {elig}")
     print()
 
     # Apply (après optimisation : relire depuis la DB fraîche)
     if args.apply:
-        run_strategies = list({r.strategy_name for r in all_reports})
+        if args.subprocess:
+            run_strategies = list({r["strategy_name"] for r in all_result_dicts if r})
+        else:
+            run_strategies = list({r.strategy_name for r in all_reports})
         if run_strategies:
             exclude_list = [s.strip() for s in args.exclude.split(",")] if args.exclude else None
             result = apply_from_db(
