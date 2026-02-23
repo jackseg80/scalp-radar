@@ -438,6 +438,21 @@ class Executor:
                 return 0.0
         return max((self._exchange_balance or 0.0) - self._pending_notional, 0.0)
 
+    def _get_strategy_nb_assets(self, strategy_name: str) -> int:
+        """Retourne le nombre d'assets configurés (per_asset) pour une stratégie.
+
+        Utilisé pour diviser le capital disponible par asset, afin qu'un seul
+        asset ne consomme pas toute la marge avant que les autres ne triggent.
+        Retourne 1 si pas de per_asset (comportement conservateur).
+        """
+        strategy = self._strategies.get(strategy_name)
+        if not strategy:
+            return 1
+        per_asset = getattr(strategy._config, "per_asset", None)
+        if per_asset and isinstance(per_asset, dict) and len(per_asset) > 0:
+            return len(per_asset)
+        return 1
+
     # ─── Setup ─────────────────────────────────────────────────────────
 
     async def _setup_leverage_and_margin(
@@ -612,6 +627,12 @@ class Executor:
                 logger.debug("Executor entry: balance <= 0, skip {}", symbol)
                 continue
 
+            # Diviser le capital par le nombre d'assets configurés.
+            # Sans ça, le premier asset à trigger ses N levels peut consommer
+            # toute la marge (ex: SOL prend 90% du compte sur 9 assets).
+            nb_assets = self._get_strategy_nb_assets(strategy_name)
+            allocated_balance = available_balance / nb_assets
+
             from backend.strategies.base import StrategyContext
 
             ctx = StrategyContext(
@@ -620,7 +641,7 @@ class Executor:
                 candles=ctx.candles,
                 indicators=ctx.indicators,
                 current_position=ctx.current_position,
-                capital=available_balance,
+                capital=allocated_balance,
                 config=ctx.config,
                 extra_data=ctx.extra_data,
             )
@@ -662,9 +683,9 @@ class Executor:
                 if not triggered:
                     continue
 
-                # Calculer la quantity (BUG 1 fix — _open_grid_position attend qty > 0)
+                # Calculer la quantity sur le capital alloué par asset
                 quantity = (
-                    level.size_fraction * available_balance * grid_leverage
+                    level.size_fraction * allocated_balance * grid_leverage
                 ) / level.entry_price
                 quantity = self._round_quantity(quantity, futures_sym)
                 if quantity <= 0:
@@ -672,7 +693,7 @@ class Executor:
 
                 # Marquer comme pending AVANT l'appel async
                 self._pending_levels.add(pending_key)
-                level_margin = level.size_fraction * available_balance
+                level_margin = level.size_fraction * allocated_balance
                 self._pending_notional += level_margin
 
                 event = TradeEvent(

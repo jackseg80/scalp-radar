@@ -505,3 +505,85 @@ class TestPendingNotional:
 
         assert executor._pending_notional == 0.0
         assert executor._balance_bootstrapped is True
+
+
+# ── TestAllocatedBalance ─────────────────────────────────────────────────
+
+
+class TestAllocatedBalance:
+    """Tests du sizing par asset (division capital / nb_assets)."""
+
+    def test_get_strategy_nb_assets_returns_count(self):
+        """per_asset avec 9 entries → retourne 9."""
+        strat = _make_strategy()
+        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        executor = _make_executor(strategy=strat)
+        assert executor._get_strategy_nb_assets("grid_atr") == 9
+
+    def test_get_strategy_nb_assets_no_per_asset(self):
+        """per_asset vide → retourne 1 (fallback conservateur)."""
+        strat = _make_strategy()
+        strat._config.per_asset = {}
+        executor = _make_executor(strategy=strat)
+        assert executor._get_strategy_nb_assets("grid_atr") == 1
+
+    def test_get_strategy_nb_assets_unknown_strategy(self):
+        """Stratégie inconnue → retourne 1."""
+        executor = _make_executor()
+        assert executor._get_strategy_nb_assets("nonexistent") == 1
+
+    @pytest.mark.asyncio
+    async def test_on_candle_uses_allocated_balance_not_total(self):
+        """Balance 900$, 9 assets → capital compute_grid = 100$, pas 900$."""
+        level = GridLevel(index=0, entry_price=49_600.0, direction=Direction.LONG, size_fraction=0.25)
+        strat = _make_strategy(levels=[level])
+        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        executor = _make_executor(strategy=strat)
+        executor._exchange_balance = 900.0
+        candle = _make_candle(close=50_000.0, low=49_500.0)
+
+        captured: dict = {}
+        original_compute = strat.compute_grid
+
+        def capture(ctx, gs):
+            captured["capital"] = ctx.capital
+            return original_compute(ctx, gs)
+
+        strat.compute_grid = capture
+
+        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock):
+            await executor._on_candle("BTC/USDT", "1h", candle)
+
+        assert captured["capital"] == pytest.approx(100.0)  # 900 / 9
+
+    @pytest.mark.asyncio
+    async def test_on_candle_quantity_uses_allocated_balance(self):
+        """Quantity basée sur allocated_balance (900/9=100), pas sur 900$."""
+        level = GridLevel(index=0, entry_price=50_000.0, direction=Direction.LONG, size_fraction=0.25)
+        strat = _make_strategy(levels=[level])
+        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        executor = _make_executor(strategy=strat)
+        executor._exchange_balance = 900.0
+        candle = _make_candle(close=50_000.0, low=49_500.0)
+
+        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
+            await executor._on_candle("BTC/USDT", "1h", candle)
+            event = mock_open.call_args[0][0]
+            # 0.25 * (900/9) * 6 / 50000 = 0.25 * 100 * 6 / 50000 = 0.003
+            assert event.quantity == pytest.approx(0.003, abs=0.0001)
+
+    @pytest.mark.asyncio
+    async def test_pending_notional_on_allocated_not_total(self):
+        """_pending_notional basé sur allocated_balance, pas sur la balance totale."""
+        level = GridLevel(index=0, entry_price=50_000.0, direction=Direction.LONG, size_fraction=0.25)
+        strat = _make_strategy(levels=[level])
+        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        executor = _make_executor(strategy=strat)
+        executor._exchange_balance = 900.0
+        candle = _make_candle(close=50_000.0, low=49_500.0)
+
+        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock):
+            await executor._on_candle("BTC/USDT", "1h", candle)
+
+        # 0.25 * (900/9) = 0.25 * 100 = 25$, pas 225$ (0.25 * 900)
+        assert executor._pending_notional == pytest.approx(25.0)
