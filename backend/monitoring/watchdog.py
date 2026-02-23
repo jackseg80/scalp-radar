@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from backend.backtesting.simulator import Simulator
     from backend.core.data_engine import DataEngine
     from backend.execution.executor import Executor
+    from backend.execution.executor_manager import ExecutorManager
 
 # Cooldown anti-spam en secondes par type d'anomalie
 _ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
@@ -41,12 +42,14 @@ class Watchdog:
         notifier: Notifier,
         check_interval: int = 30,
         executor: Executor | None = None,
+        executor_mgr: ExecutorManager | None = None,
     ) -> None:
         self._data_engine = data_engine
         self._simulator = simulator
         self._notifier = notifier
         self._check_interval = check_interval
         self._executor = executor
+        self._executor_mgr = executor_mgr
 
         self._task: asyncio.Task[None] | None = None
         self._running = False
@@ -148,14 +151,23 @@ class Watchdog:
         except Exception as e:
             logger.debug("Watchdog: impossible de lire le disque: {}", e)
 
-        # 6. Executor live (Sprint 5a)
-        if self._executor is not None:
-            if self._executor.is_enabled and not self._executor.is_connected:
-                self._current_issues.append("Executor live déconnecté")
+        # 6. Executor(s) live (Sprint 36b : multi-executor)
+        executors_to_check: list[tuple[str, object]] = []
+        if self._executor_mgr is not None:
+            executors_to_check = [
+                (name, ex) for name, ex in self._executor_mgr.executors.items()
+            ]
+        elif self._executor is not None:
+            executors_to_check = [("", self._executor)]
+
+        for prefix, ex in executors_to_check:
+            tag = f" [{prefix}]" if prefix else ""
+            if ex.is_enabled and not ex.is_connected:
+                self._current_issues.append(f"Executor{tag} live déconnecté")
                 await self._alert(AnomalyType.EXECUTOR_DISCONNECTED)
 
-            if self._executor.is_enabled and self._executor._risk_manager.is_kill_switch_triggered:
-                self._current_issues.append("Kill switch live déclenché")
+            if ex.is_enabled and ex._risk_manager.is_kill_switch_triggered:
+                self._current_issues.append(f"Kill switch{tag} live déclenché")
                 await self._alert(AnomalyType.KILL_SWITCH_LIVE)
 
     async def _alert(self, anomaly_type: AnomalyType, details: str = "") -> None:

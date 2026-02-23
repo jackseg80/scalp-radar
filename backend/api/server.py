@@ -42,6 +42,20 @@ from backend.execution.risk_manager import LiveRiskManager
 from backend.monitoring.watchdog import Watchdog
 
 
+def _get_live_eligible_strategies(config) -> list[str]:
+    """Retourne les noms de stratégies enabled + live_eligible."""
+    result: list[str] = []
+    for name in config.strategies.model_fields:
+        if name == "custom_strategies":
+            continue
+        cfg = getattr(config.strategies, name, None)
+        if cfg is None:
+            continue
+        if getattr(cfg, "enabled", False) and getattr(cfg, "live_eligible", False):
+            result.append(name)
+    return result
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Démarre tous les composants au lancement, les arrête proprement."""
@@ -122,63 +136,97 @@ async def lifespan(app: FastAPI):
         app.state.state_manager = None
         app.state.arena = None
 
-    # 4b. Executor live (Sprint 5b) — après Simulator/Arena, avant Watchdog
-    executor: Executor | None = None
-    risk_mgr: LiveRiskManager | None = None
+    # 4b. Multi-Executor live (Sprint 36b) — un Executor par stratégie live
+    from backend.execution.executor_manager import ExecutorManager
+
+    executor_mgr = ExecutorManager()
     selector: AdaptiveSelector | None = None
+
     if config.secrets.live_trading and engine and simulator:
-        risk_mgr = LiveRiskManager(config, notifier=notifier)
         arena = app.state.arena
         selector = AdaptiveSelector(arena, config, db=db)
-        executor = Executor(config, risk_mgr, notifier, selector=selector)
+        live_strategies = _get_live_eligible_strategies(config)
 
-        # Restaurer l'état avant start
-        executor_state = await state_manager.load_executor_state()
-        if executor_state:
-            risk_mgr.restore_state(executor_state.get("risk_manager", {}))
-            executor.restore_positions(executor_state)
+        for strat_name in live_strategies:
+            risk_mgr = LiveRiskManager(config, notifier=notifier)
+            executor = Executor(
+                config, risk_mgr, notifier,
+                selector=selector, strategy_name=strat_name,
+            )
 
-        await executor.start()
+            # Restaurer l'état per-strategy avant start
+            strat_state = await state_manager.load_executor_state(
+                strategy_name=strat_name,
+            )
+            if strat_state:
+                risk_mgr.restore_state(strat_state.get("risk_manager", {}))
+                executor.restore_positions(strat_state)
 
-        # Hotfix 28a : warning si capital config diverge du solde Bitget réel
-        if executor.exchange_balance is not None:
-            config_capital = config.risk.initial_capital
-            real_balance = executor.exchange_balance
-            if config_capital > 0:
-                diff_pct = abs(real_balance - config_capital) / config_capital * 100
-                if diff_pct > 20:
-                    msg = (
-                        f"Capital mismatch: risk.yaml={config_capital:.0f}$ "
-                        f"vs Bitget={real_balance:.0f}$ (écart {diff_pct:.0f}%)"
-                    )
-                    logger.warning(msg)
-                    await notifier.notify_reconciliation(msg)
+            await executor.start()
+
+            # Warning capital mismatch par sous-compte
+            if executor.exchange_balance is not None:
+                config_capital = config.risk.initial_capital
+                real_balance = executor.exchange_balance
+                if config_capital > 0:
+                    diff_pct = abs(real_balance - config_capital) / config_capital * 100
+                    if diff_pct > 20:
+                        msg = (
+                            f"Capital mismatch [{strat_name}]: "
+                            f"risk.yaml={config_capital:.0f}$ "
+                            f"vs Bitget={real_balance:.0f}$ (écart {diff_pct:.0f}%)"
+                        )
+                        logger.warning(msg)
+                        await notifier.notify_reconciliation(msg)
+
+            dedicated = config.has_dedicated_keys(strat_name)
+            logger.info(
+                "Executor[{}] démarré (sous-compte: {})",
+                strat_name, "dédié" if dedicated else "global/partagé",
+            )
+            executor_mgr.add(strat_name, executor, risk_mgr)
+
+        # Warning si clés globales partagées entre >1 executor
+        if len(live_strategies) > 1 and not all(
+            config.has_dedicated_keys(s) for s in live_strategies
+        ):
+            logger.warning(
+                "Multi-Executor: certains executors partagent les mêmes clés API "
+                "— risque de rate limit. Recommandé : sous-comptes dédiés."
+            )
 
         await selector.start()
 
-        # Exit monitor autonome : sync live→paper + surveillance TP/SL indépendante
-        executor.set_data_engine(engine)
-        executor.set_strategies(simulator.get_strategy_instances(), simulator=simulator)
-
+        # Câblage exit monitor + entrées autonomes PAR EXECUTOR
+        strategy_instances = simulator.get_strategy_instances()
         from backend.execution.sync import sync_live_to_paper
-        await sync_live_to_paper(executor, simulator)
-        await executor.start_exit_monitor()
 
-        # Phase 1 : entrées autonomes — Executor reçoit chaque candle APRÈS le Simulator
-        # INVARIANT : simulator.start() a déjà enregistré son callback (index 0).
-        # L'Executor sera callback[1] → get_runner_context() retourne des indicateurs à jour.
-        engine.on_candle(executor._on_candle)
-        logger.info("Executor: entrées autonomes câblées sur DataEngine")
+        for strat_name, executor in executor_mgr.executors.items():
+            executor.set_data_engine(engine)
+            executor.set_strategies(strategy_instances, simulator=simulator)
+            await sync_live_to_paper(executor, simulator)
+            await executor.start_exit_monitor()
 
-        # Hotfix 35 : enregistrer executor dans StateManager pour sauvegarde périodique
+            # Phase 1 : entrées autonomes — chaque Executor reçoit les candles
+            # INVARIANT : simulator.start() a déjà enregistré son callback (index 0).
+            engine.on_candle(executor._on_candle)
+
+        # Sauvegarde périodique multi-executor
         if state_manager is not None:
-            state_manager.set_executor(executor, risk_mgr)
-        logger.info("Executor live démarré (mainnet)")
+            state_manager.set_executors(executor_mgr)
+
+        logger.info(
+            "Multi-Executor: {} executors démarrés ({})",
+            len(executor_mgr.executors),
+            list(executor_mgr.executors.keys()),
+        )
     elif config.secrets.live_trading:
         logger.warning("LIVE_TRADING=true mais DataEngine/Simulator absents — executor non créé")
 
-    app.state.executor = executor
-    app.state.risk_mgr = risk_mgr
+    # app.state — backward compat via duck typing (ExecutorManager.get_status())
+    app.state.executor = executor_mgr if executor_mgr.executors else None
+    app.state.executor_mgr = executor_mgr
+    app.state.risk_mgr = None  # Plus de singleton, utiliser executor_mgr.risk_managers
     app.state.selector = selector
 
     # 5. Watchdog + Heartbeat (dépendances explicites)
@@ -187,7 +235,7 @@ async def lifespan(app: FastAPI):
     if engine is not None and simulator is not None:
         watchdog = Watchdog(
             data_engine=engine, simulator=simulator, notifier=notifier,
-            executor=executor,
+            executor_mgr=executor_mgr if executor_mgr.executors else None,
         )
         await watchdog.start()
 
@@ -219,10 +267,13 @@ async def lifespan(app: FastAPI):
     # Executor + Selector : sauvegarder état + stop AVANT simulator
     if selector:
         await selector.stop()
-    if executor and state_manager and risk_mgr:
-        await state_manager.save_executor_state(executor, risk_mgr)
-        await executor.stop()
-        logger.info("Executor live arrêté et état sauvegardé")
+    if executor_mgr and executor_mgr.executors and state_manager:
+        for _name, _ex in executor_mgr.executors.items():
+            _rm = executor_mgr.risk_managers.get(_name)
+            if _rm:
+                await state_manager.save_executor_state(_ex, _rm, strategy_name=_name)
+        await executor_mgr.stop_all()
+        logger.info("Multi-Executor: tous les executors arrêtés et états sauvegardés")
 
     if state_manager and simulator:
         await state_manager.save_runner_state(

@@ -918,3 +918,62 @@ du -sh ~/scalp-radar/data/
 # Taille DB + WAL + backups
 du -sh ~/scalp-radar/data/scalp_radar.db* ~/scalp-radar/data/backups/ 2>/dev/null
 ```
+
+## 21. Multi-Executor (Sprint 36b)
+
+### Architecture
+
+Un Executor par stratégie live (enabled + live_eligible). Chaque executor peut utiliser :
+- **Clés globales** (fallback) : `BITGET_API_KEY`, `BITGET_SECRET`, `BITGET_PASSPHRASE`
+- **Sous-compte dédié** : `BITGET_API_KEY_GRID_ATR`, `BITGET_SECRET_GRID_ATR`, `BITGET_PASSPHRASE_GRID_ATR`
+
+### Configurer un sous-compte Bitget
+
+1. Bitget → API Management → Créer un sous-compte
+2. Générer les clés API pour le sous-compte (futures read + trade, no withdrawal)
+3. Ajouter dans `.env` (serveur) :
+```bash
+BITGET_API_KEY_GRID_ATR=votre_api_key
+BITGET_SECRET_GRID_ATR=votre_secret
+BITGET_PASSPHRASE_GRID_ATR=votre_passphrase
+```
+
+### Ajouter une nouvelle stratégie live
+
+1. Dans `config/strategies.yaml` : mettre `enabled: true` + `live_eligible: true`
+2. (Optionnel) Créer un sous-compte Bitget et ajouter les clés dans `.env`
+3. Redéployer : `ssh prod "cd ~/scalp-radar && bash deploy.sh"`
+
+### API endpoints
+
+```bash
+# Statut agrégé (tous les executors)
+curl -s -H "X-API-Key: $KEY" http://localhost:8000/api/executor/status | python3 -m json.tool
+
+# Statut d'un executor spécifique
+curl -s -H "X-API-Key: $KEY" "http://localhost:8000/api/executor/status?strategy=grid_atr" | python3 -m json.tool
+
+# Reset kill switch d'un executor spécifique
+curl -X POST -H "X-API-Key: $KEY" "http://localhost:8000/api/executor/kill-switch/reset?strategy=grid_atr"
+
+# Reset kill switch de tous les executors
+curl -X POST -H "X-API-Key: $KEY" http://localhost:8000/api/executor/kill-switch/reset
+```
+
+### Fichiers state per-executor
+
+```
+data/executor_grid_atr_state.json       # État grid_atr
+data/executor_grid_multi_tf_state.json  # État grid_multi_tf
+data/executor_state.json                # Legacy (migration auto au 1er boot)
+```
+
+### Diagnostic
+
+```bash
+# Vérifier quels executors tournent (dans les logs)
+docker compose logs backend 2>&1 | grep "Executor\[" | tail -20
+
+# Vérifier si clés dédiées vs partagées
+docker compose logs backend 2>&1 | grep "sous-compte" | tail -5
+```

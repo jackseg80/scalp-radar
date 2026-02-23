@@ -25,7 +25,7 @@ def _patch_config(monkeypatch, sync_api_key: str = ""):
 
 
 class TestExecutorAuth:
-    """Vérifie que les 3 routes executor exigent une API key valide."""
+    """Vérifie que les routes executor exigent une API key valide."""
 
     def test_status_no_api_key(self, monkeypatch):
         """GET /status sans header → 401."""
@@ -35,37 +35,30 @@ class TestExecutorAuth:
         assert resp.status_code == 401
         assert "invalide" in resp.json()["detail"]
 
-    def test_trade_no_api_key(self, monkeypatch):
-        """POST /test-trade sans header → 401."""
+    def test_kill_switch_no_api_key(self, monkeypatch):
+        """POST /kill-switch/reset sans header → 401."""
         _patch_config(monkeypatch, sync_api_key="secret123")
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post("/api/executor/test-trade")
+        resp = client.post("/api/executor/kill-switch/reset")
         assert resp.status_code == 401
 
-    def test_close_no_api_key(self, monkeypatch):
-        """POST /test-close sans header → 401."""
-        _patch_config(monkeypatch, sync_api_key="secret123")
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post("/api/executor/test-close")
-        assert resp.status_code == 401
-
-    def test_trade_wrong_api_key(self, monkeypatch):
-        """POST /test-trade avec mauvaise clé → 401."""
+    def test_kill_switch_wrong_api_key(self, monkeypatch):
+        """POST /kill-switch/reset avec mauvaise clé → 401."""
         _patch_config(monkeypatch, sync_api_key="secret123")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post(
-            "/api/executor/test-trade",
+            "/api/executor/kill-switch/reset",
             headers={"X-API-Key": "wrong_key"},
         )
         assert resp.status_code == 401
         assert "invalide" in resp.json()["detail"]
 
-    def test_trade_no_server_key_configured(self, monkeypatch):
-        """POST /test-trade quand sync_api_key est vide côté serveur → 401."""
+    def test_status_no_server_key_configured(self, monkeypatch):
+        """GET /status quand sync_api_key est vide côté serveur → 401."""
         _patch_config(monkeypatch, sync_api_key="")
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post(
-            "/api/executor/test-trade",
+        resp = client.get(
+            "/api/executor/status",
             headers={"X-API-Key": "any_key"},
         )
         assert resp.status_code == 401

@@ -726,6 +726,41 @@ class AppConfig:
                     self.risk.position.max_concurrent_positions,
                 )
 
+    # ─── Multi-Executor (Sprint 36b) ───────────────────────────────────
+
+    def get_executor_keys(self, strategy_name: str) -> tuple[str, str, str]:
+        """Retourne (api_key, secret, passphrase) pour un executor.
+
+        Cherche BITGET_API_KEY_{STRATEGY_UPPER}, etc. dans les env vars.
+        Fallback sur les clés globales si absentes ou incomplètes.
+        """
+        import os
+
+        suffix = strategy_name.upper()
+        api_key = os.environ.get(f"BITGET_API_KEY_{suffix}", "")
+        secret = os.environ.get(f"BITGET_SECRET_{suffix}", "")
+        passphrase = os.environ.get(f"BITGET_PASSPHRASE_{suffix}", "")
+
+        if api_key and secret and passphrase:
+            return api_key, secret, passphrase
+
+        return (
+            self.secrets.bitget_api_key,
+            self.secrets.bitget_secret,
+            self.secrets.bitget_passphrase,
+        )
+
+    def has_dedicated_keys(self, strategy_name: str) -> bool:
+        """True si la stratégie a ses propres clés API (sous-compte dédié)."""
+        import os
+
+        suffix = strategy_name.upper()
+        return bool(
+            os.environ.get(f"BITGET_API_KEY_{suffix}", "")
+            and os.environ.get(f"BITGET_SECRET_{suffix}", "")
+            and os.environ.get(f"BITGET_PASSPHRASE_{suffix}", "")
+        )
+
     def reload(self, config_dir: Path | str = "config") -> None:
         """Recharge les fichiers YAML (hot-reload en dev)."""
         new = AppConfig(config_dir=config_dir)

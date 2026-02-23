@@ -1,19 +1,17 @@
-"""Routes de l'Executor.
+"""Routes de l'Executor (Sprint 36b : Multi-Executor).
 
-POST /api/executor/test-trade — injecte un TradeEvent OPEN directement
-POST /api/executor/test-close — ferme la position ouverte
-GET  /api/executor/status — statut détaillé de l'executor
-POST /api/executor/kill-switch/reset — reset le kill switch live (Audit P0)
+GET  /api/executor/status — statut agrégé ou par stratégie (?strategy=grid_atr)
+POST /api/executor/refresh-balance — force refresh solde exchange
+POST /api/executor/kill-switch/reset — reset le kill switch live (par stratégie)
+GET  /api/executor/orders — historique des ordres mergé
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from loguru import logger
 
 from backend.core.config import get_config
-from backend.execution.executor import TradeEvent, TradeEventType, to_futures_symbol
 
 router = APIRouter(prefix="/api/executor", tags=["executor"])
 
@@ -29,223 +27,131 @@ async def verify_executor_key(x_api_key: str = Header(None, alias="X-API-Key")) 
 
 
 @router.get("/status", dependencies=[Depends(verify_executor_key)])
-async def executor_status(request: Request) -> dict:
-    """Statut détaillé de l'executor."""
-    executor = getattr(request.app.state, "executor", None)
-    if executor is None:
+async def executor_status(
+    request: Request,
+    strategy: str | None = Query(default=None, description="Nom de stratégie pour statut individuel"),
+) -> dict:
+    """Statut agrégé ou par stratégie (?strategy=grid_atr)."""
+    executor_mgr = getattr(request.app.state, "executor", None)
+    if executor_mgr is None:
         return {"enabled": False, "message": "Executor non actif"}
-    return executor.get_status()
+
+    # Per-strategy status
+    if strategy:
+        ex = getattr(executor_mgr, "get", None)
+        if ex is None:
+            # Legacy single executor — pas de méthode get()
+            return executor_mgr.get_status()
+        single = executor_mgr.get(strategy)
+        if single is None:
+            raise HTTPException(404, f"Executor '{strategy}' non trouvé")
+        return single.get_status()
+
+    return executor_mgr.get_status()
 
 
 @router.post("/refresh-balance", dependencies=[Depends(verify_executor_key)])
 async def refresh_balance(request: Request) -> dict:
-    """Force un refresh du solde exchange."""
-    executor = getattr(request.app.state, "executor", None)
-    if executor is None:
+    """Force un refresh du solde exchange (tous les executors)."""
+    executor_mgr = getattr(request.app.state, "executor", None)
+    if executor_mgr is None:
         raise HTTPException(status_code=400, detail="Executor non actif")
 
-    new_balance = await executor.refresh_balance()
+    # Multi-executor : refresh tous les balances
+    if hasattr(executor_mgr, "refresh_all_balances"):
+        results = await executor_mgr.refresh_all_balances()
+        total = sum(v for v in results.values() if v is not None)
+        return {"status": "ok", "exchange_balance": total, "per_strategy": results}
+
+    # Legacy single executor
+    new_balance = await executor_mgr.refresh_balance()
     if new_balance is None:
         raise HTTPException(status_code=502, detail="Échec fetch balance exchange")
-
     return {"status": "ok", "exchange_balance": new_balance}
 
 
-@router.post("/test-trade", dependencies=[Depends(verify_executor_key)])
-async def test_trade(
-    request: Request,
-    symbol: str = Query(default="BTC/USDT", description="Symbole spot (ex: BTC/USDT, ETH/USDT)"),
-) -> dict:
-    """Injecte un TradeEvent OPEN dans l'executor.
-
-    Récupère le prix actuel, calcule SL/TP, et envoie un ordre réel
-    avec la quantité minimale.
-    """
-    executor = getattr(request.app.state, "executor", None)
-    if executor is None:
-        raise HTTPException(status_code=400, detail="Executor non actif")
-
-    futures_sym = to_futures_symbol(symbol)
-
-    if futures_sym in executor._positions:
-        pos = executor._positions[futures_sym]
-        raise HTTPException(
-            status_code=409,
-            detail=f"Position déjà ouverte: {pos.direction} "
-                   f"{pos.symbol} @ {pos.entry_price}",
-        )
-
-    # Récupérer le prix actuel via le DataEngine
-    engine = request.app.state.engine
-    if engine is None:
-        raise HTTPException(status_code=400, detail="DataEngine non actif")
-
-    data = engine.get_data(symbol)
-    current_price = _get_current_price(data)
-
-    if current_price is None or current_price <= 0:
-        # Fallback: fetch ticker via l'exchange de l'executor
-        try:
-            ticker = await executor._exchange.fetch_ticker(futures_sym)
-            current_price = float(ticker.get("last", 0))
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Impossible d'obtenir le prix {symbol}: {e}",
-            )
-
-    if current_price <= 0:
-        raise HTTPException(status_code=500, detail=f"Prix {symbol} invalide")
-
-    # Quantité minimale selon l'asset
-    min_quantities = {"BTC/USDT": 0.001, "ETH/USDT": 0.01, "SOL/USDT": 0.1}
-    quantity = min_quantities.get(symbol, 0.001)
-
-    direction = "LONG"
-    sl_pct = 0.3 / 100  # 0.3%
-    tp_pct = 0.8 / 100  # 0.8%
-
-    sl_price = round(current_price * (1 - sl_pct), 2)
-    tp_price = round(current_price * (1 + tp_pct), 2)
-
-    event = TradeEvent(
-        event_type=TradeEventType.OPEN,
-        strategy_name="vwap_rsi",
-        symbol=symbol,
-        direction=direction,
-        entry_price=current_price,
-        quantity=quantity,
-        tp_price=tp_price,
-        sl_price=sl_price,
-        score=0.75,
-        timestamp=datetime.now(tz=timezone.utc),
-        market_regime="RANGING",
-    )
-
-    # Injecter dans l'executor
-    await executor.handle_event(event)
-
-    # Vérifier si la position a bien été ouverte
-    pos = executor._positions.get(futures_sym)
-    if pos is not None:
-        return {
-            "status": "ok",
-            "message": f"Trade test ouvert ({symbol})",
-            "trade": {
-                "direction": direction,
-                "symbol": futures_sym,
-                "entry_price_target": current_price,
-                "entry_price_real": pos.entry_price,
-                "quantity": pos.quantity,
-                "sl_price": sl_price,
-                "tp_price": tp_price,
-                "entry_order_id": pos.entry_order_id,
-                "sl_order_id": pos.sl_order_id,
-                "tp_order_id": pos.tp_order_id,
-            },
-        }
-
-    return {
-        "status": "rejected",
-        "message": "Trade rejeté (voir logs pour la raison)",
-        "event": {
-            "direction": direction,
-            "symbol": symbol,
-            "price": current_price,
-            "quantity": quantity,
-            "sl": sl_price,
-            "tp": tp_price,
-        },
-    }
-
-
-@router.post("/test-close", dependencies=[Depends(verify_executor_key)])
-async def test_close(
-    request: Request,
-    symbol: str = Query(default="BTC/USDT", description="Symbole spot (ex: BTC/USDT, ETH/USDT)"),
-) -> dict:
-    """Ferme la position ouverte par test-trade."""
-    executor = getattr(request.app.state, "executor", None)
-    if executor is None:
-        raise HTTPException(status_code=400, detail="Executor non actif")
-
-    futures_sym = to_futures_symbol(symbol)
-    pos = executor._positions.get(futures_sym)
-    if pos is None:
-        raise HTTPException(status_code=404, detail=f"Aucune position ouverte sur {symbol}")
-
-    event = TradeEvent(
-        event_type=TradeEventType.CLOSE,
-        strategy_name=pos.strategy_name,
-        symbol=symbol,
-        direction=pos.direction,
-        entry_price=pos.entry_price,
-        quantity=pos.quantity,
-        tp_price=pos.tp_price,
-        sl_price=pos.sl_price,
-        score=0.0,
-        timestamp=datetime.now(tz=timezone.utc),
-        exit_reason="manual_test_close",
-        exit_price=pos.entry_price,  # sera mis à jour par le market close
-    )
-
-    await executor.handle_event(event)
-
-    return {
-        "status": "ok",
-        "message": f"Position {symbol} fermée (market close)",
-    }
-
-
 @router.post("/kill-switch/reset", dependencies=[Depends(verify_executor_key)])
-async def reset_live_kill_switch(request: Request) -> dict:
+async def reset_live_kill_switch(
+    request: Request,
+    strategy: str | None = Query(default=None, description="Stratégie ciblée (défaut: toutes)"),
+) -> dict:
     """Reset le kill switch live et réactive le trading.
 
-    Audit P0 : sans cet endpoint, le seul moyen de reset était d'éditer
-    executor_state.json manuellement puis de redémarrer.
+    Sprint 36b : supporte multi-executor — param ?strategy=grid_atr pour cibler.
     """
-    executor = getattr(request.app.state, "executor", None)
-    if executor is None:
+    executor_mgr = getattr(request.app.state, "executor", None)
+    if executor_mgr is None:
         raise HTTPException(status_code=400, detail="Executor non actif")
 
-    risk_mgr = getattr(request.app.state, "risk_mgr", None)
-    if risk_mgr is None:
-        raise HTTPException(status_code=400, detail="RiskManager non disponible")
+    # Récupérer les risk_managers via executor_mgr
+    risk_managers: dict = {}
+    executors: dict = {}
+    if hasattr(executor_mgr, "risk_managers"):
+        risk_managers = executor_mgr.risk_managers
+        executors = executor_mgr.executors
+    else:
+        # Legacy single executor
+        rm = getattr(request.app.state, "risk_mgr", None)
+        if rm is None:
+            raise HTTPException(status_code=400, detail="RiskManager non disponible")
+        risk_managers = {"_legacy": rm}
+        executors = {"_legacy": executor_mgr}
 
-    if not risk_mgr.is_kill_switch_triggered:
-        return {"status": "not_triggered", "message": "Kill switch live non actif"}
+    # Filtrer si stratégie spécifique
+    if strategy:
+        if strategy not in risk_managers:
+            raise HTTPException(404, f"Executor '{strategy}' non trouvé")
+        risk_managers = {strategy: risk_managers[strategy]}
+        executors = {strategy: executors[strategy]}
 
-    old_pnl = risk_mgr._session_pnl
+    # Reset chaque risk_manager ciblé
+    reset_results: list[dict] = []
+    for name, rm in risk_managers.items():
+        if not rm.is_kill_switch_triggered:
+            reset_results.append({"strategy": name, "status": "not_triggered"})
+            continue
 
-    # Reset kill switch + session P&L
-    risk_mgr._kill_switch_triggered = False
-    risk_mgr._session_pnl = 0.0
+        old_pnl = rm._session_pnl
+        rm._kill_switch_triggered = False
+        rm._session_pnl = 0.0
 
-    # Sauvegarder l'état immédiatement
-    state_manager = getattr(request.app.state, "state_manager", None)
-    if state_manager:
-        await state_manager.save_executor_state(executor, risk_mgr)
+        # Sauvegarder l'état immédiatement
+        state_manager = getattr(request.app.state, "state_manager", None)
+        ex = executors.get(name)
+        if state_manager and ex:
+            strat_name = name if name != "_legacy" else None
+            await state_manager.save_executor_state(ex, rm, strategy_name=strat_name)
 
-    # Notification Telegram
-    notifier = getattr(request.app.state, "notifier", None)
-    if notifier:
-        from backend.alerts.notifier import AnomalyType
-
-        await notifier.notify_anomaly(
-            AnomalyType.KILL_SWITCH_LIVE,
-            f"Kill switch LIVE reset manuellement (session_pnl était {old_pnl:+.2f}$) "
-            "— trading réactivé",
+        logger.info(
+            "Kill switch live reset via API [{}] (session_pnl {:.2f} → 0.0)",
+            name, old_pnl,
         )
+        reset_results.append({
+            "strategy": name,
+            "status": "reset",
+            "previous_session_pnl": old_pnl,
+        })
 
-    logger.info(
-        "Kill switch live reset via API (session_pnl {:.2f} → 0.0)",
-        old_pnl,
-    )
+    # Notification Telegram (une seule)
+    reset_names = [r["strategy"] for r in reset_results if r["status"] == "reset"]
+    if reset_names:
+        notifier = getattr(request.app.state, "notifier", None)
+        if notifier:
+            from backend.alerts.notifier import AnomalyType
+
+            await notifier.notify_anomaly(
+                AnomalyType.KILL_SWITCH_LIVE,
+                f"Kill switch LIVE reset manuellement ({', '.join(reset_names)}) "
+                "— trading réactivé",
+            )
+
+    if not reset_names:
+        return {"status": "not_triggered", "message": "Aucun kill switch actif"}
 
     return {
         "status": "reset",
-        "message": "Kill switch live réinitialisé, trading réactivé",
-        "previous_session_pnl": old_pnl,
+        "message": f"Kill switch réinitialisé ({', '.join(reset_names)})",
+        "details": reset_results,
     }
 
 
@@ -255,18 +161,14 @@ async def executor_orders(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict:
     """Historique des ordres Bitget (read-only, sans auth — Sprint 32)."""
-    executor = getattr(request.app.state, "executor", None)
-    if executor is None:
+    executor_mgr = getattr(request.app.state, "executor", None)
+    if executor_mgr is None:
         return {"orders": [], "count": 0}
-    orders = list(executor._order_history)[:limit]
+
+    # Multi-executor : merge + tri
+    if hasattr(executor_mgr, "get_all_order_history"):
+        orders = executor_mgr.get_all_order_history(limit)
+    else:
+        orders = list(executor_mgr._order_history)[:limit]
+
     return {"orders": orders, "count": len(orders)}
-
-
-def _get_current_price(data) -> float | None:
-    """Extrait le dernier prix close depuis les buffers du DataEngine."""
-    # Chercher dans le timeframe 5m d'abord, puis 1m
-    for tf in ("5m", "1m", "15m"):
-        candles = data.candles.get(tf, [])
-        if candles:
-            return candles[-1].close
-    return None

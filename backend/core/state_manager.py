@@ -43,11 +43,20 @@ class StateManager:
         # Hotfix 35 : référence executor pour sauvegarde périodique
         self._executor: Any = None
         self._risk_manager: Any = None
+        # Sprint 36b : multi-executor
+        self._executor_mgr: Any = None
 
     def set_executor(self, executor: Any, risk_manager: Any) -> None:
         """Enregistre l'Executor pour la sauvegarde périodique (Hotfix 35)."""
         self._executor = executor
         self._risk_manager = risk_manager
+
+    def set_executors(self, executor_mgr: Any) -> None:
+        """Enregistre l'ExecutorManager pour la sauvegarde périodique (Sprint 36b)."""
+        self._executor_mgr = executor_mgr
+        # Désactiver le mode singleton legacy
+        self._executor = None
+        self._risk_manager = None
 
     async def save_runner_state(
         self,
@@ -225,8 +234,20 @@ class StateManager:
                         kill_switch_reason=simulator._kill_switch_reason,
                     )
 
-                    # Hotfix 35 : sauvegarde executor state (résout session_pnl fantôme)
-                    if self._executor is not None:
+                    # Sauvegarde executor state (Sprint 36b : multi-executor)
+                    if self._executor_mgr is not None:
+                        for _name, _ex in self._executor_mgr.executors.items():
+                            _rm = self._executor_mgr.risk_managers.get(_name)
+                            if _ex and _rm:
+                                try:
+                                    await self.save_executor_state(_ex, _rm, strategy_name=_name)
+                                except Exception as e:
+                                    logger.warning(
+                                        "StateManager: erreur sauvegarde executor {}: {}",
+                                        _name, e,
+                                    )
+                    elif self._executor is not None:
+                        # Legacy single executor (Hotfix 35)
                         try:
                             await self.save_executor_state(self._executor, self._risk_manager)
                         except Exception as e:
@@ -258,34 +279,72 @@ class StateManager:
         except Exception as e:
             logger.warning("Journal: erreur snapshot: {}", e)
 
-    # ─── Sprint 5a : état Executor ────────────────────────────────────
+    # ─── Sprint 5a / 36b : état Executor ─────────────────────────────
 
-    async def save_executor_state(self, executor: Any, risk_manager: Any) -> None:
+    def _executor_state_path(self, strategy_name: str | None = None) -> str:
+        """Chemin du fichier state pour un executor.
+
+        Legacy : data/executor_state.json (strategy_name=None)
+        Multi  : data/executor_{strategy_name}_state.json
+        """
+        if strategy_name:
+            return f"data/executor_{strategy_name}_state.json"
+        return self._executor_state_file
+
+    async def save_executor_state(
+        self,
+        executor: Any,
+        risk_manager: Any,
+        strategy_name: str | None = None,
+    ) -> None:
         """Sauvegarde l'état de l'Executor et du RiskManager."""
         state: dict[str, Any] = {
             "saved_at": datetime.now(tz=timezone.utc).isoformat(),
             "executor": executor.get_state_for_persistence(),
         }
 
-        await asyncio.to_thread(self._write_json_file, self._executor_state_file, state)
-        logger.debug("StateManager: état executor sauvegardé")
+        file_path = self._executor_state_path(strategy_name)
+        await asyncio.to_thread(self._write_json_file, file_path, state)
+        logger.debug("StateManager: état executor sauvegardé ({})", file_path)
 
-    async def load_executor_state(self) -> dict[str, Any] | None:
-        """Charge l'état de l'Executor sauvegardé."""
-        data = await asyncio.to_thread(self._read_json_file, self._executor_state_file)
+    async def load_executor_state(
+        self, strategy_name: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Charge l'état de l'Executor sauvegardé.
+
+        Migration legacy : si le fichier per-strategy est absent,
+        tente de lire l'ancien executor_state.json.
+        """
+        file_path = self._executor_state_path(strategy_name)
+        data = await asyncio.to_thread(self._read_json_file, file_path)
+
+        # Migration : fichier per-strategy absent → fallback legacy
+        if data is None and strategy_name:
+            legacy = await asyncio.to_thread(
+                self._read_json_file, self._executor_state_file,
+            )
+            if legacy and isinstance(legacy, dict) and "executor" in legacy:
+                logger.info(
+                    "StateManager: migration legacy executor_state.json → {}",
+                    file_path,
+                )
+                return legacy.get("executor")
+
         if data is None:
-            logger.info("StateManager: pas de fichier état executor, démarrage fresh")
+            logger.info("StateManager: pas de fichier état executor ({}), démarrage fresh", file_path)
             return None
 
         if not isinstance(data, dict) or "executor" not in data:
             logger.warning(
-                "StateManager: fichier état executor invalide, démarrage fresh"
+                "StateManager: fichier état executor invalide ({}), démarrage fresh",
+                file_path,
             )
             return None
 
         saved_at = data.get("saved_at", "inconnu")
         logger.info(
-            "StateManager: état executor chargé (sauvegardé à {})", saved_at,
+            "StateManager: état executor chargé ({}, sauvegardé à {})",
+            file_path, saved_at,
         )
         return data.get("executor")
 

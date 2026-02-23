@@ -168,11 +168,13 @@ class Executor:
         risk_manager: LiveRiskManager,
         notifier: Notifier,
         selector: AdaptiveSelector | None = None,
+        strategy_name: str | None = None,
     ) -> None:
         self._config = config
         self._risk_manager = risk_manager
         self._notifier = notifier
         self._selector = selector
+        self._strategy_name = strategy_name
 
         self._exchange: Any = None  # ccxt.pro.bitget (créé dans start)
         self._positions: dict[str, LivePosition] = {}
@@ -203,6 +205,14 @@ class Executor:
         self._last_close_time: dict[str, datetime] = {}  # {futures_sym: timestamp}
 
     # ─── Properties ────────────────────────────────────────────────────
+
+    @property
+    def strategy_name(self) -> str | None:
+        return self._strategy_name
+
+    @property
+    def _log_prefix(self) -> str:
+        return f"Executor[{self._strategy_name}]" if self._strategy_name else "Executor"
 
     @property
     def is_enabled(self) -> bool:
@@ -289,10 +299,20 @@ class Executor:
     def _create_exchange(self) -> Any:
         """Crée l'instance ccxt Pro Bitget. Isolé pour faciliter le mock en tests."""
         import ccxt.pro as ccxtpro
+
+        if self._strategy_name:
+            api_key, secret, passphrase = self._config.get_executor_keys(
+                self._strategy_name,
+            )
+        else:
+            api_key = self._config.secrets.bitget_api_key
+            secret = self._config.secrets.bitget_secret
+            passphrase = self._config.secrets.bitget_passphrase
+
         return ccxtpro.bitget({
-            "apiKey": self._config.secrets.bitget_api_key,
-            "secret": self._config.secrets.bitget_secret,
-            "password": self._config.secrets.bitget_passphrase,
+            "apiKey": api_key,
+            "secret": secret,
+            "password": passphrase,
             "enableRateLimit": True,
             "options": {"defaultType": "swap"},
             "sandbox": False,  # Sandbox Bitget cassé (ccxt #25523) — mainnet only
@@ -305,7 +325,7 @@ class Executor:
         try:
             # 1. Charger les marchés (min_order_size, tick_size réels)
             self._markets = await self._exchange.load_markets()
-            logger.info("Executor: {} marchés chargés", len(self._markets))
+            logger.info("{}: {} marchés chargés", self._log_prefix, len(self._markets))
 
             # 2. Fetch balance pour le capital initial
             balance = await self._exchange.fetch_balance({
@@ -317,12 +337,24 @@ class Executor:
             self._risk_manager.set_initial_capital(total)
             self._exchange_balance = total
             logger.info(
-                "Executor: balance USDT — libre={:.2f}, total={:.2f}", free, total,
+                "{}: balance USDT — libre={:.2f}, total={:.2f}",
+                self._log_prefix, free, total,
             )
 
-            # 3. Setup leverage pour tous les symboles configurés
+            # 3. Setup leverage pour les symboles configurés
+            # Multi-executor : uniquement les assets de SA stratégie
+            _per_asset_filter: set[str] | None = None
+            if self._strategy_name:
+                strat_cfg = getattr(
+                    self._config.strategies, self._strategy_name, None,
+                )
+                if strat_cfg and hasattr(strat_cfg, "per_asset"):
+                    _per_asset_filter = set(strat_cfg.per_asset.keys())
+
             active_symbols: set[str] = set()
             for asset in self._config.assets:
+                if _per_asset_filter is not None and asset.symbol not in _per_asset_filter:
+                    continue
                 try:
                     futures_sym = to_futures_symbol(asset.symbol)
                     leverage = self._get_leverage_for_symbol(asset.symbol)
@@ -330,8 +362,8 @@ class Executor:
                     active_symbols.add(asset.symbol)
                 except Exception as e:
                     logger.warning(
-                        "Executor: setup échoué pour {} — désactivé: {}",
-                        asset.symbol, e,
+                        "{}: setup échoué pour {} — désactivé: {}",
+                        self._log_prefix, asset.symbol, e,
                     )
 
             if self._selector:
@@ -373,10 +405,10 @@ class Executor:
             try:
                 await self._exchange.close()
             except Exception as e:
-                logger.warning("Executor: erreur fermeture exchange: {}", e)
+                logger.warning("{}: erreur fermeture exchange: {}", self._log_prefix, e)
 
         self._connected = False
-        logger.info("Executor: arrêté (positions TP/SL restent sur exchange)")
+        logger.info("{}: arrêté (positions TP/SL restent sur exchange)", self._log_prefix)
 
     # ─── Balance refresh ────────────────────────────────────────────────
 
@@ -521,22 +553,31 @@ class Executor:
         simulator: Any = None,
     ) -> None:
         """Enregistre les instances de stratégie et le Simulator (source indicateurs)."""
-        self._strategies = strategies
+        if self._strategy_name:
+            # Multi-executor : filtrer à SA stratégie uniquement
+            self._strategies = {
+                k: v for k, v in strategies.items() if k == self._strategy_name
+            }
+        else:
+            self._strategies = strategies
         self._simulator = simulator
-        logger.info("Executor: {} stratégies enregistrées pour exit autonome", len(strategies))
+        logger.info(
+            "{}: {} stratégies enregistrées pour exit autonome",
+            self._log_prefix, len(self._strategies),
+        )
 
     async def start_exit_monitor(self) -> None:
         """Démarre la boucle de vérification autonome des TP/SL."""
         if self._data_engine is None:
-            logger.warning("Executor: pas de DataEngine, exit monitor désactivé")
+            logger.warning("{}: pas de DataEngine, exit monitor désactivé", self._log_prefix)
             return
         if not self._strategies:
-            logger.warning("Executor: pas de stratégies, exit monitor désactivé")
+            logger.warning("{}: pas de stratégies, exit monitor désactivé", self._log_prefix)
             return
         self._exit_check_task = asyncio.create_task(
-            self._exit_monitor_loop(), name="executor_exit_monitor",
+            self._exit_monitor_loop(), name=f"executor_exit_monitor_{self._strategy_name or 'default'}",
         )
-        logger.info("Executor: exit monitor autonome démarré")
+        logger.info("{}: exit monitor autonome démarré", self._log_prefix)
 
     async def _exit_monitor_loop(self) -> None:
         """Vérifie périodiquement si les positions live doivent être fermées."""
@@ -2387,6 +2428,7 @@ class Executor:
             executor_grids[f"{gs.strategy_name}:{spot_sym}"] = info
 
         result: dict[str, Any] = {
+            "strategy_name": self._strategy_name,
             "enabled": self.is_enabled,
             "connected": self.is_connected,
             "exchange_balance": self._exchange_balance,
