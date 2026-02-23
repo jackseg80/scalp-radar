@@ -69,7 +69,7 @@ class PortfolioSnapshot:
     """Snapshot de l'état du portfolio à un instant t."""
 
     timestamp: datetime
-    total_equity: float  # capital + unrealized
+    total_equity: float  # capital libre + marge verrouillée + unrealized
     total_capital: float  # cash disponible (après marge)
     total_realized_pnl: float
     total_unrealized_pnl: float
@@ -777,7 +777,13 @@ class PortfolioBacktester:
                 n_positions += len(positions)
                 n_assets_active += 1
 
-        total_equity = total_capital + total_unrealized
+        # Equity correcte = capital libre + marge verrouillée + unrealized.
+        # La marge est du collatéral (réservée à l'ouverture, rendue à la clôture),
+        # elle fait partie de l'equity jusqu'à la clôture de la position.
+        # Sans ce terme, equity chute artificiellement dès qu'une position s'ouvre
+        # (margin déduite du capital mais pas réintégrée dans l'equity).
+        # Formule vérifiée : equity = initial_capital + realized_pnl + unrealized_pnl
+        total_equity = total_capital + total_margin + total_unrealized
         margin_ratio = total_margin / self._initial_capital if self._initial_capital > 0 else 0.0
 
         # Cross-margin liquidation check

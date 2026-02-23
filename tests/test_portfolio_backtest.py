@@ -355,6 +355,11 @@ class TestTakeSnapshot:
         assert snap.total_margin_used > 0
         # Unrealized P&L: (105 - 100) * 10 = 50
         assert abs(snap.total_unrealized_pnl - 50.0) < 0.01
+        # Fix equity accounting : equity = capital + margin_locked + unrealized
+        # = initial_capital + realized_pnl + unrealized_pnl
+        assert abs(snap.total_equity - (snap.total_capital + snap.total_margin_used + snap.total_unrealized_pnl)) < 0.01
+        # Avec realized=0 et unrealized=50 : equity = 5000 + 50 = 5050
+        assert abs(snap.total_equity - 5_050.0) < 1.0
 
 
 # ─── Tests Drawdown ────────────────────────────────────────────────────────
