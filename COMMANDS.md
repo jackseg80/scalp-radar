@@ -845,3 +845,76 @@ uv run python -m scripts.diagnose_margin --strategy grid_boltrend --leverage 8 -
 ```
 
 Sortie : skip counts par asset/guard, timeline margin utilization, comparaison leverages.
+
+---
+
+## 20. Maintenance production
+
+### Vérifier la taille de la DB et du WAL
+
+```bash
+# Sur le serveur (dans le container)
+docker exec scalp-radar-backend-1 ls -lh data/scalp_radar.db data/scalp_radar.db-wal data/scalp_radar.db-shm 2>/dev/null
+
+# En local (PowerShell)
+Get-Item data/scalp_radar.db, data/scalp_radar.db-wal -ErrorAction SilentlyContinue | Select-Object Name, Length
+```
+
+### WAL checkpoint manuel (réduire le fichier .db-wal)
+
+```bash
+# Sur le serveur (dans le container)
+docker exec scalp-radar-backend-1 python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/scalp_radar.db')
+result = conn.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+print(f'WAL checkpoint TRUNCATE: busy={result[0]} log={result[1]} checkpointed={result[2]}')
+conn.close()
+"
+
+# TRUNCATE = vide complètement le WAL (nécessite 0 reader actif → faire avec backend arrêté)
+docker compose stop backend
+sqlite3 data/scalp_radar.db "PRAGMA wal_checkpoint(TRUNCATE);"
+docker compose start backend
+```
+
+> **Note :** Le WAL checkpoint PASSIVE est exécuté automatiquement toutes les heures par le backend.
+> TRUNCATE est plus agressif (vide le WAL en entier) mais nécessite l'arrêt du backend.
+
+### Backup manuel de la DB
+
+```bash
+# Sur le serveur
+cd ~/scalp-radar
+bash scripts/backup_db.sh
+
+# Vérifier les backups existants
+ls -lh data/backups/
+```
+
+### Installer le cron backup (Linux prod — 1x/jour à 3h00)
+
+```bash
+# Ouvrir le crontab
+crontab -e
+
+# Ajouter cette ligne (adapter le chemin)
+0 3 * * * cd ~/scalp-radar && bash scripts/backup_db.sh >> logs/backup.log 2>&1
+
+# Vérifier
+crontab -l | grep backup
+```
+
+### Vérifier l'espace disque
+
+```bash
+# Via l'endpoint /health (inclut le champ "disk")
+curl -s http://localhost:8000/health | python3 -m json.tool | grep -A5 '"disk"'
+
+# Directement
+df -h ~/scalp-radar/data/
+du -sh ~/scalp-radar/data/
+
+# Taille DB + WAL + backups
+du -sh ~/scalp-radar/data/scalp_radar.db* ~/scalp-radar/data/backups/ 2>/dev/null
+```

@@ -28,12 +28,16 @@ from backend.core.models import (
 )
 
 
+_WAL_CHECKPOINT_INTERVAL = 3600  # 1 heure
+
+
 class Database:
     """Abstraction SQLite async."""
 
     def __init__(self, db_path: str | Path = "data/scalp_radar.db") -> None:
         self.db_path = str(db_path)
         self._conn: Optional[aiosqlite.Connection] = None
+        self._maintenance_task: Optional[asyncio.Task[None]] = None
 
     async def init(self) -> None:
         """Crée la connexion et les tables."""
@@ -1396,9 +1400,57 @@ class Database:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    # ─── MAINTENANCE ────────────────────────────────────────────────────────
+
+    async def wal_checkpoint(self) -> dict:
+        """Exécute un PRAGMA wal_checkpoint(PASSIVE) et retourne les métriques.
+
+        PASSIVE = n'attend pas les readers actifs (safe, non-bloquant).
+        Évite que le fichier .db-wal grossisse indéfiniment en production.
+        Retourne {busy, log, checkpointed}.
+        """
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        row = await cursor.fetchone()
+        # row = (busy, log, checkpointed)
+        result = {
+            "busy": row[0],          # 1 si des frames n'ont pas pu être checkpointées
+            "log": row[1],           # nb de frames dans le WAL
+            "checkpointed": row[2],  # nb de frames déplacées vers la DB principale
+        }
+        logger.info(
+            "WAL checkpoint: log={} checkpointed={} busy={}",
+            result["log"], result["checkpointed"], result["busy"],
+        )
+        return result
+
+    async def _wal_checkpoint_loop(self) -> None:
+        """Boucle de maintenance : WAL checkpoint toutes les heures."""
+        while True:
+            try:
+                await asyncio.sleep(_WAL_CHECKPOINT_INTERVAL)
+                if self._conn:
+                    await self.wal_checkpoint()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("WAL checkpoint erreur: {}", e)
+
+    def start_maintenance_loop(self) -> None:
+        """Lance la boucle de maintenance en arrière-plan (WAL checkpoint horaire)."""
+        if self._maintenance_task is None or self._maintenance_task.done():
+            self._maintenance_task = asyncio.create_task(self._wal_checkpoint_loop())
+            logger.info("Database: boucle maintenance démarrée (WAL checkpoint toutes les {}s)", _WAL_CHECKPOINT_INTERVAL)
+
     # ─── LIFECYCLE ──────────────────────────────────────────────────────────
 
     async def close(self) -> None:
+        if self._maintenance_task and not self._maintenance_task.done():
+            self._maintenance_task.cancel()
+            try:
+                await self._maintenance_task
+            except asyncio.CancelledError:
+                pass
         if self._conn:
             await self._conn.close()
             self._conn = None

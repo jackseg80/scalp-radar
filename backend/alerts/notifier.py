@@ -28,6 +28,7 @@ class AnomalyType(str, Enum):
     SL_PLACEMENT_FAILED = "sl_placement_failed"
     INDICATOR_ERROR = "indicator_error"
     CIRCUIT_BREAKER = "circuit_breaker"
+    DISK_FULL = "disk_full"
 
 
 # Messages formatés par type d'anomalie
@@ -41,6 +42,7 @@ _ANOMALY_MESSAGES = {
     AnomalyType.SL_PLACEMENT_FAILED: "Placement SL échoué — close market déclenché",
     AnomalyType.INDICATOR_ERROR: "Erreur compute_live_indicators",
     AnomalyType.CIRCUIT_BREAKER: "Circuit breaker déclenché — runner désactivé",
+    AnomalyType.DISK_FULL: "Disque presque plein (>85%)",
 }
 
 
@@ -55,6 +57,7 @@ _ANOMALY_COOLDOWNS: dict[AnomalyType, int] = {
     AnomalyType.KILL_SWITCH_LIVE: 3600,          # 1h
     AnomalyType.INDICATOR_ERROR: 3600,            # 1h — erreur persistante
     AnomalyType.CIRCUIT_BREAKER: 3600,            # 1h — ne se résout que par restart
+    AnomalyType.DISK_FULL: 3600,                  # 1h — état persistant
 }
 _DEFAULT_COOLDOWN = 600  # 10 min pour tout type non listé
 

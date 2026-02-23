@@ -7,6 +7,7 @@ Alertes via Notifier avec cooldown anti-spam (5 min par type).
 from __future__ import annotations
 
 import asyncio
+import shutil
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
 
 # Cooldown anti-spam en secondes par type d'anomalie
 _ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
+
+_DISK_ALERT_THRESHOLD_PCT = 85  # % d'utilisation disque → alerte
+_DISK_DATA_PATH = "data/"
 
 
 class Watchdog:
@@ -128,7 +132,23 @@ class Watchdog:
                 self._current_issues.append("Kill switch global")
                 await self._alert(AnomalyType.KILL_SWITCH_GLOBAL)
 
-        # 5. Executor live (Sprint 5a)
+        # 5. Espace disque
+        try:
+            disk = shutil.disk_usage(_DISK_DATA_PATH)
+            used_pct = disk.used / disk.total * 100
+            if used_pct > _DISK_ALERT_THRESHOLD_PCT:
+                free_gb = disk.free / (1024 ** 3)
+                self._current_issues.append(
+                    f"Disque plein à {used_pct:.0f}% (libre : {free_gb:.1f} GB)"
+                )
+                await self._alert(
+                    AnomalyType.DISK_FULL,
+                    f"utilisé {used_pct:.0f}% — libre {free_gb:.1f} GB ({_DISK_DATA_PATH})",
+                )
+        except Exception as e:
+            logger.debug("Watchdog: impossible de lire le disque: {}", e)
+
+        # 6. Executor live (Sprint 5a)
         if self._executor is not None:
             if self._executor.is_enabled and not self._executor.is_connected:
                 self._current_issues.append("Executor live déconnecté")

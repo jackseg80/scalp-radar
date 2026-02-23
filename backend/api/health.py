@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -55,11 +56,24 @@ async def health_check(request: Request) -> dict:
     executor = getattr(request.app.state, "executor", None)
     executor_status = executor.get_status() if executor else None
 
+    # Statut disque (répertoire data/)
+    try:
+        disk_usage = shutil.disk_usage("data/")
+        disk_info: dict | None = {
+            "total_gb": round(disk_usage.total / (1024 ** 3), 1),
+            "used_pct": round(disk_usage.used / disk_usage.total * 100, 1),
+            "free_gb": round(disk_usage.free / (1024 ** 3), 1),
+            "path": "data/",
+        }
+    except Exception:
+        disk_info = None
+
     return {
         "status": status,
         "data_engine": engine_status,
         "database": {"connected": db_connected},
         "watchdog": watchdog_status,
         "executor": executor_status,
+        "disk": disk_info,
         "uptime_seconds": int(uptime),
     }
