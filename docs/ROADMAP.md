@@ -2938,6 +2938,16 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **P1** : Seuil restart symbol stale `data_engine.py` : 600s → 300s (relance après 5 min au lieu de 10 min)
   - **P2** : `_SUBSCRIBE_BATCH_SIZE` 5 → 3, `_SUBSCRIBE_BATCH_DELAY` 2.0s → 3.0s (moins de pression rate-limit Bitget au boot)
   - **4 tests** : stale→REST ok, stale→REST échoue (skip), stale→exchange=None (skip), fraîche→pas de REST (1753 total)
+- **Benchmark BTC Buy-Hold (Portfolio)** :
+  - **Contexte** : permet de juger si la stratégie vaut la peine d'exister vs simplement acheter BTC et ne rien faire
+  - `PortfolioResult.btc_benchmark` : dict `{return_pct, max_drawdown_pct, sharpe_ratio, final_equity, entry_price, exit_price, equity_curve}` calculé automatiquement à chaque run portfolio
+  - `PortfolioResult.alpha_vs_btc` : `total_return_pct - btc_return_pct`
+  - `PortfolioBacktester._calc_btc_benchmark()` : calcule en pur Python (DD peak-to-trough, Sharpe annualisé 24×365 périodes/an, equity curve sous-échantillonnée ≤500 pts)
+  - Données source : candles BTC/USDT 1h depuis DB (même exchange, même période — chargées pendant que la connexion DB est ouverte)
+  - DB : 5 nouvelles colonnes `portfolio_backtests` via migration idempotente (`_migrate_portfolio_btc_benchmark()`)
+  - Frontend `PortfolioPage` : composant `BenchmarkBTC` (retour BTC, DD BTC, Sharpe BTC, badge alpha vert/rouge) + overlay courbe BTC en tirets ambrés sur l'equity curve (mode normalisé % automatique) + support `dashed` dans `EquityCurveSVG`
+  - CLI : section "Benchmark BTC Buy-Hold" + "Alpha vs BTC" avec verdict OUTPERFORME/SOUS-PERFORME dans `format_portfolio_report()`
+  - **12 nouveaux tests** : calc_btc_benchmark (basic, flat, drawdown, subsampling, insufficient data, alpha), PortfolioResult fields, format_report (avec/sans), DB save/load, null when absent, list columns → **1765 tests**
 - **Prochaine étape** : Sprint 8 Backtest Dashboard (non implémenté depuis Sprint 1) ou déploiement WFO grid_multi_tf (embargo + taker fee maintenant en place)
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 

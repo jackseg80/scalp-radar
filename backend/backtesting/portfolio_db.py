@@ -44,6 +44,10 @@ _LIST_COLUMNS = (
     "created_at",
     "duration_seconds",
     "label",
+    "btc_benchmark_return_pct",
+    "btc_benchmark_max_dd_pct",
+    "btc_benchmark_sharpe",
+    "alpha_vs_btc",
 )
 
 _LIST_SELECT = ", ".join(_LIST_COLUMNS)
@@ -78,6 +82,7 @@ def _result_to_row(
         for s in result.snapshots[::step]
     ]
 
+    bm = result.btc_benchmark
     return {
         "strategy_name": strategy_name,
         "initial_capital": result.initial_capital,
@@ -109,6 +114,12 @@ def _result_to_row(
         "created_at": created_at,
         "duration_seconds": duration_seconds,
         "label": label,
+        # Benchmark BTC
+        "btc_benchmark_return_pct": bm["return_pct"] if bm else None,
+        "btc_benchmark_max_dd_pct": bm["max_drawdown_pct"] if bm else None,
+        "btc_benchmark_sharpe": bm["sharpe_ratio"] if bm else None,
+        "btc_equity_curve": json.dumps(bm["equity_curve"]) if bm else None,
+        "alpha_vs_btc": result.alpha_vs_btc if bm else None,
     }
 
 
@@ -122,7 +133,9 @@ _INSERT_SQL = """
         peak_margin_ratio, peak_open_positions, peak_concurrent_assets,
         kill_switch_triggers, kill_switch_events,
         equity_curve, per_asset_results,
-        created_at, duration_seconds, label
+        created_at, duration_seconds, label,
+        btc_benchmark_return_pct, btc_benchmark_max_dd_pct, btc_benchmark_sharpe,
+        btc_equity_curve, alpha_vs_btc
     ) VALUES (
         :strategy_name, :initial_capital, :n_assets, :period_days, :assets,
         :exchange, :leverage, :kill_switch_pct, :kill_switch_window_hours,
@@ -132,7 +145,9 @@ _INSERT_SQL = """
         :peak_margin_ratio, :peak_open_positions, :peak_concurrent_assets,
         :kill_switch_triggers, :kill_switch_events,
         :equity_curve, :per_asset_results,
-        :created_at, :duration_seconds, :label
+        :created_at, :duration_seconds, :label,
+        :btc_benchmark_return_pct, :btc_benchmark_max_dd_pct, :btc_benchmark_sharpe,
+        :btc_equity_curve, :alpha_vs_btc
     )
 """
 
@@ -232,6 +247,9 @@ async def get_backtest_by_id_async(
         d["kill_switch_events"] = (
             json.loads(d["kill_switch_events"]) if d["kill_switch_events"] else []
         )
+        d["btc_equity_curve"] = (
+            json.loads(d["btc_equity_curve"]) if d.get("btc_equity_curve") else []
+        )
         return d
 
 
@@ -286,6 +304,11 @@ def build_portfolio_payload_from_row(row: dict) -> dict:
         "duration_seconds": row.get("duration_seconds"),
         "label": row.get("label"),
         "source": row.get("source", "local"),
+        "btc_benchmark_return_pct": row.get("btc_benchmark_return_pct"),
+        "btc_benchmark_max_dd_pct": row.get("btc_benchmark_max_dd_pct"),
+        "btc_benchmark_sharpe": row.get("btc_benchmark_sharpe"),
+        "btc_equity_curve": row.get("btc_equity_curve"),
+        "alpha_vs_btc": row.get("alpha_vs_btc"),
     }
 
 
@@ -333,6 +356,11 @@ def save_portfolio_from_payload_sync(db_path: str, payload: dict) -> str:
             "created_at": payload["created_at"],
             "duration_seconds": payload.get("duration_seconds"),
             "label": payload.get("label"),
+            "btc_benchmark_return_pct": payload.get("btc_benchmark_return_pct"),
+            "btc_benchmark_max_dd_pct": payload.get("btc_benchmark_max_dd_pct"),
+            "btc_benchmark_sharpe": payload.get("btc_benchmark_sharpe"),
+            "btc_equity_curve": payload.get("btc_equity_curve"),
+            "alpha_vs_btc": payload.get("alpha_vs_btc"),
         }
         conn.execute(_INSERT_SQL, row)
         conn.commit()

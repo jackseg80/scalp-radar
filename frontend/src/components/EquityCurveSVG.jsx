@@ -56,7 +56,7 @@ export default function EquityCurveSVG({ curves = [], height = 300 }) {
         ...p,
         val: normalized ? ((p.equity / cap) - 1) * 100 : p.equity,
       }))
-      return { ...curve, data, color: curve.color || COLORS[ci % COLORS.length] }
+      return { ...curve, data, color: curve.color || COLORS[ci % COLORS.length], dashed: curve.dashed || false }
     }).filter(c => c.data.length > 0)
   }, [curves, normalized])
 
@@ -93,7 +93,7 @@ export default function EquityCurveSVG({ curves = [], height = 300 }) {
       const first = `${toX(0, c.data.length).toFixed(1)},${baselineY.toFixed(1)}`
       const last = `${toX(c.data.length - 1, c.data.length).toFixed(1)},${baselineY.toFixed(1)}`
       const area = `${first} ${pts} ${last}`
-      return { line: pts, area, color: c.color, label: c.label }
+      return { line: pts, area, color: c.color, label: c.label, dashed: c.dashed }
     })
   }, [processedCurves, toX, toY, baselineY])
 
@@ -178,7 +178,7 @@ export default function EquityCurveSVG({ curves = [], height = 300 }) {
             {i === 0 && (
               <polygon points={p.area} fill={p.color} fillOpacity={0.08} />
             )}
-            <polyline points={p.line} fill="none" stroke={p.color} strokeWidth={1.5} />
+            <polyline points={p.line} fill="none" stroke={p.color} strokeWidth={1.5} strokeDasharray={p.dashed ? '6,4' : undefined} />
           </g>
         ))}
 

@@ -1644,3 +1644,175 @@ class TestKillSwitchFromConfig:
 
         assert backtester._kill_switch_pct == 45.0
         assert backtester._kill_switch_window_hours == 48
+
+
+# ─── Tests Benchmark BTC ────────────────────────────────────────────────────
+
+
+class TestBtcBenchmark:
+    """Tests pour _calc_btc_benchmark (Benchmark Buy-Hold)."""
+
+    def _make_btc_candles(
+        self,
+        prices: list[float],
+        start_ts: datetime | None = None,
+    ) -> list[Candle]:
+        ts = start_ts or datetime(2024, 1, 1, tzinfo=timezone.utc)
+        result = []
+        for price in prices:
+            result.append(_make_candle(price, ts, "BTC/USDT"))
+            ts += timedelta(hours=1)
+        return result
+
+    def test_calc_btc_benchmark_basic(self):
+        """Retourne les métriques correctes pour une série simple."""
+        # Prix qui monte de 40k à 50k (+25%)
+        candles = self._make_btc_candles([40_000.0, 42_000.0, 48_000.0, 50_000.0])
+        result = PortfolioBacktester._calc_btc_benchmark(candles, 10_000.0)
+
+        assert result is not None
+        assert result["entry_price"] == 40_000.0
+        assert result["exit_price"] == 50_000.0
+        assert abs(result["return_pct"] - 25.0) < 0.01
+        assert result["final_equity"] == pytest.approx(12_500.0, rel=1e-3)
+
+    def test_calc_btc_benchmark_flat(self):
+        """Prix flat → return 0%, drawdown 0%, sharpe proche de 0."""
+        candles = self._make_btc_candles([50_000.0] * 100)
+        result = PortfolioBacktester._calc_btc_benchmark(candles, 10_000.0)
+
+        assert result is not None
+        assert result["return_pct"] == pytest.approx(0.0, abs=0.01)
+        assert result["max_drawdown_pct"] == pytest.approx(0.0, abs=0.01)
+
+    def test_calc_btc_benchmark_drawdown(self):
+        """Drawdown calculé correctement : peak 100 → trough 50 = -50%."""
+        # Monte à 100, redescend à 50
+        prices = [80.0, 90.0, 100.0, 80.0, 60.0, 50.0]
+        candles = self._make_btc_candles(prices)
+        result = PortfolioBacktester._calc_btc_benchmark(candles, 10_000.0)
+
+        assert result is not None
+        assert result["max_drawdown_pct"] == pytest.approx(-50.0, rel=0.01)
+
+    def test_calc_btc_benchmark_equity_curve_subsampled(self):
+        """equity_curve contient max 500 points même avec 2000 candles."""
+        candles = self._make_btc_candles([50_000.0 + i for i in range(2000)])
+        result = PortfolioBacktester._calc_btc_benchmark(candles, 10_000.0)
+
+        assert result is not None
+        assert len(result["equity_curve"]) <= 501
+        # Premier et dernier points présents
+        assert "timestamp" in result["equity_curve"][0]
+        assert "equity" in result["equity_curve"][0]
+
+    def test_calc_btc_benchmark_none_on_insufficient_data(self):
+        """Retourne None si moins de 2 candles."""
+        candles = self._make_btc_candles([50_000.0])
+        result = PortfolioBacktester._calc_btc_benchmark(candles, 10_000.0)
+        assert result is None
+
+        result_empty = PortfolioBacktester._calc_btc_benchmark([], 10_000.0)
+        assert result_empty is None
+
+    def test_calc_btc_benchmark_alpha_positive(self):
+        """Alpha = portfolio_return - btc_return."""
+        bm = {"return_pct": 10.0}
+        portfolio_return = 25.0
+        alpha = portfolio_return - bm["return_pct"]
+        assert alpha == 15.0
+
+    def test_portfolio_result_btc_fields_default_none(self):
+        """PortfolioResult sans benchmark a btc_benchmark=None et alpha=0."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["BTC/USDT"],
+            final_equity=11_000.0,
+            total_return_pct=10.0,
+            total_trades=5,
+            win_rate=60.0,
+            realized_pnl=1000.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-5.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.3,
+            peak_open_positions=3,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+        )
+        assert result.btc_benchmark is None
+        assert result.alpha_vs_btc == 0.0
+
+    def test_format_portfolio_report_with_benchmark(self):
+        """Le rapport CLI inclut la section benchmark si btc_benchmark présent."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["BTC/USDT"],
+            final_equity=12_500.0,
+            total_return_pct=25.0,
+            total_trades=10,
+            win_rate=60.0,
+            realized_pnl=2500.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-8.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.3,
+            peak_open_positions=3,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+            btc_benchmark={
+                "return_pct": 10.0,
+                "max_drawdown_pct": -15.0,
+                "sharpe_ratio": 0.85,
+                "final_equity": 11_000.0,
+                "entry_price": 40_000.0,
+                "exit_price": 44_000.0,
+                "equity_curve": [],
+            },
+            alpha_vs_btc=15.0,
+        )
+        report = format_portfolio_report(result)
+        assert "Benchmark BTC Buy-Hold" in report
+        assert "Alpha vs BTC" in report
+        assert "+15.0" in report
+        assert "OUTPERFORME" in report
+
+    def test_format_portfolio_report_without_benchmark(self):
+        """Le rapport CLI n'inclut PAS la section benchmark si btc_benchmark est None."""
+        result = PortfolioResult(
+            initial_capital=10_000.0,
+            n_assets=1,
+            period_days=90,
+            assets=["BTC/USDT"],
+            final_equity=10_500.0,
+            total_return_pct=5.0,
+            total_trades=5,
+            win_rate=50.0,
+            realized_pnl=500.0,
+            force_closed_pnl=0.0,
+            max_drawdown_pct=-3.0,
+            max_drawdown_date=None,
+            max_drawdown_duration_hours=0.0,
+            peak_margin_ratio=0.2,
+            peak_open_positions=2,
+            peak_concurrent_assets=1,
+            kill_switch_triggers=0,
+            kill_switch_events=[],
+            snapshots=[],
+            per_asset_results={},
+            btc_benchmark=None,
+        )
+        report = format_portfolio_report(result)
+        assert "Benchmark BTC" not in report

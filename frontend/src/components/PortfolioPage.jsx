@@ -49,6 +49,60 @@ function MetricsGrid({ run }) {
   )
 }
 
+function BenchmarkBTC({ run }) {
+  const btcReturn = run.btc_benchmark_return_pct
+  if (btcReturn == null) return null
+
+  const alpha = run.alpha_vs_btc ?? 0
+  const btcDD = run.btc_benchmark_max_dd_pct ?? 0
+  const btcSharpe = run.btc_benchmark_sharpe ?? 0
+  const outperforms = alpha >= 0
+
+  return (
+    <div style={{ marginTop: 12, padding: '12px 16px', background: '#111', borderRadius: 8, border: '1px solid #333' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#aaa' }}>Benchmark BTC Buy-Hold</span>
+        <span style={{
+          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+          background: outperforms ? '#065f4620' : '#7f1d1d20',
+          color: outperforms ? '#10b981' : '#ef4444',
+          border: `1px solid ${outperforms ? '#10b98140' : '#ef444440'}`,
+        }}>
+          {outperforms ? '▲' : '▼'} {outperforms ? '+' : ''}{alpha.toFixed(1)}% alpha
+        </span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        {[
+          {
+            label: 'Return BTC',
+            value: `${btcReturn >= 0 ? '+' : ''}${btcReturn.toFixed(1)}%`,
+            sub: `Portfolio : ${run.total_return_pct >= 0 ? '+' : ''}${run.total_return_pct.toFixed(1)}%`,
+            color: btcReturn >= 0 ? '#10b981' : '#ef4444',
+          },
+          {
+            label: 'Max DD BTC',
+            value: `${btcDD.toFixed(1)}%`,
+            sub: `Portfolio : ${run.max_drawdown_pct.toFixed(1)}%`,
+            color: '#f59e0b',
+          },
+          {
+            label: 'Sharpe BTC',
+            value: btcSharpe.toFixed(2),
+            sub: null,
+            color: '#888',
+          },
+        ].map(item => (
+          <div key={item.label} style={{ background: '#1a1a1a', borderRadius: 6, padding: '8px 10px' }}>
+            <div style={{ fontSize: 11, color: '#666', marginBottom: 3 }}>{item.label}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: item.color, fontFamily: 'monospace' }}>{item.value}</div>
+            {item.sub && <div style={{ fontSize: 10, color: '#555', marginTop: 2 }}>{item.sub}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function AssetTable({ data }) {
   if (!data) return null
   const sorted = Object.entries(data).sort((a, b) => (b[1].net_pnl || 0) - (a[1].net_pnl || 0))
@@ -291,14 +345,24 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
     })
   }, [])
 
-  // Equity curves pour le chart
+  // Equity curves pour le chart (+ overlay BTC si disponible)
   const equityCurves = useMemo(() => {
     if (!detail?.equity_curve) return []
-    return [{
+    const curves = [{
       label: detail.label || `Run #${detail.id}`,
       points: detail.equity_curve,
       initialCapital: detail.initial_capital,
     }]
+    if (detail.btc_equity_curve && detail.btc_equity_curve.length > 0) {
+      curves.push({
+        label: 'BTC Buy-Hold',
+        color: '#f59e0b',
+        dashed: true,
+        points: detail.btc_equity_curve,
+        initialCapital: detail.initial_capital,
+      })
+    }
+    return curves
   }, [detail])
 
   // Equity curves pour la comparaison
@@ -561,6 +625,9 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
 
               {/* Métriques */}
               <MetricsGrid run={detail} />
+
+              {/* Benchmark BTC */}
+              <BenchmarkBTC run={detail} />
 
               {/* Table par asset */}
               <div>

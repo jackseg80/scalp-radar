@@ -184,3 +184,75 @@ def test_subsample_equity_curve():
     # step = max(1, 2000//500) = 4, donc ~500 points
     assert len(curve) <= 501
     assert len(curve) >= 400
+
+
+def test_save_and_get_btc_benchmark(db_path):
+    """Round-trip : benchmark BTC sauvegardé et relu correctement."""
+    btc_curve = [{"timestamp": "2025-06-01T00:00:00+00:00", "equity": 10000.0}]
+    result = _make_result()
+    result.btc_benchmark = {
+        "return_pct": 12.5,
+        "max_drawdown_pct": -18.3,
+        "sharpe_ratio": 0.92,
+        "final_equity": 11_250.0,
+        "entry_price": 40_000.0,
+        "exit_price": 45_000.0,
+        "equity_curve": btc_curve,
+    }
+    result.alpha_vs_btc = 1.0 - 12.5  # total_return_pct=1.0 - btc=12.5
+
+    result_id = save_result_sync(
+        db_path, result, "grid_atr", "binance", 45.0, 24, 120.0, "test-btc"
+    )
+
+    detail = asyncio.run(get_backtest_by_id_async(db_path, result_id))
+    assert detail is not None
+    assert detail["btc_benchmark_return_pct"] == pytest.approx(12.5)
+    assert detail["btc_benchmark_max_dd_pct"] == pytest.approx(-18.3)
+    assert detail["btc_benchmark_sharpe"] == pytest.approx(0.92)
+    assert detail["alpha_vs_btc"] == pytest.approx(1.0 - 12.5)
+    # equity_curve parsée comme liste
+    assert isinstance(detail["btc_equity_curve"], list)
+    assert len(detail["btc_equity_curve"]) == 1
+    assert detail["btc_equity_curve"][0]["equity"] == 10_000.0
+
+
+def test_btc_benchmark_null_when_absent(db_path):
+    """Un run sans benchmark BTC stocke NULL en DB et retourne [] pour btc_equity_curve."""
+    result = _make_result()
+    # btc_benchmark par défaut = None
+
+    result_id = save_result_sync(
+        db_path, result, "grid_atr", "binance", 45.0, 24, None, None
+    )
+
+    detail = asyncio.run(get_backtest_by_id_async(db_path, result_id))
+    assert detail is not None
+    assert detail["btc_benchmark_return_pct"] is None
+    assert detail["btc_equity_curve"] == []
+    assert detail["alpha_vs_btc"] is None
+
+
+def test_list_includes_btc_columns(db_path):
+    """La liste des backtests inclut btc_benchmark_return_pct et alpha_vs_btc."""
+    result = _make_result()
+    result.btc_benchmark = {
+        "return_pct": 8.0,
+        "max_drawdown_pct": -12.0,
+        "sharpe_ratio": 0.7,
+        "final_equity": 10_800.0,
+        "entry_price": 40_000.0,
+        "exit_price": 43_200.0,
+        "equity_curve": [],
+    }
+    result.alpha_vs_btc = 1.0 - 8.0
+
+    save_result_sync(db_path, result, "grid_atr", "binance", 45.0, 24, None, None)
+
+    runs = asyncio.run(get_backtests_async(db_path))
+    assert len(runs) == 1
+    assert "btc_benchmark_return_pct" in runs[0]
+    assert "alpha_vs_btc" in runs[0]
+    assert runs[0]["btc_benchmark_return_pct"] == pytest.approx(8.0)
+    # btc_equity_curve NON inclus dans la liste (trop volumineux)
+    assert "btc_equity_curve" not in runs[0]

@@ -138,6 +138,10 @@ class PortfolioResult:
     min_liquidation_distance_pct: float = 100.0
     worst_case_sl_loss_pct: float = 0.0
 
+    # Benchmark BTC buy-hold (même période, même capital initial)
+    btc_benchmark: dict | None = None  # {return_pct, max_drawdown_pct, sharpe_ratio, final_equity, entry_price, exit_price}
+    alpha_vs_btc: float = 0.0  # total_return_pct - btc_return_pct
+
 
 # ---------------------------------------------------------------------------
 # Portfolio Backtester
@@ -246,6 +250,18 @@ class PortfolioBacktester:
             except Exception:
                 pass
 
+        # Benchmark BTC buy-hold
+        btc_candles = await self._load_btc_candles(db, start, end)
+        btc_benchmark = self._calc_btc_benchmark(btc_candles, self._initial_capital)
+        if btc_benchmark:
+            logger.info(
+                "Benchmark BTC : entry={:.0f}$ exit={:.0f}$ return={:+.1f}% DD={:.1f}%",
+                btc_benchmark["entry_price"], btc_benchmark["exit_price"],
+                btc_benchmark["return_pct"], btc_benchmark["max_drawdown_pct"],
+            )
+        else:
+            logger.warning("Benchmark BTC : aucune candle BTC/USDT disponible sur la période")
+
         await db.close()
 
         if not candles_by_symbol:
@@ -314,6 +330,7 @@ class PortfolioBacktester:
             runner_keys,
             period_days,
             liquidation_event=liquidation_event,
+            btc_benchmark=btc_benchmark,
         )
 
     # ------------------------------------------------------------------
@@ -344,6 +361,84 @@ class PortfolioBacktester:
             else:
                 logger.warning("  {} : aucune candle", symbol)
         return result
+
+    async def _load_btc_candles(
+        self,
+        db: Database,
+        start: datetime,
+        end: datetime,
+    ) -> list[Candle]:
+        """Charge les candles BTC/USDT pour le benchmark buy-hold.
+
+        Réutilise les candles déjà en mémoire si BTC est dans le portfolio,
+        sinon charge depuis la DB.
+        """
+        return await db.get_candles(
+            "BTC/USDT", "1h", start, end, limit=1_000_000, exchange=self._exchange
+        ) or []
+
+    @staticmethod
+    def _calc_btc_benchmark(
+        candles: list[Candle],
+        initial_capital: float,
+    ) -> dict | None:
+        """Calcule les métriques buy-hold BTC sur la période donnée.
+
+        Retourne un dict avec :
+          return_pct, max_drawdown_pct, sharpe_ratio, final_equity,
+          entry_price, exit_price, equity_curve (500 pts max)
+        """
+        if len(candles) < 2:
+            return None
+
+        entry = candles[0].close
+        if entry <= 0:
+            return None
+
+        exit_p = candles[-1].close
+        return_pct = (exit_p / entry - 1) * 100
+
+        # Max drawdown peak-to-trough
+        peak = candles[0].close
+        max_dd = 0.0
+        for c in candles:
+            if c.close > peak:
+                peak = c.close
+            dd = (c.close / peak - 1) * 100
+            if dd < max_dd:
+                max_dd = dd
+
+        # Sharpe annualisé (fréquence 1h = 24*365 périodes/an)
+        closes = [c.close for c in candles]
+        n = len(closes)
+        if n > 1:
+            returns = [(closes[i + 1] - closes[i]) / closes[i] for i in range(n - 1)]
+            mean_r = sum(returns) / len(returns)
+            variance = sum((r - mean_r) ** 2 for r in returns) / len(returns)
+            std_r = variance ** 0.5
+            sharpe = (mean_r / std_r * (24 * 365) ** 0.5) if std_r > 0 else 0.0
+        else:
+            sharpe = 0.0
+
+        # Equity curve normalisée (max 500 pts)
+        step = max(1, len(candles) // 500)
+        equity_curve = [
+            {
+                "timestamp": c.timestamp.isoformat(),
+                "equity": round(initial_capital * c.close / entry, 2),
+            }
+            for c in candles[::step]
+        ]
+
+        return {
+            "return_pct": round(return_pct, 2),
+            "max_drawdown_pct": round(max_dd, 2),
+            "sharpe_ratio": round(sharpe, 3),
+            "final_equity": round(initial_capital * (1 + return_pct / 100), 2),
+            "entry_price": round(entry, 2),
+            "exit_price": round(exit_p, 2),
+            "equity_curve": equity_curve,
+        }
 
     # ------------------------------------------------------------------
     # Création des runners
@@ -858,6 +953,7 @@ class PortfolioBacktester:
         runner_keys: list[str],
         period_days: int,
         liquidation_event: dict | None = None,
+        btc_benchmark: dict | None = None,
     ) -> PortfolioResult:
         """Construit le PortfolioResult final."""
         # P&L
@@ -937,6 +1033,11 @@ class PortfolioBacktester:
         first_runner = next(iter(runners.values()), None)
         leverage = first_runner._leverage if first_runner is not None else 6
 
+        alpha_vs_btc = (
+            round(total_return_pct - btc_benchmark["return_pct"], 2)
+            if btc_benchmark else 0.0
+        )
+
         return PortfolioResult(
             initial_capital=self._initial_capital,
             n_assets=len(runner_keys),
@@ -965,6 +1066,8 @@ class PortfolioBacktester:
             min_liquidation_distance_pct=round(min_liq, 2),
             worst_case_sl_loss_pct=round(max_worst_case, 2),
             leverage=leverage,
+            btc_benchmark=btc_benchmark,
+            alpha_vs_btc=alpha_vs_btc,
         )
 
 
@@ -1035,6 +1138,24 @@ def format_portfolio_report(result: PortfolioResult) -> str:
             f"Maintenance={evt['maintenance_margin']:.2f}"
         )
     lines.append("")
+
+    # Benchmark BTC
+    if result.btc_benchmark:
+        bm = result.btc_benchmark
+        lines.append("  --- Benchmark BTC Buy-Hold ---")
+        lines.append(f"  Entry BTC           : {bm['entry_price']:>10,.0f} $")
+        lines.append(f"  Exit BTC            : {bm['exit_price']:>10,.0f} $")
+        lines.append(f"  Return BTC          : {bm['return_pct']:>+9.1f} %")
+        lines.append(f"  Max DD BTC          : {bm['max_drawdown_pct']:>9.1f} %")
+        lines.append(f"  Sharpe BTC          : {bm['sharpe_ratio']:>9.2f}")
+        lines.append("")
+        lines.append("  --- Alpha vs BTC ---")
+        verdict = "OUTPERFORME" if result.alpha_vs_btc >= 0 else "SOUS-PERFORME"
+        alpha_str = f"{result.alpha_vs_btc:+.1f}"
+        lines.append(f"  Portfolio return    : {result.total_return_pct:>+9.1f} %")
+        lines.append(f"  BTC buy-hold        : {bm['return_pct']:>+9.1f} %")
+        lines.append(f"  Alpha               : {alpha_str:>9s} %  ({verdict})")
+        lines.append("")
 
     # Per-asset (trié par P&L)
     lines.append("  --- Par Runner ---")
