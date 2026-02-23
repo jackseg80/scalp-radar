@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Depends, Request, Query
 from loguru import logger
+
+from backend.api.executor_routes import verify_executor_key
 
 router = APIRouter(prefix="/api/simulator", tags=["simulator"])
 
@@ -112,8 +114,7 @@ async def simulator_performance(request: Request) -> dict:
     }
 
 
-# TODO: ajouter auth quand exposé hors réseau local
-@router.post("/kill-switch/reset")
+@router.post("/kill-switch/reset", dependencies=[Depends(verify_executor_key)])
 async def reset_kill_switch(request: Request) -> dict:
     """Reset le kill switch global et réactive tous les runners."""
     simulator = getattr(request.app.state, "simulator", None)

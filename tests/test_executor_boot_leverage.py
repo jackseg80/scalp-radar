@@ -157,12 +157,8 @@ class TestBootLeverage:
         exchange = _make_mock_exchange()
         executor = _make_executor(config=config, exchange=exchange)
 
-        # Patch ccxt.pro pour que start() utilise notre mock exchange
-        mock_ccxtpro = MagicMock()
-        mock_ccxtpro.bitget.return_value = exchange
-
         with (
-            patch.dict("sys.modules", {"ccxt.pro": mock_ccxtpro}),
+            patch.object(executor, "_create_exchange", return_value=exchange),
             patch.object(executor, "_reconcile_on_boot", new_callable=AsyncMock),
             patch.object(executor, "_watch_orders_loop", new_callable=AsyncMock),
             patch.object(executor, "_poll_positions_loop", new_callable=AsyncMock),
@@ -192,11 +188,8 @@ class TestBootLeverage:
         exchange = _make_mock_exchange()
         executor = _make_executor(config=config, exchange=exchange)
 
-        mock_ccxtpro = MagicMock()
-        mock_ccxtpro.bitget.return_value = exchange
-
         with (
-            patch.dict("sys.modules", {"ccxt.pro": mock_ccxtpro}),
+            patch.object(executor, "_create_exchange", return_value=exchange),
             patch.object(executor, "_reconcile_on_boot", new_callable=AsyncMock),
             patch.object(executor, "_watch_orders_loop", new_callable=AsyncMock),
             patch.object(executor, "_poll_positions_loop", new_callable=AsyncMock),

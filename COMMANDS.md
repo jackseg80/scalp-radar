@@ -644,6 +644,20 @@ uv run python -m scripts.grid_boltrend_diagnostic --n-candles 1000 --max-trades 
 uv run python -m scripts.grid_boltrend_diagnostic --output results/boltrend_log.txt
 ```
 
+### Parité Fast Engine vs BacktestEngine (parity_check)
+
+Vérifie la divergence entre le fast engine (Numba/numpy) et le BacktestEngine classique.
+Utile pour valider les résultats WFO après une modification du fast engine.
+Compare aussi les résultats Bitget vs Binance.
+
+```powershell
+# Vérification de parité sur vwap_rsi (défaut)
+uv run python scripts/parity_check.py
+
+# Stratégie spécifique via DEFAULT_PARAMS dans le script
+# (modifier les params en tête de fichier)
+```
+
 ---
 
 ## 15. Benchmark Fast Engine

@@ -286,11 +286,10 @@ class Executor:
 
     # ─── Lifecycle ─────────────────────────────────────────────────────
 
-    async def start(self) -> None:
-        """Initialise l'exchange ccxt Pro, réconcilie, lance la surveillance."""
+    def _create_exchange(self) -> Any:
+        """Crée l'instance ccxt Pro Bitget. Isolé pour faciliter le mock en tests."""
         import ccxt.pro as ccxtpro
-
-        self._exchange = ccxtpro.bitget({
+        return ccxtpro.bitget({
             "apiKey": self._config.secrets.bitget_api_key,
             "secret": self._config.secrets.bitget_secret,
             "password": self._config.secrets.bitget_passphrase,
@@ -298,6 +297,10 @@ class Executor:
             "options": {"defaultType": "swap"},
             "sandbox": False,  # Sandbox Bitget cassé (ccxt #25523) — mainnet only
         })
+
+    async def start(self) -> None:
+        """Initialise l'exchange ccxt Pro, réconcilie, lance la surveillance."""
+        self._exchange = self._create_exchange()
 
         try:
             # 1. Charger les marchés (min_order_size, tick_size réels)

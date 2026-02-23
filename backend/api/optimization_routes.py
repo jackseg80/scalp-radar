@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
+from backend.api.executor_routes import verify_executor_key
 from backend.core.config import get_config
 from backend.optimization.optimization_db import (
     get_combo_results_async,
@@ -614,7 +615,7 @@ async def get_optimization_heatmap(
 # ─── Apply best params to strategies.yaml ─────────────────────────────────
 
 
-@router.post("/apply")
+@router.post("/apply", dependencies=[Depends(verify_executor_key)])
 async def apply_optimization_params(
     strategy_name: str | None = Query(default=None, description="Stratégie (ou toutes si omis)"),
     ignore_tf_conflicts: bool = Query(default=False, description="Exclure silencieusement les outliers timeframe"),

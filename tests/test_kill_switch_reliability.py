@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -23,6 +23,9 @@ from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.core.state_manager import StateManager
 from backend.strategies.base_grid import BaseGridStrategy
+
+
+_TEST_API_KEY = "test-ks-reset-key"
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -134,6 +137,13 @@ def _setup_mock_app(kill_switch=False, reason=None):
 class TestResetEndpoint:
     """Tests pour l'endpoint POST /api/simulator/kill-switch/reset."""
 
+    @pytest.fixture(autouse=True)
+    def patch_auth(self):
+        mock_cfg = MagicMock()
+        mock_cfg.secrets.sync_api_key = _TEST_API_KEY
+        with patch("backend.api.executor_routes.get_config", return_value=mock_cfg):
+            yield
+
     @pytest.mark.asyncio
     async def test_reset_endpoint_resets_global(self):
         """POST reset appelle simulator.reset_kill_switch()."""
@@ -142,7 +152,7 @@ class TestResetEndpoint:
 
         transport = ASGITransport(app=mock_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/simulator/kill-switch/reset")
+            resp = await client.post("/api/simulator/kill-switch/reset", headers={"X-API-Key": _TEST_API_KEY})
 
         assert resp.status_code == 200
         data = resp.json()
@@ -158,7 +168,7 @@ class TestResetEndpoint:
 
         transport = ASGITransport(app=mock_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/simulator/kill-switch/reset")
+            resp = await client.post("/api/simulator/kill-switch/reset", headers={"X-API-Key": _TEST_API_KEY})
 
         assert resp.json()["runners_reactivated"] == 3
 
@@ -170,7 +180,7 @@ class TestResetEndpoint:
 
         transport = ASGITransport(app=mock_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.post("/api/simulator/kill-switch/reset")
+            await client.post("/api/simulator/kill-switch/reset", headers={"X-API-Key": _TEST_API_KEY})
 
         mock_app.state.state_manager.save_runner_state.assert_called_once()
 
@@ -181,7 +191,7 @@ class TestResetEndpoint:
 
         transport = ASGITransport(app=mock_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/simulator/kill-switch/reset")
+            resp = await client.post("/api/simulator/kill-switch/reset", headers={"X-API-Key": _TEST_API_KEY})
 
         assert resp.status_code == 200
         assert resp.json()["status"] == "not_triggered"
@@ -194,7 +204,7 @@ class TestResetEndpoint:
 
         transport = ASGITransport(app=mock_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.post("/api/simulator/kill-switch/reset")
+            await client.post("/api/simulator/kill-switch/reset", headers={"X-API-Key": _TEST_API_KEY})
 
         mock_app.state.notifier.notify_anomaly.assert_called_once()
         call_args = mock_app.state.notifier.notify_anomaly.call_args
@@ -206,6 +216,13 @@ class TestResetEndpoint:
 
 class TestKillSwitchReason:
     """Tests pour la persistance et l'affichage de la raison du kill switch."""
+
+    @pytest.fixture(autouse=True)
+    def patch_auth(self):
+        mock_cfg = MagicMock()
+        mock_cfg.secrets.sync_api_key = _TEST_API_KEY
+        with patch("backend.api.executor_routes.get_config", return_value=mock_cfg):
+            yield
 
     @pytest.mark.asyncio
     async def test_kill_switch_reason_in_status(self):
@@ -254,7 +271,7 @@ class TestKillSwitchReason:
 
         transport = ASGITransport(app=mock_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.post("/api/simulator/kill-switch/reset")
+            await client.post("/api/simulator/kill-switch/reset", headers={"X-API-Key": _TEST_API_KEY})
 
         mock_app.state.simulator.reset_kill_switch.assert_called_once()
 
