@@ -242,6 +242,7 @@ class LiveStrategyRunner:
             return
 
         if self._kill_switch_triggered:
+            self.update_indicators_only(symbol, timeframe, candle)
             return
 
         try:
@@ -851,6 +852,10 @@ class GridStrategyRunner:
             return
 
         if self._kill_switch_triggered:
+            # Kill switch actif : pas de trades, mais on met à jour le
+            # close_buffer pour que build_context() retourne une SMA fraîche.
+            # L'Executor live lit ces données via get_runner_context().
+            self.update_indicators_only(symbol, timeframe, candle)
             return
 
         try:

@@ -144,3 +144,58 @@ class TestKillSwitchIndicators:
         await Simulator._dispatch_candle(sim, "BTC/USDT", "1h", _make_candle())
 
         assert sim._conditions_cache is None
+
+
+class TestRunnerKillSwitchIndicators:
+    """Kill switch RUNNER ne doit pas geler le close_buffer / SMA."""
+
+    @pytest.mark.asyncio
+    async def test_runner_kill_switch_updates_close_buffer(self):
+        """on_candle() avec kill switch runner met à jour _close_buffer."""
+        from backend.backtesting.simulator import GridStrategyRunner
+        from unittest.mock import MagicMock, patch
+        from collections import deque
+
+        runner = MagicMock(spec=GridStrategyRunner)
+        runner._kill_switch_triggered = True
+        runner._circuit_breaker_open = False
+        runner._strategy_tf = "1h"
+        runner._ma_period = 20
+        runner._close_buffer = {}
+
+        # Redirige vers la vraie implémentation de update_indicators_only
+        runner.update_indicators_only = lambda s, tf, c: GridStrategyRunner.update_indicators_only(
+            runner, s, tf, c
+        )
+
+        candle = _make_candle(close=79_000.0)
+        await GridStrategyRunner.on_candle(runner, "SOL/USDT", "1h", candle)
+
+        assert "SOL/USDT" in runner._close_buffer
+        assert runner._close_buffer["SOL/USDT"][-1] == 79_000.0
+
+    @pytest.mark.asyncio
+    async def test_runner_kill_switch_no_trades(self):
+        """on_candle() avec kill switch runner ne crée aucun trade ni position."""
+        from backend.backtesting.simulator import GridStrategyRunner
+
+        runner = MagicMock(spec=GridStrategyRunner)
+        runner._kill_switch_triggered = True
+        runner._circuit_breaker_open = False
+        runner._strategy_tf = "1h"
+        runner._ma_period = 20
+        runner._close_buffer = {}
+        runner._trades = []
+        runner._positions = {}
+
+        runner.update_indicators_only = lambda s, tf, c: GridStrategyRunner.update_indicators_only(
+            runner, s, tf, c
+        )
+        runner._on_candle_inner = MagicMock()
+
+        candle = _make_candle(close=79_000.0)
+        await GridStrategyRunner.on_candle(runner, "SOL/USDT", "1h", candle)
+
+        assert len(runner._trades) == 0
+        assert len(runner._positions) == 0
+        runner._on_candle_inner.assert_not_called()
