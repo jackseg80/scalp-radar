@@ -5,10 +5,11 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - ./.env:/app/.env:ro
       - ./config:/app/config:ro
     restart: unless-stopped
     healthcheck:
