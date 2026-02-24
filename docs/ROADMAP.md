@@ -3125,6 +3125,40 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 ---
 
+## PROCHAINES STRATÉGIES
+
+### Ordre de priorité
+
+1. **grid_funding** — Funding rate harvesting (LONG + SHORT)
+   - Edge structurel crypto (anomalie de marché garantie par l'exchange)
+   - Code existant (grid_funding.py), données funding en DB (Sprint 7b)
+   - Prérequis : audit données + funding dans PnL backtest + ajout SHORT
+   - Objectif : décorrélation avec grid_atr (cible r < 0.3)
+
+2. **Grid adaptatif** — ATR multiplier dynamique sur grid_atr
+   - Workflow B (A/B test), pas une nouvelle stratégie
+   - Moduler la largeur de grille selon le régime de volatilité
+   - Objectif : améliorer résilience crash, pas décorrélation
+
+3. **Pairs trading** — Spread mean-reversion (ex: ETH/BTC)
+   - Market-neutral par construction (fonctionne tous régimes)
+   - Refonte architecturale nécessaire (2 positions synchronisées)
+   - Phase 3 du projet, quand l'infra mono-asset est mature
+
+### Stratégies abandonnées
+
+- **grid_momentum** — Donchian breakout + pullback DCA
+  - Résultat : 1 Grade B / 19 assets (NO-GO), testé en 1h et 4h
+  - Raison : faux breakouts trop fréquents en crypto (83% range)
+
+- **grid_boltrend** — Bollinger + Supertrend
+  - Résultat : DSR 0/15, non viable (pré-corrections 40a, jamais re-testé)
+
+- **Stratégies mono-position** (vwap_rsi, momentum, bollinger, etc.)
+  - Résultat : toutes Grade F, l'edge vient du mécanisme DCA, pas des indicateurs
+
+---
+
 ## RESSOURCES
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
