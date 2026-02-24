@@ -42,8 +42,9 @@ async def get_equity_curve(
 
     result = simulator.get_equity_curve(since=since, strategy=strategy)
 
-    # Fallback DB si la mémoire est vide (après restart)
-    if not result.get("equity"):
+    # Fallback DB si la mémoire est vide (après restart).
+    # Note : get_equity_curve() ajoute toujours un point "now", donc on vérifie <= 1
+    if len(result.get("equity", [])) <= 1:
         db = getattr(request.app.state, "db", None)
         if db is not None:
             equity = await db.get_equity_curve_from_trades(since=since, strategy=strategy)

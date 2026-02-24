@@ -19,7 +19,7 @@ and presents results via a real-time dashboard.
 - **[docs/plans/](docs/plans/)** — Plans de sprint archivés (1 fichier par sprint)
   - Copier le plan dans `docs/plans/sprint-{n}-{nom}.md` à chaque fin de sprint
 - **[docs/audit/](docs/audit/)** — Rapports d'audit (`audit-{sujet}-{YYYYMMDD}.md`)
-- **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 16 stratégies
+- **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 17 stratégies
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Architecture runtime, flux de données, boot/shutdown
 - **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI — **consulter avant de proposer des commandes**
 - **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Dépannage production
@@ -64,15 +64,15 @@ scalp-radar/
 ├── config/            # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/          # models, config, database, indicators, state_manager, data_engine
-│   ├── strategies/    # base, base_grid, factory + 16 stratégies
+│   ├── strategies/    # base, base_grid, factory + 17 stratégies
 │   ├── optimization/  # walk_forward, overfitting, report, indicator_cache, fast_backtest
 │   ├── backtesting/   # engine, multi_engine, simulator, arena, portfolio_engine
 │   ├── execution/     # executor, executor_manager, risk_manager, adaptive_selector
 │   ├── api/           # server, routes (simulator, conditions, arena, executor, websocket, portfolio)
 │   ├── alerts/        # telegram, notifier, heartbeat
 │   └── monitoring/    # watchdog
-├── frontend/          # React + Vite (32 components)
-├── tests/             # pytest (~1807 tests — voir ROADMAP.md)
+├── frontend/          # React + Vite (48 components)
+├── tests/             # pytest (~1840 tests — voir ROADMAP.md)
 ├── scripts/           # backfill, fetch_history, optimize, portfolio_backtest, stress_test_leverage
 ├── docs/plans/        # Sprint plans archivés
 └── docs/audit/        # Rapports d'audit
@@ -109,8 +109,8 @@ Détails complets : voir **[STRATEGIES.md](docs/STRATEGIES.md)** | Workflow WFO 
 
 ## Config Files (5 YAML)
 
-- `assets.yaml` — 21 assets, timeframes, groupes corrélation
-- `strategies.yaml` — 16 stratégies + per_asset overrides
+- `assets.yaml` — 19 assets, timeframes, groupes corrélation
+- `strategies.yaml` — 17 stratégies + per_asset overrides
 - `risk.yaml` — kill switch, sizing, fees, slippage, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits
 - `param_grids.yaml` — espaces de recherche WFO + config per-strategy
