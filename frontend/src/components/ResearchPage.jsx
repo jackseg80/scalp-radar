@@ -26,6 +26,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
     filters: {
       strategy: '',
       asset: '',
+      timeframe: '',
       minGrade: '',
     },
     sortBy: 'total_score',
@@ -122,6 +123,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
     let filtered = results.results.filter(r => {
       if (filters.strategy && r.strategy_name !== filters.strategy) return false
       if (filters.asset && r.asset !== filters.asset) return false
+      if (filters.timeframe && (r.timeframe || '1h') !== filters.timeframe) return false
       if (filters.minGrade) {
         const gradeOrder = { A: 4, B: 3, C: 2, D: 1, F: 0 }
         if (gradeOrder[r.grade] < gradeOrder[filters.minGrade]) return false
@@ -164,6 +166,11 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
   const assets = useMemo(() => {
     if (!results || !results.results) return []
     return [...new Set(results.results.map(r => r.asset))].sort()
+  }, [results])
+
+  const timeframes = useMemo(() => {
+    if (!results || !results.results) return []
+    return [...new Set(results.results.map(r => r.timeframe || '1h'))].sort()
   }, [results])
 
   // Apply params
@@ -511,6 +518,17 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
           </select>
 
           <select
+            value={filters.timeframe}
+            onChange={(e) => setFilters({ ...filters, timeframe: e.target.value })}
+            className="filter-select"
+          >
+            <option value="">Tous les TF</option>
+            {timeframes.map(tf => (
+              <option key={tf} value={tf}>{tf}</option>
+            ))}
+          </select>
+
+          <select
             value={filters.minGrade}
             onChange={(e) => setFilters({ ...filters, minGrade: e.target.value })}
             className="filter-select"
@@ -630,6 +648,11 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
           {filters.minGrade && (
             <button className="btn-link" onClick={() => setFilters({...filters, minGrade: ''})}>
               Retirer le filtre grade ({filters.minGrade})
+            </button>
+          )}
+          {filters.timeframe && (
+            <button className="btn-link" onClick={() => setFilters({...filters, timeframe: ''})}>
+              Retirer le filtre TF ({filters.timeframe})
             </button>
           )}
           {filters.asset && (

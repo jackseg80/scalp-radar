@@ -377,11 +377,13 @@ async def run_optimization(
     ]
 
     # Sauvegarde JSON + DB
+    # Utiliser le timeframe du best combo s'il est dans les params optimisés
+    saved_tf = report.recommended_params.get("timeframe", main_tf)
     filepath, result_id = save_report(
         report,
         wfo_windows=windows_serialized,
         duration=None,  # TODO: tracker la durée si nécessaire
-        timeframe=main_tf,
+        timeframe=saved_tf,
         combo_results=wfo.combo_results,  # Sprint 14b
         regime_analysis=wfo.regime_analysis,  # Sprint 15b
     )
