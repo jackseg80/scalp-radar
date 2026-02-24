@@ -107,7 +107,7 @@ Si la stratégie fait du SHORT (grid_multi_tf, grid_range_atr) → rester dans l
 
 ```bash
 # Tous les assets
-uv run python -m scripts.optimize --strategy grid_atr --all-symbols
+uv run python -m scripts.optimize --strategy grid_atr --all-symbols --subprocess -v
 
 # Un seul asset
 uv run python -m scripts.optimize --strategy grid_atr --symbol BTC/USDT -v
@@ -133,7 +133,7 @@ Le WFO fait :
 
 **window_factor** (fix critique Sprint 38b) : pénalise les combos évalués sur peu de fenêtres. Sans ça, des combos "parfaits" sur 1-2 fenêtres polluent les résultats.
 
-### Étape 1b — Appliquer les résultats (TOUS les Grade A/B)
+### Étape 2 — Appliquer les résultats (TOUS les Grade A/B)
 
 ```bash
 # Appliquer les params Grade A/B dans strategies.yaml — TOUS les assets, sans filtre
@@ -155,9 +155,13 @@ uv run python -m scripts.optimize --strategy grid_atr --symbols BCH/USDT --force
 uv run python -m scripts.optimize --strategy grid_atr --apply --exclude BCH/USDT
 ```
 
-### Étape 2 — Portfolio backtest (LE vrai filtre)
+### Étape 3 — Portfolio backtest (LE vrai filtre)
 
-Simule TOUS les assets Grade A/B ensemble avec capital partagé, comme en production :
+> **IMPORTANT — CHAQUE STRATÉGIE EST INDÉPENDANTE** : Chaque stratégie a son propre sous-compte
+> Bitget avec son propre capital. On backteste chaque stratégie séparément.
+> Ne PAS utiliser `--strategies "strat1:...+strat2:..."` — ce mode ne correspond pas à la production.
+
+Simule TOUS les assets Grade A/B d'**une seule stratégie** avec capital partagé, comme en production :
 
 ```bash
 # Auto-détection durée (max historique commun)
@@ -166,7 +170,7 @@ uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --ca
 # Durée spécifique
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 365 --capital 1000
 
-# Sauvegarder en DB
+# Sauvegarder en DB (requis pour les étapes 3b, 5 et 6)
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --save --label "grid_atr_7x"
 
 # Comparer des leverages
@@ -191,7 +195,7 @@ Référence complète des flags : voir [COMMANDS.md § 12](../COMMANDS.md#12-por
 > vus en Deep Analysis peuvent être compensés par la diversification. Seul le résultat combiné compte.
 > Exemple réel : grid_boltrend, 4/6 assets AT RISK individuellement → portfolio **+552.2%, DD -15.3%**.
 
-### Étape 2b — Deep Analysis post-WFO (DIAGNOSTIC — si portfolio échoue)
+### Étape 3b — Deep Analysis post-WFO (DIAGNOSTIC — pas un filtre)
 
 ```bash
 uv run python -m scripts.analyze_wfo_deep --strategy grid_atr
@@ -212,7 +216,7 @@ uv run python -m scripts.analyze_wfo_deep --strategy grid_atr
 - `[~~] BORDERLINE` : warnings seulement (DSR, trades faibles, OOS/IS élevé)
 - `[!?] AT RISK` : flags critiques détectés — tester l'impact sur le portfolio avant de décider
 
-### Étape 3 — Stress test leverage
+### Étape 4 — Stress test leverage
 
 Confirme que le leverage choisi tient sous pression :
 
@@ -226,20 +230,65 @@ Teste leverage ± 1x (ex: si 6x choisi → teste 5x, 6x, 7x) sur plusieurs fenê
 
 **Critères** : Liq distance > 50%, KS@45 = 0, W-SL < kill_switch - 5pts
 
-### Étape 4 — Corrélation (si multi-stratégie)
+### Étape 5 — Portfolio Robustness
+
+Valide la robustesse statistique du portfolio backtest sauvé à l'étape 3 :
 
 ```bash
-# Multi-stratégie portfolio
-uv run python -m scripts.portfolio_backtest --strategies "grid_atr:assets1+grid_multi_tf:assets2" --capital 1000
+uv run python -m scripts.portfolio_robustness --label "<label_étape_3>" --save
 ```
 
-Mesurer la corrélation des drawdowns entre stratégies. Si r < 0.3 → bonne diversification. Optimiser l'allocation (ex: 40/60) pour minimiser le DD combiné.
+4 méthodes complémentaires :
+- **Block Bootstrap** (5000 sims, blocs 7j) — CI95 sur return et max DD, probabilité de perte
+- **Regime Stress** (5 scénarios × 1000 sims) — bear prolongé, double crash, range permanent, bull run, crypto winter
+- **Historical Stress** — performance réelle pendant COVID, China ban, LUNA, FTX, Aug 2024 crash
+- **CVaR** — tail risk journalier, compound 30j, par régime
 
-### Étape 5 — Paper trading (≥ 2 semaines)
+**Critères GO/NO-GO** :
+- CI95 return borne basse > 0%
+- Probabilité de perte < 10%
+- CVaR 5% 30j (compound) < kill_switch (45%)
+- Survit à ≥ 3/5 crashes historiques avec DD < -40%
+
+**Verdicts** :
+- `VIABLE` (tout vert) → paper trading
+- `CAUTION` (1 warning) → paper trading 1 mois avec surveillance renforcée
+- `FAIL` (≥ 2 critères rouges) → investiguer avant de déployer
+
+> Note : le `--label` doit correspondre exactement au label utilisé lors du `--save` à l'étape 3.
+
+### Étape 6 — Corrélation inter-stratégies (si multi-stratégie)
+
+> **Rappel** : chaque stratégie a son propre sous-compte Bitget avec son propre capital.
+> L'objectif ici n'est pas de créer un portfolio unifié, mais de vérifier que les stratégies
+> ne crashent pas au même moment. L'allocation = proportion de capital entre les sous-comptes.
+
+```bash
+# Comparer la corrélation DD entre deux labels sauvés
+uv run python -m scripts.analyze_correlation --labels "grid_atr_7x,grid_multi_tf_6x"
+
+# Lister tous les labels disponibles
+uv run python -m scripts.analyze_correlation --list
+
+# Avec noms personnalisés pour le rapport
+uv run python -m scripts.analyze_correlation --labels "grid_atr_7x,grid_multi_tf_6x" --label-names "ATR,MTF"
+```
+
+Référence complète des flags : voir [COMMANDS.md § 20](../COMMANDS.md#20-analyze-correlation).
+
+Mesure la corrélation des drawdowns entre stratégies. **Cible : r < 0.3**.
+
+- Si r < 0.3 → bonne diversification → optimiser l'allocation (ex: 40/60 ATR/MTF)
+- Si r ≥ 0.3 → les stratégies crashent ensemble → réévaluer l'allocation ou ne pas combiner
+
+### Étape 7 — Paper trading (≥ 2 semaines)
 
 Déployer avec `enabled: true, live_eligible: false` sur le serveur. Observer les signaux, les trades paper, vérifier la cohérence avec le backtest.
 
-### Étape 6 — Live trading (progressif)
+- Verdict **VIABLE** → paper minimum 2 semaines
+- Verdict **CAUTION** → paper minimum 1 mois avec surveillance renforcée
+
+### Étape 8 — Live trading (progressif)
 
 1. Sous-compte Bitget dédié + API keys (voir [COMMANDS.md § 21](../COMMANDS.md#21-multi-executor-sprint-36b))
 2. `live_eligible: true` + leverage réduit (3x)
@@ -259,11 +308,15 @@ uv run python -m scripts.optimize --regrade --strategy grid_atr
 uv run python -m scripts.analyze_wfo_regression --strategy grid_atr --leverage 7
 ```
 
-### Multi-stratégie portfolio
+### ~~Multi-stratégie portfolio~~ (déprécié)
+
+> **DÉPRÉCIÉ** : le flag `--strategies` ne correspond pas à la production (chaque stratégie a son
+> propre sous-compte Bitget). Backtester chaque stratégie séparément (étape 3) puis comparer
+> avec `analyze_correlation` (étape 6).
+
 ```bash
-uv run python -m scripts.portfolio_backtest \
-  --strategies "grid_atr:BTC/USDT,DOGE/USDT+grid_multi_tf:ETH/USDT,ADA/USDT" \
-  --capital 2000 --days auto
+# Comparer la corrélation DD entre deux stratégies déjà backtestées
+uv run python -m scripts.analyze_correlation --labels "label_strat1,label_strat2"
 ```
 
 Pour toutes les commandes CLI : voir [COMMANDS.md](../COMMANDS.md).
@@ -322,10 +375,10 @@ L'analyse par régime est intégrée au portfolio backtest :
 
 | Régime | Définition | % temps typique |
 |--------|-----------|-----------------|
-| RANGE | BTC varie < ±15% sur 30j | ~83% |
-| BULL | BTC > +15% sur 30j | ~13% |
-| BEAR | BTC < -15% sur 30j | ~2% |
-| CRASH | BTC < -10% sur 7j | ~2% |
+| RANGE | BTC varie < ±20% sur 30j | ~83% |
+| BULL | BTC > +20% sur 30j | ~13% |
+| BEAR | BTC < -20% sur 30j | ~2% |
+| CRASH | BTC DD > -30% en ≤ 14j | ~2% |
 
 Les stratégies grid (mean-reversion) excellent en RANGE, sont rentables en BULL (mais sous-performent HODL), et sont quasi-neutres en BEAR/CRASH.
 
@@ -367,6 +420,23 @@ Les stratégies grid (mean-reversion) excellent en RANGE, sont rentables en BULL
 | Max DD | **-5.52%** |
 | Ratio return/DD | **52.6** |
 | Corrélation DD | r=0.18 |
+
+### Robustness — Sprint 44
+
+| Stratégie | Verdict | CI95 borne basse | Prob. perte | CVaR 30j | Crashes |
+|-----------|---------|-----------------|-------------|----------|---------|
+| grid_atr 14 assets 7x | **VIABLE** | +157% | 0.0% | 26.9% < 45% | 1/1 OK |
+| grid_multi_tf 14 assets 6x | **VIABLE** | +121% | 0.0% | 35.6% < 45% | 1/1 OK |
+| grid_boltrend 6 assets 6x | **CAUTION** | +177% | 0.0% | 57.2% > 45% | 4/4 OK |
+
+**Note grid_boltrend** : seul critère en échec = CVaR 30j (57.2% vs kill_switch 45%).
+Tous les autres critères sont verts. Paper 1 mois avec surveillance renforcée.
+
+### Corrélation inter-stratégies — Sprint 44b
+
+| Paire | Corrélation DD (r) | Verdict | Allocation optimale |
+|-------|-------------------|---------|---------------------|
+| grid_atr / grid_multi_tf | **r = 0.18** | Bonne diversification (< 0.3) | 40% ATR / 60% MTF |
 
 ---
 

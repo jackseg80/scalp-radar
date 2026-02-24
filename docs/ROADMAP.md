@@ -2903,7 +2903,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 ## ÉTAT ACTUEL (24 février 2026)
 
 - **1840 tests passants**, 0 régression (+33 Sprint grid_momentum)
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
@@ -3008,7 +3008,26 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Résultats grid_boltrend documentés** : WFO 6 Grade B / 19 assets (BTC, ETH, DOGE, LINK, DYDX, BCH) — Leverage 6x — Portfolio backtest 2008j : **+552.2%, DD -15.3%, Alpha vs BTC +92.1%, 0 KS, tous régimes positifs sauf CRASH (-0.37$/j quasi-neutre)** — Stress test 6x confirmé (0 KS sur toutes fenêtres)
   - **Fichiers** : `scripts/analyze_wfo_deep.py`, `docs/WORKFLOW_WFO.md`, `docs/STRATEGIES.md`, `COMMANDS.md`, `docs/ROADMAP.md`
   - **Tests** : 0 (corrections terminologie + docs uniquement)
-- **Prochaine étape** : Grid adaptatif (ATR multiplier dynamique sur grid_atr, Workflow B) ou Pairs trading (ETH/BTC spread, Phase 3)
+- **Sprint 44 Portfolio Robustness Analysis** (fév 2026) — Validation robustesse statistique avant déploiement :
+  - **Problème** : un portfolio backtest donne un seul chemin historique, susceptible de data mining bias. Exemple : grid_boltrend +552%, DD -15.3% — mais DSR=0 sur certains assets, période commune 126j seulement.
+  - **Solution** : `scripts/portfolio_robustness.py` — 4 méthodes complémentaires :
+    - **Block Bootstrap** (5000 sims) : CI95 return/DD, probabilité de perte
+    - **Regime Stress** (5 scénarios × 1000 sims) : bear prolongé, double crash, range permanent, bull run, crypto winter
+    - **Historical Stress** : performance réelle pendant COVID, China ban, LUNA, FTX, Aug 2024
+    - **CVaR** (Conditional Value at Risk) : tail risk journalier + compound annualisé + par régime
+  - **Verdict automatique** : VIABLE / CAUTION / FAIL basé sur 4 critères GO/NO-GO
+  - **Fichiers** : `scripts/portfolio_robustness.py`, `COMMANDS.md` (§ 19), `docs/ROADMAP.md`
+  - **Tests** : 0 (script lecture seule, pas de tests unitaires requis)
+- **Sprint 44b Documentation Workflow** (fév 2026) — Mise à jour complète de la documentation post-robustness :
+  - **Principe documenté** : CHAQUE STRATÉGIE EST INDÉPENDANTE — chaque stratégie a son propre sous-compte Bitget avec son propre capital. `portfolio_backtest --strategies` déprécié.
+  - **WORKFLOW_WFO.md** renumeroté : étapes 0-8 (Étape 2 = Apply, Étape 3 = Portfolio, Étape 5 = Robustness, Étape 6 = Corrélation avec `analyze_correlation`). Commande multi-stratégie `--strategies` dépréciée en section 4. Seuils régimes corrigés (±20%/30j, CRASH -30%/14j). Résultats robustness + corrélation ajoutés section 8.
+  - **BACKTEST_WFO.md** mis à jour : numérotation 0-8, note CHAQUE STRATÉGIE EST INDÉPENDANTE.
+  - **COMMANDS.md** : section `analyze_correlation` ajoutée (`--labels`, `--list`). Workflow post-WFO mis à jour vers 0-8.
+  - **STRATEGIES.md** : step 10 checklist `--subprocess -v`.
+  - **Corrélation ATR/MTF** : r=0.18 (< 0.3 → bonne diversification). Allocation 40% ATR / 60% MTF → Return +291%, Max DD **-5.52%**, ratio return/DD = 52.6.
+  - **Fichiers** : `docs/WORKFLOW_WFO.md`, `docs/BACKTEST_WFO.md`, `docs/STRATEGIES.md`, `COMMANDS.md`, `docs/ROADMAP.md`
+  - **Tests** : 0 (documentation uniquement)
+- **Prochaine étape** : Paper trading grid_atr (VIABLE 7x) + grid_multi_tf (VIABLE 6x) + grid_boltrend (CAUTION 6x, surveillance 1 mois). Ou Workflow B : Grid adaptatif (ATR multiplier dynamique sur grid_atr).
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
@@ -3032,6 +3051,33 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 **Décision** : grid_atr Top 10 = meilleur ratio rendement/risque. grid_trend échoue en forward (bear market sans trends prolongés).
 
 **Validation Bitget** : 7/21 assets grid_atr Sharpe négatif sur 90j Bitget récents (bear soutenu nov 2025 → fév 2026). WFO pas faux (fenêtres OOS 2022-2024 ont crashes AVEC recovery), mais le bear actuel piège le mean-reversion DCA.
+
+### Résultats Robustness — Sprint 44
+
+| Config | Verdict | CI95 low | Prob. perte | CVaR 30j | Crashes |
+|--------|---------|----------|-------------|----------|---------|
+| grid_atr 14 assets 7x | **VIABLE** | +157% | 0.0% | 26.9% < 45% | 1/1 OK |
+| grid_multi_tf 14 assets 6x | **VIABLE** | +121% | 0.0% | 35.6% < 45% | 1/1 OK |
+| grid_boltrend 6 assets 6x | **CAUTION** | +177% | 0.0% | 57.2% > 45% | 4/4 OK |
+
+**grid_boltrend CAUTION** : CVaR 30j dépasse le kill_switch (57.2% vs 45%). Tous les autres critères sont verts (0% prob. perte, CI95 >0%, survit 4/4 crashes historiques avec DD max -4.8% LUNA). Le risque est concentré dans les 5% pires jours (CVaR journalier CRASH = -4.4%). Paper trading avec surveillance renforcée (1 mois).
+
+**grid_atr + grid_multi_tf** : pleinement viables, les deux passent les 4 critères GO/NO-GO.
+
+### Allocation production (Sprint 44b)
+
+- **grid_multi_tf** : 1500$ (60%) — 6x cible, 3x actuellement (montée progressive)
+- **grid_atr** : 1000$ (40%) — 7x nominal, 3x en bear
+- **grid_boltrend** : paper only (curiosité, pas d'allocation)
+- Basé sur allocation optimale `analyze_correlation` : 40/60 ATR/MTF → Return +291%, Max DD **-5.52%**, ratio return/DD = 52.6
+
+### État live (février 2026)
+
+- **grid_atr** : LIVE 3x (baissé depuis 7x à cause du bear)
+  - BCH/USDT : position fermée manuellement (-47.8%)
+  - Leçon : **ne jamais changer le leverage avec des positions ouvertes**
+- **grid_multi_tf** : LIVE 3x (0 trades, filtre bear actif = correct)
+- **grid_boltrend** : PAPER 6x (BTC SHORT, 2 assets)
 
 ---
 

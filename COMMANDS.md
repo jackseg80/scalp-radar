@@ -888,6 +888,53 @@ uv run python -m scripts.diagnose_margin --strategy grid_boltrend --leverage 8 -
 
 Sortie : skip counts par asset/guard, timeline margin utilization, comparaison leverages.
 
+### Analyser la robustesse d'un portfolio backtest (bootstrap, stress, CVaR)
+
+```powershell
+# Analyser un backtest sauvé par label
+uv run python -m scripts.portfolio_robustness --label "grid_boltrend_6x_all_6B"
+
+# Comparer plusieurs backtests
+uv run python -m scripts.portfolio_robustness --labels "grid_atr_14assets_7x_post40a,grid_boltrend_6x_all_6B"
+
+# Paramètres optionnels
+uv run python -m scripts.portfolio_robustness --label "grid_boltrend_6x_all_6B" \
+  --n-simulations 10000 --block-size 7 --confidence 95 --seed 42 --save
+```
+
+4 méthodes : Block Bootstrap (CI return/DD), Regime Stress (scénarios marché), Historical Stress (crashes réels), CVaR.
+Verdict automatique GO/NO-GO (VIABLE / CAUTION / FAIL). `--save` sauvegarde en DB table `portfolio_robustness`.
+
+### Analyser la corrélation entre stratégies
+
+```powershell
+# Lister les labels disponibles en DB
+uv run python -m scripts.analyze_correlation --list
+
+# Comparer la corrélation DD entre deux labels sauvés (étape 3)
+uv run python -m scripts.analyze_correlation --labels "grid_atr_7x,grid_multi_tf_6x"
+
+# Trois stratégies
+uv run python -m scripts.analyze_correlation --labels "label1,label2,label3"
+```
+
+Mesure la corrélation des drawdowns entre stratégies (2 ou 3 labels max).
+Cible : r < 0.3. Calcule aussi l'allocation optimale minimisant le DD combiné.
+
+**Workflow post-WFO complet (étapes 0-8)** :
+```
+0. Leverage → calcul mathématique (AVANT le WFO)
+1. WFO      → uv run python -m scripts.optimize --strategy <n> --all-symbols --subprocess -v
+2. Apply    → uv run python -m scripts.optimize --strategy <n> --apply
+3. Portfolio → uv run python -m scripts.portfolio_backtest --strategy <n> --days auto --save --label "<label>"
+3b. Deep (DIAGNOSTIC) → uv run python -m scripts.analyze_wfo_deep --strategy <n>
+4. Stress   → uv run python -m scripts.stress_test_leverage --strategy <n>
+5. Robust.  → uv run python -m scripts.portfolio_robustness --label "<label>" --save
+6. Corrél.  → uv run python -m scripts.analyze_correlation --labels "<label1>,<label2>"
+7. Paper    → enabled: true, live_eligible: false (2 semaines min, 1 mois si CAUTION)
+8. Live     → live_eligible: true (leverage progressif 3x → 5x → 6x)
+```
+
 ---
 
 ## 20. Maintenance production

@@ -691,7 +691,7 @@ Pourcentages fixes (`tp_percent`, `sl_percent`). Pas de sortie anticipée.
 
 ## Comment ajouter une nouvelle stratégie
 
-### Checklist (11 étapes)
+### Checklist (16 étapes)
 
 1. Créer `backend/strategies/my_strategy.py` (hérite `BaseGridStrategy` ou `BaseStrategy`)
 2. Ajouter la config Pydantic dans `backend/core/config.py`
@@ -702,10 +702,13 @@ Pourcentages fixes (`tp_percent`, `sl_percent`). Pas de sortie anticipée.
 7. Ajouter `_INDICATOR_PARAMS` dans `backend/optimization/walk_forward.py`
 8. Config YAML : `config/strategies.yaml` + `config/param_grids.yaml`
 9. Tests : signaux, fast engine parité, WFO integration
-10. WFO : `uv run python -m scripts.optimize --strategy my_strategy --all-symbols`
+10. WFO : `uv run python -m scripts.optimize --strategy my_strategy --all-symbols --subprocess -v`
 11. Apply (TOUS les Grade A/B, sans filtre) : `uv run python -m scripts.optimize --strategy my_strategy --apply`
-12. Portfolio backtest (LE vrai filtre) : `uv run python -m scripts.portfolio_backtest --strategy my_strategy --days auto --capital 1000`
+12. Portfolio backtest (LE vrai filtre) : `uv run python -m scripts.portfolio_backtest --strategy my_strategy --days auto --capital 1000 --save --label "<nom>"`
 13. Deep Analysis (DIAGNOSTIC si portfolio échoue) : `uv run python -m scripts.analyze_wfo_deep --strategy my_strategy`
+14. Stress test leverage : `uv run python -m scripts.stress_test_leverage --strategy my_strategy`
+15. **Portfolio Robustness** : `uv run python -m scripts.portfolio_robustness --label "<nom>" --save` — CI95, CVaR, crashes historiques, régime stress → verdict VIABLE / CAUTION / FAIL
+16. Corrélation (si multi-stratégie) : `uv run python -m scripts.analyze_correlation --labels "<label1>,<label2>"`
 
 ### Pattern de code — Stratégie Grid
 
