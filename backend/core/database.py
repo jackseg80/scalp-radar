@@ -180,6 +180,7 @@ class Database:
         await self._create_portfolio_tables()
         await self._create_journal_tables()
         await self._create_live_trades_table()
+        await self._create_balance_snapshots_table()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -1699,7 +1700,7 @@ class Database:
         ).isoformat()
 
         conditions = [
-            "trade_type IN ('tp_close', 'sl_close', 'force_close', 'close')",
+            "trade_type IN ('tp_close', 'sl_close', 'force_close', 'close', 'cycle_close')",
             "timestamp >= ?",
         ]
         params: list[str] = [since]
@@ -1774,6 +1775,146 @@ class Database:
             cursor = await self._conn.execute("DELETE FROM live_trades")
         await self._conn.commit()
         return cursor.rowcount
+
+    # ─── BALANCE SNAPSHOTS (Sprint 46) ──────────────────────────────────────
+
+    async def _create_balance_snapshots_table(self) -> None:
+        """Table Sprint 46 : snapshots de balance Bitget pour equity curve live."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS balance_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                balance REAL NOT NULL,
+                unrealized_pnl REAL DEFAULT 0,
+                margin_used REAL DEFAULT 0,
+                equity REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_balance_snap_ts
+                ON balance_snapshots(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_balance_snap_strat
+                ON balance_snapshots(strategy_name);
+        """)
+
+    async def insert_balance_snapshot(self, snapshot: dict) -> None:
+        """Insère un snapshot de balance (Sprint 46)."""
+        await self._execute_with_retry(
+            """INSERT INTO balance_snapshots
+               (timestamp, strategy_name, balance, unrealized_pnl, margin_used, equity)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                snapshot["timestamp"],
+                snapshot["strategy_name"],
+                snapshot["balance"],
+                snapshot.get("unrealized_pnl", 0),
+                snapshot.get("margin_used", 0),
+                snapshot["equity"],
+            ),
+        )
+
+    async def get_balance_snapshots(
+        self, strategy: str | None = None, days: int = 30,
+    ) -> list[dict]:
+        """Récupère les snapshots de balance (Sprint 46)."""
+        assert self._conn is not None
+
+        since = (
+            datetime.now(tz=timezone.utc) - timedelta(days=days)
+        ).isoformat()
+
+        conditions = ["timestamp >= ?"]
+        params: list[str] = [since]
+        if strategy:
+            conditions.append("strategy_name = ?")
+            params.append(strategy)
+
+        where = f"WHERE {' AND '.join(conditions)}"
+        cursor = await self._conn.execute(
+            f"SELECT * FROM balance_snapshots {where} ORDER BY timestamp ASC",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_daily_pnl_summary(self) -> dict:
+        """P&L du jour + P&L total + date premier trade (Sprint 46)."""
+        assert self._conn is not None
+
+        close_types = (
+            "('tp_close', 'sl_close', 'force_close', 'close', 'cycle_close')"
+        )
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+
+        # P&L du jour
+        cursor = await self._conn.execute(
+            f"SELECT COALESCE(SUM(pnl), 0) FROM live_trades "
+            f"WHERE trade_type IN {close_types} AND DATE(timestamp) = ?",
+            (today,),
+        )
+        row = await cursor.fetchone()
+        daily_pnl = row[0] if row else 0
+
+        # P&L total
+        cursor = await self._conn.execute(
+            f"SELECT COALESCE(SUM(pnl), 0) FROM live_trades "
+            f"WHERE trade_type IN {close_types}",
+        )
+        row = await cursor.fetchone()
+        total_pnl = row[0] if row else 0
+
+        # Date du premier trade
+        cursor = await self._conn.execute(
+            f"SELECT MIN(timestamp) FROM live_trades "
+            f"WHERE trade_type IN {close_types}",
+        )
+        row = await cursor.fetchone()
+        first_trade_date = row[0] if row and row[0] else None
+
+        return {
+            "daily_pnl": round(daily_pnl, 2),
+            "total_pnl": round(total_pnl, 2),
+            "first_trade_date": first_trade_date,
+        }
+
+    async def get_max_drawdown_from_snapshots(
+        self, strategy: str | None = None, period: str = "all",
+    ) -> float | None:
+        """Calcule le max drawdown depuis les balance_snapshots (Sprint 46)."""
+        assert self._conn is not None
+
+        since = self._period_to_since(period)
+        conditions: list[str] = []
+        params: list[str] = []
+
+        if since:
+            conditions.append("timestamp >= ?")
+            params.append(since)
+        if strategy:
+            conditions.append("strategy_name = ?")
+            params.append(strategy)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        cursor = await self._conn.execute(
+            f"SELECT equity FROM balance_snapshots {where} ORDER BY timestamp ASC",
+            params,
+        )
+        rows = await cursor.fetchall()
+        if len(rows) < 2:
+            return None
+
+        peak = rows[0]["equity"]
+        max_dd = 0.0
+        for row in rows:
+            eq = row["equity"]
+            if eq > peak:
+                peak = eq
+            if peak > 0:
+                dd = (eq - peak) / peak
+                if dd < max_dd:
+                    max_dd = dd
+        return round(max_dd * 100, 2)
 
     def _period_to_since(self, period: str) -> str | None:
         """Convertit une période en timestamp ISO 'since'."""

@@ -116,10 +116,31 @@ export default function JournalPage({ wsData, onTabChange }) {
  * ════════════════════════════════════════════════════════════════════════ */
 
 function LiveJournal({ period, wsData }) {
+  const [strategy, setStrategy] = useState('')
+
+  // Détecter les stratégies live disponibles
+  const { data: tradesData } = useApi(`/api/journal/live-trades?period=all&limit=500`, 60000)
+  const liveStrategies = useMemo(() => {
+    const trades = tradesData?.trades || []
+    return [...new Set(trades.map(t => t.strategy_name).filter(Boolean))].sort()
+  }, [tradesData])
+
+  const stratParam = strategy || null
+
   return (
     <>
+      {/* Filtre stratégie global (Sprint 46) */}
+      {liveStrategies.length > 1 && (
+        <div className="journal-strategy-filter">
+          <select value={strategy} onChange={e => setStrategy(e.target.value)}>
+            <option value="">Toutes les strategies</option>
+            {liveStrategies.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      )}
+
       <CollapsibleCard title="Stats Live" defaultOpen={true} storageKey="journal-live-stats">
-        <LiveStatsOverview period={period} />
+        <LiveStatsOverview period={period} strategy={stratParam} />
       </CollapsibleCard>
 
       <CollapsibleCard title="Positions & Trades" defaultOpen={true} storageKey="journal-live-positions">
@@ -127,7 +148,11 @@ function LiveJournal({ period, wsData }) {
       </CollapsibleCard>
 
       <CollapsibleCard title="P&L Journalier" defaultOpen={true} storageKey="journal-live-daily">
-        <LiveDailyPnl />
+        <LiveDailyPnl strategy={stratParam} />
+      </CollapsibleCard>
+
+      <CollapsibleCard title="Equity Curve Live" defaultOpen={true} storageKey="journal-live-equity">
+        <LiveEquityCurve strategy={stratParam} />
       </CollapsibleCard>
 
       <CollapsibleCard title="Ordres Bitget" defaultOpen={true} storageKey="journal-orders">
@@ -135,14 +160,15 @@ function LiveJournal({ period, wsData }) {
       </CollapsibleCard>
 
       <CollapsibleCard title="Performance par Asset" defaultOpen={false} storageKey="journal-live-per-asset">
-        <LivePerAssetSummary period={period} />
+        <LivePerAssetSummary period={period} strategy={stratParam} />
       </CollapsibleCard>
     </>
   )
 }
 
-function LiveStatsOverview({ period }) {
-  const { data, loading } = useApi(`/api/journal/live-stats?period=${period}`, 30000)
+function LiveStatsOverview({ period, strategy }) {
+  const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
+  const { data, loading } = useApi(`/api/journal/live-stats?period=${period}${stratQ}`, 30000)
   const stats = data?.stats
 
   if (loading && !stats) {
@@ -180,8 +206,8 @@ function LiveStatsOverview({ period }) {
         </div>
         <div className="stat-card">
           <div className="stat-label">Max Drawdown</div>
-          <div className="stat-value negative">
-            -{stats.max_drawdown_pct}%
+          <div className={`stat-value ${stats.max_drawdown_pct != null ? 'negative' : ''}`}>
+            {stats.max_drawdown_pct != null ? `${stats.max_drawdown_pct}%` : 'N/A'}
           </div>
         </div>
         <div className="stat-card">
@@ -346,8 +372,9 @@ function LiveTradeHistory({ period }) {
   )
 }
 
-function LiveDailyPnl() {
-  const { data, loading } = useApi('/api/journal/live-daily-pnl?days=30', 60000)
+function LiveDailyPnl({ strategy }) {
+  const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
+  const { data, loading } = useApi(`/api/journal/live-daily-pnl?days=30${stratQ}`, 60000)
   const days = data?.daily_pnl || []
 
   if (loading && !data) return <div className="empty-state">Chargement...</div>
@@ -379,8 +406,61 @@ function LiveDailyPnl() {
   )
 }
 
-function LivePerAssetSummary({ period }) {
-  const { data, loading } = useApi(`/api/journal/live-per-asset?period=${period}`, 30000)
+function LiveEquityCurve({ strategy }) {
+  const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
+  const { data, loading } = useApi(`/api/journal/live-equity?days=30${stratQ}`, 60000)
+  const points = data?.equity_curve || []
+
+  if (loading && !data) return <div className="empty-state">Chargement...</div>
+  if (points.length < 2) return <div className="empty-state">Pas assez de snapshots (min 2h de donnees)</div>
+
+  const equities = points.map(p => p.equity)
+  const minEq = Math.min(...equities)
+  const maxEq = Math.max(...equities)
+  const range = maxEq - minEq || 1
+
+  const width = 600
+  const height = 180
+  const padX = 0
+  const padY = 10
+
+  const pathPoints = points.map((p, i) => {
+    const x = padX + (i / (points.length - 1)) * (width - 2 * padX)
+    const y = padY + (1 - (p.equity - minEq) / range) * (height - 2 * padY)
+    return `${x},${y}`
+  })
+  const linePath = `M${pathPoints.join(' L')}`
+
+  // Colorer selon tendance
+  const first = equities[0]
+  const last = equities[equities.length - 1]
+  const color = last >= first ? 'var(--accent)' : 'var(--red)'
+
+  // Dates pour axes
+  const firstDate = points[0].timestamp ? new Date(points[0].timestamp).toLocaleDateString('fr-FR') : ''
+  const lastDate = points[points.length - 1].timestamp ? new Date(points[points.length - 1].timestamp).toLocaleDateString('fr-FR') : ''
+
+  return (
+    <div>
+      <div className="equity-svg-container">
+        <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: 180 }}>
+          <path d={linePath} fill="none" stroke={color} strokeWidth="2" />
+        </svg>
+      </div>
+      <div className="equity-labels">
+        <span className="text-xs muted">{firstDate}</span>
+        <span className="text-xs muted">
+          {last.toFixed(2)} USDT ({last >= first ? '+' : ''}{(last - first).toFixed(2)}$)
+        </span>
+        <span className="text-xs muted">{lastDate}</span>
+      </div>
+    </div>
+  )
+}
+
+function LivePerAssetSummary({ period, strategy }) {
+  const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
+  const { data, loading } = useApi(`/api/journal/live-per-asset?period=${period}${stratQ}`, 30000)
   const [sortBy, setSortBy] = useState('total_pnl')
   const [sortAsc, setSortAsc] = useState(false)
 
@@ -528,8 +608,8 @@ function StatsOverview({ period, wsData }) {
         </div>
         <div className="stat-card">
           <div className="stat-label">Max Drawdown</div>
-          <div className="stat-value negative">
-            -{stats.max_drawdown_pct}%
+          <div className={`stat-value ${stats.max_drawdown_pct != null ? 'negative' : ''}`}>
+            {stats.max_drawdown_pct != null ? `${stats.max_drawdown_pct}%` : 'N/A'}
           </div>
         </div>
         <div className="stat-card">

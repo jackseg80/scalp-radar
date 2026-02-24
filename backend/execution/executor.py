@@ -517,6 +517,9 @@ class Executor:
 
     async def _balance_refresh_loop(self) -> None:
         """Boucle périodique de refresh du solde (toutes les 5 min)."""
+        snapshot_counter = 0
+        # Persister en DB toutes les heures (~12 itérations de 5 min)
+        snapshot_db_interval = max(1, 3600 // self._balance_refresh_interval)
         while self._running:
             await asyncio.sleep(self._balance_refresh_interval)
             if not self._running:
@@ -525,6 +528,27 @@ class Executor:
             # P1 Audit : snapshot pour kill switch global live (drawdown 24h)
             if new_balance is not None:
                 self._risk_manager.record_balance_snapshot(new_balance)
+                # Sprint 46 : persister en DB toutes les heures
+                snapshot_counter += 1
+                if snapshot_counter >= snapshot_db_interval:
+                    snapshot_counter = 0
+                    await self._persist_balance_snapshot(new_balance)
+
+    async def _persist_balance_snapshot(self, balance: float) -> None:
+        """Persiste un snapshot de balance en DB (best-effort, Sprint 46)."""
+        if self._db is None:
+            return
+        try:
+            await self._db.insert_balance_snapshot({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "strategy_name": self._strategy_name or "default",
+                "balance": balance,
+                "unrealized_pnl": 0,
+                "margin_used": 0,
+                "equity": balance,
+            })
+        except Exception as e:
+            logger.warning("{}: échec snapshot balance DB: {}", self._log_prefix, e)
 
     # ─── Balance bootstrap ──────────────────────────────────────────────
 

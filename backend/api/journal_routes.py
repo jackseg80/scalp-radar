@@ -260,6 +260,14 @@ async def get_live_stats(
         period = "all"
 
     stats = await db.get_live_stats(period=period, strategy=strategy)
+
+    # Sprint 46 : enrichir max_drawdown depuis balance_snapshots
+    if stats and stats.get("max_drawdown_pct") is None:
+        max_dd = await db.get_max_drawdown_from_snapshots(
+            strategy=strategy, period=period,
+        )
+        stats["max_drawdown_pct"] = max_dd
+
     return {"stats": stats}
 
 
@@ -294,6 +302,31 @@ async def get_live_per_asset(
 
     per_asset = await db.get_live_per_asset_stats(period=period, strategy=strategy)
     return {"per_asset": per_asset}
+
+
+@router.get("/daily-pnl-summary")
+async def get_daily_pnl_summary(request: Request) -> dict:
+    """P&L du jour + P&L total pour ExecutorPanel (Sprint 46)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"daily_pnl": None, "total_pnl": None, "first_trade_date": None}
+
+    return await db.get_daily_pnl_summary()
+
+
+@router.get("/live-equity")
+async def get_live_equity(
+    request: Request,
+    strategy: str | None = Query(None),
+    days: int = Query(30, ge=1, le=365),
+) -> dict:
+    """Equity curve live depuis les balance_snapshots (Sprint 46)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"equity_curve": []}
+
+    snapshots = await db.get_balance_snapshots(strategy=strategy, days=days)
+    return {"equity_curve": snapshots}
 
 
 @router.get("/live-count")

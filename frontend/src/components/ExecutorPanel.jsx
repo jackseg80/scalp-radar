@@ -12,6 +12,7 @@
  * Sprint 39 : P&L backend, TP/SL distances, durée, P&L par niveau.
  */
 import { useState } from 'react'
+import { useApi } from '../hooks/useApi'
 import Tooltip from './Tooltip'
 import { formatPrice } from '../utils/format'
 
@@ -53,7 +54,13 @@ export default function ExecutorPanel({ wsData }) {
   const positions = executor.positions || (executor.position ? [executor.position] : [])
 
   const isLive = enabled
-  const sessionPnl = rm?.session_pnl ?? 0
+  // Sprint 46 : P&L Jour + P&L Total (remplace P&L Session)
+  const { data: pnlData } = useApi('/api/journal/daily-pnl-summary', 60000)
+  const dailyPnl = pnlData?.daily_pnl ?? null
+  const totalPnl = pnlData?.total_pnl ?? null
+  const firstTradeDate = pnlData?.first_trade_date
+    ? new Date(pnlData.first_trade_date).toLocaleDateString('fr-FR')
+    : null
   // Solde Bitget réel en priorité, fallback sur capital initial configuré
   const balance = executor.exchange_balance ?? rm?.initial_capital
 
@@ -90,11 +97,22 @@ export default function ExecutorPanel({ wsData }) {
           const lev = grids.length > 0 ? grids[0].leverage : null
           return lev != null ? <StatusRow label="Leverage" value={`x${lev}`} /> : null
         })()}
-        <StatusRow
-          label="P&L Session"
-          value={`${sessionPnl >= 0 ? '+' : ''}${Number(sessionPnl).toFixed(2)}$`}
-          color={sessionPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
-        />
+        {dailyPnl != null && (
+          <StatusRow
+            label="P&L Jour"
+            value={`${dailyPnl >= 0 ? '+' : ''}${Number(dailyPnl).toFixed(2)}$`}
+            color={dailyPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
+          />
+        )}
+        {totalPnl != null && (
+          <Tooltip content={firstTradeDate ? `Depuis le ${firstTradeDate}` : 'P&L total depuis le début des trades en DB'}>
+            <StatusRow
+              label="P&L Total"
+              value={`${totalPnl >= 0 ? '+' : ''}${Number(totalPnl).toFixed(2)}$`}
+              color={totalPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
+            />
+          </Tooltip>
+        )}
         {rm?.total_orders != null && rm.total_orders > 0 && (
           <StatusRow label="Ordres passés" value={rm.total_orders} />
         )}
