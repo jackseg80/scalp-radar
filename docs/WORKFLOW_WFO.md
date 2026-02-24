@@ -133,11 +133,45 @@ Le WFO fait :
 
 **window_factor** (fix critique Sprint 38b) : pénalise les combos évalués sur peu de fenêtres. Sans ça, des combos "parfaits" sur 1-2 fenêtres polluent les résultats.
 
-### Étape 1b — Appliquer les résultats
+### Étape 1b — Deep Analysis post-WFO (OBLIGATOIRE avant --apply)
 
 ```bash
-# Appliquer les params Grade A/B dans strategies.yaml
-uv run python -m scripts.optimize --strategy grid_atr --apply
+uv run python -m scripts.analyze_wfo_deep --strategy grid_atr
+```
+
+**Critère : ≥ 5 assets VIABLE ou BORDERLINE pour continuer. En dessous, ne pas appliquer.**
+
+Le script analyse chaque asset Grade A/B et détecte les red flags que le grade ne capture pas :
+
+| Check | Seuil | Sévérité |
+|-------|-------|---------|
+| SL × leverage | > 100% de la marge | 🔴 CRITICAL |
+| SL × leverage | > 80% de la marge  | 🟠 WARNING  |
+| Sharpe en RANGE | < 0 (perd 83% du temps) | 🔴 CRITICAL |
+| Sharpe dans un régime | < -5 | 🔴 CRITICAL |
+| Sharpe dans régime dominant | < 0 | 🔴 CRITICAL |
+| CI95 Bitget | entièrement négatif | 🔴 CRITICAL |
+| DSR | = 0 | 🟠 WARNING  |
+| Trades Bitget | < 10 | 🟠 WARNING  |
+| OOS/IS ratio | > 5 | 🟠 WARNING  |
+
+**Verdicts** :
+- `[OK] VIABLE` : Grade A/B + aucun red flag critical + CI validé
+- `[~~] BORDERLINE` : Grade A/B + warnings seulement, pas de critical
+- `[XX] ELIMINATED` : Grade A/B mais red flag critical — **ne passe pas au --apply**
+
+Le script affiche à la fin la commande `--apply --exclude <eliminated>` prête à copier-coller.
+
+> **Exemple réel (grid_boltrend, 6 assets Grade B)** :
+> BCH (SL×6=120%), DYDX (SL×6=120%, 3 trades), ETH (Sharpe BULL -10), BTC (Sharpe RANGE -2.9)
+> → 4 ELIMINATED, 1 VIABLE (DOGE), 1 BORDERLINE (LINK). Sans cette analyse, les 6 auraient été appliqués.
+
+### Étape 1c — Appliquer les résultats (VIABLE + BORDERLINE seulement)
+
+```bash
+# Appliquer les params Grade A/B dans strategies.yaml — EXCLUANT les ELIMINATED
+# (la commande exacte est affichée par analyze_wfo_deep à la fin)
+uv run python -m scripts.optimize --strategy grid_atr --apply --exclude BCH/USDT,ETH/USDT,...
 ```
 
 Écrit les paramètres optimaux dans `config/strategies.yaml` sous `per_asset:` pour chaque asset Grade A/B. Les params convergents deviennent les défauts, les divergents vont dans per_asset.

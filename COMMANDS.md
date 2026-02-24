@@ -790,6 +790,31 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 
 Scripts d'analyse ponctuelle. Ne font aucune modification — lecture seule.
 
+### Deep Analysis post-WFO (OBLIGATOIRE avant --apply)
+
+Analyse chaque asset Grade A/B et produit un verdict enrichi : VIABLE / BORDERLINE / ELIMINATED.
+Détecte les red flags que le grade seul ne capture pas (SL×leverage, régimes catastrophiques, DSR, CI95).
+
+```powershell
+# Analyser une stratégie complète
+uv run python -m scripts.analyze_wfo_deep --strategy grid_boltrend
+
+# Analyser toutes les stratégies avec résultats Grade A/B en DB
+uv run python -m scripts.analyze_wfo_deep --all
+```
+
+Sortie : tableau récapitulatif (VIABLE/BORDERLINE/ELIMINATED) + détail par asset + commande `--apply --exclude` prête à copier.
+
+**Workflow post-WFO** :
+```
+1. WFO  → uv run python -m scripts.optimize --strategy <n> --all-symbols
+2. Deep → uv run python -m scripts.analyze_wfo_deep --strategy <n>   ← OBLIGATOIRE
+           Critère : >= 5 VIABLE ou BORDERLINE pour continuer
+3. Apply → commande affichée par le script (avec --exclude automatique)
+```
+
+---
+
 ### Analyser une régression WFO (compare les 2 derniers runs)
 
 ```powershell
