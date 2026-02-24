@@ -567,28 +567,68 @@ grid_boltrend:
   sides:
   - long
   - short
-  leverage: 8
+  leverage: 6
   cooldown_candles: 3
   weight: 0.2
   per_asset:
-    BTC/USDT:
-      atr_period: 10
+    BCH/USDT:
+      atr_period: 14
       atr_spacing_mult: 1.0
-      bol_std: 2.0
+      bol_std: 2.5
       bol_window: 100
-      long_ma_window: 400
-      min_bol_spread: 0.0
-      num_levels: 4
+      long_ma_window: 200
+      min_bol_spread: 0.01
+      num_levels: 3
       sl_percent: 20.0
       timeframe: 1h
-    DYDX/USDT:
+    BTC/USDT:
       atr_period: 14
+      atr_spacing_mult: 1.0
+      bol_std: 2.0
+      bol_window: 50
+      long_ma_window: 200
+      min_bol_spread: 0.01
+      num_levels: 4
+      sl_percent: 15.0
+      timeframe: 1h
+    DOGE/USDT:
+      atr_period: 10
       atr_spacing_mult: 1.5
       bol_std: 1.5
       bol_window: 100
       long_ma_window: 200
       min_bol_spread: 0.0
-      num_levels: 3
+      num_levels: 4
+      sl_percent: 15.0
+      timeframe: 1h
+    DYDX/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.5
+      bol_std: 1.5
+      bol_window: 100
+      long_ma_window: 200
+      min_bol_spread: 0.01
+      num_levels: 2
+      sl_percent: 20.0
+      timeframe: 1h
+    ETH/USDT:
+      atr_period: 14
+      atr_spacing_mult: 1.0
+      bol_std: 2.5
+      bol_window: 100
+      long_ma_window: 400
+      min_bol_spread: 0.01
+      num_levels: 4
+      sl_percent: 10.0
+      timeframe: 1h
+    LINK/USDT:
+      atr_period: 10
+      atr_spacing_mult: 1.5
+      bol_std: 2.5
+      bol_window: 100
+      long_ma_window: 400
+      min_bol_spread: 0.01
+      num_levels: 2
       sl_percent: 15.0
       timeframe: 1h
 grid_momentum:
