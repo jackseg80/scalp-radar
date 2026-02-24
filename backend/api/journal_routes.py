@@ -218,3 +218,90 @@ async def get_per_asset_stats(
 
     per_asset = await db.get_journal_per_asset_stats(period=period)
     return {"per_asset": per_asset}
+
+
+# ─── LIVE TRADES (Sprint 45) ────────────────────────────────────────────
+
+
+@router.get("/live-trades")
+async def get_live_trades(
+    request: Request,
+    period: str = Query("all", description="today, 7d, 30d, all"),
+    strategy: str | None = Query(None),
+    symbol: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+) -> dict:
+    """Trades live persistés en DB (Sprint 45)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"trades": [], "count": 0}
+
+    if period not in {"today", "7d", "30d", "all"}:
+        period = "all"
+
+    trades = await db.get_live_trades(
+        period=period, strategy=strategy, symbol=symbol, limit=limit,
+    )
+    return {"trades": trades, "count": len(trades)}
+
+
+@router.get("/live-stats")
+async def get_live_stats(
+    request: Request,
+    period: str = Query("all", description="today, 7d, 30d, all"),
+    strategy: str | None = Query(None),
+) -> dict:
+    """Stats agrégées des trades live (Sprint 45)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"stats": None}
+
+    if period not in {"today", "7d", "30d", "all"}:
+        period = "all"
+
+    stats = await db.get_live_stats(period=period, strategy=strategy)
+    return {"stats": stats}
+
+
+@router.get("/live-daily-pnl")
+async def get_live_daily_pnl(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+    strategy: str | None = Query(None),
+) -> dict:
+    """P&L journalier live agrégé par jour (Sprint 45)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"daily_pnl": []}
+
+    daily = await db.get_live_daily_pnl(days=days, strategy=strategy)
+    return {"daily_pnl": daily}
+
+
+@router.get("/live-per-asset")
+async def get_live_per_asset(
+    request: Request,
+    period: str = Query("all", description="today, 7d, 30d, all"),
+    strategy: str | None = Query(None),
+) -> dict:
+    """Performance par asset depuis live_trades (Sprint 45)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"per_asset": []}
+
+    if period not in {"today", "7d", "30d", "all"}:
+        period = "all"
+
+    per_asset = await db.get_live_per_asset_stats(period=period, strategy=strategy)
+    return {"per_asset": per_asset}
+
+
+@router.get("/live-count")
+async def get_live_count(request: Request) -> dict:
+    """Nombre de trades live en DB (pour savoir si l'onglet Live est pertinent)."""
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"count": 0}
+
+    count = await db.get_live_trade_count()
+    return {"count": count}

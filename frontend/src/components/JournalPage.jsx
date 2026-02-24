@@ -1,9 +1,8 @@
 /**
- * JournalPage — Page Journal de Trading (Sprint 32).
- * 4 sections collapsibles : Stats, Positions & Trades, Equity Curve, Ordres Bitget.
- * Selecteur de periode global (today/7d/30d/all).
+ * JournalPage — Journal de Trading avec 2 onglets Live / Paper (Sprint 45).
+ * Chaque onglet a ses propres stats, historique, equity curve et performance par asset.
  */
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useApi } from '../hooks/useApi'
 import { formatPrice } from '../utils/format'
 import CollapsibleCard from './CollapsibleCard'
@@ -19,11 +18,12 @@ const PERIODS = [
 const EXIT_LABELS = {
   sl: 'SL', tp: 'TP', tp_global: 'TP global', sl_global: 'SL global',
   force_close: 'Force close', signal_exit: 'Signal', regime_change: 'Regime', end_of_data: 'Fin',
+  tp_close: 'TP', sl_close: 'SL',
 }
 
 const EXIT_BADGE_CLASS = {
-  sl: 'badge-stopped', sl_global: 'badge-stopped',
-  tp: 'badge-active', tp_global: 'badge-active',
+  sl: 'badge-stopped', sl_global: 'badge-stopped', sl_close: 'badge-stopped',
+  tp: 'badge-active', tp_global: 'badge-active', tp_close: 'badge-active',
   signal_exit: 'badge-simulation', regime_change: 'badge-trending',
 }
 
@@ -53,30 +53,408 @@ function timeAgo(isoString) {
 
 export default function JournalPage({ wsData, onTabChange }) {
   const [period, setPeriod] = useState('all')
+  const [source, setSource] = useState('live') // 'live' ou 'paper'
+
+  // Detecter si des trades live existent
+  const { data: liveCountData } = useApi('/api/journal/live-count', 60000)
+  const hasLiveTrades = (liveCountData?.count || 0) > 0
+
+  // Si pas de trades live, basculer sur paper
+  useEffect(() => {
+    if (liveCountData && !hasLiveTrades && source === 'live') {
+      setSource('paper')
+    }
+  }, [liveCountData, hasLiveTrades]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="journal-page">
       <div className="journal-header">
         <h2>Journal de Trading</h2>
-        <div className="period-selector">
-          {PERIODS.map(p => (
+        <div className="journal-header-controls">
+          <div className="source-toggle">
             <button
-              key={p.id}
-              className={`period-btn ${period === p.id ? 'active' : ''}`}
-              onClick={() => setPeriod(p.id)}
+              className={`source-btn ${source === 'live' ? 'active live' : ''}`}
+              onClick={() => setSource('live')}
+              disabled={!hasLiveTrades}
+              title={!hasLiveTrades ? 'Aucun trade live' : ''}
             >
-              {p.label}
+              Live
             </button>
-          ))}
+            <button
+              className={`source-btn ${source === 'paper' ? 'active paper' : ''}`}
+              onClick={() => setSource('paper')}
+            >
+              Paper
+            </button>
+          </div>
+          <div className="period-selector">
+            {PERIODS.map(p => (
+              <button
+                key={p.id}
+                className={`period-btn ${period === p.id ? 'active' : ''}`}
+                onClick={() => setPeriod(p.id)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <CollapsibleCard title="Stats" defaultOpen={true} storageKey="journal-stats">
+      {source === 'live' ? (
+        <LiveJournal period={period} wsData={wsData} />
+      ) : (
+        <PaperJournal period={period} wsData={wsData} />
+      )}
+    </div>
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * LIVE JOURNAL (Sprint 45)
+ * ════════════════════════════════════════════════════════════════════════ */
+
+function LiveJournal({ period, wsData }) {
+  return (
+    <>
+      <CollapsibleCard title="Stats Live" defaultOpen={true} storageKey="journal-live-stats">
+        <LiveStatsOverview period={period} />
+      </CollapsibleCard>
+
+      <CollapsibleCard title="Positions & Trades" defaultOpen={true} storageKey="journal-live-positions">
+        <LivePositionsAndTrades wsData={wsData} period={period} />
+      </CollapsibleCard>
+
+      <CollapsibleCard title="P&L Journalier" defaultOpen={true} storageKey="journal-live-daily">
+        <LiveDailyPnl />
+      </CollapsibleCard>
+
+      <CollapsibleCard title="Ordres Bitget" defaultOpen={true} storageKey="journal-orders">
+        <BitgetOrders />
+      </CollapsibleCard>
+
+      <CollapsibleCard title="Performance par Asset" defaultOpen={false} storageKey="journal-live-per-asset">
+        <LivePerAssetSummary period={period} />
+      </CollapsibleCard>
+    </>
+  )
+}
+
+function LiveStatsOverview({ period }) {
+  const { data, loading } = useApi(`/api/journal/live-stats?period=${period}`, 30000)
+  const stats = data?.stats
+
+  if (loading && !stats) {
+    return <div className="empty-state">Chargement des stats live...</div>
+  }
+
+  if (!stats || stats.total_trades === 0) {
+    return <div className="empty-state">Aucun trade live pour cette periode</div>
+  }
+
+  const pnlClass = stats.total_pnl >= 0 ? 'positive' : 'negative'
+  const pfClass = stats.profit_factor >= 1.5 ? 'positive' : stats.profit_factor >= 1 ? '' : 'negative'
+  const streakIcon = stats.current_streak?.type === 'win' ? '\u{1F525}' : '\u{2744}\u{FE0F}'
+
+  return (
+    <div>
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-label">P&L Net</div>
+          <div className={`stat-value ${pnlClass}`}>
+            {stats.total_pnl >= 0 ? '+' : ''}{stats.total_pnl.toFixed(2)}$
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Win Rate</div>
+          <div className={`stat-value ${stats.win_rate >= 50 ? 'positive' : 'negative'}`}>
+            {stats.win_rate}%
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Profit Factor</div>
+          <div className={`stat-value ${pfClass}`}>
+            {stats.profit_factor}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Max Drawdown</div>
+          <div className="stat-value negative">
+            -{stats.max_drawdown_pct}%
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Trades</div>
+          <div className="stat-value">{stats.total_trades}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Streak</div>
+          <div className="stat-value">
+            {streakIcon} {stats.current_streak?.count || 0}
+          </div>
+        </div>
+      </div>
+
+      <div className="stats-secondary">
+        {stats.best_trade && (
+          <span>Meilleur : <span className="pnl-pos">+{stats.best_trade.pnl.toFixed(2)}$</span> ({stats.best_trade.symbol})</span>
+        )}
+        {stats.worst_trade && (
+          <span>Pire : <span className="pnl-neg">{stats.worst_trade.pnl.toFixed(2)}$</span> ({stats.worst_trade.symbol})</span>
+        )}
+        <span>Trades/jour : {stats.trades_per_day}</span>
+        <span>W/L : {stats.wins}/{stats.losses}</span>
+        <span className="live-badge-inline">LIVE</span>
+      </div>
+    </div>
+  )
+}
+
+function LivePositionsAndTrades({ wsData, period }) {
+  const [subTab, setSubTab] = useState('ouvertes')
+
+  return (
+    <div>
+      <div className="sub-tabs">
+        <button className={`sub-tab ${subTab === 'ouvertes' ? 'active' : ''}`} onClick={() => setSubTab('ouvertes')}>
+          Ouvertes
+        </button>
+        <button className={`sub-tab ${subTab === 'historique' ? 'active' : ''}`} onClick={() => setSubTab('historique')}>
+          Historique
+        </button>
+      </div>
+
+      {subTab === 'ouvertes' && <OpenPositions wsData={wsData} filterSource="LIVE" />}
+      {subTab === 'historique' && <LiveTradeHistory period={period} />}
+    </div>
+  )
+}
+
+function LiveTradeHistory({ period }) {
+  const [limit, setLimit] = useState(50)
+  const [filterSymbol, setFilterSymbol] = useState('')
+  const [filterStrategy, setFilterStrategy] = useState('')
+  const [sortBy, setSortBy] = useState('timestamp')
+  const [sortAsc, setSortAsc] = useState(false)
+
+  const { data, loading } = useApi(
+    `/api/journal/live-trades?period=${period}&limit=${limit}`, 15000,
+  )
+  const allTrades = data?.trades || []
+
+  // Filtrer uniquement les closes (qui ont un P&L)
+  const closeTrades = useMemo(() =>
+    allTrades.filter(t => t.pnl != null),
+    [allTrades],
+  )
+
+  const filtered = useMemo(() => {
+    let t = closeTrades
+    if (filterSymbol) t = t.filter(tr => tr.symbol === filterSymbol)
+    if (filterStrategy) t = t.filter(tr => tr.strategy_name === filterStrategy)
+    t = [...t].sort((a, b) => {
+      const va = a[sortBy] ?? ''
+      const vb = b[sortBy] ?? ''
+      if (typeof va === 'number') return sortAsc ? va - vb : vb - va
+      return sortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va))
+    })
+    return t
+  }, [closeTrades, filterSymbol, filterStrategy, sortBy, sortAsc])
+
+  const symbols = useMemo(() => [...new Set(closeTrades.map(t => t.symbol).filter(Boolean))].sort(), [closeTrades])
+  const strategies = useMemo(() => [...new Set(closeTrades.map(t => t.strategy_name).filter(Boolean))].sort(), [closeTrades])
+
+  const handleSort = (col) => {
+    if (sortBy === col) setSortAsc(!sortAsc)
+    else { setSortBy(col); setSortAsc(false) }
+  }
+
+  if (loading && !data) return <div className="empty-state">Chargement...</div>
+  if (closeTrades.length === 0) return <div className="empty-state">Aucun trade live ferme</div>
+
+  return (
+    <div>
+      <div className="journal-filters">
+        <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)}>
+          <option value="">Tous les symbols</option>
+          {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select value={filterStrategy} onChange={e => setFilterStrategy(e.target.value)}>
+          <option value="">Toutes les strategies</option>
+          {strategies.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table className="journal-table">
+          <thead>
+            <tr>
+              <th onClick={() => handleSort('timestamp')}>Date {sortBy === 'timestamp' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}</th>
+              <th>Dir</th>
+              <th onClick={() => handleSort('symbol')}>Symbol {sortBy === 'symbol' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}</th>
+              <th>Strategie</th>
+              <th>Prix</th>
+              <th onClick={() => handleSort('pnl')}>P&L Net {sortBy === 'pnl' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}</th>
+              <th>P&L %</th>
+              <th>Niveaux</th>
+              <th>Raison</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((t, i) => (
+              <tr key={i} className={(t.pnl || 0) >= 0 ? 'row-positive' : 'row-negative'}>
+                <td className="text-xs muted">
+                  {t.timestamp ? new Date(t.timestamp).toLocaleDateString('fr-FR') : '--'}
+                </td>
+                <td><span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span></td>
+                <td style={{ fontWeight: 600, fontSize: 11 }}>{t.symbol || '--'}</td>
+                <td className="text-xs">{t.strategy_name}</td>
+                <td className="mono text-xs">{formatPrice(t.price)}</td>
+                <td className={`mono ${(t.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
+                  {(t.pnl || 0) >= 0 ? '+' : ''}{Number(t.pnl || 0).toFixed(2)}$
+                </td>
+                <td className={`mono text-xs ${(t.pnl_pct || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                  {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(1)}%` : '--'}
+                </td>
+                <td className="text-xs">{t.grid_level != null ? `${t.grid_level}` : '--'}</td>
+                <td>
+                  <span className={`badge ${EXIT_BADGE_CLASS[t.trade_type] || ''}`}>
+                    {EXIT_LABELS[t.trade_type] || t.trade_type}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {closeTrades.length >= limit && (
+        <button className="load-more-btn" onClick={() => setLimit(prev => prev + 50)}>
+          Charger plus de trades...
+        </button>
+      )}
+    </div>
+  )
+}
+
+function LiveDailyPnl() {
+  const { data, loading } = useApi('/api/journal/live-daily-pnl?days=30', 60000)
+  const days = data?.daily_pnl || []
+
+  if (loading && !data) return <div className="empty-state">Chargement...</div>
+  if (days.length === 0) return <div className="empty-state">Aucun P&L journalier</div>
+
+  const maxPnl = Math.max(...days.map(d => Math.abs(d.pnl)), 1)
+
+  return (
+    <div className="daily-pnl-chart">
+      {days.map((d, i) => {
+        const pct = (d.pnl / maxPnl) * 100
+        const isPos = d.pnl >= 0
+        return (
+          <div key={i} className="daily-bar-row" title={`${d.day}: ${d.pnl >= 0 ? '+' : ''}${d.pnl.toFixed(2)}$ (${d.trades} trades)`}>
+            <span className="daily-bar-label">{d.day.slice(5)}</span>
+            <div className="daily-bar-track">
+              <div
+                className={`daily-bar-fill ${isPos ? 'positive' : 'negative'}`}
+                style={{ width: `${Math.abs(pct)}%` }}
+              />
+            </div>
+            <span className={`daily-bar-value mono ${isPos ? 'pnl-pos' : 'pnl-neg'}`}>
+              {d.pnl >= 0 ? '+' : ''}{d.pnl.toFixed(2)}$
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function LivePerAssetSummary({ period }) {
+  const { data, loading } = useApi(`/api/journal/live-per-asset?period=${period}`, 30000)
+  const [sortBy, setSortBy] = useState('total_pnl')
+  const [sortAsc, setSortAsc] = useState(false)
+
+  const assets = data?.per_asset || []
+
+  const sorted = useMemo(() => {
+    return [...assets].sort((a, b) => {
+      const va = a[sortBy] ?? 0
+      const vb = b[sortBy] ?? 0
+      return sortAsc ? va - vb : vb - va
+    })
+  }, [assets, sortBy, sortAsc])
+
+  const handleSort = (col) => {
+    if (sortBy === col) setSortAsc(!sortAsc)
+    else { setSortBy(col); setSortAsc(false) }
+  }
+
+  if (loading && !data) return <div className="empty-state">Chargement...</div>
+  if (assets.length === 0) return <div className="empty-state">Aucun trade live</div>
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <div className="text-xs" style={{ marginBottom: 4, color: 'var(--accent)' }}>
+        Donnees live trading
+      </div>
+      <table className="journal-table">
+        <thead>
+          <tr>
+            <th onClick={() => handleSort('symbol')} style={{ cursor: 'pointer' }}>
+              Symbol {sortBy === 'symbol' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('total_trades')} style={{ cursor: 'pointer' }}>
+              Trades {sortBy === 'total_trades' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('win_rate')} style={{ cursor: 'pointer' }}>
+              Win Rate {sortBy === 'win_rate' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('total_pnl')} style={{ cursor: 'pointer' }}>
+              P&L Net {sortBy === 'total_pnl' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th onClick={() => handleSort('avg_pnl')} style={{ cursor: 'pointer' }}>
+              P&L Moyen {sortBy === 'avg_pnl' ? (sortAsc ? '\u25B2' : '\u25BC') : ''}
+            </th>
+            <th>W/L</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((a) => (
+            <tr key={a.symbol} className={a.total_pnl >= 0 ? 'row-positive' : 'row-negative'}>
+              <td style={{ fontWeight: 600 }}>{a.symbol}</td>
+              <td className="mono text-xs">{a.total_trades}</td>
+              <td className={`mono text-xs ${a.win_rate >= 50 ? 'pnl-pos' : 'pnl-neg'}`}>
+                {a.win_rate}%
+              </td>
+              <td className={`mono ${a.total_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
+                {a.total_pnl >= 0 ? '+' : ''}{a.total_pnl.toFixed(2)}$
+              </td>
+              <td className={`mono text-xs ${a.avg_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                {a.avg_pnl >= 0 ? '+' : ''}{a.avg_pnl.toFixed(2)}$
+              </td>
+              <td className="text-xs">{a.wins}/{a.losses}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * PAPER JOURNAL (existant, inchange)
+ * ════════════════════════════════════════════════════════════════════════ */
+
+function PaperJournal({ period, wsData }) {
+  return (
+    <>
+      <CollapsibleCard title="Stats Paper" defaultOpen={true} storageKey="journal-stats">
         <StatsOverview period={period} wsData={wsData} />
       </CollapsibleCard>
 
       <CollapsibleCard title="Positions & Trades" defaultOpen={true} storageKey="journal-positions">
-        <PositionsAndTrades wsData={wsData} />
+        <PaperPositionsAndTrades wsData={wsData} />
       </CollapsibleCard>
 
       <CollapsibleCard title="Equity Curve" defaultOpen={true} storageKey="journal-equity">
@@ -90,12 +468,12 @@ export default function JournalPage({ wsData, onTabChange }) {
       <CollapsibleCard title="Performance par Asset" defaultOpen={false} storageKey="journal-per-asset">
         <PerAssetSummary period={period} />
       </CollapsibleCard>
-    </div>
+    </>
   )
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Section 1 — Stats Overview
+ * Section 1 — Stats Overview (Paper)
  * ──────────────────────────────────────────────────────────────────────── */
 
 function StatsOverview({ period, wsData }) {
@@ -170,16 +548,17 @@ function StatsOverview({ period, wsData }) {
         {totalFunding !== 0 && (
           <span>Funding : <span className={totalFunding >= 0 ? 'pnl-pos' : 'pnl-neg'}>{totalFunding >= 0 ? '+' : ''}{totalFunding.toFixed(2)}$</span></span>
         )}
+        <span className="paper-badge-inline">PAPER</span>
       </div>
     </div>
   )
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Section 2 — Positions & Trades
+ * Section 2 — Positions & Trades (Paper)
  * ──────────────────────────────────────────────────────────────────────── */
 
-function PositionsAndTrades({ wsData }) {
+function PaperPositionsAndTrades({ wsData }) {
   const [subTab, setSubTab] = useState('ouvertes')
 
   return (
@@ -199,7 +578,7 @@ function PositionsAndTrades({ wsData }) {
   )
 }
 
-function OpenPositions({ wsData }) {
+function OpenPositions({ wsData, filterSource }) {
   const [expandedSymbol, setExpandedSymbol] = useState(null)
   const simPositions = wsData?.simulator_positions || []
   const execPositions = wsData?.executor?.positions || (wsData?.executor?.position ? [wsData.executor.position] : [])
@@ -213,18 +592,24 @@ function OpenPositions({ wsData }) {
   const monoSim = simPositions.filter(p => p.type !== 'grid')
   // Filtrer les exec mono (exclure ceux qui sont dans les grids LIVE)
   const monoExec = execPositions.filter(p => p.type !== 'grid')
-  const hasPositions = grids.length > 0 || monoSim.length > 0 || execPositions.length > 0 || liveGrids.length > 0
 
-  if (!hasPositions) {
-    return <div className="empty-state">Aucune position ouverte</div>
-  }
-
-  const allPositions = [
+  let allPositions = [
     ...liveGrids,
     ...grids.map(g => ({ ...g, _source: 'PAPER', _type: 'grid' })),
     ...monoExec.map(p => ({ ...p, _source: 'LIVE', _type: 'mono' })),
     ...monoSim.map(p => ({ ...p, _source: 'PAPER', _type: 'mono' })),
   ]
+
+  // Filtre par source si specifie
+  if (filterSource) {
+    allPositions = allPositions.filter(p => p._source === filterSource)
+  }
+
+  const hasPositions = allPositions.length > 0
+
+  if (!hasPositions) {
+    return <div className="empty-state">Aucune position ouverte{filterSource ? ` (${filterSource})` : ''}</div>
+  }
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -251,7 +636,7 @@ function OpenPositions({ wsData }) {
             const direction = pos.direction || 'LONG'
             const isLong = direction === 'LONG'
             const entryPrice = isGrid ? pos.avg_entry : pos.entry_price
-            // total_quantity absent du grid_state → calculer depuis les niveaux
+            // total_quantity absent du grid_state -> calculer depuis les niveaux
             const qty = isGrid
               ? (pos.positions || []).reduce((s, p) => s + (p.quantity || 0), 0)
               : pos.quantity
@@ -428,7 +813,7 @@ function TradeHistorySection() {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Section 3 — Equity Curve Annotee
+ * Section 3 — Equity Curve Annotee (Paper)
  * ──────────────────────────────────────────────────────────────────────── */
 
 const EQ_W = 800
@@ -617,7 +1002,7 @@ function getPeriodSince(period) {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Section 4 — Ordres Bitget
+ * Section 4 — Ordres Bitget (partage entre Live et Paper)
  * ──────────────────────────────────────────────────────────────────────── */
 
 function BitgetOrders() {
@@ -711,7 +1096,7 @@ function BitgetOrders() {
 
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Section 5 — Performance par Asset
+ * Section 5 — Performance par Asset (Paper)
  * ──────────────────────────────────────────────────────────────────────── */
 
 function PerAssetSummary({ period }) {

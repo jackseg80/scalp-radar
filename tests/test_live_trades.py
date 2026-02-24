@@ -1,0 +1,278 @@
+"""Tests Sprint 45 — Live trades DB persistence."""
+
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+
+from backend.core.database import Database
+
+
+@pytest_asyncio.fixture
+async def db():
+    """DB en mémoire initialisée avec toutes les tables."""
+    database = Database(db_path=":memory:")
+    await database.init()
+    yield database
+    await database.close()
+
+
+def _make_live_trade(**overrides) -> dict:
+    """Helper pour créer un live trade."""
+    base = {
+        "timestamp": "2026-02-24T10:00:00+00:00",
+        "strategy_name": "grid_atr",
+        "symbol": "BTC/USDT:USDT",
+        "direction": "LONG",
+        "trade_type": "entry",
+        "side": "buy",
+        "quantity": 0.01,
+        "price": 95000.0,
+        "order_id": "order_123",
+        "fee": 0.57,
+        "pnl": None,
+        "pnl_pct": None,
+        "leverage": 7,
+        "grid_level": 0,
+        "context": "grid",
+    }
+    base.update(overrides)
+    return base
+
+
+# ─── Insert & Read ──────────────────────────────────────────────────────
+
+
+class TestInsertLiveTrade:
+    @pytest.mark.asyncio
+    async def test_insert_and_read_roundtrip(self, db):
+        """Insert un trade et le relire."""
+        trade = _make_live_trade()
+        trade_id = await db.insert_live_trade(trade)
+        assert trade_id > 0
+
+        trades = await db.get_live_trades(limit=10)
+        assert len(trades) == 1
+        assert trades[0]["symbol"] == "BTC/USDT:USDT"
+        assert trades[0]["strategy_name"] == "grid_atr"
+        assert trades[0]["price"] == 95000.0
+
+    @pytest.mark.asyncio
+    async def test_insert_close_with_pnl(self, db):
+        """Insert un close avec P&L."""
+        trade = _make_live_trade(
+            trade_type="tp_close",
+            side="sell",
+            price=96000.0,
+            pnl=8.5,
+            pnl_pct=1.2,
+        )
+        await db.insert_live_trade(trade)
+
+        trades = await db.get_live_trades()
+        assert trades[0]["pnl"] == 8.5
+        assert trades[0]["pnl_pct"] == 1.2
+
+    @pytest.mark.asyncio
+    async def test_trade_count(self, db):
+        """get_live_trade_count retourne le bon nombre."""
+        assert await db.get_live_trade_count() == 0
+        await db.insert_live_trade(_make_live_trade())
+        assert await db.get_live_trade_count() == 1
+        await db.insert_live_trade(_make_live_trade(order_id="order_456"))
+        assert await db.get_live_trade_count() == 2
+
+
+# ─── Period Filter ──────────────────────────────────────────────────────
+
+
+class TestLiveTradesPeriodFilter:
+    @pytest.mark.asyncio
+    async def test_filter_by_period_today(self, db):
+        """Seuls les trades d'aujourd'hui sont retournés."""
+        # Trade ancien
+        await db.insert_live_trade(_make_live_trade(
+            timestamp="2025-01-01T10:00:00+00:00",
+        ))
+        # Trade récent (sera dans "all" mais pas "today")
+        await db.insert_live_trade(_make_live_trade(
+            timestamp="2026-02-24T10:00:00+00:00",
+            order_id="order_today",
+        ))
+
+        all_trades = await db.get_live_trades(period="all")
+        assert len(all_trades) == 2
+
+    @pytest.mark.asyncio
+    async def test_filter_by_strategy(self, db):
+        """Filtre par stratégie."""
+        await db.insert_live_trade(_make_live_trade(strategy_name="grid_atr"))
+        await db.insert_live_trade(_make_live_trade(
+            strategy_name="grid_multi_tf", order_id="order_mt",
+        ))
+
+        atr = await db.get_live_trades(strategy="grid_atr")
+        assert len(atr) == 1
+        assert atr[0]["strategy_name"] == "grid_atr"
+
+    @pytest.mark.asyncio
+    async def test_filter_by_symbol(self, db):
+        """Filtre par symbol."""
+        await db.insert_live_trade(_make_live_trade(symbol="BTC/USDT:USDT"))
+        await db.insert_live_trade(_make_live_trade(
+            symbol="ETH/USDT:USDT", order_id="order_eth",
+        ))
+
+        btc = await db.get_live_trades(symbol="BTC/USDT:USDT")
+        assert len(btc) == 1
+
+
+# ─── Stats ──────────────────────────────────────────────────────────────
+
+
+class TestLiveStats:
+    @pytest.mark.asyncio
+    async def test_stats_empty(self, db):
+        """Stats vides retournent les bons defaults."""
+        stats = await db.get_live_stats()
+        assert stats["total_trades"] == 0
+        assert stats["total_pnl"] == 0.0
+        assert stats["win_rate"] == 0.0
+        assert stats["profit_factor"] == 0.0
+        assert stats["best_trade"] is None
+
+    @pytest.mark.asyncio
+    async def test_stats_pnl_and_winrate(self, db):
+        """P&L total et win rate corrects."""
+        # 2 wins + 1 loss
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=10.0, order_id="o1",
+            timestamp="2026-02-24T10:00:00+00:00",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=5.0, order_id="o2",
+            timestamp="2026-02-24T11:00:00+00:00",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="sl_close", pnl=-3.0, order_id="o3",
+            timestamp="2026-02-24T12:00:00+00:00",
+        ))
+
+        stats = await db.get_live_stats()
+        assert stats["total_trades"] == 3
+        assert stats["total_pnl"] == 12.0
+        assert stats["wins"] == 2
+        assert stats["losses"] == 1
+        assert stats["win_rate"] == 66.7
+        assert stats["gross_profit"] == 15.0
+        assert stats["gross_loss"] == -3.0
+        assert stats["profit_factor"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_stats_best_worst(self, db):
+        """Best et worst trade."""
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=20.0, order_id="best",
+            symbol="ETH/USDT:USDT",
+            timestamp="2026-02-24T10:00:00+00:00",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="sl_close", pnl=-8.0, order_id="worst",
+            symbol="BTC/USDT:USDT",
+            timestamp="2026-02-24T11:00:00+00:00",
+        ))
+
+        stats = await db.get_live_stats()
+        assert stats["best_trade"]["pnl"] == 20.0
+        assert stats["best_trade"]["symbol"] == "ETH/USDT:USDT"
+        assert stats["worst_trade"]["pnl"] == -8.0
+
+    @pytest.mark.asyncio
+    async def test_stats_streak(self, db):
+        """Streak calculée correctement."""
+        for i, pnl in enumerate([5.0, -2.0, -1.0, -3.0]):
+            await db.insert_live_trade(_make_live_trade(
+                trade_type="tp_close" if pnl > 0 else "sl_close",
+                pnl=pnl, order_id=f"streak_{i}",
+                timestamp=f"2026-02-24T{10+i:02d}:00:00+00:00",
+            ))
+
+        stats = await db.get_live_stats()
+        assert stats["current_streak"]["type"] == "loss"
+        assert stats["current_streak"]["count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_stats_ignores_entries(self, db):
+        """Les entries (pnl=None) ne sont pas comptées dans les stats."""
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="entry", pnl=None, order_id="entry1",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=5.0, order_id="close1",
+            timestamp="2026-02-24T10:00:00+00:00",
+        ))
+
+        stats = await db.get_live_stats()
+        assert stats["total_trades"] == 1  # Seulement le close
+
+
+# ─── Daily PnL ──────────────────────────────────────────────────────────
+
+
+class TestLiveDailyPnl:
+    @pytest.mark.asyncio
+    async def test_daily_aggregation(self, db):
+        """P&L groupé par jour."""
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=10.0, order_id="d1",
+            timestamp="2026-02-23T10:00:00+00:00",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="sl_close", pnl=-3.0, order_id="d2",
+            timestamp="2026-02-23T14:00:00+00:00",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=5.0, order_id="d3",
+            timestamp="2026-02-24T10:00:00+00:00",
+        ))
+
+        daily = await db.get_live_daily_pnl(days=30)
+        assert len(daily) == 2
+        # Premier jour : 10 - 3 = 7
+        assert daily[0]["pnl"] == 7.0
+        assert daily[0]["trades"] == 2
+        # Deuxième jour : 5
+        assert daily[1]["pnl"] == 5.0
+
+
+# ─── Per Asset Stats ────────────────────────────────────────────────────
+
+
+class TestLivePerAssetStats:
+    @pytest.mark.asyncio
+    async def test_per_asset_stats(self, db):
+        """Stats par asset."""
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=10.0, order_id="a1",
+            symbol="BTC/USDT:USDT",
+            timestamp="2026-02-24T10:00:00+00:00",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="sl_close", pnl=-2.0, order_id="a2",
+            symbol="BTC/USDT:USDT",
+            timestamp="2026-02-24T11:00:00+00:00",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            trade_type="tp_close", pnl=5.0, order_id="a3",
+            symbol="ETH/USDT:USDT",
+            timestamp="2026-02-24T12:00:00+00:00",
+        ))
+
+        per_asset = await db.get_live_per_asset_stats()
+        assert len(per_asset) == 2
+
+        btc = next(a for a in per_asset if a["symbol"] == "BTC/USDT:USDT")
+        assert btc["total_trades"] == 2
+        assert btc["total_pnl"] == 8.0
+        assert btc["wins"] == 1
+        assert btc["win_rate"] == 50.0

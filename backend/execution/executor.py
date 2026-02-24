@@ -210,6 +210,9 @@ class Executor:
         self._reconciliation_pnl: float = 0.0
         self._reconciliation_count: int = 0
 
+        # Sprint 45 : persistance live trades en DB
+        self._db: Any = None
+
     # ─── Properties ────────────────────────────────────────────────────
 
     @property
@@ -250,6 +253,10 @@ class Executor:
         return self._exchange_balance
 
     # Sandbox Bitget supprimé (cassé, ccxt #25523) — mainnet only
+
+    def set_db(self, db: Any) -> None:
+        """Injecte la DB pour persister les live trades (Sprint 45)."""
+        self._db = db
 
     # ─── Order History (Sprint 32) ────────────────────────────────────
 
@@ -299,6 +306,49 @@ class Executor:
                 if fee is not None:
                     record["fee"] = fee
                 return
+
+    # ─── Live Trade Persistence (Sprint 45) ──────────────────────────
+
+    async def _persist_live_trade(
+        self,
+        trade_type: str,
+        symbol: str,
+        side: str,
+        direction: str,
+        quantity: float,
+        price: float,
+        strategy_name: str = "",
+        order_id: str = "",
+        fee: float = 0.0,
+        pnl: float | None = None,
+        pnl_pct: float | None = None,
+        leverage: int | None = None,
+        grid_level: int | None = None,
+        context: str = "",
+    ) -> None:
+        """Persiste un trade live en DB (best-effort, pas de crash si DB absente)."""
+        if self._db is None:
+            return
+        try:
+            await self._db.insert_live_trade({
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "strategy_name": strategy_name or self._strategy_name or "",
+                "symbol": symbol,
+                "direction": direction,
+                "trade_type": trade_type,
+                "side": side,
+                "quantity": quantity,
+                "price": price,
+                "order_id": order_id,
+                "fee": fee,
+                "pnl": pnl,
+                "pnl_pct": pnl_pct,
+                "leverage": leverage,
+                "grid_level": grid_level,
+                "context": context,
+            })
+        except Exception as e:
+            logger.warning("Executor: échec persist live trade: {}", e)
 
     # ─── Lifecycle ─────────────────────────────────────────────────────
 
@@ -1101,6 +1151,15 @@ class Executor:
             event.direction, futures_sym, filled_qty, avg_price, entry_order_id,
         )
 
+        # Sprint 45 : persist entry live
+        await self._persist_live_trade(
+            "entry", futures_sym, side, event.direction,
+            filled_qty, avg_price,
+            strategy_name=event.strategy_name,
+            order_id=entry_order_id,
+            fee=entry_fee,
+        )
+
         await asyncio.sleep(_ORDER_DELAY)
 
         # 2. Placer SL (market trigger) — CRITIQUE, retry si échec
@@ -1429,6 +1488,18 @@ class Executor:
             filled_qty, avg_price, state.avg_entry_price, state.sl_price,
         )
 
+        # Sprint 45 : persist grid entry
+        await self._persist_live_trade(
+            "entry", futures_sym, side, event.direction,
+            filled_qty, avg_price,
+            strategy_name=event.strategy_name,
+            order_id=order_id,
+            fee=entry_fee,
+            leverage=state.leverage,
+            grid_level=level_num,
+            context="grid",
+        )
+
     async def _update_grid_sl(
         self, futures_sym: str, state: GridLiveState,
     ) -> None:
@@ -1640,6 +1711,23 @@ class Executor:
             state.avg_entry_price, exit_price, net_pnl, event.exit_reason,
         )
 
+        # Sprint 45 : persist grid close
+        margin = state.avg_entry_price * state.total_quantity / max(state.leverage, 1)
+        pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
+        trade_type = "tp_close" if event.exit_reason in ("tp_global", "signal_exit") else "sl_close"
+        await self._persist_live_trade(
+            trade_type, futures_sym, close_side, state.direction,
+            state.total_quantity, exit_price,
+            strategy_name=state.strategy_name,
+            order_id=close_order.get("id", "") if event.exit_reason != "sl_global" else "",
+            fee=exit_fee or 0,
+            pnl=round(net_pnl, 4),
+            pnl_pct=round(pnl_pct, 2),
+            leverage=state.leverage,
+            grid_level=len(state.positions),
+            context=f"grid_cycle_{event.exit_reason or 'unknown'}",
+        )
+
         # 6. Cleanup
         self._record_grid_close(futures_sym)
         del self._grid_states[futures_sym]
@@ -1700,6 +1788,22 @@ class Executor:
 
         logger.info(
             "Executor: SL grid exécuté {} — net={:+.2f}", futures_sym, net_pnl,
+        )
+
+        # Sprint 45 : persist grid SL close
+        close_side = "sell" if state.direction == "LONG" else "buy"
+        margin = state.avg_entry_price * state.total_quantity / max(state.leverage, 1)
+        pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
+        await self._persist_live_trade(
+            "sl_close", futures_sym, close_side, state.direction,
+            state.total_quantity, exit_price,
+            strategy_name=state.strategy_name,
+            fee=exit_fee or 0,
+            pnl=round(net_pnl, 4),
+            pnl_pct=round(pnl_pct, 2),
+            leverage=state.leverage,
+            grid_level=len(state.positions),
+            context="grid_sl_global",
         )
 
         # Nettoyer les éventuels ordres trigger orphelins restants
@@ -1775,6 +1879,23 @@ class Executor:
             "Executor: CLOSE {} {} @ {:.2f} net={:+.2f} ({})",
             pos.direction, futures_sym, exit_price,
             net_pnl, event.exit_reason,
+        )
+
+        # Sprint 45 : persist mono close
+        trade_type = "sl_close" if event.exit_reason in ("sl",) else "tp_close"
+        if event.exit_reason in ("force_close", "emergency_close"):
+            trade_type = "force_close"
+        margin = pos.entry_price * pos.quantity / 3  # default leverage 3x
+        pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
+        await self._persist_live_trade(
+            trade_type, futures_sym, close_side, pos.direction,
+            pos.quantity, exit_price,
+            strategy_name=event.strategy_name,
+            order_id=close_order.get("id", ""),
+            fee=exit_fee or 0,
+            pnl=round(net_pnl, 4),
+            pnl_pct=round(pnl_pct, 2),
+            context=f"mono_{event.exit_reason or 'unknown'}",
         )
 
         # 4. Enregistrer et notifier
@@ -2005,6 +2126,21 @@ class Executor:
         logger.info(
             "Executor: EXCHANGE CLOSE {} {} @ {:.2f} net={:+.2f} ({})",
             pos.direction, symbol, exit_price, net_pnl, exit_reason,
+        )
+
+        # Sprint 45 : persist exchange close
+        close_side = "sell" if pos.direction == "LONG" else "buy"
+        trade_type = "sl_close" if exit_reason == "sl" else "tp_close"
+        margin = pos.entry_price * pos.quantity / 3
+        pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
+        await self._persist_live_trade(
+            trade_type, symbol, close_side, pos.direction,
+            pos.quantity, exit_price,
+            strategy_name=pos.strategy_name,
+            fee=exit_fee or 0,
+            pnl=round(net_pnl, 4),
+            pnl_pct=round(pnl_pct, 2),
+            context=f"exchange_{exit_reason}",
         )
 
         from backend.execution.risk_manager import LiveTradeResult

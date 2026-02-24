@@ -202,6 +202,7 @@ async def lifespan(app: FastAPI):
         from backend.execution.sync import sync_live_to_paper
 
         for strat_name, executor in executor_mgr.executors.items():
+            executor.set_db(db)  # Sprint 45 : persist live trades
             executor.set_data_engine(engine)
             executor.set_strategies(strategy_instances, simulator=simulator)
             await sync_live_to_paper(executor, simulator)

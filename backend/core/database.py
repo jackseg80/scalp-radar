@@ -179,6 +179,7 @@ class Database:
         await self._create_simulator_trades_table()
         await self._create_portfolio_tables()
         await self._create_journal_tables()
+        await self._create_live_trades_table()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -1488,6 +1489,298 @@ class Database:
         if self._maintenance_task is None or self._maintenance_task.done():
             self._maintenance_task = asyncio.create_task(self._wal_checkpoint_loop())
             logger.info("Database: boucle maintenance démarrée (WAL checkpoint toutes les {}s)", _WAL_CHECKPOINT_INTERVAL)
+
+    # ─── LIVE TRADES (Sprint 45) ────────────────────────────────────────────
+
+    async def _create_live_trades_table(self) -> None:
+        """Table Sprint 45 : trades live persistés (séparés du paper)."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS live_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                trade_type TEXT NOT NULL,
+                side TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                price REAL NOT NULL,
+                order_id TEXT,
+                fee REAL DEFAULT 0,
+                pnl REAL,
+                pnl_pct REAL,
+                leverage INTEGER,
+                grid_level INTEGER,
+                context TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_live_trades_ts
+                ON live_trades(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_live_trades_strat
+                ON live_trades(strategy_name);
+            CREATE INDEX IF NOT EXISTS idx_live_trades_order
+                ON live_trades(order_id);
+        """)
+
+    async def insert_live_trade(self, trade: dict) -> int:
+        """Insère un trade live en DB. Retourne l'id."""
+        await self._execute_with_retry(
+            """INSERT INTO live_trades
+               (timestamp, strategy_name, symbol, direction, trade_type,
+                side, quantity, price, order_id, fee, pnl, pnl_pct,
+                leverage, grid_level, context)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                trade["timestamp"],
+                trade["strategy_name"],
+                trade["symbol"],
+                trade["direction"],
+                trade["trade_type"],
+                trade["side"],
+                trade["quantity"],
+                trade["price"],
+                trade.get("order_id"),
+                trade.get("fee", 0),
+                trade.get("pnl"),
+                trade.get("pnl_pct"),
+                trade.get("leverage"),
+                trade.get("grid_level"),
+                trade.get("context"),
+            ),
+        )
+        assert self._conn is not None
+        cursor = await self._conn.execute("SELECT last_insert_rowid()")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def get_live_trades(
+        self,
+        period: str = "all",
+        strategy: str | None = None,
+        symbol: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Retourne les trades live filtrés par période/stratégie/symbol."""
+        assert self._conn is not None
+
+        since = self._period_to_since(period)
+        conditions: list[str] = []
+        params: list[str | int] = []
+
+        if since:
+            conditions.append("timestamp >= ?")
+            params.append(since)
+        if strategy:
+            conditions.append("strategy_name = ?")
+            params.append(strategy)
+        if symbol:
+            conditions.append("symbol = ?")
+            params.append(symbol)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"SELECT * FROM live_trades {where} ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_live_stats(
+        self, period: str = "all", strategy: str | None = None,
+    ) -> dict:
+        """Stats agrégées depuis live_trades (closes uniquement)."""
+        assert self._conn is not None
+
+        since = self._period_to_since(period)
+        conditions = ["trade_type IN ('tp_close', 'sl_close', 'force_close', 'close')"]
+        params: list[str] = []
+
+        if since:
+            conditions.append("timestamp >= ?")
+            params.append(since)
+        if strategy:
+            conditions.append("strategy_name = ?")
+            params.append(strategy)
+
+        where = f"WHERE {' AND '.join(conditions)}"
+
+        cursor = await self._conn.execute(
+            f"SELECT pnl, pnl_pct, timestamp, symbol FROM live_trades {where} "
+            "ORDER BY timestamp ASC",
+            params,
+        )
+        rows = await cursor.fetchall()
+
+        total_trades = len(rows)
+        if total_trades == 0:
+            return {
+                "period": period,
+                "total_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "total_pnl": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "profit_factor": 0.0,
+                "best_trade": None,
+                "worst_trade": None,
+                "max_drawdown_pct": 0.0,
+                "current_streak": {"type": "none", "count": 0},
+                "trades_per_day": 0.0,
+            }
+
+        pnls = [row["pnl"] or 0 for row in rows]
+        wins = sum(1 for p in pnls if p > 0)
+        losses = total_trades - wins
+        win_rate = round(wins / total_trades * 100, 1)
+        total_pnl = round(sum(pnls), 2)
+        gross_profit = round(sum(p for p in pnls if p > 0), 2)
+        gross_loss = round(sum(p for p in pnls if p <= 0), 2)
+        profit_factor = (
+            round(gross_profit / abs(gross_loss), 2) if gross_loss < 0 else 0.0
+        )
+
+        best_idx = max(range(total_trades), key=lambda i: pnls[i])
+        worst_idx = min(range(total_trades), key=lambda i: pnls[i])
+        best_trade = {"symbol": rows[best_idx]["symbol"], "pnl": round(pnls[best_idx], 2)}
+        worst_trade = {"symbol": rows[worst_idx]["symbol"], "pnl": round(pnls[worst_idx], 2)}
+
+        # Streak (depuis le plus récent)
+        streak_type = "win" if pnls[-1] > 0 else "loss"
+        streak_count = 0
+        for p in reversed(pnls):
+            if (streak_type == "win" and p > 0) or (streak_type == "loss" and p <= 0):
+                streak_count += 1
+            else:
+                break
+
+        # Max drawdown depuis equity reconstituée
+        max_drawdown_pct = 0.0
+        equity = 0.0
+        peak = 0.0
+        for p in pnls:
+            equity += p
+            if equity > peak:
+                peak = equity
+            if peak > 0:
+                dd = (peak - equity) / peak * 100
+                if dd > max_drawdown_pct:
+                    max_drawdown_pct = dd
+        max_drawdown_pct = round(max_drawdown_pct, 1)
+
+        # Trades par jour
+        try:
+            first = datetime.fromisoformat(rows[0]["timestamp"])
+            last = datetime.fromisoformat(rows[-1]["timestamp"])
+            span_days = max(1, (last - first).days + 1)
+            trades_per_day = round(total_trades / span_days, 1)
+        except (ValueError, TypeError):
+            trades_per_day = 0.0
+
+        return {
+            "period": period,
+            "total_trades": total_trades,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+            "gross_profit": gross_profit,
+            "gross_loss": gross_loss,
+            "profit_factor": profit_factor,
+            "best_trade": best_trade,
+            "worst_trade": worst_trade,
+            "max_drawdown_pct": max_drawdown_pct,
+            "current_streak": {"type": streak_type, "count": streak_count},
+            "trades_per_day": trades_per_day,
+        }
+
+    async def get_live_daily_pnl(
+        self, days: int = 30, strategy: str | None = None,
+    ) -> list[dict]:
+        """P&L journalier live agrégé par jour."""
+        assert self._conn is not None
+
+        since = (
+            datetime.now(tz=timezone.utc) - timedelta(days=days)
+        ).isoformat()
+
+        conditions = [
+            "trade_type IN ('tp_close', 'sl_close', 'force_close', 'close')",
+            "timestamp >= ?",
+        ]
+        params: list[str] = [since]
+        if strategy:
+            conditions.append("strategy_name = ?")
+            params.append(strategy)
+
+        where = f"WHERE {' AND '.join(conditions)}"
+
+        cursor = await self._conn.execute(
+            f"SELECT DATE(timestamp) as day, SUM(pnl) as pnl, COUNT(*) as trades "
+            f"FROM live_trades {where} GROUP BY DATE(timestamp) ORDER BY day ASC",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_live_per_asset_stats(
+        self, period: str = "all", strategy: str | None = None,
+    ) -> list[dict]:
+        """Stats par asset depuis live_trades (closes)."""
+        assert self._conn is not None
+
+        since = self._period_to_since(period)
+        conditions = ["trade_type IN ('tp_close', 'sl_close', 'force_close', 'close')"]
+        params: list[str] = []
+
+        if since:
+            conditions.append("timestamp >= ?")
+            params.append(since)
+        if strategy:
+            conditions.append("strategy_name = ?")
+            params.append(strategy)
+
+        where = f"WHERE {' AND '.join(conditions)}"
+
+        cursor = await self._conn.execute(
+            f"""SELECT symbol,
+                       COUNT(*) as total_trades,
+                       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) as losses,
+                       ROUND(SUM(pnl), 2) as total_pnl,
+                       ROUND(AVG(pnl), 2) as avg_pnl
+                FROM live_trades {where}
+                GROUP BY symbol ORDER BY total_pnl DESC""",
+            params,
+        )
+        rows = await cursor.fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            total = d["total_trades"]
+            d["win_rate"] = round(d["wins"] / total * 100, 1) if total > 0 else 0.0
+            result.append(d)
+        return result
+
+    async def get_live_trade_count(self) -> int:
+        """Nombre total de trades live en DB."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("SELECT COUNT(*) FROM live_trades")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    def _period_to_since(self, period: str) -> str | None:
+        """Convertit une période en timestamp ISO 'since'."""
+        now = datetime.now(tz=timezone.utc)
+        if period == "today":
+            return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        if period == "7d":
+            return (now - timedelta(days=7)).isoformat()
+        if period == "30d":
+            return (now - timedelta(days=30)).isoformat()
+        return None
 
     # ─── LIFECYCLE ──────────────────────────────────────────────────────────
 
