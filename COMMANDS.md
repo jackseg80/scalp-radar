@@ -136,7 +136,7 @@ uv run python -m scripts.optimize --strategy envelope_dca --symbol BTC/USDT -v
 
 ### Optimiser une stratégie sur tous les assets
 ```powershell
-uv run python -m scripts.optimize --strategy envelope_dca --all-assets -v
+uv run python -m scripts.optimize --strategy envelope_dca --all-symbols -v
 ```
 
 ### Optimiser toutes les stratégies, tous les assets
@@ -474,17 +474,10 @@ foreach ($s in @("AAVE/USDT","ARB/USDT","AVAX/USDT")) { uv run python -m scripts
 4. Vérifier visuellement le dashboard
 
 ### Pour ajouter une nouvelle stratégie grid
-1. Créer `backend/strategies/my_strategy.py` (hérite BaseGridStrategy)
-2. Ajouter config dans `backend/core/config.py`
-3. Ajouter dans `backend/strategies/factory.py`
-4. Ajouter dans `backend/optimization/__init__.py` (STRATEGY_REGISTRY + GRID_STRATEGIES)
-5. Ajouter fast engine dans `backend/optimization/fast_multi_backtest.py`
-6. Ajouter indicateurs dans `backend/optimization/indicator_cache.py` si nécessaire
-7. Ajouter `_INDICATOR_PARAMS` dans `backend/optimization/walk_forward.py`
-8. Config YAML : `config/strategies.yaml` + `config/param_grids.yaml`
-9. Tests : signaux, fast engine parité, WFO integration
-10. WFO : `uv run python -m scripts.optimize --strategy my_strategy --all-assets`
-11. Résultats : commande section 1 ci-dessus
+
+Voir [STRATEGIES.md § Comment ajouter une nouvelle stratégie](docs/STRATEGIES.md#comment-ajouter-une-nouvelle-stratégie) (checklist 11 étapes).
+
+Pour le workflow complet validation (WFO → Grade → Portfolio → Paper → Live), voir [WORKFLOW_WFO.md](docs/WORKFLOW_WFO.md).
 
 ---
 

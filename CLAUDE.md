@@ -78,22 +78,23 @@ scalp-radar/
 └── docs/audit/        # Rapports d'audit
 ```
 
-## Trading Strategies (16 implémentées)
+## Trading Strategies (17 implémentées)
 
 **5m Scalp (4)** : vwap_rsi, momentum, funding (paper), liquidation (paper)
 
-**1h Swing (4)** : bollinger_mr, donchian_breakout, supertrend, boltrend (`enabled: true`)
+**1h Swing (4)** : bollinger_mr, donchian_breakout, supertrend, boltrend (`enabled: false`)
 
-**1h Grid/DCA (8)** :
-- `grid_atr` — Enveloppes ATR adaptatives (`enabled: true`, paper Top 9)
-- `grid_boltrend` — DCA Bollinger breakout + SMA, TP inversé (`enabled: true`, paper Top 5)
+**1h Grid/DCA (9)** :
+- `grid_atr` — Enveloppes ATR adaptatives (LIVE 7x, 14 assets)
+- `grid_multi_tf` — Supertrend 4h + Grid ATR 1h (LIVE 3x, 14 assets)
+- `grid_boltrend` — DCA Bollinger breakout + SMA, TP inversé (paper, 2 assets, mise en pause Sprint 38b)
+- `grid_momentum` — Donchian breakout + DCA pullback (`enabled: false`, WFO à lancer)
 - `grid_range_atr` — Bidirectionnel LONG+SHORT (`enabled: false`)
-- `grid_multi_tf` — Supertrend 4h + Grid ATR 1h (`enabled: false`)
 - `grid_funding` — DCA sur funding négatif (`enabled: false`)
 - `grid_trend` — EMA cross + ADX + trailing stop ATR (`enabled: false`, échoue bear market)
 - `envelope_dca` / `envelope_dca_short` — (`enabled: false`, remplacés par grid_atr)
 
-Détails complets : voir **[STRATEGIES.md](docs/STRATEGIES.md)**
+Détails complets : voir **[STRATEGIES.md](docs/STRATEGIES.md)** | Workflow WFO : voir **[WORKFLOW_WFO.md](docs/WORKFLOW_WFO.md)**
 
 ## Critical Design Requirements
 

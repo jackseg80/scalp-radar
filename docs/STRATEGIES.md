@@ -9,12 +9,12 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 
 | # | Stratégie | Timeframe | Type | Direction | Enabled | Statut |
 |---|-----------|-----------|------|-----------|---------|--------|
-| 1 | `grid_atr` | 1h | Grid/DCA | Long + Short | **true** | Paper trading Top 10 |
+| 1 | `grid_atr` | 1h | Grid/DCA | Long + Short | **true** | LIVE 7x, 14 assets |
 | 2 | `grid_trend` | 1h | Grid/DCA | Long + Short | false | Echoue en forward test |
-| 3 | `grid_multi_tf` | 1h + 4h | Grid/DCA | Long + Short | false | WFO terminé |
+| 3 | `grid_multi_tf` | 1h + 4h | Grid/DCA | Long + Short | **true** | LIVE 3x (test), 14 assets |
 | 4 | `grid_funding` | 1h | Grid/DCA | Long only | false | WFO terminé |
 | 5 | `grid_range_atr` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
-| 6 | `grid_boltrend` | 1h | Grid/DCA | Long + Short | **true** | Paper trading 6 assets |
+| 6 | `grid_boltrend` | 1h | Grid/DCA | Long + Short | **true** | Paper, 2 assets (mise en pause Sprint 38b) |
 | 7 | `envelope_dca` | 1h | Grid/DCA | Long only | false | Remplacé par grid_atr |
 | 8 | `envelope_dca_short` | 1h | Grid/DCA | Short only | false | Validation en attente |
 | 9 | `boltrend` | 1h | Swing | Long + Short | false | Grade C (trop peu de trades) |
@@ -27,9 +27,12 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 16 | `liquidation` | 5m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 | 17 | `grid_momentum` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
 
-**Paper trading actif** :
-- `grid_atr` sur 10 assets (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — leverage 6x
-- `grid_boltrend` sur 6 assets (BTC, ETH, DOGE, DYDX, LINK, SAND) — leverage 8x
+**Live trading actif** :
+- `grid_atr` sur 14 assets — leverage 7x
+- `grid_multi_tf` sur 14 assets — leverage 3x (phase test, cible 6x)
+
+**Paper trading** :
+- `grid_boltrend` sur 2 assets (BTC, DYDX) — leverage 8x (mise en pause Sprint 38b)
 
 ---
 
@@ -61,7 +64,7 @@ margin_par_level = capital / nb_assets / num_levels
 Cap 25% du capital par asset. Margin guard global 70% (`max_margin_ratio` dans `risk.yaml`).
 
 **Politique leverage** :
-- Stratégies grid : leverage défini par stratégie dans `strategies.yaml` (grid_atr = 6x, grid_boltrend = 8x)
+- Stratégies grid : leverage défini par stratégie dans `strategies.yaml` (grid_atr = 7x, grid_multi_tf = 3x, grid_boltrend = 8x)
 - Stratégies non-grid : `risk.yaml` `default_leverage: 3` (fallback)
 - Résultats stress test (Sprint 35) : grid_atr optimal à 4-6x (Calmar 11.2), grid_boltrend optimal à 8x (Calmar 20.4)
 
@@ -118,9 +121,9 @@ L'ATR rend les enveloppes **adaptatives** : en haute volatilité, les niveaux s'
 | `num_levels` | Nombre de niveaux DCA | 2, 3, 4 |
 | `sl_percent` | SL en % du prix moyen | 15, 20, 25, 30 |
 | `sides` | Directions autorisées | ["long"] par défaut |
-| `leverage` | Levier | 6 |
+| `leverage` | Levier | 7 |
 
-**WFO** : 3240 combos, fenêtres IS=180j / OOS=60j / step=60j. Grade A sur 20/21 assets.
+**WFO** : 3240 combos, fenêtres IS=180j / OOS=60j / step=60j. Grade A/B sur 14 assets.
 
 #### Limites
 
@@ -257,7 +260,7 @@ Le resampling est **anti-lookahead** : chaque candle 1h utilise la direction du 
 
 Les autres paramètres sont les mêmes que grid_atr. **WFO** : 384 combos.
 
-**Statut** : `enabled: false`. WFO terminé, validation Bitget en cours.
+**Statut** : `enabled: true`, `live_eligible: true`. LIVE 3x sur 14 assets (phase test, cible 6x).
 
 ---
 
@@ -397,7 +400,7 @@ Réutilise 100% du code de `envelope_dca`. Seuls le nom (`"envelope_dca_short"`)
 
 **Différence vs grid_atr** : grid_atr = grille toujours active (mean reversion). grid_boltrend = grille activée uniquement sur signal directionnel (trend following DCA).
 
-**Statut** : `enabled: true`, `live_eligible: false`. Paper trading actif sur 6 assets (BTC, ETH, DOGE, DYDX, LINK, SAND) avec leverage 8x.
+**Statut** : `enabled: true`, `live_eligible: false`. Paper, 2 assets (BTC, DYDX) avec leverage 8x.
 
 **Résultats WFO** : Grade B (83/100), Sharpe +1.58 (post-Hotfix 33a). Bugs corrigés : TP inverse via `get_tp_price()` retournant NaN (Hotfix 33a), exit_price/fees fast engine (Hotfix 33b), divergence fast/event réduite à 2.62%.
 
@@ -699,7 +702,7 @@ Pourcentages fixes (`tp_percent`, `sl_percent`). Pas de sortie anticipée.
 7. Ajouter `_INDICATOR_PARAMS` dans `backend/optimization/walk_forward.py`
 8. Config YAML : `config/strategies.yaml` + `config/param_grids.yaml`
 9. Tests : signaux, fast engine parité, WFO integration
-10. WFO : `uv run python -m scripts.optimize --strategy my_strategy --all-assets`
+10. WFO : `uv run python -m scripts.optimize --strategy my_strategy --all-symbols`
 11. Vérifier les résultats
 
 ### Pattern de code — Stratégie Grid
@@ -751,65 +754,9 @@ class MyStrategy(BaseStrategy):
 
 ## Validation Workflow
 
-### A. Nouvelle stratégie (ou re-validation complète)
-
-Pipeline complète, chaque étape doit être validée avant de passer à la suivante :
-
-```text
-0. Calcul leverage initial (AVANT le WFO)
-   └─ Aucun WFO nécessaire — calcul purement mathématique
-   └─ Inputs : param_grids.yaml (SL_max, num_levels_max),
-               risk.yaml (kill_switch_pct, max_margin_ratio)
-   └─ Formules :
-       - Plancher conservateur : kill_switch / (SL_max × margin_guard)
-         Ex: 45% / (25% × 70%) = 2.57 → arrondi 3x
-       - Plafond agressif : 80% / (SL_max × avg_margin_usage)
-         Ex: 80% / (25% × 50%) = 6.4 → arrondi 6x
-       - Fourchette typique : [3x, 6x]
-   └─ Critère : choisir dans la fourchette selon tolérance au risque
-   └─ Écrire le leverage choisi dans strategies.yaml AVANT l'étape 1
-   └─ Note : si la stratégie fait du SHORT (grid_multi_tf, grid_range_atr),
-             considérer le risque de short squeeze → rester dans le bas
-             de la fourchette
-
-1. Implémentation
-   └─ Stratégie + fast engine + tests (parité, signaux, registry)
-
-2. WFO mono-coin (21 assets)
-   └─ uv run python -m scripts.optimize --strategy <name> --all-assets
-   └─ Le WFO utilise le leverage de strategies.yaml (fixé à l'étape 0)
-   └─ Critère : Grade A ou B sur ≥ 5 assets
-
-2b. Cohérence timeframe (OBLIGATOIRE avant --apply)
-   └─ Le badge TF dans la page Recherche signale les outliers (orange = ≠ 1h)
-   └─ Si outliers détectés, `--apply` est BLOQUÉ (exit 1, HTTP 409)
-   └─ Actions requises (par ordre de préférence) :
-       a) Re-tester les outliers en 1h : --symbols BCH/USDT --force-timeframe 1h
-       b) Exclure les outliers : --apply --exclude BCH/USDT
-       c) Forcer (exclut silencieusement) : --apply --ignore-tf-conflicts
-   └─ Critère : Tous les Grade A/B doivent avoir timeframe=1h
-
-3. Portfolio backtest multi-coin (Grade A/B seulement)
-   └─ uv run python -m scripts.portfolio_backtest --strategy <name> --days auto
-   └─ Critère : Return > 0, Max DD < -35%, Sharpe > 0.5
-
-4. Stress test leverage (CONFIRMATION, pas exploration)
-   └─ uv run python -m scripts.stress_test_leverage --strategy <name>
-   └─ But : confirmer que le leverage choisi à l'étape 0 tient
-   └─ Tester leverage_choisi ± 1x (ex: si 6x choisi, tester 5x, 6x, 7x)
-   └─ Critères : Liq distance > 50%, KS@45 = 0, W-SL < kill_switch - 5%
-   └─ Si le stress test recommande un leverage différent de ±2x
-     par rapport à l'étape 0 → revenir à l'étape 0, ajuster,
-     et re-WFO (rare mais nécessaire)
-
-5. Paper trading (≥ 2 semaines, idéalement 1 mois)
-   └─ Déployer sur le serveur avec enabled: true
-   └─ Critère : Résultats cohérents avec le backtest (±20% sur les métriques clés)
-
-6. Live trading (capital progressif)
-   └─ Commencer avec capital minimal, augmenter par paliers
-   └─ Critère : Slippage paper vs live < 0.1%, pas d'anomalies executor
-```
+> **Workflow complet (pipeline nouvelle stratégie / re-validation)** : voir [WORKFLOW_WFO.md](WORKFLOW_WFO.md).
+>
+> Les sous-workflows B et C ci-dessous sont des variantes allégées pour des changements ponctuels.
 
 ### B. Nouveau paramètre / feature (ex: max_hold_candles)
 
@@ -861,14 +808,9 @@ Workflow A/B test — on isole l'impact d'une seule variable :
 
 ### Règles générales
 
-- **Leverage first** : toujours fixer le leverage AVANT le WFO. Le WFO lit le leverage depuis `strategies.yaml` et optimise en conséquence. Un WFO fait à 3x peut sélectionner des combos dangereux à 7x (SL large × leverage élevé → dépassement kill switch).
-- **Jamais de raccourci** : ne pas sauter d'étape, même si "ça a l'air évident"
-- **Un changement à la fois** : ne pas tester un nouveau paramètre ET un nouveau leverage simultanément
-- **Grade minimum** : seuls les Grade A et B passent en portfolio/paper/live
-- **Shallow validation** : le grade reçoit une pénalité si le WFO a peu de fenêtres (< 24 = ⚠ shallow). Pénalités : 18-23 → -10pts, 12-17 → -20pts, < 12 → -25pts. Un score parfait avec 15 fenêtres tombe en B. Recalculable via `--regrade --strategy <name>`.
-- **Timeframe unifié** : tous les Grade A/B d'une stratégie doivent avoir le même timeframe (1h pour le portfolio/paper/live). Un outlier 4h ou 1d ne produit aucun trade en portfolio malgré un Grade A.
+> Voir [WORKFLOW_WFO.md § 10 — Règles d'or](WORKFLOW_WFO.md#10-règles-dor) pour les règles complètes.
+
 - **Backward compat** : tout nouveau paramètre a un défaut qui préserve le comportement existant
-- **Données fraîches** : toujours `fetch_history` avant un WFO important pour avoir les dernières candles
 
 ---
 
