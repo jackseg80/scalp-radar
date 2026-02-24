@@ -214,6 +214,19 @@ uv run python -m scripts.optimize --strategy grid_range_atr --all-symbols --resu
 
 ---
 
+### Recalculer les grades sans re-WFO (--regrade)
+
+Recalcule le score et le grade à partir des résultats OOS déjà en DB. Utile après un changement de formule combo_score ou de seuil de grading.
+
+```powershell
+uv run python -m scripts.optimize --regrade --strategy grid_atr
+uv run python -m scripts.optimize --regrade --strategy grid_multi_tf
+```
+
+> Incompatible avec `--apply`, `--symbol`, `--symbols`, `--all-symbols`, `--all`, `--resume`.
+
+---
+
 ### Optimiser grid_boltrend (source binance)
 
 ```powershell
@@ -239,9 +252,17 @@ uv run python -m scripts.optimize --strategy grid_boltrend --all-symbols --excha
 uv run python -m scripts.optimize --check-data
 ```
 
-### Fetch données 1h (backtest principal — 1800 jours)
+### Fetch données 1h (backtest principal)
+
 ```powershell
-uv run python -m scripts.fetch_history --exchange binance --days 1800 --symbols BTC/USDT,ETH/USDT,SOL/USDT --timeframe 1h
+# Tous les 21 assets depuis assets.yaml (sans --symbol = tous par défaut)
+uv run python -m scripts.fetch_history --exchange binance --days 1100 --timeframe 1h
+
+# Assets spécifiques
+uv run python -m scripts.fetch_history --exchange binance --days 1100 --symbols BTC/USDT,ETH/USDT,SOL/USDT --timeframe 1h
+
+# Bitget pour validation cross-exchange (~90j)
+uv run python -m scripts.fetch_history --exchange bitget --days 90 --timeframe 1h
 ```
 
 ### Fetch données courtes (indicateurs Scanner — 7 jours)
