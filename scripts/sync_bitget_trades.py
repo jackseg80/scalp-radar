@@ -86,6 +86,55 @@ def _classify_trade(
     return direction, trade_type
 
 
+def _aggregate_fills_by_order(fills: list[dict]) -> list[dict]:
+    """Agrège les fills Bitget par order_id.
+
+    Bitget retourne un fill par niveau de prix pour un seul ordre
+    (ex: un close de 0.03 peut générer 3 fills à 0.01 chacun).
+    On agrège : qty totale + prix VWAP + fees totales.
+    Conserve le premier fill comme référence pour les métadonnées.
+    """
+    orders: dict[str, dict] = {}  # order_id → aggregated
+
+    for fill in fills:
+        oid = fill.get("order", "") or fill.get("id", "")
+        qty = float(fill.get("amount", 0) or 0)
+        price = float(fill.get("price", 0) or 0)
+        fee = float((fill.get("fee") or {}).get("cost", 0) or 0)
+
+        if oid not in orders:
+            # Premier fill : initialiser l'agrégat avec toutes les métadonnées
+            orders[oid] = {
+                "_ref_fill": fill,      # Référence pour side, info, datetime...
+                "_total_qty": qty,
+                "_total_cost": price * qty,
+                "_total_fee": fee,
+            }
+        else:
+            orders[oid]["_total_qty"] += qty
+            orders[oid]["_total_cost"] += price * qty
+            orders[oid]["_total_fee"] += fee
+
+    # Construire la liste agrégée (une entrée par order_id)
+    result = []
+    for oid, agg in orders.items():
+        ref = agg["_ref_fill"]
+        total_qty = agg["_total_qty"]
+        total_cost = agg["_total_cost"]
+        vwap = total_cost / total_qty if total_qty > 0 else 0.0
+
+        # Reconstruire un objet "fill-like" avec les données agrégées
+        aggregated = dict(ref)                 # Copie du premier fill
+        aggregated["amount"] = total_qty       # Quantité totale
+        aggregated["price"] = vwap             # Prix VWAP
+        if aggregated.get("fee") is not None:
+            aggregated["fee"] = {"cost": agg["_total_fee"]}
+        aggregated["order"] = oid              # order_id explicite
+        result.append(aggregated)
+
+    return result
+
+
 def _compute_pnl_for_closes(
     trades: list[dict],
 ) -> list[dict]:
@@ -254,8 +303,14 @@ async def main() -> None:
 
         for symbol in symbols:
             logger.info("Fetching trades for {} since {} days...", symbol, args.days)
-            trades = await _fetch_all_trades(exchange, symbol, since)
-            logger.info("  {} fills bruts pour {}", len(trades), symbol)
+            fills = await _fetch_all_trades(exchange, symbol, since)
+            # Agréger les fills par order_id (VWAP + qty totale)
+            # → un close Bitget peut générer N fills (un par niveau de prix)
+            trades = _aggregate_fills_by_order(fills)
+            logger.info(
+                "  {} fills → {} ordres agrégés pour {}",
+                len(fills), len(trades), symbol,
+            )
 
             for trade in trades:
                 order_id = trade.get("order", "") or trade.get("id", "")

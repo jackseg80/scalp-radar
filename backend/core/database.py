@@ -1626,7 +1626,7 @@ class Database:
                 "profit_factor": 0.0,
                 "best_trade": None,
                 "worst_trade": None,
-                "max_drawdown_pct": 0.0,
+                "max_drawdown_pct": None,
                 "current_streak": {"type": "none", "count": 0},
                 "trades_per_day": 0.0,
             }
@@ -1656,19 +1656,11 @@ class Database:
             else:
                 break
 
-        # Max drawdown depuis equity reconstituée
-        max_drawdown_pct = 0.0
-        equity = 0.0
-        peak = 0.0
-        for p in pnls:
-            equity += p
-            if equity > peak:
-                peak = equity
-            if peak > 0:
-                dd = (peak - equity) / peak * 100
-                if dd > max_drawdown_pct:
-                    max_drawdown_pct = dd
-        max_drawdown_pct = round(max_drawdown_pct, 1)
+        # Max drawdown : non calculable sans capital initial connu
+        # (diviser le P&L cumulé par un peak lui-même issu du P&L donne
+        # des valeurs aberrantes). Affiché N/A côté frontend jusqu'à
+        # qu'un vrai tracking de l'equity soit disponible.
+        max_drawdown_pct = None
 
         # Trades par jour
         try:
@@ -1691,7 +1683,7 @@ class Database:
             "profit_factor": profit_factor,
             "best_trade": best_trade,
             "worst_trade": worst_trade,
-            "max_drawdown_pct": max_drawdown_pct,
+            "max_drawdown_pct": None,  # N/A — capital initial requis
             "current_streak": {"type": streak_type, "count": streak_count},
             "trades_per_day": trades_per_day,
         }

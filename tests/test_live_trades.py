@@ -432,3 +432,95 @@ class TestClassifyAndPnl:
         # pnl = (91000-90000)*0.01 + (91000-89000)*0.005 - 0.82
         #     = 10 + 10 - 0.82 = 19.18
         assert close["pnl"] == 19.18
+
+    def test_aggregate_fills_single_fill(self):
+        """Un seul fill → retourné tel quel."""
+        from scripts.sync_bitget_trades import _aggregate_fills_by_order
+        fills = [{"order": "A", "amount": 0.01, "price": 100.0, "side": "buy", "info": {}, "fee": {"cost": 0.5}}]
+        result = _aggregate_fills_by_order(fills)
+        assert len(result) == 1
+        assert result[0]["amount"] == 0.01
+        assert result[0]["price"] == 100.0
+
+    def test_aggregate_fills_multiple_fills_same_order(self):
+        """3 fills du même ordre → 1 enregistrement agrégé (VWAP + qty totale)."""
+        from scripts.sync_bitget_trades import _aggregate_fills_by_order
+        fills = [
+            {"order": "D", "amount": 0.01, "price": 98.0, "side": "sell", "info": {"tradeSide": "close"}, "fee": {"cost": 0.55}},
+            {"order": "D", "amount": 0.01, "price": 98.0, "side": "sell", "info": {"tradeSide": "close"}, "fee": {"cost": 0.55}},
+            {"order": "D", "amount": 0.01, "price": 98.0, "side": "sell", "info": {"tradeSide": "close"}, "fee": {"cost": 0.55}},
+        ]
+        result = _aggregate_fills_by_order(fills)
+        assert len(result) == 1
+        assert round(result[0]["amount"], 6) == 0.03
+        assert round(result[0]["price"], 4) == 98.0
+        assert round(result[0]["fee"]["cost"], 4) == 1.65
+
+    def test_aggregate_fills_vwap_different_prices(self):
+        """VWAP correct quand fills à prix différents."""
+        from scripts.sync_bitget_trades import _aggregate_fills_by_order
+        fills = [
+            {"order": "D", "amount": 0.02, "price": 96.0, "side": "sell", "info": {}, "fee": {"cost": 1.0}},
+            {"order": "D", "amount": 0.01, "price": 99.0, "side": "sell", "info": {}, "fee": {"cost": 0.5}},
+        ]
+        result = _aggregate_fills_by_order(fills)
+        assert len(result) == 1
+        # VWAP = (0.02*96 + 0.01*99) / 0.03 = (1.92 + 0.99) / 0.03 = 97.0
+        assert round(result[0]["price"], 4) == 97.0
+        assert round(result[0]["amount"], 6) == 0.03
+
+    def test_aggregate_fills_different_orders(self):
+        """Fills de 2 ordres différents → 2 enregistrements séparés."""
+        from scripts.sync_bitget_trades import _aggregate_fills_by_order
+        fills = [
+            {"order": "A", "amount": 0.01, "price": 100.0, "side": "buy", "info": {}, "fee": {"cost": 0.5}},
+            {"order": "B", "amount": 0.01, "price": 95.0, "side": "buy", "info": {}, "fee": {"cost": 0.5}},
+        ]
+        result = _aggregate_fills_by_order(fills)
+        assert len(result) == 2
+
+    def test_aggregate_fills_output_fields(self):
+        """Après agrégation, les champs amount/price/fee sont corrects pour C1."""
+        from scripts.sync_bitget_trades import _aggregate_fills_by_order
+        fills = [
+            {"order": "E1", "amount": 0.01, "price": 100.0, "side": "buy",  "info": {}, "fee": {"cost": 0}, "datetime": "2026-02-24T10:00:00+00:00"},
+            {"order": "E2", "amount": 0.01, "price": 95.0,  "side": "buy",  "info": {}, "fee": {"cost": 0}, "datetime": "2026-02-24T10:10:00+00:00"},
+            {"order": "E3", "amount": 0.01, "price": 90.0,  "side": "buy",  "info": {}, "fee": {"cost": 0}, "datetime": "2026-02-24T10:20:00+00:00"},
+            {"order": "C1", "amount": 0.01, "price": 98.0,  "side": "sell", "info": {"tradeSide": "close"}, "fee": {"cost": 0.18}, "datetime": "2026-02-24T11:00:00+00:00"},
+            {"order": "C1", "amount": 0.01, "price": 98.0,  "side": "sell", "info": {"tradeSide": "close"}, "fee": {"cost": 0.18}, "datetime": "2026-02-24T11:00:00+00:00"},
+            {"order": "C1", "amount": 0.01, "price": 98.0,  "side": "sell", "info": {"tradeSide": "close"}, "fee": {"cost": 0.18}, "datetime": "2026-02-24T11:00:00+00:00"},
+        ]
+        aggregated = _aggregate_fills_by_order(fills)
+        assert len(aggregated) == 4  # E1, E2, E3, C1
+
+        # C1 doit avoir qty=0.03, vwap=98.0, fee=0.54
+        c1 = next(a for a in aggregated if a["order"] == "C1")
+        assert c1["amount"] == pytest.approx(0.03)
+        assert c1["price"] == pytest.approx(98.0)
+        assert c1["fee"]["cost"] == pytest.approx(0.54)
+
+    def test_pnl_fifo_grid_cycle_wins(self):
+        """Scénario grid complet : FIFO direct → 1 WIN avec paramètres réalistes.
+
+        Clé : qty=1.0 BTC (pas 0.01) pour que le P&L brut dépasse les fees.
+        (98-100)*1 + (98-95)*1 + (98-90)*1 - 0.54 = -2+3+8-0.54 = 8.46
+        """
+        from scripts.sync_bitget_trades import _compute_pnl_for_closes
+        records = [
+            {"timestamp": "2026-02-24T10:00:00+00:00", "symbol": "BTC/USDT:USDT",
+             "direction": "LONG", "trade_type": "entry",  "price": 100.0, "quantity": 1.0, "fee": 0,    "leverage": 3},
+            {"timestamp": "2026-02-24T10:10:00+00:00", "symbol": "BTC/USDT:USDT",
+             "direction": "LONG", "trade_type": "entry",  "price": 95.0,  "quantity": 1.0, "fee": 0,    "leverage": 3},
+            {"timestamp": "2026-02-24T10:20:00+00:00", "symbol": "BTC/USDT:USDT",
+             "direction": "LONG", "trade_type": "entry",  "price": 90.0,  "quantity": 1.0, "fee": 0,    "leverage": 3},
+            # Close agrégé : qty=3.0 (3 fills × 1.0), fee=0.54
+            {"timestamp": "2026-02-24T11:00:00+00:00", "symbol": "BTC/USDT:USDT",
+             "direction": "LONG", "trade_type": "close",  "price": 98.0,  "quantity": 3.0, "fee": 0.54, "leverage": 3},
+        ]
+        result = _compute_pnl_for_closes(records)
+        close = next(r for r in result if r["trade_type"] == "close")
+
+        # FIFO : (98-100)*1 + (98-95)*1 + (98-90)*1 - 0.54
+        #      = -2 + 3 + 8 - 0.54 = 8.46
+        assert close["pnl"] == pytest.approx(8.46, abs=0.001)
+        assert close["pnl"] > 0  # 1 WIN au lieu de 1 LOSS + 2 WINS fragmentés
