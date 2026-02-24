@@ -165,6 +165,41 @@ class TestKillSwitchLive:
         assert rm._session_pnl == pytest.approx(-100.0)
 
 
+# ─── Reconciliation (kill switch déclenche normalement, UX améliorée) ────
+
+
+class TestReconciliationKillSwitch:
+    """Hotfix 2026-02-24 : le kill switch déclenche normalement sur les pertes
+    de réconciliation (pas de bypass). L'UX est améliorée côté Executor."""
+
+    def test_downtime_losses_trigger_kill_switch(self):
+        """Les pertes de réconciliation DOIVENT déclencher le kill switch."""
+        rm = _make_rm()
+        rm.record_trade_result(LiveTradeResult(
+            net_pnl=-500.0, timestamp=_now(),
+            symbol="BTC/USDT:USDT", direction="LONG",
+            exit_reason="closed_during_downtime",
+        ))
+        assert rm.is_kill_switch_triggered is True
+        assert rm._session_pnl == pytest.approx(-500.0)
+
+    def test_downtime_losses_in_session_pnl(self):
+        """Les pertes de réconciliation sont bien comptées dans session_pnl."""
+        rm = _make_rm()
+        rm.record_trade_result(LiveTradeResult(
+            net_pnl=-200.0, timestamp=_now(),
+            symbol="ETH/USDT:USDT", direction="SHORT",
+            exit_reason="closed_during_downtime", strategy_name="grid_boltrend",
+        ))
+        rm.record_trade_result(LiveTradeResult(
+            net_pnl=-100.0, timestamp=_now(),
+            symbol="SOL/USDT:USDT", direction="LONG",
+            exit_reason="closed_during_downtime", strategy_name="grid_atr",
+        ))
+        assert rm._session_pnl == pytest.approx(-300.0)
+        assert len(rm._trade_history) == 2
+
+
 # ─── Position tracking ────────────────────────────────────────────────────
 
 

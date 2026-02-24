@@ -205,6 +205,11 @@ class Executor:
         # Phase 2 : cooldown anti-churning
         self._last_close_time: dict[str, datetime] = {}  # {futures_sym: timestamp}
 
+        # Réconciliation au boot : flag pour adapter les messages kill switch
+        self._is_reconciling: bool = False
+        self._reconciliation_pnl: float = 0.0
+        self._reconciliation_count: int = 0
+
     # ─── Properties ────────────────────────────────────────────────────
 
     @property
@@ -1681,6 +1686,9 @@ class Executor:
             strategy_name=state.strategy_name,
         ))
         self._risk_manager.unregister_position(futures_sym)
+        if self._is_reconciling:
+            self._reconciliation_pnl += net_pnl
+            self._reconciliation_count += 1
 
         # Convertir futures → spot pour le notifier
         spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
@@ -2024,22 +2032,52 @@ class Executor:
 
     async def _reconcile_on_boot(self) -> None:
         """Synchronise l'état local avec les positions Bitget réelles."""
-        configured_symbols = []
-        for a in self._config.assets:
-            try:
-                configured_symbols.append(to_futures_symbol(a.symbol))
-            except ValueError:
-                pass  # symbole non supporté en futures, ignoré
+        self._is_reconciling = True
+        self._reconciliation_pnl = 0.0
+        self._reconciliation_count = 0
+        ks_before = self._risk_manager.is_kill_switch_triggered
 
-        for futures_sym in configured_symbols:
-            await self._reconcile_symbol(futures_sym)
+        try:
+            configured_symbols = []
+            for a in self._config.assets:
+                try:
+                    configured_symbols.append(to_futures_symbol(a.symbol))
+                except ValueError:
+                    pass  # symbole non supporté en futures, ignoré
 
-        # Réconcilier les cycles grid restaurés
-        for futures_sym in list(self._grid_states.keys()):
-            await self._reconcile_grid_symbol(futures_sym)
+            for futures_sym in configured_symbols:
+                await self._reconcile_symbol(futures_sym)
 
-        # Nettoyage ordres trigger orphelins (TP/SL restés après fermeture)
-        await self._cancel_orphan_orders()
+            # Réconcilier les cycles grid restaurés
+            for futures_sym in list(self._grid_states.keys()):
+                await self._reconcile_grid_symbol(futures_sym)
+
+            # Nettoyage ordres trigger orphelins (TP/SL restés après fermeture)
+            await self._cancel_orphan_orders()
+        finally:
+            self._is_reconciling = False
+
+        # Message explicite si le kill switch a déclenché pendant la réconciliation
+        if (
+            not ks_before
+            and self._risk_manager.is_kill_switch_triggered
+            and self._reconciliation_count > 0
+        ):
+            strat = self._strategy_name or "unknown"
+            msg = (
+                f"Kill switch déclenché par réconciliation au boot "
+                f"({self._reconciliation_count} position(s) fermée(s) pendant "
+                f"downtime, P&L total: {self._reconciliation_pnl:+.2f}$). "
+                f"Reset manuel via POST /api/executor/kill-switch/reset"
+                f"?strategy={strat}"
+            )
+            logger.warning("{}: {}", self._log_prefix, msg)
+            await self._notifier.notify_reconciliation(
+                f"⚠️ KILL SWITCH (RÉCONCILIATION BOOT)\n"
+                f"{self._reconciliation_count} position(s) fermée(s) pendant downtime\n"
+                f"P&L réconciliation: {self._reconciliation_pnl:+.2f}$\n"
+                f"→ Reset manuel si le marché est stable"
+            )
 
     async def _reconcile_symbol(self, futures_sym: str) -> None:
         """Réconcilie une paire spécifique."""
@@ -2092,6 +2130,8 @@ class Executor:
                 strategy_name=pos.strategy_name,
             ))
             self._risk_manager.unregister_position(pos.symbol)
+            self._reconciliation_pnl += net_pnl
+            self._reconciliation_count += 1
 
             await self._notifier.notify_reconciliation(
                 f"Position {futures_sym} fermée pendant downtime. "
@@ -2169,6 +2209,8 @@ class Executor:
                 exit_reason="closed_during_downtime",
                 strategy_name=state.strategy_name,
             ))
+            self._reconciliation_pnl += net_pnl
+            self._reconciliation_count += 1
             await self._notifier.notify_reconciliation(
                 f"Cycle grid {futures_sym} fermé pendant downtime. "
                 f"P&L estimé: {net_pnl:+.2f}$"

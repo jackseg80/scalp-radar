@@ -550,6 +550,111 @@ class TestReconciliation:
         assert len(downtime_calls) >= 1
 
 
+# ─── Reconciliation kill switch message ──────────────────────────────────
+
+
+class TestReconciliationKillSwitchMessage:
+    """Hotfix 2026-02-24 : quand le kill switch déclenche pendant la
+    réconciliation, un message explicite avec contexte est envoyé."""
+
+    @pytest.mark.asyncio
+    async def test_reconciliation_kill_switch_message(self):
+        """Si le kill switch déclenche pendant réconciliation, message adapté."""
+        notifier = _make_notifier()
+        config = _make_config()
+        rm = LiveRiskManager(config)
+        rm.set_initial_capital(1_000.0)  # petit capital → 5% = 50$
+        executor = _make_executor(config=config, risk_manager=rm, notifier=notifier)
+
+        # Position locale existante, mais fermée sur exchange
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="old_entry",
+            strategy_name="vwap_rsi",
+        )
+        rm.register_position({"symbol": "BTC/USDT:USDT", "direction": "LONG"})
+        executor._exchange.fetch_positions = AsyncMock(return_value=[])
+        executor._exchange.fetch_my_trades = AsyncMock(return_value=[
+            {"price": 40_000.0},  # grosse perte → kill switch
+        ])
+
+        await executor._reconcile_on_boot()
+
+        # Kill switch déclenché
+        assert rm.is_kill_switch_triggered is True
+        # Flag réconciliation nettoyé
+        assert executor._is_reconciling is False
+        # Message Telegram envoyé avec contexte réconciliation
+        recon_calls = [
+            c for c in notifier.notify_reconciliation.call_args_list
+            if "KILL SWITCH" in c[0][0] and "RÉCONCILIATION" in c[0][0]
+        ]
+        assert len(recon_calls) == 1
+        assert "Reset manuel" in recon_calls[0][0][0]
+
+    @pytest.mark.asyncio
+    async def test_reconciliation_no_kill_switch_no_extra_message(self):
+        """Si pas de kill switch, pas de message réconciliation kill switch."""
+        notifier = _make_notifier()
+        config = _make_config()
+        rm = LiveRiskManager(config)
+        rm.set_initial_capital(100_000.0)  # gros capital → perte < seuil
+        executor = _make_executor(config=config, risk_manager=rm, notifier=notifier)
+
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=100_000.0, quantity=0.001,
+            entry_order_id="old_entry",
+            strategy_name="vwap_rsi",
+        )
+        rm.register_position({"symbol": "BTC/USDT:USDT", "direction": "LONG"})
+        executor._exchange.fetch_positions = AsyncMock(return_value=[])
+        executor._exchange.fetch_my_trades = AsyncMock(return_value=[
+            {"price": 99_000.0},  # petite perte
+        ])
+
+        await executor._reconcile_on_boot()
+
+        assert rm.is_kill_switch_triggered is False
+        # Pas de message "KILL SWITCH" dans les notifications
+        ks_calls = [
+            c for c in notifier.notify_reconciliation.call_args_list
+            if "KILL SWITCH" in c[0][0]
+        ]
+        assert len(ks_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_reconciliation_tracking_counters(self):
+        """Les compteurs _reconciliation_pnl et _reconciliation_count sont corrects."""
+        notifier = _make_notifier()
+        config = _make_config()
+        rm = LiveRiskManager(config)
+        rm.set_initial_capital(100_000.0)
+        executor = _make_executor(config=config, risk_manager=rm, notifier=notifier)
+
+        # 2 positions fermées pendant downtime
+        for sym, price in [("BTC/USDT:USDT", 99_000.0), ("ETH/USDT:USDT", 3_000.0)]:
+            executor._positions[sym] = LivePosition(
+                symbol=sym, direction="LONG",
+                entry_price=100_000.0 if "BTC" in sym else 3_500.0,
+                quantity=0.001 if "BTC" in sym else 0.01,
+                entry_order_id="old",
+                strategy_name="vwap_rsi",
+            )
+            rm.register_position({"symbol": sym, "direction": "LONG"})
+
+        executor._exchange.fetch_positions = AsyncMock(return_value=[])
+        executor._exchange.fetch_my_trades = AsyncMock(return_value=[
+            {"price": 99_000.0},
+        ])
+
+        await executor._reconcile_on_boot()
+
+        assert executor._reconciliation_count == 2
+        assert executor._is_reconciling is False
+
+
 # ─── Orphan trigger orders ────────────────────────────────────────────────
 
 
