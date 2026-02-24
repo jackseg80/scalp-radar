@@ -1,6 +1,6 @@
 # Stratégies Scalp Radar — Index
 
-> Documentation complète des 14 stratégies de trading implémentées dans Scalp Radar.
+> Documentation complète des 15 stratégies de trading documentées dans Scalp Radar.
 > Chaque fichier détaille la logique d'entrée/sortie, les paramètres, les résultats WFO et les leçons apprises.
 
 ## Table des matières
@@ -22,6 +22,7 @@
 | 2 | **grid_multi_tf** | Grid/DCA | 1h + 4h | — | Désactivé (WFO terminé) | [grid_multi_tf.md](grid_multi_tf.md) |
 | 3 | **grid_funding** | Grid/DCA | 1h | — | Désactivé (WFO terminé) | [grid_funding.md](grid_funding.md) |
 | 4 | **grid_trend** | Grid/DCA | 1h | F (grille réduite) | Désactivé (échec forward) | [grid_trend.md](grid_trend.md) |
+| 15 | **grid_momentum** | Grid/DCA | 1h | — | Désactivé (WFO à lancer) | [grid_momentum.md](grid_momentum.md) |
 | 5 | **envelope_dca** | Grid/DCA | 1h | A/B/D (23 assets) | Désactivé (remplacé par grid_atr) | [envelope_dca.md](envelope_dca.md) |
 | 6 | **envelope_dca_short** | Grid/DCA | 1h | — | Désactivé (WFO en attente) | [envelope_dca_short.md](envelope_dca_short.md) |
 | 7 | **vwap_rsi** | Scalp mono | 5m + 15m | F | Désactivé | [vwap_rsi.md](vwap_rsi.md) |
@@ -84,18 +85,19 @@ Stratégies mono-position sur le timeframe 1 heure. Héritent de `BaseStrategy`.
 
 Chaque stratégie cible un régime de marché spécifique. La combinaison idéale couvre tous les régimes.
 
-| Régime | grid_atr | grid_multi_tf | grid_funding | grid_trend | envelope_dca | Scalp 5m | Swing 1h |
-|--------|----------|---------------|--------------|------------|--------------|----------|----------|
-| **Range / Sideways** | Excellent | Bon | — | Bloqué (ADX < seuil) | Bon | vwap_rsi (F) | bollinger_mr (F) |
-| **Trend haussier** | Bon (LONG) | Bon (LONG via ST) | — | Excellent (LONG) | Bon (LONG) | momentum (F) | supertrend (F), donchian (F) |
-| **Trend baissier** | Risqué (LONG) | Bon (SHORT via ST) | — | Excellent (SHORT) | Risqué (LONG) | momentum (F) | supertrend (F), donchian (F) |
-| **Crash / Forte vol.** | SL touché | Force close (ST flip) | — | Force close (EMA flip) | SL touché | — | — |
-| **Funding négatif** | — | — | Excellent | — | — | funding (—) | — |
+| Régime | grid_atr | grid_multi_tf | grid_funding | grid_trend | grid_momentum | envelope_dca | Scalp 5m | Swing 1h |
+|--------|----------|---------------|--------------|------------|---------------|--------------|----------|----------|
+| **Range / Sideways** | Excellent | Bon | — | Bloqué (ADX < seuil) | Drawdown (faux breakouts) | Bon | vwap_rsi (F) | bollinger_mr (F) |
+| **Trend haussier** | Bon (LONG) | Bon (LONG via ST) | — | Excellent (LONG) | Excellent (LONG breakout) | Bon (LONG) | momentum (F) | supertrend (F), donchian (F) |
+| **Trend baissier** | Risqué (LONG) | Bon (SHORT via ST) | — | Excellent (SHORT) | Excellent (SHORT breakout) | Risqué (LONG) | momentum (F) | supertrend (F), donchian (F) |
+| **Crash / Forte vol.** | SL touché | Force close (ST flip) | — | Force close (EMA flip) | Trail stop + direction flip | SL touché | — | — |
+| **Funding négatif** | — | — | Excellent | — | — | — | funding (—) | — |
 
 ### Analyse
 
 - **grid_atr** excelle en range et en trend modéré, mais souffre en bear market soutenu (7/21 assets Sharpe négatif sur 90j récents)
 - **grid_multi_tf** corrige le défaut de grid_atr en bear grâce au filtre Supertrend 4h (SHORT autorisé)
+- **grid_momentum** est décorrélé de grid_atr (profil convexe vs concave) — profite des breakouts que grid_atr subit comme des SL. WFO non encore lancé.
 - **grid_trend** est complémentaire en théorie (trend following vs mean reversion) mais échoue en forward test sans trends prolongés
 - **grid_funding** a un edge indépendant du prix (shorts paient les longs), mais événements rares
 - Les **stratégies mono-position** (scalp 5m + swing 1h) n'ont aucun edge démontré en crypto — l'edge vient du DCA multi-niveaux

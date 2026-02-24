@@ -2553,6 +2553,8 @@ class Simulator:
             runner._capital += trade.net_pnl + margin_to_return
             runner._realized_pnl += trade.net_pnl
             runner._positions[symbol] = []
+            if hasattr(runner, "_hwm"):
+                runner._hwm.pop(symbol, None)  # Reset HWM après force_close
             runner._record_close(symbol, trade.exit_time)
             runner._stats.total_trades += 1
             runner._trades.append((symbol, trade))
