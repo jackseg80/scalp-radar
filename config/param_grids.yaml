@@ -220,13 +220,14 @@ grid_funding:
     tp_mode: ["funding_positive", "sma_cross", "funding_or_sma"]
     min_hold_candles: [4, 8, 16]
 
-# Grid Momentum : ~20736 combos (4×4×3×2×3×2×3×3×2×2), ~60 min/asset
+# Grid Momentum : ~41472 combos (2×4×4×3×2×3×2×3×3×2×2), ~120 min/asset
 grid_momentum:
   wfo:
     is_days: 180
     oos_days: 60
     step_days: 60
   default:
+    timeframe: ["1h", "4h"]
     donchian_period: [20, 30, 48, 72]
     vol_multiplier: [1.2, 1.5, 2.0, 2.5]
     atr_period: [10, 14, 20]
