@@ -2903,13 +2903,13 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 ## ÉTAT ACTUEL (24 février 2026)
 
 - **1840 tests passants**, 0 régression (+33 Sprint grid_momentum)
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
-- **grid_momentum** : implémenté, WFO à lancer (~20,736 combos)
+- **grid_momentum** : **ABANDONNÉ** — WFO terminé (1 Grade B / 21 assets, faux breakouts crypto)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
 - **Frontend complet** : 7 pages (Scanner, **Stratégies**, Recherche, Explorer, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve) + **3 tutoriels interactifs** (Grid ATR avec sliders, Grid BolTrend 8 étapes + sliders, Comparateur Envelope DCA vs Grid ATR)
@@ -2983,7 +2983,19 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Fast engine** : `_simulate_grid_momentum()` dédié (state machine INACTIVE→ACTIVE→EXIT, incompatible `_simulate_grid_common`)
   - **12 fichiers** : config.py, grid_momentum.py, factory.py, optimization/__init__.py, indicator_cache.py, fast_multi_backtest.py, walk_forward.py, simulator.py, strategies.yaml, param_grids.yaml, test_grid_momentum.py, STRATEGIES.md
   - **33 nouveaux tests** → **1840 tests**
-- **Prochaine étape** : WFO grid_momentum (~20,736 combos) ou déploiement WFO grid_multi_tf
+- **Sprint 41 grid_momentum WFO** (fév 2026) — Run WFO complet, stratégie abandonnée :
+  - **Résultats** : 21 assets testés (1h + 4h), ~41 472 combos — Grade B : 1 (CRV), Grade C : 2 (BTC, BCH), Grade D : 12, Grade F : 4
+  - **Critère** : ≥ 5 Grade A/B requis → **NO-GO**
+  - **Diagnostic** : faux breakouts trop fréquents en crypto (83% du temps en range) — profil convexe (win rate 25-35%) ne compense pas les pertes sur faux signaux
+  - **Code conservé** : grid_momentum.py + tests, `enabled: false` dans strategies.yaml. Peut servir de base si filtrage plus robuste trouvé.
+- **Sprint 42 grid_funding WFO** (fév 2026) — Investigation données + WFO complet, stratégie abandonnée :
+  - **Phase A Investigation** : ✅ GO — données 14 assets (1000-2000j, zéro trou), fast engine funding crédité dans PnL toutes les 8h, code grid_funding.py complet (LONG only, TP hybride, min_hold_candles)
+  - **Résultats WFO** : 17 assets testés, 2592 combos — Grade A : 0, Grade B : 0, Grade F : 17 (tous)
+  - **Meilleur asset** : SOL (67% consistency, Sharpe 1.38) mais OOS/IS = 0.00 → overfitting complet
+  - **Diagnostic** : funding extrême corrélé avec stress de marché — LONG entre dans un effondrement, funding collecté (~0.03%/8h) dérisoire face au mouvement de prix (-5% à -20%). "Ramasser des pièces devant un rouleau compresseur."
+  - **SHORT non testé** : résultat LONG unanimement F suggère que le mécanisme (funding extremes = stress = prix contre nous) s'applique dans les deux sens
+  - **Code conservé** : grid_funding.py + tests, `enabled: false` dans strategies.yaml
+- **Prochaine étape** : Grid adaptatif (ATR multiplier dynamique sur grid_atr, Workflow B) ou Pairs trading (ETH/BTC spread, Phase 3)
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
@@ -3129,33 +3141,37 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 ### Ordre de priorité
 
-1. **grid_funding** — Funding rate harvesting (LONG + SHORT)
-   - Edge structurel crypto (anomalie de marché garantie par l'exchange)
-   - Code existant (grid_funding.py), données funding en DB (Sprint 7b)
-   - Prérequis : audit données + funding dans PnL backtest + ajout SHORT
-   - Objectif : décorrélation avec grid_atr (cible r < 0.3)
-
-2. **Grid adaptatif** — ATR multiplier dynamique sur grid_atr
-   - Workflow B (A/B test), pas une nouvelle stratégie
+1. **Grid adaptatif** — ATR multiplier dynamique sur grid_atr (Workflow B, A/B test)
    - Moduler la largeur de grille selon le régime de volatilité
    - Objectif : améliorer résilience crash, pas décorrélation
+   - Pas une nouvelle stratégie, évolution de grid_atr existant
 
-3. **Pairs trading** — Spread mean-reversion (ex: ETH/BTC)
+2. **Pairs trading** — Spread mean-reversion ETH/BTC (Phase 3, refonte archi)
    - Market-neutral par construction (fonctionne tous régimes)
    - Refonte architecturale nécessaire (2 positions synchronisées)
    - Phase 3 du projet, quand l'infra mono-asset est mature
 
 ### Stratégies abandonnées
 
-- **grid_momentum** — Donchian breakout + pullback DCA
-  - Résultat : 1 Grade B / 19 assets (NO-GO), testé en 1h et 4h
-  - Raison : faux breakouts trop fréquents en crypto (83% range)
+| Stratégie | Sprint | Résultat WFO | Raison échec |
+|-----------|--------|--------------|--------------|
+| `grid_momentum` | 41 | 1/21 Grade B (CRV) | Faux breakouts, crypto = 83% range |
+| `grid_funding` | 42 | 0/17 Grade B (tous F) | Funding extrême = stress marché = prix contre nous |
+| `grid_boltrend` | 38b | DSR 0/15 | Non viable (pré-corrections 40a, jamais re-testé) |
+| `grid_trend` | 20 | Échoue forward test | Trends crypto trop courts, bear market 2025 |
+| `vwap_rsi` | 9 | Grade F | Pas d'edge sans DCA |
+| `momentum` | 9 | Grade F | Pas d'edge sans DCA |
+| `bollinger_mr` | 9 | Grade F | Pas d'edge sans DCA |
+| `donchian_breakout` | 9 | Grade F | Pas d'edge sans DCA |
+| `supertrend` | 9 | Grade F | Pas d'edge sans DCA |
+| `funding` (mono) | 9 | 0 trades | Données live requises |
+| `liquidation` (mono) | 9 | 0 trades | Données live requises |
 
-- **grid_boltrend** — Bollinger + Supertrend
-  - Résultat : DSR 0/15, non viable (pré-corrections 40a, jamais re-testé)
+### Insight clé
 
-- **Stratégies mono-position** (vwap_rsi, momentum, bollinger, etc.)
-  - Résultat : toutes Grade F, l'edge vient du mécanisme DCA, pas des indicateurs
+L'edge en crypto vient du **mécanisme DCA mean-reversion** en régime RANGE (83% du temps).
+Toutes les tentatives de capter d'autres régimes (breakout, trend, funding) ont échoué.
+Les deux seules stratégies viables (`grid_atr`, `grid_multi_tf`) partagent ce mécanisme.
 
 ---
 

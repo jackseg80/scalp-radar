@@ -12,7 +12,7 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 1 | `grid_atr` | 1h | Grid/DCA | Long + Short | **true** | LIVE 7x, 14 assets |
 | 2 | `grid_trend` | 1h | Grid/DCA | Long + Short | false | Echoue en forward test |
 | 3 | `grid_multi_tf` | 1h + 4h | Grid/DCA | Long + Short | **true** | LIVE 3x (test), 14 assets |
-| 4 | `grid_funding` | 1h | Grid/DCA | Long only | false | WFO terminé |
+| 4 | `grid_funding` | 1h | Grid/DCA | Long only | false | **ABANDONNÉ** (0/17 Grade B) |
 | 5 | `grid_range_atr` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
 | 6 | `grid_boltrend` | 1h | Grid/DCA | Long + Short | **true** | Paper, 2 assets (mise en pause Sprint 38b) |
 | 7 | `envelope_dca` | 1h | Grid/DCA | Long only | false | Remplacé par grid_atr |
@@ -25,7 +25,7 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 14 | `momentum` | 5m + 15m | Scalp | Long + Short | false | Désactivé |
 | 15 | `funding` | 15m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 | 16 | `liquidation` | 5m | Scalp | Long + Short | false | Paper only (pas de backtest) |
-| 17 | `grid_momentum` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
+| 17 | `grid_momentum` | 1h | Grid/DCA | Long + Short | false | **ABANDONNÉ** (1/21 Grade B) |
 
 **Live trading actif** :
 - `grid_atr` sur 14 assets — leverage 7x
@@ -315,7 +315,7 @@ Le funding rate est en DB en pourcentage, converti en décimal (`/100`) pour la 
 
 **WFO** : 2592 combos, fenêtres IS=360j / OOS=90j.
 
-**Statut** : `enabled: false`, LONG-only.
+**Statut** : `enabled: false`, LONG-only. **ABANDONNÉ** — WFO terminé Sprint 42 (0/17 Grade B, tous Grade F). Funding extrême corrélé avec stress marché : LONG entre dans un effondrement, funding collecté (~0.03%/8h) dérisoire face au mouvement de prix (-5% à -20%).
 
 ---
 
@@ -456,7 +456,7 @@ Réutilise 100% du code de `envelope_dca`. Seuls le nom (`"envelope_dca_short"`)
 - grid_momentum = profil convexe (breakout, capture les 16% de trends directionnels)
 - grid_trend (échoué) : EMA trop lent, pas de volume filter. grid_momentum utilise Donchian + volume spike = signal plus réactif
 
-**Statut** : `enabled: false`, `live_eligible: false`. WFO à lancer (~20,736 combos).
+**Statut** : `enabled: false`, `live_eligible: false`. **ABANDONNÉ** — WFO terminé Sprint 41 (1 Grade B / 21 assets, NO-GO). Faux breakouts trop fréquents en crypto (83% range), profil convexe insuffisant pour compenser.
 
 ---
 
@@ -840,3 +840,41 @@ Workflow A/B test — on isole l'impact d'une seule variable :
 | **Trailing stop** | SL dynamique qui suit le prix. Monte avec le prix (LONG), descend (SHORT). Ne recule jamais |
 | **HWM** | High Water Mark — plus haut atteint par le prix depuis l'entrée (pour le trailing stop) |
 | **Margin guard** | Limite de marge totale utilisée (70% par défaut) pour éviter la liquidation |
+
+---
+
+## Stratégies abandonnées
+
+| Stratégie | Sprint | Résultat WFO | Raison échec |
+|-----------|--------|--------------|--------------|
+| `grid_momentum` | 41 | 1/21 Grade B (CRV) | Faux breakouts, crypto = 83% range |
+| `grid_funding` | 42 | 0/17 Grade B (tous F) | Funding extrême = stress marché = prix contre nous |
+| `grid_boltrend` | 38b | DSR 0/15 | Non viable (pré-corrections 40a, jamais re-testé) |
+| `grid_trend` | 20 | Échoue forward test | Trends crypto trop courts, bear market 2025 |
+| `vwap_rsi` | 9 | Grade F | Pas d'edge sans DCA |
+| `momentum` | 9 | Grade F | Pas d'edge sans DCA |
+| `bollinger_mr` | 9 | Grade F | Pas d'edge sans DCA |
+| `donchian_breakout` | 9 | Grade F | Pas d'edge sans DCA |
+| `supertrend` | 9 | Grade F | Pas d'edge sans DCA |
+| `funding` (mono) | 9 | 0 trades | Données live requises |
+| `liquidation` (mono) | 9 | 0 trades | Données live requises |
+
+---
+
+## Prochaines stratégies — Ordre de priorité
+
+1. **Grid adaptatif** — ATR multiplier dynamique sur `grid_atr` (Workflow B, A/B test)
+   - Moduler la largeur de grille selon le régime de volatilité
+   - Objectif : améliorer résilience crash, pas décorrélation
+
+2. **Pairs trading** — Spread mean-reversion ETH/BTC (Phase 3, refonte archi)
+   - Market-neutral par construction (fonctionne tous régimes)
+   - Refonte architecturale nécessaire (2 positions synchronisées)
+
+---
+
+## Insight clé
+
+L'edge en crypto vient du **mécanisme DCA mean-reversion** en régime RANGE (83% du temps).
+Toutes les tentatives de capter d'autres régimes (breakout, trend, funding) ont échoué.
+Les deux seules stratégies viables (`grid_atr`, `grid_multi_tf`) partagent ce mécanisme.
