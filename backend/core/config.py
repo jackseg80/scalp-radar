@@ -391,6 +391,36 @@ class GridBolTrendConfig(BaseModel):
         return {**base, **overrides}
 
 
+class GridMomentumConfig(BaseModel):
+    """Grid Momentum : DCA pullback sur breakout Donchian + trailing stop ATR."""
+
+    enabled: bool = False
+    live_eligible: bool = False
+    timeframe: str = "1h"
+    donchian_period: int = Field(default=30, ge=10, le=100)
+    vol_sma_period: int = Field(default=20, ge=5, le=50)
+    vol_multiplier: float = Field(default=1.5, gt=0)
+    adx_period: int = Field(default=14, ge=5, le=30)
+    adx_threshold: float = Field(default=0.0, ge=0)
+    atr_period: int = Field(default=14, ge=5, le=30)
+    pullback_start: float = Field(default=1.0, gt=0)
+    pullback_step: float = Field(default=0.5, gt=0)
+    num_levels: int = Field(default=3, ge=1, le=6)
+    trailing_atr_mult: float = Field(default=3.0, gt=0)
+    sl_percent: float = Field(default=15.0, gt=0)
+    sides: list[str] = Field(default=["long", "short"])
+    leverage: int = Field(default=6, ge=1, le=20)
+    weight: float = Field(default=0.15, ge=0, le=1)
+    cooldown_candles: int = Field(default=3, ge=0, le=10)
+    per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:
+        """Retourne les paramètres avec overrides per_asset appliqués."""
+        base = self.model_dump(exclude={"per_asset", "enabled", "live_eligible", "weight"})
+        overrides = self.per_asset.get(symbol, {})
+        return {**base, **overrides}
+
+
 class CustomStrategyConfig(BaseModel):
     enabled: bool = False
     timeframe: str = "1h"
@@ -414,6 +444,7 @@ class StrategiesConfig(BaseModel):
     grid_funding: GridFundingConfig = Field(default_factory=GridFundingConfig)
     grid_trend: GridTrendConfig = Field(default_factory=GridTrendConfig)
     grid_boltrend: GridBolTrendConfig = Field(default_factory=GridBolTrendConfig)
+    grid_momentum: GridMomentumConfig = Field(default_factory=GridMomentumConfig)
     custom_strategies: dict[str, CustomStrategyConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -428,6 +459,7 @@ class StrategiesConfig(BaseModel):
                 self.grid_range_atr, self.grid_multi_tf, self.grid_funding,
                 self.grid_trend,
                 self.grid_boltrend,
+                self.grid_momentum,
             ]
             if s.enabled
         ]

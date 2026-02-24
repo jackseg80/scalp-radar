@@ -1,6 +1,6 @@
 # Trading Strategies — Scalp Radar
 
-Guide complet des 16 stratégies de trading implémentées dans Scalp Radar.
+Guide complet des 17 stratégies de trading implémentées dans Scalp Radar.
 Tout ce qui est documenté ici est extrait du code source réel (`backend/strategies/`).
 
 ---
@@ -25,6 +25,7 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 14 | `momentum` | 5m + 15m | Scalp | Long + Short | false | Désactivé |
 | 15 | `funding` | 15m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 | 16 | `liquidation` | 5m | Scalp | Long + Short | false | Paper only (pas de backtest) |
+| 17 | `grid_momentum` | 1h | Grid/DCA | Long + Short | false | WFO à lancer |
 
 **Paper trading actif** :
 - `grid_atr` sur 10 assets (BTC, CRV, DOGE, DYDX, ENJ, FET, GALA, ICP, NEAR, AVAX) — leverage 6x
@@ -404,7 +405,59 @@ Réutilise 100% du code de `envelope_dca`. Seuls le nom (`"envelope_dca_short"`)
 
 ---
 
-### 8. grid_range_atr — Range Trading Bidirectionnel
+### 8. grid_momentum — Breakout Donchian + DCA Pullback + Trailing Stop ATR
+
+**Fichier** : `backend/strategies/grid_momentum.py`
+
+**Concept** : Stratégie breakout/trend-following à profil de payoff **convexe** (petites pertes sur faux breakouts, gros gains sur vrais trends). Intentionnellement décorrélée de grid_atr (profil concave, mean-reversion).
+
+**Signal d'activation** :
+- Breakout Donchian : `close > donchian_high` (LONG) ou `close < donchian_low` (SHORT)
+- Filtre volume : `volume > volume_sma × vol_multiplier`
+- Filtre ADX optionnel : `adx > adx_threshold` (si threshold > 0, désactivé par défaut)
+
+**Exécution** : Grid DCA pullback depuis le prix du breakout.
+- Level 0 = prix du breakout (trigger immédiat)
+- Level k (k≥1) = prix ∓ ATR × (pullback_start + (k-1) × pullback_step)
+
+**Sorties** :
+- **Trailing stop ATR** : `close < HWM - ATR × trailing_atr_mult` (LONG) → `"trail_stop"`
+- **Direction flip** : breakout inverse détecté SANS filtre volume/ADX (sortie de protection) → `"direction_flip"`
+- **SL global** : `avg_entry ± sl_percent%` (géré par `get_sl_price()` + OHLC heuristic du runner)
+- **Pas de TP fixe** : `get_tp_price()` retourne `float("nan")`
+
+**HWM tracking** :
+- Fast engine : variable locale dans `_simulate_grid_momentum()`
+- Live : tracké dans `GridStrategyRunner._hwm` (dict par symbol), injecté via `indicators["hwm"]`
+
+**Paramètres** :
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `donchian_period` | 30 | Lookback Donchian (rolling max/min) |
+| `vol_sma_period` | 20 | Période SMA volume |
+| `vol_multiplier` | 1.5 | Multiplicateur volume pour breakout |
+| `adx_period` | 14 | Période ADX |
+| `adx_threshold` | 0.0 | Seuil ADX (0 = désactivé) |
+| `atr_period` | 14 | Période ATR |
+| `pullback_start` | 1.0 | Offset ATR du 1er niveau DCA |
+| `pullback_step` | 0.5 | Incrément ATR entre niveaux DCA |
+| `num_levels` | 3 | Nombre de niveaux de la grille |
+| `trailing_atr_mult` | 3.0 | Multiplicateur ATR pour trailing stop |
+| `sl_percent` | 15.0 | Stop-loss global (%) |
+| `cooldown_candles` | 3 | Bougies d'attente entre trades |
+| `leverage` | 6 | Levier |
+
+**Décorrélation** :
+- grid_atr / grid_multi_tf = profil concave (mean-reversion, 84% du temps en range)
+- grid_momentum = profil convexe (breakout, capture les 16% de trends directionnels)
+- grid_trend (échoué) : EMA trop lent, pas de volume filter. grid_momentum utilise Donchian + volume spike = signal plus réactif
+
+**Statut** : `enabled: false`, `live_eligible: false`. WFO à lancer (~20,736 combos).
+
+---
+
+### 9. grid_range_atr — Range Trading Bidirectionnel
 
 **Fichier** : `backend/strategies/grid_range_atr.py`
 

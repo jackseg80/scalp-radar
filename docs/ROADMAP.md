@@ -2900,15 +2900,16 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
-## ÉTAT ACTUEL (23 février 2026)
+## ÉTAT ACTUEL (24 février 2026)
 
-- **1807 tests passants**, 0 régression (+19 Sprint 36b Multi-Executor)
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + **Sprint 36b Multi-Executor**
+- **1840 tests passants**, 0 régression (+33 Sprint grid_momentum)
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
-- **16 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 8 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend)
+- **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
+- **grid_momentum** : implémenté, WFO à lancer (~20,736 combos)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
 - **Frontend complet** : 7 pages (Scanner, **Stratégies**, Recherche, Explorer, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve) + **3 tutoriels interactifs** (Grid ATR avec sliders, Grid BolTrend 8 étapes + sliders, Comparateur Envelope DCA vs Grid ATR)
@@ -2973,7 +2974,16 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Supprimé** : routes `test-trade` / `test-close` (code mort — `handle_event()` n'existe pas)
   - **Rétrocompatibilité** : `LIVE_TRADING=true` + 1 seule stratégie live → comportement identique à avant
   - **19 nouveaux tests** → **1807 tests**
-- **Prochaine étape** : Sprint 8 Backtest Dashboard (non implémenté depuis Sprint 1) ou déploiement WFO grid_multi_tf (embargo + taker fee maintenant en place)
+- **Sprint grid_momentum** (24 fév 2026) — 17e stratégie, breakout/trend-following décorrélé de grid_atr :
+  - **Concept** : profil convexe (petites pertes faux breakouts, gros gains vrais trends) vs profil concave grid_atr/grid_multi_tf
+  - **Signal** : breakout Donchian (`close > donchian_high`) + filtre volume (`volume > vol_sma × multiplier`) + ADX optionnel
+  - **Exécution** : DCA pullback (Level 0 = breakout price, Level k = prix ∓ ATR × (pullback_start + k × step))
+  - **Sortie** : trailing stop ATR (HWM tracking) + direction flip (sans filtre volume/ADX) + SL global %
+  - **HWM** : variable locale fast engine + `GridStrategyRunner._hwm` dict pour le mode live/simulator
+  - **Fast engine** : `_simulate_grid_momentum()` dédié (state machine INACTIVE→ACTIVE→EXIT, incompatible `_simulate_grid_common`)
+  - **12 fichiers** : config.py, grid_momentum.py, factory.py, optimization/__init__.py, indicator_cache.py, fast_multi_backtest.py, walk_forward.py, simulator.py, strategies.yaml, param_grids.yaml, test_grid_momentum.py, STRATEGIES.md
+  - **33 nouveaux tests** → **1840 tests**
+- **Prochaine étape** : WFO grid_momentum (~20,736 combos) ou déploiement WFO grid_multi_tf
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

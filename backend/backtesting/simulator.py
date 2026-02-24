@@ -614,6 +614,9 @@ class GridStrategyRunner:
         # Phase 2 : cooldown anti-churning — timestamp du dernier close par symbol
         self._last_close_time: dict[str, datetime] = {}
 
+        # HWM tracking pour trailing stop (grid_momentum, grid_trend)
+        self._hwm: dict[str, float] = {}
+
         # Funding costs tracking (approximation 0.01% par settlement)
         self._total_funding_cost: float = 0.0
 
@@ -995,6 +998,16 @@ class GridStrategyRunner:
         # Construire le GridState
         grid_state = self._gpm.compute_grid_state(positions, candle.close)
 
+        # HWM tracking : update + injection dans indicators pour trailing stop
+        if positions and symbol in self._hwm:
+            direction = positions[0].direction
+            if direction == Direction.LONG:
+                self._hwm[symbol] = max(self._hwm[symbol], candle.high)
+            else:
+                self._hwm[symbol] = min(self._hwm[symbol], candle.low)
+        if self._strategy_tf in ctx.indicators:
+            ctx.indicators[self._strategy_tf]["hwm"] = self._hwm.get(symbol, float("nan"))
+
         # 1. Si positions ouvertes → check TP/SL global
         if positions:
             tp_price = self._strategy.get_tp_price(grid_state, main_ind)
@@ -1033,6 +1046,7 @@ class GridStrategyRunner:
                     self._record_trade(trade, symbol)
                     self._record_close(symbol, candle.timestamp)
                 self._positions[symbol] = []
+                self._hwm.pop(symbol, None)  # Reset HWM après fermeture
                 if not self._is_warming_up:
                     self._pending_journal_events.append({
                         "timestamp": trade.exit_time.isoformat(),
@@ -1167,6 +1181,12 @@ class GridStrategyRunner:
                                 continue
                             self._capital -= margin_used
                         self._positions.setdefault(symbol, []).append(position)
+                        # Init HWM quand la 1ère position s'ouvre (trailing stop)
+                        if symbol not in self._hwm:
+                            if position.direction == Direction.LONG:
+                                self._hwm[symbol] = candle.high
+                            else:
+                                self._hwm[symbol] = candle.low
                         _h = getattr(self, "_on_position_opened", None)
                         if callable(_h): _h(symbol)
                         logger.info(

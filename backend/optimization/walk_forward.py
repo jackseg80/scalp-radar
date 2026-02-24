@@ -382,6 +382,7 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "grid_trend": ["ema_fast", "ema_slow", "adx_period", "atr_period"],
     "grid_range_atr": ["ma_period", "atr_period"],
     "grid_boltrend": ["bol_window", "bol_std", "long_ma_window", "atr_period"],
+    "grid_momentum": ["donchian_period", "atr_period"],
 }
 
 

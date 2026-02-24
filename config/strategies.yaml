@@ -591,6 +591,28 @@ grid_boltrend:
       num_levels: 3
       sl_percent: 15.0
       timeframe: 1h
+grid_momentum:
+  enabled: false
+  live_eligible: false
+  timeframe: 1h
+  donchian_period: 30
+  vol_sma_period: 20
+  vol_multiplier: 1.5
+  adx_period: 14
+  adx_threshold: 0
+  atr_period: 14
+  pullback_start: 1.0
+  pullback_step: 0.5
+  num_levels: 3
+  trailing_atr_mult: 3.0
+  sl_percent: 15.0
+  sides:
+  - long
+  - short
+  leverage: 6
+  cooldown_candles: 3
+  weight: 0.15
+  per_asset: {}
 custom_strategies:
   swing_baseline:
     enabled: false

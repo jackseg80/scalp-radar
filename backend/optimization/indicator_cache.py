@@ -309,6 +309,8 @@ def build_cache(
         lookbacks.update(param_grid_values["breakout_lookback"])
     if "entry_lookback" in param_grid_values:
         lookbacks.update(param_grid_values["entry_lookback"])
+    if "donchian_period" in param_grid_values:
+        lookbacks.update(param_grid_values["donchian_period"])
     rolling_high_dict = {lb: _rolling_max(highs, lb) for lb in lookbacks}
     rolling_low_dict = {lb: _rolling_min(lows, lb) for lb in lookbacks}
 
@@ -425,7 +427,7 @@ def build_cache(
 
     # --- ATR multi-period (pour donchian/supertrend/grid_atr/grid_multi_tf) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr", "grid_boltrend"):
+    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr", "grid_boltrend", "grid_momentum"):
         atr_periods: set[int] = set()
         if "atr_period" in param_grid_values:
             atr_periods.update(param_grid_values["atr_period"])

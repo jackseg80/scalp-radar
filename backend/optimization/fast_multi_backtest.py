@@ -1139,6 +1139,262 @@ def _simulate_grid_boltrend(
     return trade_pnls, trade_returns, capital
 
 
+def _simulate_grid_momentum(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Simulation Grid Momentum (DCA pullback sur breakout Donchian + trailing stop ATR).
+
+    State machine :
+    - grid inactif → détection breakout Donchian + volume → fixation niveaux DCA → grid actif
+    - grid actif → DCA filling + trailing stop ATR + SL global + direction flip
+    - exit → cooldown → grid inactif
+
+    Trailing stop ATR : close < HWM - ATR * trailing_atr_mult (LONG).
+    Direction flip : close < donchian_low (LONG ouvert) SANS filtre volume/ADX (sortie de protection).
+    """
+    n = cache.n_candles
+    num_levels = params["num_levels"]
+    sl_pct = params["sl_percent"] / 100
+    trailing_atr_mult = params["trailing_atr_mult"]
+    sides = params.get("sides", ["long", "short"])
+    vol_multiplier = params.get("vol_multiplier", 1.5)
+    adx_threshold = params.get("adx_threshold", 0.0)
+    cooldown_candles = params.get("cooldown_candles", 0)
+    pullback_start = params["pullback_start"]
+    pullback_step = params["pullback_step"]
+
+    donchian_period = params["donchian_period"]
+    atr_period = params["atr_period"]
+
+    # Indicateurs pré-calculés depuis le cache
+    rolling_high = cache.rolling_high[donchian_period]
+    rolling_low = cache.rolling_low[donchian_period]
+    atr_arr = cache.atr_by_period[atr_period]
+    vol_sma = cache.volume_sma_arr
+    adx_arr = cache.adx_arr
+
+    closes = cache.closes
+    highs = cache.highs
+    lows = cache.lows
+    volumes = cache.volumes
+
+    capital = bt_config.initial_capital
+    leverage = bt_config.leverage
+    taker_fee = bt_config.taker_fee
+    slippage_pct = bt_config.slippage_pct
+
+    trade_pnls: list[float] = []
+    trade_returns: list[float] = []
+
+    # State machine
+    positions: list[tuple[int, float, float, float]] = []
+    entry_levels: list[float] = []
+    direction = 0  # 0=inactif, 1=LONG, -1=SHORT
+    hwm = 0.0  # High Water Mark (LONG) / Low Water Mark (SHORT)
+    last_exit_candle_idx = -999
+
+    # Start index : besoin de Donchian + ATR valides
+    start_idx = max(donchian_period, atr_period) + 1
+
+    for i in range(start_idx, n):
+        close_i = closes[i]
+        if math.isnan(close_i):
+            continue
+
+        # === 1. CHECK EXITS (si positions ouvertes) ===
+        if positions:
+            avg_entry = sum(p[1] * p[2] for p in positions) / sum(p[2] for p in positions)
+            atr_val = atr_arr[i]
+
+            # SL global
+            sl_hit = False
+            if direction == 1:
+                sl_price = avg_entry * (1 - sl_pct)
+                sl_hit = lows[i] <= sl_price
+            else:
+                sl_price = avg_entry * (1 + sl_pct)
+                sl_hit = highs[i] >= sl_price
+
+            # HWM update
+            if direction == 1:
+                hwm = max(hwm, highs[i])
+            else:
+                hwm = min(hwm, lows[i]) if hwm > 0 else lows[i]
+
+            # Trailing stop
+            trail_hit = False
+            trail_price = 0.0
+            if not math.isnan(atr_val) and atr_val > 0:
+                trail_distance = atr_val * trailing_atr_mult
+                if direction == 1:
+                    trail_price = hwm - trail_distance
+                    trail_hit = trail_price > 0 and lows[i] <= trail_price
+                else:
+                    trail_price = hwm + trail_distance
+                    trail_hit = highs[i] >= trail_price
+
+            # Direction flip (sans filtre volume/ADX — sortie de protection)
+            flip_hit = False
+            dh_val = rolling_high[i]
+            dl_val = rolling_low[i]
+            if not math.isnan(dl_val) and direction == 1 and close_i < dl_val:
+                flip_hit = True
+            elif not math.isnan(dh_val) and direction == -1 and close_i > dh_val:
+                flip_hit = True
+
+            # Résolution : SL prioritaire > trail > flip
+            exit_reason = None
+            exit_price = close_i
+            if sl_hit and trail_hit:
+                is_green = closes[i] >= cache.opens[i]
+                if direction == 1:
+                    exit_reason = "sl_global" if not is_green else "trail_stop"
+                    exit_price = sl_price if not is_green else trail_price
+                else:
+                    exit_reason = "sl_global" if is_green else "trail_stop"
+                    exit_price = sl_price if is_green else trail_price
+            elif sl_hit:
+                exit_reason = "sl_global"
+                exit_price = sl_price
+            elif trail_hit:
+                exit_reason = "trail_stop"
+                exit_price = trail_price
+            elif flip_hit:
+                exit_reason = "direction_flip"
+                exit_price = close_i
+
+            if exit_reason is not None:
+                margin_to_return = sum(
+                    ep * qty / leverage for _l, ep, qty, _f in positions
+                )
+                capital += margin_to_return
+                pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
+                trade_pnls.append(pnl)
+                if capital > 0:
+                    trade_returns.append(pnl / capital)
+                capital += pnl
+                positions = []
+                entry_levels = []
+                direction = 0
+                hwm = 0.0
+                last_exit_candle_idx = i
+                continue
+
+        # === 2. Guard capital épuisé ===
+        if capital <= 0:
+            continue
+
+        # === 3. DCA filling (si grid actif) ===
+        if direction != 0 and entry_levels:
+            filled = {p[0] for p in positions}
+            for lvl in range(num_levels):
+                if lvl in filled or lvl >= len(entry_levels):
+                    continue
+                if len(positions) >= num_levels:
+                    break
+
+                ep = entry_levels[lvl]
+                if math.isnan(ep) or ep <= 0:
+                    continue
+
+                triggered = False
+                if direction == 1:
+                    triggered = lows[i] <= ep
+                else:
+                    triggered = highs[i] >= ep
+
+                if triggered:
+                    notional = capital * (1.0 / num_levels) * leverage
+                    qty = notional / ep
+                    if qty <= 0:
+                        continue
+                    margin = notional / leverage
+                    if capital < margin:
+                        continue
+                    capital -= margin
+                    entry_fee = qty * ep * taker_fee
+                    positions.append((lvl, ep, qty, entry_fee))
+
+        # === 4. Breakout detection (si grid inactif) ===
+        if direction == 0 and not positions:
+            # Cooldown check
+            if cooldown_candles > 0 and (i - last_exit_candle_idx) < cooldown_candles:
+                continue
+
+            dh = rolling_high[i]
+            dl = rolling_low[i]
+            atr_val = atr_arr[i]
+            vs = vol_sma[i]
+
+            if any(math.isnan(v) for v in [dh, dl, atr_val]):
+                continue
+            if atr_val <= 0:
+                continue
+
+            # Filtre volume
+            vol_ok = not math.isnan(vs) and vs > 0 and volumes[i] > vs * vol_multiplier
+
+            # Filtre ADX (optionnel)
+            adx_ok = True
+            if adx_threshold > 0:
+                adx_val = adx_arr[i]
+                if math.isnan(adx_val) or adx_val < adx_threshold:
+                    adx_ok = False
+
+            if not vol_ok or not adx_ok:
+                continue
+
+            # Breakout LONG
+            long_bo = "long" in sides and close_i > dh
+            # Breakout SHORT
+            short_bo = "short" in sides and close_i < dl
+
+            if long_bo or short_bo:
+                direction = 1 if long_bo else -1
+
+                # Fixer les niveaux d'entrée (pullback DCA)
+                entry_levels = [close_i]  # Level 0 = breakout price
+                for k in range(1, num_levels):
+                    offset = atr_val * (pullback_start + (k - 1) * pullback_step)
+                    if direction == 1:
+                        entry_levels.append(close_i - offset)
+                    else:
+                        entry_levels.append(close_i + offset)
+
+                # Level 0 = close → trigger immédiat
+                ep0 = entry_levels[0]
+                if ep0 > 0 and capital > 0:
+                    notional = capital * (1.0 / num_levels) * leverage
+                    qty = notional / ep0
+                    margin = notional / leverage
+                    if qty > 0 and capital >= margin:
+                        capital -= margin
+                        entry_fee = qty * ep0 * taker_fee
+                        positions.append((0, ep0, qty, entry_fee))
+                        # Init HWM
+                        if direction == 1:
+                            hwm = highs[i]
+                        else:
+                            hwm = lows[i]
+
+    # Force close fin de données
+    if positions:
+        exit_price = float(closes[n - 1])
+        margin_to_return = sum(
+            ep * qty / leverage for _l, ep, qty, _f in positions
+        )
+        capital += margin_to_return
+        pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
+        trade_pnls.append(pnl)
+        if capital > 0:
+            trade_returns.append(pnl / capital)
+        capital += pnl
+
+    return trade_pnls, trade_returns, capital
+
+
 # ─── Entry point ───────────────────────────────────────────────────────────
 
 
@@ -1152,9 +1408,9 @@ def run_multi_backtest_from_cache(
 
     Retourne (params, sharpe, net_return_pct, profit_factor, n_trades).
     """
-    # Phase 2 : warning cooldown non implémenté dans le fast engine
+    # Warning cooldown non implémenté (sauf grid_momentum qui le gère nativement)
     cooldown = params.get("cooldown_candles", 0)
-    if cooldown > 0:
+    if cooldown > 0 and strategy_name != "grid_momentum":
         import warnings
         warnings.warn(
             f"cooldown_candles={cooldown} non implémenté dans le fast engine — "
@@ -1192,6 +1448,10 @@ def run_multi_backtest_from_cache(
         )
     elif strategy_name == "grid_boltrend":
         trade_pnls, trade_returns, final_capital = _simulate_grid_boltrend(
+            cache, params, bt_config,
+        )
+    elif strategy_name == "grid_momentum":
+        trade_pnls, trade_returns, final_capital = _simulate_grid_momentum(
             cache, params, bt_config,
         )
     else:
