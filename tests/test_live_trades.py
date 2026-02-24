@@ -645,3 +645,123 @@ class TestGroupIntoCycles:
         # margin = 90000 * 0.01 / 7 = 128.57
         # pnl_pct = 9.45 / 128.57 * 100 ≈ 7.35
         assert cc["pnl_pct"] == pytest.approx(7.35, abs=0.1)
+
+    def test_notional_dust_tolerance(self):
+        """Résidu < $0.50 en notionnel → cycle fermé (filtre dust micro-fills).
+
+        Scénario : close légèrement en dessous de l'entry, résidu = 0.00001 unité
+        × prix $10000 = $0.10 < $0.50 → traité comme position = 0.
+        Sans filtre notionnel : résidu 0.00001 > tolérance 2%(0.0001)=0.000002
+        → ok dans les 2 cas, mais avec dust plus extrême :
+        Résidu 0.000008 × $10000 = $0.08 < $0.50 → cycle complet.
+        """
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(price=10000.0, quantity=0.0001, order_id="E1"),
+            # Close légèrement en dessous : résidu = 0.0001 - 0.000092 = 0.000008
+            # Notionnel résidu = 0.000008 × 10000 = $0.08 < $0.50 → cycle fermé
+            _make_record(trade_type="close", price=10000.0, quantity=0.000092, order_id="C1",
+                         side="sell", timestamp="2026-02-24T11:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        # Le cycle doit être considéré comme complet (résidu dust < $0.50)
+        assert len(cycle_closes) == 1
+
+
+# ─── Merge Close Bursts ─────────────────────────────────────────────────
+
+
+def _make_close(order_id, timestamp, price=98.0, qty=0.1, fee=0.2, symbol="BTC/USDT:USDT", direction="LONG"):
+    return {
+        "timestamp": timestamp, "symbol": symbol, "direction": direction,
+        "trade_type": "close", "side": "sell",
+        "price": price, "quantity": qty, "fee": fee,
+        "order_id": order_id, "strategy_name": "grid_atr", "leverage": 7,
+    }
+
+
+def _make_entry_rec(order_id, timestamp, price=100.0, qty=0.1, symbol="BTC/USDT:USDT", direction="LONG"):
+    return {
+        "timestamp": timestamp, "symbol": symbol, "direction": direction,
+        "trade_type": "entry", "side": "buy",
+        "price": price, "quantity": qty, "fee": 0.1,
+        "order_id": order_id, "strategy_name": "grid_atr", "leverage": 7,
+    }
+
+
+class TestMergeCloseBursts:
+    def test_single_close_unchanged(self):
+        """1 seul close → retourné tel quel."""
+        from scripts.sync_bitget_trades import _merge_close_bursts
+        records = [_make_close("C1", "2026-02-24T10:00:00+00:00")]
+        result = _merge_close_bursts(records)
+        assert len(result) == 1
+        assert result[0]["trade_type"] == "close"
+
+    def test_three_closes_within_window_merged(self):
+        """3 closes en 30s (SL sweep) → 1 seul close fusionné."""
+        from scripts.sync_bitget_trades import _merge_close_bursts
+        records = [
+            _make_close("C1", "2026-02-24T10:00:00+00:00", price=98.0, qty=0.1, fee=0.2),
+            _make_close("C2", "2026-02-24T10:00:10+00:00", price=97.5, qty=0.1, fee=0.2),
+            _make_close("C3", "2026-02-24T10:00:20+00:00", price=97.0, qty=0.1, fee=0.2),
+        ]
+        result = _merge_close_bursts(records, window_minutes=5)
+        closes = [r for r in result if r["trade_type"] == "close"]
+        assert len(closes) == 1
+        c = closes[0]
+        assert c["quantity"] == pytest.approx(0.3, abs=1e-6)
+        # VWAP = (98*0.1 + 97.5*0.1 + 97*0.1) / 0.3 = 29.25/0.3 = 97.5
+        assert c["price"] == pytest.approx(97.5, abs=0.001)
+        assert c["fee"] == pytest.approx(0.6, abs=1e-4)
+
+    def test_closes_outside_window_not_merged(self):
+        """2 closes espacés de 10 min (> window=5) → 2 closes séparés."""
+        from scripts.sync_bitget_trades import _merge_close_bursts
+        records = [
+            _make_close("C1", "2026-02-24T10:00:00+00:00"),
+            _make_close("C2", "2026-02-24T10:10:00+00:00"),  # +10 min
+        ]
+        result = _merge_close_bursts(records, window_minutes=5)
+        closes = [r for r in result if r["trade_type"] == "close"]
+        assert len(closes) == 2
+
+    def test_entry_between_closes_breaks_merge(self):
+        """close + entry + close → 2 closes séparés (entry reset le buffer)."""
+        from scripts.sync_bitget_trades import _merge_close_bursts
+        records = [
+            _make_close("C1", "2026-02-24T10:00:00+00:00"),
+            _make_entry_rec("E1", "2026-02-24T10:01:00+00:00"),  # entry entre les 2 closes
+            _make_close("C2", "2026-02-24T10:02:00+00:00"),     # proche mais après une entry
+        ]
+        result = _merge_close_bursts(records, window_minutes=5)
+        closes = [r for r in result if r["trade_type"] == "close"]
+        entries = [r for r in result if r["trade_type"] == "entry"]
+        assert len(closes) == 2
+        assert len(entries) == 1
+
+    def test_sl_sweep_three_levels(self):
+        """Simulation SL grid 3 niveaux : 3 entries + 3 closes rapides → 1 cycle_close."""
+        from scripts.sync_bitget_trades import _merge_close_bursts, _group_into_cycles
+        records = [
+            _make_entry_rec("E1", "2026-02-24T09:00:00+00:00", price=100.0, qty=1.0),
+            _make_entry_rec("E2", "2026-02-24T09:30:00+00:00", price=95.0, qty=1.0),
+            _make_entry_rec("E3", "2026-02-24T10:00:00+00:00", price=90.0, qty=1.0),
+            # SL : 3 closes en quelques secondes
+            _make_close("SL1", "2026-02-24T10:30:00+00:00", price=88.0, qty=1.0, fee=0.2),
+            _make_close("SL2", "2026-02-24T10:30:05+00:00", price=88.0, qty=1.0, fee=0.2),
+            _make_close("SL3", "2026-02-24T10:30:10+00:00", price=88.0, qty=1.0, fee=0.2),
+        ]
+        merged = _merge_close_bursts(records, window_minutes=5)
+        result = _group_into_cycles(merged, leverage=7)
+
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        assert len(cycle_closes) == 1, "SL sweep = 1 seul cycle, pas 3"
+
+        cc = cycle_closes[0]
+        # avg_entry = (100+95+90)/3 = 95.0, avg_close = 88.0
+        # entry_fees = 3 * 0.1 = 0.3, close_fees = 3 * 0.2 = 0.6
+        # pnl = (88 - 95) * 3 - (0.3 + 0.6) = -21 - 0.9 = -21.9
+        assert cc["pnl"] == pytest.approx(-21.9, abs=0.01)
+        assert cc["grid_level"] == 3

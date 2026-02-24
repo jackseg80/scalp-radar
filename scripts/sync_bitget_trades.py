@@ -18,6 +18,7 @@ import argparse
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 
 import ccxt.pro as ccxtpro
 from loguru import logger
@@ -29,6 +30,9 @@ from backend.core.logging_setup import setup_logging
 
 # Stratégies LONG-only : sell = toujours close
 LONG_ONLY_STRATEGIES = {"grid_atr", "grid_boltrend", "grid_momentum"}
+
+# Fenêtre de fusion des closes consécutifs (SL grid ferme N niveaux en N ordres rapides)
+MERGE_WINDOW_MINUTES = 5
 
 
 def parse_args() -> argparse.Namespace:
@@ -130,6 +134,77 @@ def _aggregate_fills_by_order(fills: list[dict]) -> list[dict]:
     return result
 
 
+def _parse_ts(ts: str) -> datetime:
+    """Parse un timestamp ISO 8601 en datetime UTC."""
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def _flush_close_buffer(closes: list[dict]) -> dict:
+    """Fusionne une liste de closes en un seul (VWAP + somme qty + somme fees)."""
+    if len(closes) == 1:
+        return closes[0]
+    total_qty = sum(c["quantity"] for c in closes)
+    total_cost = sum(c["price"] * c["quantity"] for c in closes)
+    total_fee = sum(c.get("fee", 0) or 0 for c in closes)
+    vwap = total_cost / total_qty if total_qty > 0 else 0.0
+    merged = dict(closes[-1])  # timestamp le plus récent comme base
+    merged["quantity"] = round(total_qty, 8)
+    merged["price"] = round(vwap, 6)
+    merged["fee"] = round(total_fee, 6)
+    return merged
+
+
+def _merge_close_bursts(
+    records: list[dict],
+    window_minutes: int = MERGE_WINDOW_MINUTES,
+) -> list[dict]:
+    """Fusionne les closes consécutifs proches dans le temps par (symbol, direction).
+
+    Un SL grid peut fermer N niveaux en N ordres séparés en quelques secondes.
+    Sans fusion : chaque close partiel ramène la position à 0 → N faux cycles.
+    Avec fusion : N closes consécutifs sans entry entre eux, espacés de moins
+    de window_minutes → 1 close agrégé (VWAP, somme qty, somme fees).
+    """
+    sorted_records = sorted(
+        records,
+        key=lambda r: (r["symbol"], r["direction"], r["timestamp"]),
+    )
+
+    result: list[dict] = []
+
+    for _key, group in groupby(
+        sorted_records, key=lambda r: (r["symbol"], r["direction"]),
+    ):
+        close_buffer: list[dict] = []
+
+        for rec in group:
+            if rec["trade_type"] == "entry":
+                # Flush les closes en attente avant de traiter l'entry
+                if close_buffer:
+                    result.append(_flush_close_buffer(close_buffer))
+                    close_buffer = []
+                result.append(rec)
+            else:
+                # close : vérifier si proche du dernier dans le buffer
+                if not close_buffer:
+                    close_buffer.append(rec)
+                else:
+                    last_ts = _parse_ts(close_buffer[-1]["timestamp"])
+                    cur_ts = _parse_ts(rec["timestamp"])
+                    delta_min = (cur_ts - last_ts).total_seconds() / 60
+                    if delta_min <= window_minutes:
+                        close_buffer.append(rec)
+                    else:
+                        result.append(_flush_close_buffer(close_buffer))
+                        close_buffer = [rec]
+
+        # Flush restant
+        if close_buffer:
+            result.append(_flush_close_buffer(close_buffer))
+
+    return result
+
+
 def _group_into_cycles(
     records: list[dict],
     leverage: int = 3,
@@ -173,10 +248,13 @@ def _group_into_cycles(
             st["qty"] -= rec["quantity"]
             st["closes"].append(rec)
 
-            # Tolérance : 2% de la position max ou 1e-6 absolu
+            # Tolérance : 2% de la position max OU résiduel < $0.50 en notionnel
+            # (cas : micro-fills BTC de 0.0001 laissent un résidu dust)
             tolerance = max(1e-6, st["max_qty"] * 0.02)
+            cur_price = rec.get("price", 0) or 0
+            notional_residual = abs(st["qty"]) * cur_price if cur_price > 0 else float("inf")
 
-            if abs(st["qty"]) <= tolerance:
+            if abs(st["qty"]) <= tolerance or notional_residual < 0.50:
                 # ── Cycle complet ─────────────────────────────────────────
                 entries = st["entries"]
                 closes = st["closes"]
@@ -385,8 +463,18 @@ async def main() -> None:
             n_raw_entries, n_raw_closes, len(raw_records),
         )
 
+        # ── Phase 1b : Fusionner les closes en rafale (SL multi-niveaux) ──
+        n_raw_closes_before = sum(1 for r in raw_records if r["trade_type"] != "entry")
+        merged_records = _merge_close_bursts(raw_records, window_minutes=MERGE_WINDOW_MINUTES)
+        n_merged_closes = sum(1 for r in merged_records if r["trade_type"] != "entry")
+        if n_raw_closes_before != n_merged_closes:
+            logger.info(
+                "Merge bursts : {} closes → {} (fusionnés en fenêtre {}min)",
+                n_raw_closes_before, n_merged_closes, MERGE_WINDOW_MINUTES,
+            )
+
         # ── Phase 2 : Grouper en cycles ───────────────────────────────────
-        result_records = _group_into_cycles(raw_records, leverage=leverage)
+        result_records = _group_into_cycles(merged_records, leverage=leverage)
 
         n_entries = sum(1 for r in result_records if r["trade_type"] == "entry")
         n_cycles = sum(1 for r in result_records if r["trade_type"] == "cycle_close")
