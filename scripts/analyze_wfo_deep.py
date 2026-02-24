@@ -1,6 +1,9 @@
-"""Post-WFO Deep Analysis — Vérifie la viabilité réelle des assets Grade A/B
-après un WFO. Identifie les red flags (SL critique, régimes catastrophiques,
-overfitting) et produit un verdict enrichi : VIABLE / BORDERLINE / ELIMINATED.
+"""Post-WFO Deep Analysis — Analyse le profil de risque par régime des assets Grade A/B
+après un WFO. Produit un verdict VIABLE / BORDERLINE / AT RISK.
+
+NOTE: Ce script est un OUTIL DIAGNOSTIQUE, pas un filtre. Tous les assets Grade A/B
+doivent passer au portfolio backtest. Les red flags individuels peuvent être compensés
+par la diversification.
 
 Usage:
     uv run python -m scripts.analyze_wfo_deep --strategy grid_boltrend
@@ -31,7 +34,7 @@ OIS_SUSPECT     = 5.0   # OOS/IS > 5 → probablement période exceptionnelle
 
 REGIME_LABELS = {"bull": "BULL", "bear": "BEAR", "range": "RANGE", "crash": "CRASH"}
 
-VERDICT_ICONS = {"VIABLE": "[OK]", "BORDERLINE": "[~~]", "ELIMINATED": "[XX]"}
+VERDICT_ICONS = {"VIABLE": "[OK]", "BORDERLINE": "[~~]", "AT RISK": "[!?]"}
 SEV_ICONS     = {"critical": "[!!]", "warning": "[!] ", "info": "[i] ", "ok": "[ ] "}
 
 
@@ -214,7 +217,7 @@ def analyze_asset(row: dict, leverage: int) -> dict:
     has_warning  = any(s == "warning"  for s, _ in flags)
 
     if has_critical:
-        verdict = "ELIMINATED"
+        verdict = "AT RISK"
     elif has_warning:
         verdict = "BORDERLINE"
     else:
@@ -262,7 +265,7 @@ def print_summary_table(
 
     viable_list:     list[str] = []
     borderline_list: list[str] = []
-    eliminated_list: list[str] = []
+    at_risk_list:    list[str] = []
 
     for row, ana in zip(results, analyses):
         asset   = row["asset"]
@@ -286,25 +289,27 @@ def print_summary_table(
         elif verdict == "BORDERLINE":
             borderline_list.append(asset)
         else:
-            eliminated_list.append(asset)
+            at_risk_list.append(asset)
 
     total    = len(results)
     n_viable = len(viable_list)
     n_border = len(borderline_list)
-    n_elim   = len(eliminated_list)
+    n_risk   = len(at_risk_list)
 
-    print(f"\n  Summary: {total} Grade A/B  ->  {n_viable} VIABLE, {n_border} BORDERLINE, {n_elim} ELIMINATED")
+    print(f"\n  Summary: {total} Grade A/B  ->  {n_viable} VIABLE, {n_border} BORDERLINE, {n_risk} AT RISK (individual analysis)")
+    print(f"  NOTE: Individual verdicts are DIAGNOSTIC only.")
+    print(f"        All Grade A/B assets should go to portfolio backtest together.")
+    print(f"        Red flags may be compensated by diversification.")
+    print(f"        Use this analysis to investigate if portfolio backtest fails.")
 
-    effective = viable_list + borderline_list
-    if effective:
-        print(f"  Effective assets:   {', '.join(effective)}")
-    else:
-        print(f"  Effective assets:   aucun — strategie non viable (critere : 5 minimum)")
+    if viable_list:
+        print(f"\n  VIABLE    : {', '.join(viable_list)}")
+    if borderline_list:
+        print(f"  BORDERLINE: {', '.join(borderline_list)}")
+    if at_risk_list:
+        print(f"  AT RISK   : {', '.join(at_risk_list)}")
 
-    if eliminated_list:
-        print(f"  Eliminated:         {', '.join(eliminated_list)}")
-
-    return viable_list, borderline_list, eliminated_list
+    return viable_list, borderline_list, at_risk_list
 
 
 def print_asset_detail(row: dict, ana: dict, leverage: int) -> None:
@@ -392,28 +397,19 @@ def print_asset_detail(row: dict, ana: dict, leverage: int) -> None:
             print(f"    [!]  {msg}")
 
 
-def print_workflow_advice(strategy: str, viable: list[str], borderline: list[str], eliminated: list[str]) -> None:
+def print_workflow_advice(strategy: str, viable: list[str], borderline: list[str], at_risk: list[str]) -> None:
     SEP = "=" * 80
-    effective = viable + borderline
+    total = len(viable) + len(borderline) + len(at_risk)
     print(f"\n  {SEP}")
-    print(f"  WORKFLOW — ETAPE SUIVANTE (--apply)")
+    print(f"  PROCHAINE ETAPE — Portfolio Backtest (LE vrai filtre)")
     print(f"  {SEP}")
-    if not effective:
-        print(f"  [XX] Strategie non viable — ne pas appliquer")
-        print(f"       Critere requis : >= 5 assets VIABLE ou BORDERLINE")
-    elif len(effective) < 5:
-        print(f"  [!]  Seulement {len(effective)} asset(s) VIABLE/BORDERLINE (critere : >= 5)")
-        print(f"       Recommande : ne pas deployer. Revoir parametres ou cible d'assets.")
-    else:
-        if eliminated:
-            excl_str = ",".join(eliminated)
-            print(f"  uv run python -m scripts.optimize --strategy {strategy} --apply --exclude {excl_str}")
-        else:
-            print(f"  uv run python -m scripts.optimize --strategy {strategy} --apply")
-        print(f"\n  VIABLE  ({len(viable)}) : {', '.join(viable) if viable else 'aucun'}")
-        print(f"  BORDER  ({len(borderline)}) : {', '.join(borderline) if borderline else 'aucun'}")
-        if eliminated:
-            print(f"  EXCLU   ({len(eliminated)}) : {', '.join(eliminated)}")
+    print(f"\n  Lancer le portfolio backtest avec TOUS les {total} assets Grade A/B :")
+    print(f"  uv run python -m scripts.portfolio_backtest --strategy {strategy} --days auto --capital 1000")
+    print(f"\n  Les verdicts VIABLE/BORDERLINE/AT RISK ci-dessus sont indicatifs uniquement.")
+    print(f"  Le portfolio backtest est le seul vrai filtre. Les red flags individuels sont")
+    print(f"  souvent compenses par la diversification (ex: +552% avec assets AT RISK inclus).")
+    print(f"\n  Si le portfolio backtest ECHOUE -> utiliser analyze_wfo_deep pour identifier")
+    print(f"  quel(s) asset(s) retirer, puis retester le portfolio sans eux.")
     print()
 
 
@@ -445,12 +441,12 @@ def main() -> None:
             leverage = get_leverage(strategies_cfg, strategy)
             analyses = [analyze_asset(row, leverage) for row in results]
 
-            viable, borderline, eliminated = print_summary_table(results, analyses, strategy)
+            viable, borderline, at_risk = print_summary_table(results, analyses, strategy)
 
             for row, ana in zip(results, analyses):
                 print_asset_detail(row, ana, leverage)
 
-            print_workflow_advice(strategy, viable, borderline, eliminated)
+            print_workflow_advice(strategy, viable, borderline, at_risk)
 
     finally:
         conn.close()

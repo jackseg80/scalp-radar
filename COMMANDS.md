@@ -790,28 +790,31 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 
 Scripts d'analyse ponctuelle. Ne font aucune modification — lecture seule.
 
-### Deep Analysis post-WFO (OBLIGATOIRE avant --apply)
+### Deep Analysis post-WFO (outil DIAGNOSTIQUE — pas un filtre)
 
-Analyse chaque asset Grade A/B et produit un verdict enrichi : VIABLE / BORDERLINE / ELIMINATED.
-Détecte les red flags que le grade seul ne capture pas (SL×leverage, régimes catastrophiques, DSR, CI95).
+Analyse le profil de risque par régime des assets Grade A/B. Produit un verdict : VIABLE / BORDERLINE / AT RISK.
+Détecte les red flags (SL×leverage, régimes négatifs, DSR, CI95) — à des fins de diagnostic uniquement.
 
 ```powershell
-# Analyser une stratégie complète
+# Analyser une stratégie
 uv run python -m scripts.analyze_wfo_deep --strategy grid_boltrend
 
 # Analyser toutes les stratégies avec résultats Grade A/B en DB
 uv run python -m scripts.analyze_wfo_deep --all
 ```
 
-Sortie : tableau récapitulatif (VIABLE/BORDERLINE/ELIMINATED) + détail par asset + commande `--apply --exclude` prête à copier.
+Sortie : tableau récapitulatif (VIABLE/BORDERLINE/AT RISK) + détail par asset + note prochaine étape.
 
 **Workflow post-WFO** :
 ```
-1. WFO  → uv run python -m scripts.optimize --strategy <n> --all-symbols
-2. Deep → uv run python -m scripts.analyze_wfo_deep --strategy <n>   ← OBLIGATOIRE
-           Critère : >= 5 VIABLE ou BORDERLINE pour continuer
-3. Apply → commande affichée par le script (avec --exclude automatique)
+1. WFO      → uv run python -m scripts.optimize --strategy <n> --all-symbols
+2. Apply    → uv run python -m scripts.optimize --strategy <n> --apply   (TOUS les Grade A/B)
+3. Portfolio → uv run python -m scripts.portfolio_backtest --strategy <n> --days auto   ← LE vrai filtre
+4. Deep (si portfolio échoue) → uv run python -m scripts.analyze_wfo_deep --strategy <n>
 ```
+
+> Note : les verdicts AT RISK individuels peuvent être compensés par la diversification.
+> Exemple : grid_boltrend — 4/6 assets AT RISK, mais portfolio +552%, DD -15.3%.
 
 ---
 

@@ -2903,7 +2903,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 ## ÉTAT ACTUEL (24 février 2026)
 
 - **1840 tests passants**, 0 régression (+33 Sprint grid_momentum)
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
@@ -2997,12 +2997,17 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Code conservé** : grid_funding.py + tests, `enabled: false` dans strategies.yaml
 - **Sprint 43 Post-WFO Deep Analysis** (fév 2026) — Script d'analyse post-WFO automatisant la décision d'activation :
   - **Problème** : le Grade WFO (A/B/C/D/F) est insuffisant pour décider de l'activation. Exemple : BCH grid_boltrend = Grade B mais SL×6=120% marge, Sharpe CRASH=-1.86, DSR=0 → inapplicable en production.
-  - **Solution** : `scripts/analyze_wfo_deep.py` — analyse chaque asset Grade A/B et produit VIABLE / BORDERLINE / ELIMINATED
+  - **Solution** : `scripts/analyze_wfo_deep.py` — analyse chaque asset Grade A/B et produit VIABLE / BORDERLINE / AT RISK
   - **Red flags détectés** : SL×leverage > 80%/100% marge, Sharpe négatif en RANGE ou régime dominant, Sharpe < -5 dans tout régime, CI95 négatif, < 10 trades Bitget, OOS/IS > 5
-  - **Workflow** : ajout Étape 1b obligatoire dans WORKFLOW_WFO.md entre WFO et --apply ; l'Étape 1b (Apply) renommée 1c
-  - **Validation grid_boltrend** : 6 assets Grade B → 1 VIABLE (DOGE, seul CI95 positif + transfer_significant), 1 BORDERLINE (LINK), 4 ELIMINATED (BCH, BTC, DYDX, ETH)
   - **Fichiers** : `scripts/analyze_wfo_deep.py`, `docs/WORKFLOW_WFO.md` (étapes 1b/1c), `docs/STRATEGIES.md` (checklist étape 11), `COMMANDS.md` (§ 19)
   - **Tests** : 0 (script lecture seule, pas de tests unitaires requis)
+- **Sprint 43b Workflow Correction** (fév 2026) — Deep Analysis repositionné en outil diagnostique :
+  - **Problème** : Sprint 43 avait instauré le Deep Analysis comme filtre obligatoire (ELIMINATED = exclure). Preuve que c'est faux : grid_boltrend, BCH (SL×6=120%) et DYDX (DSR=0) auraient été exclus → mais portfolio avec les 6 Grade B donne +552.2%, DD -15.3%. BCH contribue +1018$, DYDX +778$.
+  - **Correction** : `ELIMINATED` renommé `AT RISK` (moins définitif). `print_workflow_advice()` remplacé par un message "lancer le portfolio backtest avec TOUS les assets". Deep Analysis déplacé de Étape 1b (filtre) à Étape 2b (diagnostic).
+  - **Workflow corrigé** : WFO → Apply (TOUS Grade A/B) → Portfolio backtest (LE vrai filtre) → Deep Analysis si portfolio échoue
+  - **Résultats grid_boltrend documentés** : WFO 6 Grade B / 19 assets (BTC, ETH, DOGE, LINK, DYDX, BCH) — Leverage 6x — Portfolio backtest 2008j : **+552.2%, DD -15.3%, Alpha vs BTC +92.1%, 0 KS, tous régimes positifs sauf CRASH (-0.37$/j quasi-neutre)** — Stress test 6x confirmé (0 KS sur toutes fenêtres)
+  - **Fichiers** : `scripts/analyze_wfo_deep.py`, `docs/WORKFLOW_WFO.md`, `docs/STRATEGIES.md`, `COMMANDS.md`, `docs/ROADMAP.md`
+  - **Tests** : 0 (corrections terminologie + docs uniquement)
 - **Prochaine étape** : Grid adaptatif (ATR multiplier dynamique sur grid_atr, Workflow B) ou Pairs trading (ETH/BTC spread, Phase 3)
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
@@ -3165,7 +3170,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 |-----------|--------|--------------|--------------|
 | `grid_momentum` | 41 | 1/21 Grade B (CRV) | Faux breakouts, crypto = 83% range |
 | `grid_funding` | 42 | 0/17 Grade B (tous F) | Funding extrême = stress marché = prix contre nous |
-| `grid_boltrend` | 38b | DSR 0/15 | Non viable (pré-corrections 40a, jamais re-testé) |
+| `grid_boltrend` | 43 | 6 Grade B / 19, portfolio +552% | **Re-validé** — pré-corrections 40a étaient invalides, re-WFO Sprint 43 → viable |
 | `grid_trend` | 20 | Échoue forward test | Trends crypto trop courts, bear market 2025 |
 | `vwap_rsi` | 9 | Grade F | Pas d'edge sans DCA |
 | `momentum` | 9 | Grade F | Pas d'edge sans DCA |
@@ -3179,7 +3184,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 L'edge en crypto vient du **mécanisme DCA mean-reversion** en régime RANGE (83% du temps).
 Toutes les tentatives de capter d'autres régimes (breakout, trend, funding) ont échoué.
-Les deux seules stratégies viables (`grid_atr`, `grid_multi_tf`) partagent ce mécanisme.
+Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent ce mécanisme.
 
 ---
 

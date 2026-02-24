@@ -703,8 +703,9 @@ Pourcentages fixes (`tp_percent`, `sl_percent`). Pas de sortie anticipée.
 8. Config YAML : `config/strategies.yaml` + `config/param_grids.yaml`
 9. Tests : signaux, fast engine parité, WFO integration
 10. WFO : `uv run python -m scripts.optimize --strategy my_strategy --all-symbols`
-11. Deep Analysis : `uv run python -m scripts.analyze_wfo_deep --strategy my_strategy` — critère ≥ 5 VIABLE/BORDERLINE
-12. Apply (VIABLE + BORDERLINE seulement) : voir [WORKFLOW_WFO.md § Étape 1c](WORKFLOW_WFO.md)
+11. Apply (TOUS les Grade A/B, sans filtre) : `uv run python -m scripts.optimize --strategy my_strategy --apply`
+12. Portfolio backtest (LE vrai filtre) : `uv run python -m scripts.portfolio_backtest --strategy my_strategy --days auto --capital 1000`
+13. Deep Analysis (DIAGNOSTIC si portfolio échoue) : `uv run python -m scripts.analyze_wfo_deep --strategy my_strategy`
 
 ### Pattern de code — Stratégie Grid
 
