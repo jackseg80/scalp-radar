@@ -276,3 +276,159 @@ class TestLivePerAssetStats:
         assert btc["total_pnl"] == 8.0
         assert btc["wins"] == 1
         assert btc["win_rate"] == 50.0
+
+
+# ─── Purge ─────────────────────────────────────────────────────────────
+
+
+class TestPurgeLiveTrades:
+    @pytest.mark.asyncio
+    async def test_purge_all(self, db):
+        """Purge tous les trades."""
+        await db.insert_live_trade(_make_live_trade(order_id="p1"))
+        await db.insert_live_trade(_make_live_trade(order_id="p2"))
+        assert await db.get_live_trade_count() == 2
+
+        deleted = await db.purge_live_trades()
+        assert deleted == 2
+        assert await db.get_live_trade_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_purge_by_context(self, db):
+        """Purge seulement les trades d'un contexte donné."""
+        await db.insert_live_trade(_make_live_trade(
+            order_id="sync1", context="sync_bitget_trades",
+        ))
+        await db.insert_live_trade(_make_live_trade(
+            order_id="live1", context="grid",
+        ))
+        assert await db.get_live_trade_count() == 2
+
+        deleted = await db.purge_live_trades(context="sync_bitget_trades")
+        assert deleted == 1
+        assert await db.get_live_trade_count() == 1
+
+        remaining = await db.get_live_trades()
+        assert remaining[0]["context"] == "grid"
+
+
+# ─── Classify & P&L (sync script) ─────────────────────────────────────
+
+
+class TestClassifyAndPnl:
+    def test_classify_long_only_buy_is_entry(self):
+        """grid_atr LONG-only : buy = entry."""
+        from scripts.sync_bitget_trades import _classify_trade
+        trade = {"side": "buy", "info": {}}
+        direction, trade_type = _classify_trade(trade, "grid_atr")
+        assert direction == "LONG"
+        assert trade_type == "entry"
+
+    def test_classify_long_only_sell_is_close(self):
+        """grid_atr LONG-only : sell = close."""
+        from scripts.sync_bitget_trades import _classify_trade
+        trade = {"side": "sell", "info": {}}
+        direction, trade_type = _classify_trade(trade, "grid_atr")
+        assert direction == "LONG"
+        assert trade_type == "close"
+
+    def test_classify_tradeside_close(self):
+        """tradeSide=close dans info → close."""
+        from scripts.sync_bitget_trades import _classify_trade
+        trade = {"side": "buy", "info": {"tradeSide": "close"}}
+        direction, trade_type = _classify_trade(trade, "grid_multi_tf")
+        assert direction == "SHORT"
+        assert trade_type == "close"
+
+    def test_classify_reduce_only(self):
+        """reduceOnly=true → close."""
+        from scripts.sync_bitget_trades import _classify_trade
+        trade = {"side": "sell", "info": {"reduceOnly": True}}
+        direction, trade_type = _classify_trade(trade, "grid_multi_tf")
+        assert direction == "LONG"
+        assert trade_type == "close"
+
+    def test_classify_multi_tf_sell_entry_short(self):
+        """grid_multi_tf : sell sans reduceOnly = entry SHORT."""
+        from scripts.sync_bitget_trades import _classify_trade
+        trade = {"side": "sell", "info": {}}
+        direction, trade_type = _classify_trade(trade, "grid_multi_tf")
+        assert direction == "SHORT"
+        assert trade_type == "entry"
+
+    def test_pnl_fifo_long(self):
+        """P&L calculé correctement en FIFO pour LONG."""
+        from scripts.sync_bitget_trades import _compute_pnl_for_closes
+        trades = [
+            {
+                "timestamp": "2026-02-24T10:00:00+00:00",
+                "symbol": "BTC/USDT:USDT", "direction": "LONG",
+                "trade_type": "entry", "price": 90000.0, "quantity": 0.01,
+                "fee": 0, "leverage": 3,
+            },
+            {
+                "timestamp": "2026-02-24T11:00:00+00:00",
+                "symbol": "BTC/USDT:USDT", "direction": "LONG",
+                "trade_type": "close", "price": 91000.0, "quantity": 0.01,
+                "fee": 0.55, "leverage": 3,
+            },
+        ]
+        result = _compute_pnl_for_closes(trades)
+        close = [t for t in result if t["trade_type"] == "close"][0]
+        # (91000 - 90000) * 0.01 - 0.55 = 10 - 0.55 = 9.45
+        assert close["pnl"] == 9.45
+        # margin = 90000 * 0.01 / 3 = 300
+        # pnl_pct = 9.45 / 300 * 100 = 3.15
+        assert close["pnl_pct"] == 3.15
+
+    def test_pnl_fifo_short(self):
+        """P&L calculé correctement pour SHORT."""
+        from scripts.sync_bitget_trades import _compute_pnl_for_closes
+        trades = [
+            {
+                "timestamp": "2026-02-24T10:00:00+00:00",
+                "symbol": "ETH/USDT:USDT", "direction": "SHORT",
+                "trade_type": "entry", "price": 3000.0, "quantity": 1.0,
+                "fee": 0, "leverage": 3,
+            },
+            {
+                "timestamp": "2026-02-24T11:00:00+00:00",
+                "symbol": "ETH/USDT:USDT", "direction": "SHORT",
+                "trade_type": "close", "price": 2900.0, "quantity": 1.0,
+                "fee": 1.8, "leverage": 3,
+            },
+        ]
+        result = _compute_pnl_for_closes(trades)
+        close = [t for t in result if t["trade_type"] == "close"][0]
+        # (3000 - 2900) * 1.0 - 1.8 = 100 - 1.8 = 98.2
+        assert close["pnl"] == 98.2
+
+    def test_pnl_multiple_entries_fifo(self):
+        """FIFO : 2 entries à prix différents, 1 close partiel."""
+        from scripts.sync_bitget_trades import _compute_pnl_for_closes
+        trades = [
+            {
+                "timestamp": "2026-02-24T10:00:00+00:00",
+                "symbol": "BTC/USDT:USDT", "direction": "LONG",
+                "trade_type": "entry", "price": 90000.0, "quantity": 0.01,
+                "fee": 0, "leverage": 3,
+            },
+            {
+                "timestamp": "2026-02-24T10:30:00+00:00",
+                "symbol": "BTC/USDT:USDT", "direction": "LONG",
+                "trade_type": "entry", "price": 89000.0, "quantity": 0.01,
+                "fee": 0, "leverage": 3,
+            },
+            {
+                "timestamp": "2026-02-24T11:00:00+00:00",
+                "symbol": "BTC/USDT:USDT", "direction": "LONG",
+                "trade_type": "close", "price": 91000.0, "quantity": 0.015,
+                "fee": 0.82, "leverage": 3,
+            },
+        ]
+        result = _compute_pnl_for_closes(trades)
+        close = [t for t in result if t["trade_type"] == "close"][0]
+        # FIFO : 0.01 @ 90000 + 0.005 @ 89000
+        # pnl = (91000-90000)*0.01 + (91000-89000)*0.005 - 0.82
+        #     = 10 + 10 - 0.82 = 19.18
+        assert close["pnl"] == 19.18

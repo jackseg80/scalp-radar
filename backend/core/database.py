@@ -1771,6 +1771,18 @@ class Database:
         row = await cursor.fetchone()
         return row[0] if row else 0
 
+    async def purge_live_trades(self, context: str | None = None) -> int:
+        """Supprime les trades live. Si context fourni, seulement ceux-là."""
+        assert self._conn is not None
+        if context:
+            cursor = await self._conn.execute(
+                "DELETE FROM live_trades WHERE context = ?", (context,),
+            )
+        else:
+            cursor = await self._conn.execute("DELETE FROM live_trades")
+        await self._conn.commit()
+        return cursor.rowcount
+
     def _period_to_since(self, period: str) -> str | None:
         """Convertit une période en timestamp ISO 'since'."""
         now = datetime.now(tz=timezone.utc)
