@@ -245,11 +245,7 @@ async def main() -> None:
 
         # Récupérer le leverage par stratégie
         strategy_name = args.strategy or "unknown"
-        strategy_config = {}
-        for s in config.strategies:
-            if s.name == strategy_name:
-                strategy_config = s
-                break
+        strategy_config = getattr(config.strategies, strategy_name, None)
         leverage = getattr(strategy_config, "leverage", None) or 3
 
         # ── Phase 1 : Fetch + Classify ───────────────────────────────────
