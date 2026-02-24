@@ -1593,7 +1593,7 @@ class Database:
         assert self._conn is not None
 
         since = self._period_to_since(period)
-        conditions = ["trade_type IN ('tp_close', 'sl_close', 'force_close', 'close')"]
+        conditions = ["trade_type IN ('tp_close', 'sl_close', 'force_close', 'close', 'cycle_close')"]
         params: list[str] = []
 
         if since:
@@ -1724,7 +1724,7 @@ class Database:
         assert self._conn is not None
 
         since = self._period_to_since(period)
-        conditions = ["trade_type IN ('tp_close', 'sl_close', 'force_close', 'close')"]
+        conditions = ["trade_type IN ('tp_close', 'sl_close', 'force_close', 'close', 'cycle_close')"]
         params: list[str] = []
 
         if since:

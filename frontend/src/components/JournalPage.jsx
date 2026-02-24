@@ -18,13 +18,14 @@ const PERIODS = [
 const EXIT_LABELS = {
   sl: 'SL', tp: 'TP', tp_global: 'TP global', sl_global: 'SL global',
   force_close: 'Force close', signal_exit: 'Signal', regime_change: 'Regime', end_of_data: 'Fin',
-  tp_close: 'TP', sl_close: 'SL',
+  tp_close: 'TP', sl_close: 'SL', cycle_close: 'Cycle',
 }
 
 const EXIT_BADGE_CLASS = {
   sl: 'badge-stopped', sl_global: 'badge-stopped', sl_close: 'badge-stopped',
   tp: 'badge-active', tp_global: 'badge-active', tp_close: 'badge-active',
   signal_exit: 'badge-simulation', regime_change: 'badge-trending',
+  cycle_close: 'badge-active',
 }
 
 function formatDuration(entryTime, exitTime) {
@@ -301,29 +302,37 @@ function LiveTradeHistory({ period }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((t, i) => (
-              <tr key={i} className={(t.pnl || 0) >= 0 ? 'row-positive' : 'row-negative'}>
-                <td className="text-xs muted">
-                  {t.timestamp ? new Date(t.timestamp).toLocaleDateString('fr-FR') : '--'}
-                </td>
-                <td><span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span></td>
-                <td style={{ fontWeight: 600, fontSize: 11 }}>{t.symbol || '--'}</td>
-                <td className="text-xs">{t.strategy_name}</td>
-                <td className="mono text-xs">{formatPrice(t.price)}</td>
-                <td className={`mono ${(t.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
-                  {(t.pnl || 0) >= 0 ? '+' : ''}{Number(t.pnl || 0).toFixed(2)}$
-                </td>
-                <td className={`mono text-xs ${(t.pnl_pct || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
-                  {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(1)}%` : '--'}
-                </td>
-                <td className="text-xs">{t.grid_level != null ? `${t.grid_level}` : '--'}</td>
-                <td>
-                  <span className={`badge ${EXIT_BADGE_CLASS[t.trade_type] || ''}`}>
-                    {EXIT_LABELS[t.trade_type] || t.trade_type}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {filtered.map((t, i) => {
+              const isCycle = t.trade_type === 'cycle_close'
+              const rowTitle = isCycle
+                ? `Cycle ${t.grid_level || '?'} niveaux — Exit: ${formatPrice(t.price)}`
+                : undefined
+              return (
+                <tr key={i} className={(t.pnl || 0) >= 0 ? 'row-positive' : 'row-negative'} title={rowTitle}>
+                  <td className="text-xs muted">
+                    {t.timestamp ? new Date(t.timestamp).toLocaleDateString('fr-FR') : '--'}
+                  </td>
+                  <td><span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span></td>
+                  <td style={{ fontWeight: 600, fontSize: 11 }}>{t.symbol || '--'}</td>
+                  <td className="text-xs">{t.strategy_name}</td>
+                  <td className="mono text-xs">
+                    {isCycle ? <span className="muted text-xs">exit </span> : null}{formatPrice(t.price)}
+                  </td>
+                  <td className={`mono ${(t.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ fontWeight: 600 }}>
+                    {(t.pnl || 0) >= 0 ? '+' : ''}{Number(t.pnl || 0).toFixed(2)}$
+                  </td>
+                  <td className={`mono text-xs ${(t.pnl_pct || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                    {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(1)}%` : '--'}
+                  </td>
+                  <td className="text-xs">{t.grid_level != null ? `${t.grid_level}` : '--'}</td>
+                  <td>
+                    <span className={`badge ${EXIT_BADGE_CLASS[t.trade_type] || ''}`}>
+                      {EXIT_LABELS[t.trade_type] || t.trade_type}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

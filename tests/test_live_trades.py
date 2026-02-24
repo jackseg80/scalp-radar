@@ -356,83 +356,6 @@ class TestClassifyAndPnl:
         assert direction == "SHORT"
         assert trade_type == "entry"
 
-    def test_pnl_fifo_long(self):
-        """P&L calculé correctement en FIFO pour LONG."""
-        from scripts.sync_bitget_trades import _compute_pnl_for_closes
-        trades = [
-            {
-                "timestamp": "2026-02-24T10:00:00+00:00",
-                "symbol": "BTC/USDT:USDT", "direction": "LONG",
-                "trade_type": "entry", "price": 90000.0, "quantity": 0.01,
-                "fee": 0, "leverage": 3,
-            },
-            {
-                "timestamp": "2026-02-24T11:00:00+00:00",
-                "symbol": "BTC/USDT:USDT", "direction": "LONG",
-                "trade_type": "close", "price": 91000.0, "quantity": 0.01,
-                "fee": 0.55, "leverage": 3,
-            },
-        ]
-        result = _compute_pnl_for_closes(trades)
-        close = [t for t in result if t["trade_type"] == "close"][0]
-        # (91000 - 90000) * 0.01 - 0.55 = 10 - 0.55 = 9.45
-        assert close["pnl"] == 9.45
-        # margin = 90000 * 0.01 / 3 = 300
-        # pnl_pct = 9.45 / 300 * 100 = 3.15
-        assert close["pnl_pct"] == 3.15
-
-    def test_pnl_fifo_short(self):
-        """P&L calculé correctement pour SHORT."""
-        from scripts.sync_bitget_trades import _compute_pnl_for_closes
-        trades = [
-            {
-                "timestamp": "2026-02-24T10:00:00+00:00",
-                "symbol": "ETH/USDT:USDT", "direction": "SHORT",
-                "trade_type": "entry", "price": 3000.0, "quantity": 1.0,
-                "fee": 0, "leverage": 3,
-            },
-            {
-                "timestamp": "2026-02-24T11:00:00+00:00",
-                "symbol": "ETH/USDT:USDT", "direction": "SHORT",
-                "trade_type": "close", "price": 2900.0, "quantity": 1.0,
-                "fee": 1.8, "leverage": 3,
-            },
-        ]
-        result = _compute_pnl_for_closes(trades)
-        close = [t for t in result if t["trade_type"] == "close"][0]
-        # (3000 - 2900) * 1.0 - 1.8 = 100 - 1.8 = 98.2
-        assert close["pnl"] == 98.2
-
-    def test_pnl_multiple_entries_fifo(self):
-        """FIFO : 2 entries à prix différents, 1 close partiel."""
-        from scripts.sync_bitget_trades import _compute_pnl_for_closes
-        trades = [
-            {
-                "timestamp": "2026-02-24T10:00:00+00:00",
-                "symbol": "BTC/USDT:USDT", "direction": "LONG",
-                "trade_type": "entry", "price": 90000.0, "quantity": 0.01,
-                "fee": 0, "leverage": 3,
-            },
-            {
-                "timestamp": "2026-02-24T10:30:00+00:00",
-                "symbol": "BTC/USDT:USDT", "direction": "LONG",
-                "trade_type": "entry", "price": 89000.0, "quantity": 0.01,
-                "fee": 0, "leverage": 3,
-            },
-            {
-                "timestamp": "2026-02-24T11:00:00+00:00",
-                "symbol": "BTC/USDT:USDT", "direction": "LONG",
-                "trade_type": "close", "price": 91000.0, "quantity": 0.015,
-                "fee": 0.82, "leverage": 3,
-            },
-        ]
-        result = _compute_pnl_for_closes(trades)
-        close = [t for t in result if t["trade_type"] == "close"][0]
-        # FIFO : 0.01 @ 90000 + 0.005 @ 89000
-        # pnl = (91000-90000)*0.01 + (91000-89000)*0.005 - 0.82
-        #     = 10 + 10 - 0.82 = 19.18
-        assert close["pnl"] == 19.18
-
     def test_aggregate_fills_single_fill(self):
         """Un seul fill → retourné tel quel."""
         from scripts.sync_bitget_trades import _aggregate_fills_by_order
@@ -500,27 +423,225 @@ class TestClassifyAndPnl:
         assert c1["fee"]["cost"] == pytest.approx(0.54)
 
     def test_pnl_fifo_grid_cycle_wins(self):
-        """Scénario grid complet : FIFO direct → 1 WIN avec paramètres réalistes.
+        """Scénario grid complet : 3 entries + 1 close agrégé → 1 cycle_close WIN.
 
-        Clé : qty=1.0 BTC (pas 0.01) pour que le P&L brut dépasse les fees.
-        (98-100)*1 + (98-95)*1 + (98-90)*1 - 0.54 = -2+3+8-0.54 = 8.46
+        avg_entry = (100+95+90)/3 = 95.0
+        pnl = (98-95)*3 - 0.54 = 9 - 0.54 = 8.46
         """
-        from scripts.sync_bitget_trades import _compute_pnl_for_closes
+        from scripts.sync_bitget_trades import _group_into_cycles
         records = [
             {"timestamp": "2026-02-24T10:00:00+00:00", "symbol": "BTC/USDT:USDT",
-             "direction": "LONG", "trade_type": "entry",  "price": 100.0, "quantity": 1.0, "fee": 0,    "leverage": 3},
+             "direction": "LONG", "trade_type": "entry",  "price": 100.0, "quantity": 1.0,
+             "fee": 0, "leverage": 3, "strategy_name": "grid_atr", "order_id": "E1", "side": "buy"},
             {"timestamp": "2026-02-24T10:10:00+00:00", "symbol": "BTC/USDT:USDT",
-             "direction": "LONG", "trade_type": "entry",  "price": 95.0,  "quantity": 1.0, "fee": 0,    "leverage": 3},
+             "direction": "LONG", "trade_type": "entry",  "price": 95.0,  "quantity": 1.0,
+             "fee": 0, "leverage": 3, "strategy_name": "grid_atr", "order_id": "E2", "side": "buy"},
             {"timestamp": "2026-02-24T10:20:00+00:00", "symbol": "BTC/USDT:USDT",
-             "direction": "LONG", "trade_type": "entry",  "price": 90.0,  "quantity": 1.0, "fee": 0,    "leverage": 3},
-            # Close agrégé : qty=3.0 (3 fills × 1.0), fee=0.54
+             "direction": "LONG", "trade_type": "entry",  "price": 90.0,  "quantity": 1.0,
+             "fee": 0, "leverage": 3, "strategy_name": "grid_atr", "order_id": "E3", "side": "buy"},
+            # Close agrégé : qty=3.0, fee=0.54
             {"timestamp": "2026-02-24T11:00:00+00:00", "symbol": "BTC/USDT:USDT",
-             "direction": "LONG", "trade_type": "close",  "price": 98.0,  "quantity": 3.0, "fee": 0.54, "leverage": 3},
+             "direction": "LONG", "trade_type": "close",  "price": 98.0,  "quantity": 3.0,
+             "fee": 0.54, "leverage": 3, "strategy_name": "grid_atr", "order_id": "C1", "side": "sell"},
         ]
-        result = _compute_pnl_for_closes(records)
-        close = next(r for r in result if r["trade_type"] == "close")
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        entries = [r for r in result if r["trade_type"] == "entry"]
 
-        # FIFO : (98-100)*1 + (98-95)*1 + (98-90)*1 - 0.54
-        #      = -2 + 3 + 8 - 0.54 = 8.46
-        assert close["pnl"] == pytest.approx(8.46, abs=0.001)
-        assert close["pnl"] > 0  # 1 WIN au lieu de 1 LOSS + 2 WINS fragmentés
+        assert len(cycle_closes) == 1
+        assert len(entries) == 3
+
+        cc = cycle_closes[0]
+        # avg_entry = (100+95+90)/3 = 95.0, avg_close = 98.0
+        # pnl = (98-95)*3 - 0.54 = 8.46
+        assert cc["pnl"] == pytest.approx(8.46, abs=0.001)
+        assert cc["pnl"] > 0
+        assert cc["grid_level"] == 3  # 3 entries dans ce cycle
+
+
+# ─── Group Into Cycles ──────────────────────────────────────────────────
+
+
+def _make_record(**overrides) -> dict:
+    """Helper pour créer un record classifié destiné à _group_into_cycles."""
+    base = {
+        "timestamp": "2026-02-24T10:00:00+00:00",
+        "strategy_name": "grid_atr",
+        "symbol": "BTC/USDT:USDT",
+        "direction": "LONG",
+        "trade_type": "entry",
+        "side": "buy",
+        "quantity": 1.0,
+        "price": 100.0,
+        "order_id": "E1",
+        "fee": 0.0,
+        "leverage": 3,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestGroupIntoCycles:
+    def test_simple_cycle_long(self):
+        """1 entry + 1 close → 1 cycle_close + 1 entry dans le résultat."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(trade_type="entry", price=100.0, quantity=1.0, order_id="E1"),
+            _make_record(trade_type="close", price=105.0, quantity=1.0, order_id="C1",
+                         side="sell", timestamp="2026-02-24T11:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        entries = [r for r in result if r["trade_type"] == "entry"]
+
+        assert len(cycle_closes) == 1
+        assert len(entries) == 1
+        cc = cycle_closes[0]
+        # pnl = (105 - 100) * 1 - 0 = 5.0
+        assert cc["pnl"] == pytest.approx(5.0, abs=0.001)
+        assert cc["grid_level"] == 1
+
+    def test_simple_cycle_short(self):
+        """1 entry SHORT + 1 close → cycle_close avec pnl correct."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(direction="SHORT", trade_type="entry", price=3000.0,
+                         quantity=1.0, order_id="E1", side="sell"),
+            _make_record(direction="SHORT", trade_type="close", price=2900.0,
+                         quantity=1.0, order_id="C1", side="buy", fee=1.8,
+                         timestamp="2026-02-24T11:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+
+        assert len(cycle_closes) == 1
+        cc = cycle_closes[0]
+        # pnl = (3000 - 2900) * 1 - 1.8 = 98.2
+        assert cc["pnl"] == pytest.approx(98.2, abs=0.001)
+        assert cc["direction"] == "SHORT"
+
+    def test_multi_entry_single_close(self):
+        """3 entries + 1 close global → 1 cycle_close avec avg pondéré."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(price=100.0, quantity=0.01, order_id="E1",
+                         timestamp="2026-02-24T10:00:00+00:00"),
+            _make_record(price=95.0, quantity=0.01, order_id="E2",
+                         timestamp="2026-02-24T10:10:00+00:00"),
+            _make_record(price=90.0, quantity=0.01, order_id="E3",
+                         timestamp="2026-02-24T10:20:00+00:00"),
+            _make_record(trade_type="close", price=97.0, quantity=0.03, order_id="C1",
+                         side="sell", fee=0.2, timestamp="2026-02-24T11:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        entries = [r for r in result if r["trade_type"] == "entry"]
+
+        assert len(cycle_closes) == 1
+        assert len(entries) == 3
+        cc = cycle_closes[0]
+        assert cc["grid_level"] == 3
+        # avg_entry = (100+95+90)/3 = 95.0
+        # pnl = (97 - 95) * 0.03 - 0.2 = 0.06 - 0.2 = -0.14
+        assert cc["pnl"] == pytest.approx(-0.14, abs=0.001)
+
+    def test_multi_close_until_position_zero(self):
+        """2 entries + 2 closes parttiels → 1 seul cycle_close."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(price=100.0, quantity=1.0, order_id="E1",
+                         timestamp="2026-02-24T10:00:00+00:00"),
+            _make_record(price=98.0, quantity=1.0, order_id="E2",
+                         timestamp="2026-02-24T10:10:00+00:00"),
+            # Premier close : position passe de 2 à 1 (pas encore à 0)
+            _make_record(trade_type="close", price=103.0, quantity=1.0, order_id="C1",
+                         side="sell", timestamp="2026-02-24T11:00:00+00:00"),
+            # Deuxième close : position passe à 0 → cycle complet
+            _make_record(trade_type="close", price=105.0, quantity=1.0, order_id="C2",
+                         side="sell", timestamp="2026-02-24T12:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        assert len(cycle_closes) == 1
+
+        cc = cycle_closes[0]
+        # avg_entry = (100+98)/2 = 99.0, avg_close = (103+105)/2 = 104.0
+        # pnl = (104 - 99) * 2 = 10.0
+        assert cc["pnl"] == pytest.approx(10.0, abs=0.001)
+        assert cc["grid_level"] == 2  # 2 entries
+
+    def test_open_cycle_no_cycle_close(self):
+        """Cycle non clôturé → aucun cycle_close, entries conservées."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(price=100.0, quantity=1.0, order_id="E1"),
+            _make_record(price=95.0, quantity=1.0, order_id="E2",
+                         timestamp="2026-02-24T10:10:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        entries = [r for r in result if r["trade_type"] == "entry"]
+
+        assert len(cycle_closes) == 0
+        assert len(entries) == 2
+
+    def test_orphan_close_ignored(self):
+        """Close sans entry correspondante → ignoré."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(trade_type="close", price=105.0, quantity=1.0, order_id="C1",
+                         side="sell"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        assert len(result) == 0
+
+    def test_two_independent_cycles(self):
+        """2 cycles successifs sur le même symbol → 2 cycle_close."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(price=100.0, quantity=1.0, order_id="E1",
+                         timestamp="2026-02-24T10:00:00+00:00"),
+            _make_record(trade_type="close", price=102.0, quantity=1.0, order_id="C1",
+                         side="sell", timestamp="2026-02-24T11:00:00+00:00"),
+            # Second cycle
+            _make_record(price=101.0, quantity=1.0, order_id="E2",
+                         timestamp="2026-02-24T12:00:00+00:00"),
+            _make_record(trade_type="close", price=103.0, quantity=1.0, order_id="C2",
+                         side="sell", timestamp="2026-02-24T13:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cycle_closes = [r for r in result if r["trade_type"] == "cycle_close"]
+        assert len(cycle_closes) == 2
+        # Premier cycle : pnl = (102-100)*1 = 2.0
+        assert cycle_closes[0]["pnl"] == pytest.approx(2.0, abs=0.001)
+        # Second cycle : pnl = (103-101)*1 = 2.0
+        assert cycle_closes[1]["pnl"] == pytest.approx(2.0, abs=0.001)
+
+    def test_cycle_close_order_id_format(self):
+        """order_id du cycle_close = cycle_{first_entry_order_id}."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(price=100.0, quantity=1.0, order_id="ENTRY_ABC"),
+            _make_record(trade_type="close", price=102.0, quantity=1.0, order_id="C1",
+                         side="sell", timestamp="2026-02-24T11:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=3)
+        cc = next(r for r in result if r["trade_type"] == "cycle_close")
+        assert cc["order_id"] == "cycle_ENTRY_ABC"
+
+    def test_pnl_pct_calculation(self):
+        """pnl_pct = pnl / margin * 100, margin = avg_entry * qty / leverage."""
+        from scripts.sync_bitget_trades import _group_into_cycles
+        records = [
+            _make_record(price=90000.0, quantity=0.01, order_id="E1", leverage=7),
+            _make_record(trade_type="close", price=91000.0, quantity=0.01, order_id="C1",
+                         side="sell", fee=0.55, leverage=7,
+                         timestamp="2026-02-24T11:00:00+00:00"),
+        ]
+        result = _group_into_cycles(records, leverage=7)
+        cc = next(r for r in result if r["trade_type"] == "cycle_close")
+        # pnl = (91000 - 90000) * 0.01 - 0.55 = 10 - 0.55 = 9.45
+        assert cc["pnl"] == pytest.approx(9.45, abs=0.001)
+        # margin = 90000 * 0.01 / 7 = 128.57
+        # pnl_pct = 9.45 / 128.57 * 100 ≈ 7.35
+        assert cc["pnl_pct"] == pytest.approx(7.35, abs=0.1)

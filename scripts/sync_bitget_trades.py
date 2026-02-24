@@ -2,12 +2,14 @@
 
 Rattrapage pour les trades executés avant le Sprint 45.
 Utilise ccxt Bitget fetchMyTrades() pour récupérer les fills,
-classifie entry/close, et calcule le P&L par matching FIFO.
+classifie entry/close, et groupe en cycles de grille.
 
 Lancement :
-    uv run python -m scripts.sync_bitget_trades --strategy grid_atr --days 30
-    uv run python -m scripts.sync_bitget_trades --days 7
     uv run python -m scripts.sync_bitget_trades --purge --strategy grid_atr --days 30
+    uv run python -m scripts.sync_bitget_trades --dry-run --strategy grid_atr --days 7
+
+NOTE : utiliser --purge pour un re-sync propre. Sans --purge, les cycles
+       dont les entries sont déjà en DB sont ignorés (sync incrémental).
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="Afficher sans insérer")
     parser.add_argument(
         "--purge", action="store_true",
-        help="Purger les trades sync existants avant re-sync",
+        help="Purger les trades sync existants avant re-sync (recommandé)",
     )
     return parser.parse_args()
 
@@ -49,7 +51,7 @@ def _classify_trade(
 
     Retourne (direction, trade_type) où :
     - direction: "LONG" ou "SHORT"
-    - trade_type: "entry", "tp_close", "sl_close", ou "close"
+    - trade_type: "entry" ou "close"
     """
     side = trade.get("side", "buy")
     info = trade.get("info", {})
@@ -78,11 +80,7 @@ def _classify_trade(
         direction = "LONG" if side == "buy" else "SHORT"
 
     # 5) Trade type
-    if is_close:
-        trade_type = "close"  # On raffinera en tp_close/sl_close si possible
-    else:
-        trade_type = "entry"
-
+    trade_type = "close" if is_close else "entry"
     return direction, trade_type
 
 
@@ -103,9 +101,8 @@ def _aggregate_fills_by_order(fills: list[dict]) -> list[dict]:
         fee = float((fill.get("fee") or {}).get("cost", 0) or 0)
 
         if oid not in orders:
-            # Premier fill : initialiser l'agrégat avec toutes les métadonnées
             orders[oid] = {
-                "_ref_fill": fill,      # Référence pour side, info, datetime...
+                "_ref_fill": fill,
                 "_total_qty": qty,
                 "_total_cost": price * qty,
                 "_total_fee": fee,
@@ -115,7 +112,6 @@ def _aggregate_fills_by_order(fills: list[dict]) -> list[dict]:
             orders[oid]["_total_cost"] += price * qty
             orders[oid]["_total_fee"] += fee
 
-    # Construire la liste agrégée (une entrée par order_id)
     result = []
     for oid, agg in orders.items():
         ref = agg["_ref_fill"]
@@ -123,92 +119,135 @@ def _aggregate_fills_by_order(fills: list[dict]) -> list[dict]:
         total_cost = agg["_total_cost"]
         vwap = total_cost / total_qty if total_qty > 0 else 0.0
 
-        # Reconstruire un objet "fill-like" avec les données agrégées
-        aggregated = dict(ref)                 # Copie du premier fill
-        aggregated["amount"] = total_qty       # Quantité totale
-        aggregated["price"] = vwap             # Prix VWAP
+        aggregated = dict(ref)
+        aggregated["amount"] = total_qty
+        aggregated["price"] = vwap
         if aggregated.get("fee") is not None:
             aggregated["fee"] = {"cost": agg["_total_fee"]}
-        aggregated["order"] = oid              # order_id explicite
+        aggregated["order"] = oid
         result.append(aggregated)
 
     return result
 
 
-def _compute_pnl_for_closes(
-    trades: list[dict],
+def _group_into_cycles(
+    records: list[dict],
+    leverage: int = 3,
 ) -> list[dict]:
-    """Calcule le P&L des closes par matching FIFO des entries.
+    """Groupe les entries et closes en cycles de grille.
 
-    Modifie in-place les trades de type close pour ajouter pnl et pnl_pct.
-    Retourne la liste complète (entries + closes avec P&L).
+    Un cycle commence au premier entry et se termine quand la position
+    revient à ~0 après un ou plusieurs closes.
+
+    Retourne :
+    - Les entries individuelles (trade_type='entry', pnl=None) pour audit
+    - UN record par cycle complet (trade_type='cycle_close', pnl=réel)
+    - Les closes individuels sont absorbés dans le cycle_close (non stockés)
     """
-    # Trier par timestamp
-    trades.sort(key=lambda t: t["timestamp"])
+    # Trier par (symbol, direction, timestamp) pour traitement séquentiel
+    records.sort(key=lambda r: (r["symbol"], r["direction"], r["timestamp"]))
 
-    # État par (symbol, direction) : file FIFO de {price, qty_remaining}
-    positions: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    result: list[dict] = []
 
-    for trade in trades:
-        symbol = trade["symbol"]
-        direction = trade["direction"]
-        key = (symbol, direction)
+    # État par (symbol, direction)
+    state: dict[tuple[str, str], dict] = {}
 
-        if trade["trade_type"] == "entry":
-            positions[key].append({
-                "price": trade["price"],
-                "qty_remaining": trade["quantity"],
-            })
-        else:
-            # Close : matcher FIFO
-            close_qty = trade["quantity"]
-            close_price = trade["price"]
-            total_pnl = 0.0
-            total_cost = 0.0  # Pour calculer avg_entry pondéré
+    for rec in records:
+        key = (rec["symbol"], rec["direction"])
+        if key not in state:
+            state[key] = {"qty": 0.0, "entries": [], "closes": [], "max_qty": 0.0}
+        st = state[key]
 
-            fifo = positions[key]
-            matched_qty = 0.0
+        if rec["trade_type"] == "entry":
+            st["qty"] += rec["quantity"]
+            st["max_qty"] = max(st["max_qty"], st["qty"])
+            st["entries"].append(rec)
+            result.append(rec)  # Garder les entries pour audit
 
-            while close_qty > 1e-12 and fifo:
-                entry = fifo[0]
-                match_qty = min(close_qty, entry["qty_remaining"])
+        else:  # close
+            if st["qty"] <= 0:
+                # Close sans entry correspondante → orphelin, ignorer
+                logger.debug("Close orphelin ignoré : {} {} @ {}", rec["symbol"], rec["direction"], rec["price"])
+                continue
 
-                if direction == "LONG":
-                    pnl_piece = (close_price - entry["price"]) * match_qty
-                else:
-                    pnl_piece = (entry["price"] - close_price) * match_qty
+            st["qty"] -= rec["quantity"]
+            st["closes"].append(rec)
 
-                total_pnl += pnl_piece
-                total_cost += entry["price"] * match_qty
-                matched_qty += match_qty
+            # Tolérance : 2% de la position max ou 1e-6 absolu
+            tolerance = max(1e-6, st["max_qty"] * 0.02)
 
-                entry["qty_remaining"] -= match_qty
-                close_qty -= match_qty
+            if abs(st["qty"]) <= tolerance:
+                # ── Cycle complet ─────────────────────────────────────────
+                entries = st["entries"]
+                closes = st["closes"]
 
-                if entry["qty_remaining"] < 1e-12:
-                    fifo.pop(0)
+                if entries and closes:
+                    # Avg entry pondérée
+                    total_entry_qty = sum(e["quantity"] for e in entries)
+                    avg_entry = (
+                        sum(e["price"] * e["quantity"] for e in entries) / total_entry_qty
+                        if total_entry_qty > 0 else 0.0
+                    )
 
-            # Soustraire les fees (entry + close)
-            fee = trade.get("fee", 0) or 0
-            total_pnl -= fee
+                    # Avg close pondérée
+                    total_close_qty = sum(c["quantity"] for c in closes)
+                    avg_close = (
+                        sum(c["price"] * c["quantity"] for c in closes) / total_close_qty
+                        if total_close_qty > 0 else 0.0
+                    )
 
-            trade["pnl"] = round(total_pnl, 4)
+                    # P&L brut
+                    direction = rec["direction"]
+                    if direction == "LONG":
+                        pnl = (avg_close - avg_entry) * total_close_qty
+                    else:
+                        pnl = (avg_entry - avg_close) * total_close_qty
 
-            # pnl_pct = pnl / margin * 100, margin = cost / leverage
-            leverage = trade.get("leverage") or 1
-            if total_cost > 0:
-                margin = total_cost / leverage
-                trade["pnl_pct"] = round(total_pnl / margin * 100, 2)
-            else:
-                trade["pnl_pct"] = None
+                    # Fees totales (entries + closes)
+                    total_fees = sum(
+                        r.get("fee", 0) or 0 for r in entries + closes
+                    )
+                    pnl = round(pnl - total_fees, 4)
 
-            if close_qty > 1e-12:
-                logger.warning(
-                    "  {} {} : {:.6f} qty non matchée (entries manquantes)",
-                    symbol, direction, close_qty,
-                )
+                    # pnl_pct
+                    lev = rec.get("leverage") or leverage
+                    margin = avg_entry * total_close_qty / lev
+                    pnl_pct = round(pnl / margin * 100, 2) if margin > 0 else None
 
-    return trades
+                    first_entry = entries[0]
+                    last_close = closes[-1]
+
+                    cycle_close = {
+                        "timestamp": last_close["timestamp"],
+                        "strategy_name": rec["strategy_name"],
+                        "symbol": rec["symbol"],
+                        "direction": direction,
+                        "trade_type": "cycle_close",
+                        "side": "sell" if direction == "LONG" else "buy",
+                        "quantity": round(total_close_qty, 8),
+                        "price": round(avg_close, 4),
+                        "order_id": f"cycle_{first_entry['order_id']}",
+                        "fee": round(total_fees, 6),
+                        "pnl": pnl,
+                        "pnl_pct": pnl_pct,
+                        "leverage": lev,
+                        "grid_level": len(entries),   # Nb d'entries dans ce cycle
+                        "context": "sync_bitget_trades",
+                    }
+                    result.append(cycle_close)
+
+                # Réinitialiser pour le prochain cycle
+                state[key] = {"qty": 0.0, "entries": [], "closes": [], "max_qty": 0.0}
+
+    # Cycles non fermés : logger uniquement
+    for (sym, direction), st in state.items():
+        if st["entries"] or st["closes"]:
+            logger.info(
+                "Cycle ouvert non clôturé : {} {} — {} entries, qty={:.6f}",
+                sym, direction, len(st["entries"]), st["qty"],
+            )
+
+    return result
 
 
 async def _fetch_all_trades(
@@ -234,7 +273,6 @@ async def _fetch_all_trades(
 
         all_trades.extend(batch)
 
-        # Avancer le curseur après le dernier trade
         last_ts = batch[-1].get("timestamp", 0)
         if last_ts <= current_since:
             break
@@ -276,56 +314,53 @@ async def main() -> None:
         if args.purge:
             count = await db.purge_live_trades(context="sync_bitget_trades")
             logger.info("Purgé {} trades sync existants", count)
+        else:
+            logger.warning(
+                "Sans --purge, les cycles dont les entries sont déjà en DB seront ignorés.",
+            )
 
         since = int(
             (datetime.now(tz=timezone.utc) - timedelta(days=args.days)).timestamp() * 1000,
         )
 
-        # Récupérer les ordres déjà en DB pour dédupliquer
+        # order_ids déjà en DB (pour dédup des entries)
         existing = await db.get_live_trades(period="all", limit=10000)
         existing_order_ids = {t["order_id"] for t in existing if t.get("order_id")}
 
-        # Récupérer les symbols des assets configurés
+        # Symbols des assets configurés
         symbols = []
         for asset in config.assets:
             futures_sym = f"{asset.symbol}:USDT"
             if futures_sym in exchange.markets:
                 symbols.append(futures_sym)
 
-        # Récupérer le leverage par stratégie
+        # Leverage par stratégie
         strategy_name = args.strategy or "unknown"
         strategy_config = getattr(config.strategies, strategy_name, None)
         leverage = getattr(strategy_config, "leverage", None) or 3
 
-        # ── Phase 1 : Fetch + Classify ───────────────────────────────────
-        all_records: list[dict] = []
-        total_skipped = 0
+        # ── Phase 1 : Fetch + Aggregate + Classify ───────────────────────
+        raw_records: list[dict] = []
 
         for symbol in symbols:
             logger.info("Fetching trades for {} since {} days...", symbol, args.days)
             fills = await _fetch_all_trades(exchange, symbol, since)
-            # Agréger les fills par order_id (VWAP + qty totale)
-            # → un close Bitget peut générer N fills (un par niveau de prix)
-            trades = _aggregate_fills_by_order(fills)
-            logger.info(
-                "  {} fills → {} ordres agrégés pour {}",
-                len(fills), len(trades), symbol,
-            )
+            orders = _aggregate_fills_by_order(fills)
+            logger.info("  {} fills → {} ordres pour {}", len(fills), len(orders), symbol)
 
-            for trade in trades:
+            for trade in orders:
                 order_id = trade.get("order", "") or trade.get("id", "")
+                # Dédup : si cet order est déjà en DB (entry existante), on ignore
                 if order_id in existing_order_ids:
-                    total_skipped += 1
                     continue
 
                 direction, trade_type = _classify_trade(trade, args.strategy)
                 side = trade.get("side", "buy")
                 fee_cost = float((trade.get("fee") or {}).get("cost", 0) or 0)
 
-                record = {
+                raw_records.append({
                     "timestamp": trade.get(
-                        "datetime",
-                        datetime.now(tz=timezone.utc).isoformat(),
+                        "datetime", datetime.now(tz=timezone.utc).isoformat(),
                     ),
                     "strategy_name": strategy_name,
                     "symbol": symbol,
@@ -341,67 +376,77 @@ async def main() -> None:
                     "leverage": leverage,
                     "grid_level": None,
                     "context": "sync_bitget_trades",
-                }
-                all_records.append(record)
+                })
 
-        # ── Phase 2 : Calculer P&L pour les closes ───────────────────────
+        n_raw_entries = sum(1 for r in raw_records if r["trade_type"] == "entry")
+        n_raw_closes = sum(1 for r in raw_records if r["trade_type"] != "entry")
         logger.info(
-            "Classification : {} entries, {} closes sur {} trades",
-            sum(1 for r in all_records if r["trade_type"] == "entry"),
-            sum(1 for r in all_records if r["trade_type"] != "entry"),
-            len(all_records),
+            "Bruts : {} entries + {} closes = {} ordres",
+            n_raw_entries, n_raw_closes, len(raw_records),
         )
 
-        _compute_pnl_for_closes(all_records)
+        # ── Phase 2 : Grouper en cycles ───────────────────────────────────
+        result_records = _group_into_cycles(raw_records, leverage=leverage)
+
+        n_entries = sum(1 for r in result_records if r["trade_type"] == "entry")
+        n_cycles = sum(1 for r in result_records if r["trade_type"] == "cycle_close")
+        logger.info(
+            "Cycles : {} entries (audit) + {} cycle_close",
+            n_entries, n_cycles,
+        )
 
         # ── Phase 3 : Insérer en DB ──────────────────────────────────────
         total_inserted = 0
-        total_entries = 0
-        total_closes = 0
         total_pnl = 0.0
 
-        for record in all_records:
-            is_close = record["trade_type"] != "entry"
+        for record in result_records:
+            # Dédup au niveau cycle_close aussi
+            if record["order_id"] in existing_order_ids:
+                continue
 
             if args.dry_run:
-                pnl_str = f"P&L={record['pnl']:.2f}" if record["pnl"] is not None else ""
+                pnl_str = f"  P&L={record['pnl']:.2f}$" if record["pnl"] is not None else ""
                 logger.info(
-                    "[DRY-RUN] {} {} {} {} @ {:.2f} {} (order={})",
+                    "[DRY-RUN] {} {} {} @ {:.4f}{} ({})",
                     record["trade_type"], record["direction"],
-                    record["symbol"], record["side"],
-                    record["price"], pnl_str, record["order_id"],
+                    record["symbol"], record["price"],
+                    pnl_str, record["order_id"],
                 )
             else:
                 await db.insert_live_trade(record)
                 existing_order_ids.add(record["order_id"])
 
             total_inserted += 1
-            if is_close:
-                total_closes += 1
-                if record["pnl"] is not None:
-                    total_pnl += record["pnl"]
-            else:
-                total_entries += 1
+            if record["trade_type"] == "cycle_close" and record["pnl"] is not None:
+                total_pnl += record["pnl"]
 
         logger.info("─" * 60)
         logger.info(
-            "Sync terminée : {} trades ({} entries + {} closes), {} doublons ignorés",
-            total_inserted, total_entries, total_closes, total_skipped,
+            "Sync terminée : {} records insérés ({} entries + {} cycles)",
+            total_inserted,
+            sum(1 for r in result_records if r["trade_type"] == "entry"),
+            n_cycles,
         )
-        logger.info("P&L total calculé : {:.2f} USDT", total_pnl)
+        logger.info("P&L total : {:.2f} USDT", total_pnl)
 
-        # Résumé par symbol
-        pnl_by_symbol: dict[str, float] = defaultdict(float)
-        trades_by_symbol: dict[str, int] = defaultdict(int)
-        for r in all_records:
-            if r["trade_type"] != "entry" and r["pnl"] is not None:
-                pnl_by_symbol[r["symbol"]] += r["pnl"]
-                trades_by_symbol[r["symbol"]] += 1
+        # Résumé par symbol (cycles seulement)
+        pnl_by_sym: dict[str, float] = defaultdict(float)
+        wins_by_sym: dict[str, int] = defaultdict(int)
+        cycles_by_sym: dict[str, int] = defaultdict(int)
+        for r in result_records:
+            if r["trade_type"] == "cycle_close" and r["pnl"] is not None:
+                sym = r["symbol"]
+                pnl_by_sym[sym] += r["pnl"]
+                cycles_by_sym[sym] += 1
+                if r["pnl"] > 0:
+                    wins_by_sym[sym] += 1
 
-        for sym in sorted(pnl_by_symbol):
+        for sym in sorted(pnl_by_sym):
+            total_c = cycles_by_sym[sym]
+            wr = round(wins_by_sym[sym] / total_c * 100) if total_c else 0
             logger.info(
-                "  {} : {} closes, P&L {:.2f}",
-                sym, trades_by_symbol[sym], pnl_by_symbol[sym],
+                "  {} : {} cycles, WR {}%, P&L {:.2f}",
+                sym, total_c, wr, pnl_by_sym[sym],
             )
 
     finally:
