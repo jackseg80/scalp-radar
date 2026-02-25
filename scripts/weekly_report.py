@@ -1,8 +1,9 @@
 """CLI pour générer et envoyer le rapport Telegram hebdomadaire.
 
 Usage :
-    uv run python -m scripts.weekly_report --dry-run   # aperçu terminal
-    uv run python -m scripts.weekly_report              # envoi Telegram
+    uv run python -m scripts.weekly_report --dry-run           # semaine précédente
+    uv run python -m scripts.weekly_report --dry-run --current # semaine en cours
+    uv run python -m scripts.weekly_report                      # envoi Telegram
 """
 
 from __future__ import annotations
@@ -18,6 +19,10 @@ from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
 
+# Forcer UTF-8 sur Windows (évite UnicodeEncodeError avec les emoji)
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 
 async def main() -> None:
     setup_logging()
@@ -30,6 +35,11 @@ async def main() -> None:
         action="store_true",
         help="Affiche le rapport sans l'envoyer",
     )
+    parser.add_argument(
+        "--current",
+        action="store_true",
+        help="Rapport semaine en cours (défaut : semaine précédente complète)",
+    )
     args = parser.parse_args()
 
     config = get_config()
@@ -37,7 +47,7 @@ async def main() -> None:
     await db.init()
 
     try:
-        report = await generate_report(db, config)
+        report = await generate_report(db, config, current_week=args.current)
 
         if args.dry_run:
             print(report)

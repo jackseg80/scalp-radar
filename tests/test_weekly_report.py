@@ -23,13 +23,8 @@ def _make_config(
     """Construit un config mock avec les stratégies spécifiées."""
     live = live or []
     paper = paper or []
-    all_names = live + paper
-
     config = MagicMock()
-    # model_fields doit être un dict (comme Pydantic)
-    config.strategies.model_fields = {
-        name: None for name in all_names
-    }
+    config.strategies.model_fields = {name: None for name in live + paper}
     for name in live:
         strat = MagicMock()
         strat.enabled = True
@@ -45,51 +40,25 @@ def _make_config(
     return config
 
 
-def _make_db(
-    live_stats: dict | None = None,
-    per_asset: list[dict] | None = None,
-    daily_summary: dict | None = None,
-    max_dd: float | None = None,
-    balance_snapshots: list[dict] | None = None,
-    paper_week_row: dict | None = None,
-    paper_total: float = 0.0,
-) -> AsyncMock:
-    """Construit un db mock avec les données spécifiées."""
-    db = AsyncMock()
-
-    # Live stats
-    db.get_live_stats.return_value = live_stats or {
-        "total_trades": 0, "wins": 0, "win_rate": 0.0, "total_pnl": 0.0,
-    }
-    db.get_daily_pnl_summary.return_value = daily_summary or {
-        "daily_pnl": 0.0, "total_pnl": 0.0,
-    }
-    db.get_live_per_asset_stats.return_value = per_asset or []
-    db.get_max_drawdown_from_snapshots.return_value = max_dd
-    db.get_balance_snapshots.return_value = balance_snapshots or []
-
-    # Paper : mock _conn pour les requêtes SQL directes
-    mock_conn = AsyncMock()
-
-    if paper_week_row:
-        week_cursor = AsyncMock()
-        week_cursor.fetchone.return_value = paper_week_row
-    else:
-        week_cursor = AsyncMock()
-        week_cursor.fetchone.return_value = {
-            "total_trades": 0, "wins": 0, "total_pnl_week": 0.0,
-        }
-
-    total_cursor = AsyncMock()
-    total_row = MagicMock()
-    total_row.__getitem__ = lambda self, idx: paper_total
-    total_cursor.fetchone.return_value = total_row
-
-    # execute retourne alternativement week_cursor puis total_cursor
-    mock_conn.execute = AsyncMock(side_effect=[week_cursor, total_cursor])
-    db._conn = mock_conn
-
+def _make_db() -> MagicMock:
+    """Construit un db mock minimal (conn non-None pour l'assert)."""
+    db = MagicMock()
+    db._conn = MagicMock()
     return db
+
+
+def _default_live_stats() -> dict:
+    return {
+        "total_trades": 0, "wins": 0, "win_rate": 0.0,
+        "total_pnl": 0.0, "per_asset": [],
+    }
+
+
+def _default_paper_stats() -> dict:
+    return {
+        "total_trades": 0, "wins": 0, "win_rate": 0.0,
+        "total_pnl_week": 0.0, "total_pnl_all": 0.0,
+    }
 
 
 # ─── TESTS ────────────────────────────────────────────────────────────────────
@@ -99,37 +68,57 @@ def _make_db(
 async def test_weekly_report_format():
     """Le rapport contient les sections GLOBAL et le nom de la stratégie."""
     config = _make_config(live=["grid_atr"])
-    db = _make_db(
-        live_stats={
-            "total_trades": 28, "wins": 22, "win_rate": 78.6, "total_pnl": 12.34,
-        },
-        daily_summary={"daily_pnl": 5.0, "total_pnl": -0.29},
-        balance_snapshots=[{"equity": 625.0, "timestamp": "2026-02-24T12:00:00+00:00"}],
-        max_dd=-2.1,
-        per_asset=[
-            {"symbol": "BNB/USDT", "total_trades": 8, "total_pnl": 1.33},
-            {"symbol": "AAVE/USDT", "total_trades": 5, "total_pnl": 0.68},
+    db = _make_db()
+    live_stats = {
+        "total_trades": 28, "wins": 22, "win_rate": 78.6, "total_pnl": 12.34,
+        "per_asset": [
+            {"symbol": "BNB/USDT", "total_pnl": 1.33},
+            {"symbol": "AAVE/USDT", "total_pnl": 0.68},
         ],
-    )
+    }
 
-    report = await generate_report(db, config)
+    with (
+        patch("backend.alerts.weekly_reporter._live_week_stats",
+              new=AsyncMock(return_value=live_stats)),
+        patch("backend.alerts.weekly_reporter._live_total_pnl",
+              new=AsyncMock(return_value=-0.29)),
+        patch("backend.alerts.weekly_reporter._latest_balance",
+              new=AsyncMock(return_value=625.0)),
+        patch("backend.alerts.weekly_reporter._max_drawdown_week",
+              new=AsyncMock(return_value=-2.1)),
+        patch("backend.alerts.weekly_reporter._compute_uptime",
+              new=AsyncMock(return_value=99.8)),
+    ):
+        report = await generate_report(db, config)
 
     assert "SCALP-RADAR" in report
     assert "GLOBAL" in report
     assert "GRID_ATR" in report
     assert "+12.34$" in report
     assert "28" in report
+    assert "625" in report   # balance
+    assert "x4" in report    # leverage
 
 
 @pytest.mark.asyncio
 async def test_weekly_report_no_trades():
     """Semaine sans trades → P&L 0 et Trades 0."""
     config = _make_config(live=["grid_atr"])
-    db = _make_db(
-        balance_snapshots=[{"equity": 500.0, "timestamp": "2026-02-24T12:00:00+00:00"}],
-    )
+    db = _make_db()
 
-    report = await generate_report(db, config)
+    with (
+        patch("backend.alerts.weekly_reporter._live_week_stats",
+              new=AsyncMock(return_value=_default_live_stats())),
+        patch("backend.alerts.weekly_reporter._live_total_pnl",
+              new=AsyncMock(return_value=0.0)),
+        patch("backend.alerts.weekly_reporter._latest_balance",
+              new=AsyncMock(return_value=None)),
+        patch("backend.alerts.weekly_reporter._max_drawdown_week",
+              new=AsyncMock(return_value=None)),
+        patch("backend.alerts.weekly_reporter._compute_uptime",
+              new=AsyncMock(return_value=None)),
+    ):
+        report = await generate_report(db, config)
 
     assert "+0.00$" in report
     assert "Trades          : 0" in report
@@ -137,35 +126,60 @@ async def test_weekly_report_no_trades():
 
 @pytest.mark.asyncio
 async def test_weekly_report_multiple_strategies():
-    """2 stratégies (1 live, 1 paper) → sections séparées."""
+    """1 stratégie live + 1 paper → sections séparées, GLOBAL = live only."""
     config = _make_config(live=["grid_atr"], paper=["grid_boltrend"])
+    db = _make_db()
+    live_stats = {
+        "total_trades": 10, "wins": 8, "win_rate": 80.0, "total_pnl": 5.0,
+        "per_asset": [],
+    }
 
-    # DB mock avec side_effect pour 2 appels paper SQL
-    db = _make_db(
-        live_stats={
-            "total_trades": 10, "wins": 8, "win_rate": 80.0, "total_pnl": 5.0,
-        },
-        daily_summary={"daily_pnl": 2.0, "total_pnl": 15.0},
-        balance_snapshots=[{"equity": 625.0, "timestamp": "2026-02-24T12:00:00+00:00"}],
-        paper_week_row={"total_trades": 3, "wins": 2, "total_pnl_week": 1.5},
-        paper_total=4.2,
-    )
+    with (
+        patch("backend.alerts.weekly_reporter._live_week_stats",
+              new=AsyncMock(return_value=live_stats)),
+        patch("backend.alerts.weekly_reporter._live_total_pnl",
+              new=AsyncMock(return_value=15.0)),
+        patch("backend.alerts.weekly_reporter._latest_balance",
+              new=AsyncMock(return_value=625.0)),
+        patch("backend.alerts.weekly_reporter._max_drawdown_week",
+              new=AsyncMock(return_value=None)),
+        patch("backend.alerts.weekly_reporter._paper_week_stats",
+              new=AsyncMock(return_value={
+                  "total_trades": 3, "wins": 2, "win_rate": 66.7,
+                  "total_pnl_week": 1.5, "total_pnl_all": 4.2,
+              })),
+        patch("backend.alerts.weekly_reporter._compute_uptime",
+              new=AsyncMock(return_value=None)),
+    ):
+        report = await generate_report(db, config)
 
-    report = await generate_report(db, config)
-
-    # Live avec ⚡
+    # LIVE avec ⚡
     assert "\u26a1 GRID_ATR" in report
-    # Paper avec 👁️
-    assert "\U0001f441\ufe0f GRID_BOLTREND (paper)" in report
+    # PAPER avec 👁️ — ne pollue pas le GLOBAL
+    assert "GRID_BOLTREND (paper)" in report
+    # GLOBAL = live only (5.0$ semaine, pas 5+1.5$)
+    assert "+5.00$" in report
 
 
 @pytest.mark.asyncio
 async def test_weekly_report_dry_run():
-    """generate_report retourne un str sans dépendance Telegram."""
+    """generate_report retourne un str sans aucune dépendance Telegram."""
     config = _make_config(live=["grid_atr"])
     db = _make_db()
 
-    report = await generate_report(db, config)
+    with (
+        patch("backend.alerts.weekly_reporter._live_week_stats",
+              new=AsyncMock(return_value=_default_live_stats())),
+        patch("backend.alerts.weekly_reporter._live_total_pnl",
+              new=AsyncMock(return_value=0.0)),
+        patch("backend.alerts.weekly_reporter._latest_balance",
+              new=AsyncMock(return_value=None)),
+        patch("backend.alerts.weekly_reporter._max_drawdown_week",
+              new=AsyncMock(return_value=None)),
+        patch("backend.alerts.weekly_reporter._compute_uptime",
+              new=AsyncMock(return_value=None)),
+    ):
+        report = await generate_report(db, config)
 
     assert isinstance(report, str)
     assert len(report) > 0
@@ -174,28 +188,64 @@ async def test_weekly_report_dry_run():
 
 @pytest.mark.asyncio
 async def test_weekly_report_top_worst_assets():
-    """Top et Worst assets correctement extraits."""
+    """Top et Worst assets correctement extraits depuis per_asset."""
     config = _make_config(live=["grid_atr"])
-    db = _make_db(
-        live_stats={
-            "total_trades": 15, "wins": 12, "win_rate": 80.0, "total_pnl": 8.5,
-        },
-        daily_summary={"daily_pnl": 3.0, "total_pnl": 20.0},
-        balance_snapshots=[{"equity": 1000.0, "timestamp": "2026-02-24T12:00:00+00:00"}],
-        per_asset=[
-            {"symbol": "BNB/USDT", "total_trades": 5, "total_pnl": 3.5},
-            {"symbol": "AAVE/USDT", "total_trades": 4, "total_pnl": 2.1},
-            {"symbol": "SOL/USDT", "total_trades": 3, "total_pnl": 0.5},
-            {"symbol": "NEAR/USDT", "total_trades": 3, "total_pnl": -0.8},
+    db = _make_db()
+    live_stats = {
+        "total_trades": 15, "wins": 12, "win_rate": 80.0, "total_pnl": 8.5,
+        "per_asset": [
+            {"symbol": "BNB/USDT", "total_pnl": 3.5},
+            {"symbol": "AAVE/USDT", "total_pnl": 2.1},
+            {"symbol": "SOL/USDT", "total_pnl": 0.5},
+            {"symbol": "NEAR/USDT", "total_pnl": -0.8},
         ],
-    )
+    }
 
-    report = await generate_report(db, config)
+    with (
+        patch("backend.alerts.weekly_reporter._live_week_stats",
+              new=AsyncMock(return_value=live_stats)),
+        patch("backend.alerts.weekly_reporter._live_total_pnl",
+              new=AsyncMock(return_value=20.0)),
+        patch("backend.alerts.weekly_reporter._latest_balance",
+              new=AsyncMock(return_value=1000.0)),
+        patch("backend.alerts.weekly_reporter._max_drawdown_week",
+              new=AsyncMock(return_value=-1.2)),
+        patch("backend.alerts.weekly_reporter._compute_uptime",
+              new=AsyncMock(return_value=None)),
+    ):
+        report = await generate_report(db, config)
 
     assert "BNB" in report
     assert "AAVE" in report
     assert "NEAR" in report
     assert "Worst" in report
+    assert "Top" in report
+
+
+# ─── TEST CURRENT WEEK ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_weekly_report_current_week():
+    """Le flag current_week=True change le label de la période."""
+    config = _make_config(live=["grid_atr"])
+    db = _make_db()
+
+    with (
+        patch("backend.alerts.weekly_reporter._live_week_stats",
+              new=AsyncMock(return_value=_default_live_stats())),
+        patch("backend.alerts.weekly_reporter._live_total_pnl",
+              new=AsyncMock(return_value=0.0)),
+        patch("backend.alerts.weekly_reporter._latest_balance",
+              new=AsyncMock(return_value=None)),
+        patch("backend.alerts.weekly_reporter._max_drawdown_week",
+              new=AsyncMock(return_value=None)),
+        patch("backend.alerts.weekly_reporter._compute_uptime",
+              new=AsyncMock(return_value=None)),
+    ):
+        report = await generate_report(db, config, current_week=True)
+
+    assert "Semaine en cours" in report
 
 
 # ─── TEST CLASSIFY ────────────────────────────────────────────────────────────
@@ -203,7 +253,10 @@ async def test_weekly_report_top_worst_assets():
 
 def test_classify_strategies():
     """_classify_strategies sépare correctement live et paper."""
-    config = _make_config(live=["grid_atr", "grid_multi_tf"], paper=["grid_boltrend"])
+    config = _make_config(
+        live=["grid_atr", "grid_multi_tf"],
+        paper=["grid_boltrend"],
+    )
     live, paper = _classify_strategies(config)
     assert "grid_atr" in live
     assert "grid_multi_tf" in live
@@ -213,9 +266,7 @@ def test_classify_strategies():
 # ─── TEST SCHEDULER ──────────────────────────────────────────────────────────
 
 
-def test_seconds_until_next_monday():
-    """Le calcul du prochain lundi est toujours dans le futur."""
+def test_seconds_until_next_monday_positive():
+    """Le calcul du prochain lundi est toujours dans le futur, max 7 jours."""
     seconds = WeeklyReporter._seconds_until_next_monday_8utc()
-    assert seconds > 0
-    # Max 7 jours = 604800 secondes
-    assert seconds <= 7 * 24 * 3600
+    assert 0 < seconds <= 7 * 24 * 3600
