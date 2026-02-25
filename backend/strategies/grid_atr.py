@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from loguru import logger
 
 from backend.core.config import GridATRConfig
 from backend.core.indicators import atr, sma
@@ -87,7 +88,17 @@ class GridATRStrategy(BaseGridStrategy):
         close_val = indicators.get("close", float("nan"))
         min_spacing = self._config.min_grid_spacing_pct
         if min_spacing > 0 and close_val > 0:
-            effective_atr = max(atr_val, close_val * min_spacing / 100)
+            floor_atr = close_val * min_spacing / 100
+            effective_atr = max(atr_val, floor_atr)
+            # Log une fois par nouveau cycle (grille vide) si le plancher est actif
+            if effective_atr > atr_val and not grid_state.positions:
+                logger.info(
+                    "grid_atr — plancher ATR actif : effective_atr={:.4f} ({:.2f}%) "
+                    "> raw_atr={:.4f} ({:.2f}%), min_grid_spacing_pct={:.1f}%",
+                    effective_atr, effective_atr / close_val * 100,
+                    atr_val, atr_val / close_val * 100,
+                    min_spacing,
+                )
         else:
             effective_atr = atr_val
 

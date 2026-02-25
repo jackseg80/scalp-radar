@@ -679,6 +679,18 @@ class GridStrategyRunner:
                 return int(overrides["num_levels"])
         return default
 
+    def _get_per_asset_float(self, symbol: str, param: str, default: float) -> float:
+        """Résout un paramètre float pour un symbol (avec override per_asset)."""
+        per_asset = getattr(self._strategy._config, "per_asset", {})
+        if isinstance(per_asset, dict):
+            overrides = per_asset.get(symbol, {})
+            if isinstance(overrides, dict) and param in overrides:
+                try:
+                    return float(overrides[param])
+                except (TypeError, ValueError):
+                    pass
+        return default
+
     def _should_allow_new_grid(self, symbol: str) -> bool:
         """Sprint 27 : Filtre Darwinien — bloque si régime WFO défavorable.
 
@@ -1020,7 +1032,17 @@ class GridStrategyRunner:
 
             # Si pas de TP/SL OHLC, check should_close_all (signal)
             if exit_reason is None:
-                close_reason = self._strategy.should_close_all(ctx, grid_state)
+                # Patcher min_profit_pct per_asset avant l'appel
+                original_min_profit = getattr(self._strategy._config, "min_profit_pct", 0.0)
+                if hasattr(self._strategy._config, "min_profit_pct"):
+                    self._strategy._config.min_profit_pct = self._get_per_asset_float(
+                        symbol, "min_profit_pct", original_min_profit
+                    )
+                try:
+                    close_reason = self._strategy.should_close_all(ctx, grid_state)
+                finally:
+                    if hasattr(self._strategy._config, "min_profit_pct"):
+                        self._strategy._config.min_profit_pct = original_min_profit
                 if close_reason:
                     exit_reason = close_reason
                     exit_price = candle.close
@@ -1087,14 +1109,20 @@ class GridStrategyRunner:
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
         effective_max = self._get_num_levels(symbol)
         if len(positions) < effective_max:
-            # Patcher temporairement num_levels pour que compute_grid()
-            # génère le bon nombre de niveaux (per_asset override)
+            # Patcher temporairement les params per_asset pour ce symbol
             original_num_levels = self._strategy._config.num_levels
+            original_spacing = getattr(self._strategy._config, "min_grid_spacing_pct", 0.0)
             self._strategy._config.num_levels = effective_max
+            if hasattr(self._strategy._config, "min_grid_spacing_pct"):
+                self._strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
+                    symbol, "min_grid_spacing_pct", original_spacing
+                )
             try:
                 levels = self._strategy.compute_grid(ctx, grid_state)
             finally:
                 self._strategy._config.num_levels = original_num_levels
+                if hasattr(self._strategy._config, "min_grid_spacing_pct"):
+                    self._strategy._config.min_grid_spacing_pct = original_spacing
 
             for level in levels:
                 if level.index in {p.level for p in positions}:

@@ -52,7 +52,7 @@ Toutes sont des stratégies **mean-reversion** avec grille de niveaux DCA :
 
 | Stratégie | Direction | Filtre | Statut |
 |-----------|-----------|--------|--------|
-| **grid_atr** | LONG only | Enveloppes ATR autour de SMA | ✅ LIVE 7x, 14 assets |
+| **grid_atr** | LONG only | Enveloppes ATR autour de SMA (V2 : min_grid_spacing_pct + min_profit_pct) | ✅ LIVE 7x, 14 assets |
 | **grid_multi_tf** | LONG + SHORT | Supertrend 4h filtre + Grid ATR 1h | ✅ LIVE 3x (test, cible 6x), 14 assets |
 | **grid_boltrend** | LONG + SHORT | Bollinger + Supertrend | PAPER, 2 assets en config, pas re-WFO depuis corrections moteur 40a |
 | **grid_momentum** | LONG + SHORT | Donchian breakout + DCA pullback | Non validé (17e stratégie, WFO à lancer) |
@@ -141,6 +141,14 @@ uv run python -m scripts.optimize --strategy grid_atr --apply
 ```
 
 Écrit les paramètres optimaux dans `config/strategies.yaml` sous `per_asset:` pour chaque asset Grade A/B. Les params convergents deviennent les défauts, les divergents vont dans per_asset.
+
+**grid_atr V2 (Sprint 47)** : la grille WFO inclut `min_grid_spacing_pct` et `min_profit_pct`. Ces params sont propagés dans per_asset → strategies.yaml. Le WFO peut sélectionner 0.0 (classique) ou une valeur non-nulle pour activer les protections basse-volatilité. Après `--apply`, lancer `purge_wfo_duplicates` si la DB a des doublons `is_latest` (Sprint 47b fix).
+
+```powershell
+# Purger les doublons is_latest (après WFO multi-TF)
+uv run python -m scripts.purge_wfo_duplicates --dry-run
+uv run python -m scripts.purge_wfo_duplicates
+```
 
 > **Règle** : appliquer TOUS les Grade A/B sans filtrer. Les red flags individuels peuvent être
 > compensés par la diversification (prouvé grid_boltrend : BCH SL×6=120% et DYDX DSR=0 → mais

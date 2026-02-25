@@ -584,6 +584,19 @@ class Executor:
             return len(per_asset)
         return 1
 
+    @staticmethod
+    def _get_per_asset_float(strategy: Any, symbol: str, param: str, default: float) -> float:
+        """Résout un paramètre float pour un symbol (avec override per_asset)."""
+        per_asset = getattr(strategy._config, "per_asset", {})
+        if isinstance(per_asset, dict):
+            overrides = per_asset.get(symbol, {})
+            if isinstance(overrides, dict) and param in overrides:
+                try:
+                    return float(overrides[param])
+                except (TypeError, ValueError):
+                    pass
+        return default
+
     # ─── Setup ─────────────────────────────────────────────────────────
 
     async def _setup_leverage_and_margin(
@@ -800,7 +813,12 @@ class Executor:
             # Construire GridState depuis les positions LIVE
             grid_state = self._live_state_to_grid_state(futures_sym)
 
-            # Évaluer la grille
+            # Évaluer la grille — patcher min_grid_spacing_pct per_asset
+            original_spacing = getattr(strategy._config, "min_grid_spacing_pct", 0.0)
+            if hasattr(strategy._config, "min_grid_spacing_pct"):
+                strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
+                    strategy, symbol, "min_grid_spacing_pct", original_spacing
+                )
             try:
                 levels = strategy.compute_grid(ctx, grid_state)
             except Exception as e:
@@ -809,6 +827,9 @@ class Executor:
                     strategy_name, symbol, e,
                 )
                 continue
+            finally:
+                if hasattr(strategy._config, "min_grid_spacing_pct"):
+                    strategy._config.min_grid_spacing_pct = original_spacing
 
             if not levels:
                 continue
@@ -1054,7 +1075,17 @@ class Executor:
         # ── FALLBACK : should_close_all() pour les cas spéciaux ──
         # (TP inverse BolTrend : get_tp_price()=NaN, exit géré ici via signal SMA)
         if exit_reason is None:
-            exit_reason = strategy.should_close_all(ctx, grid_state)
+            # Patcher min_profit_pct per_asset avant l'appel
+            original_min_profit = getattr(strategy._config, "min_profit_pct", 0.0)
+            if hasattr(strategy._config, "min_profit_pct"):
+                strategy._config.min_profit_pct = self._get_per_asset_float(
+                    strategy, spot_sym, "min_profit_pct", original_min_profit
+                )
+            try:
+                exit_reason = strategy.should_close_all(ctx, grid_state)
+            finally:
+                if hasattr(strategy._config, "min_profit_pct"):
+                    strategy._config.min_profit_pct = original_min_profit
 
         if exit_reason is None:
             sma_val = tf_indicators.get("sma", 0.0)

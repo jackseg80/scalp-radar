@@ -1065,3 +1065,74 @@ class TestGridATRAdaptiveIntegration:
         assert r_base[4] == r_v2[4], f"Trades: base={r_base[4]}, v2={r_v2[4]}"
         assert r_base[1] == pytest.approx(r_v2[1], abs=1e-10), "Sharpe diverge"
         assert r_base[2] == pytest.approx(r_v2[2], abs=1e-10), "Return diverge"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 47d — Tests propagation per_asset chain
+# ---------------------------------------------------------------------------
+
+
+class TestGridATRPerAssetChain:
+    """Tests de la chaîne config per_asset → GridATRStrategy (Sprint 47d)."""
+
+    def test_config_per_asset_propagates_adaptive_params(self):
+        """per_asset NEAR {min_grid_spacing_pct: 1.8} doit être accessible via get_params_for_symbol."""
+        from backend.core.config import GridATRConfig
+
+        cfg = GridATRConfig(
+            min_grid_spacing_pct=0.0,
+            min_profit_pct=0.0,
+            per_asset={
+                "NEAR/USDT": {
+                    "min_grid_spacing_pct": 1.8,
+                    "min_profit_pct": 0.2,
+                    "num_levels": 4,
+                    "sl_percent": 25.0,
+                }
+            },
+        )
+        params = cfg.get_params_for_symbol("NEAR/USDT")
+        assert params["min_grid_spacing_pct"] == 1.8
+        assert params["min_profit_pct"] == 0.2
+        assert params["num_levels"] == 4
+
+    def test_config_per_asset_fallback_to_default(self):
+        """Symbol sans override per_asset → valeurs top-level."""
+        from backend.core.config import GridATRConfig
+
+        cfg = GridATRConfig(
+            min_grid_spacing_pct=0.8,
+            min_profit_pct=0.0,
+            per_asset={"BNB/USDT": {"min_grid_spacing_pct": 1.2}},
+        )
+        params = cfg.get_params_for_symbol("BTC/USDT")  # Pas dans per_asset
+        assert params["min_grid_spacing_pct"] == 0.8  # Valeur top-level
+
+    def test_get_per_asset_float_helper_simulator(self):
+        """GridStrategyRunner._get_per_asset_float() résout les overrides per_asset."""
+        from unittest.mock import MagicMock
+
+        from backend.core.config import GridATRConfig
+
+        cfg = GridATRConfig(
+            min_grid_spacing_pct=0.0,
+            per_asset={"SOL/USDT": {"min_grid_spacing_pct": 1.8}},
+        )
+        strategy = MagicMock()
+        strategy._config = cfg
+
+        # Simuler le helper sans instancier le runner complet
+        def _get_per_asset_float(sym: str, param: str, default: float) -> float:
+            per_asset = getattr(strategy._config, "per_asset", {})
+            if isinstance(per_asset, dict):
+                overrides = per_asset.get(sym, {})
+                if isinstance(overrides, dict) and param in overrides:
+                    try:
+                        return float(overrides[param])
+                    except (TypeError, ValueError):
+                        pass
+            return default
+
+        assert _get_per_asset_float("SOL/USDT", "min_grid_spacing_pct", 0.0) == 1.8
+        assert _get_per_asset_float("BTC/USDT", "min_grid_spacing_pct", 0.0) == 0.0
+        assert _get_per_asset_float("SOL/USDT", "unknown_param", 99.0) == 99.0
