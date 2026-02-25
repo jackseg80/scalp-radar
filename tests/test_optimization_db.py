@@ -634,3 +634,106 @@ def test_build_payload_from_db_row():
     # id et is_latest ne sont PAS dans le payload (gérés côté serveur)
     assert "id" not in payload
     assert "is_latest" not in payload
+
+
+# ---------------------------------------------------------------------------
+# Sprint 47b — Tests déduplication is_latest cross-timeframe
+# ---------------------------------------------------------------------------
+
+
+def _make_report(strategy: str, symbol: str, tf: str, score: float, ts: str) -> "FinalReport":
+    """Helper : crée un FinalReport minimal pour les tests is_latest."""
+    from backend.optimization.report import ValidationResult
+    val = ValidationResult(
+        bitget_sharpe=1.0, bitget_net_return_pct=5.0, bitget_trades=20,
+        bitget_sharpe_ci_low=0.5, bitget_sharpe_ci_high=1.5,
+        binance_oos_avg_sharpe=1.0, transfer_ratio=0.70,
+        transfer_significant=False, volume_warning=False, volume_warning_detail="",
+    )
+    return FinalReport(
+        strategy_name=strategy, symbol=symbol, timestamp=datetime.fromisoformat(ts),
+        grade="B", total_score=score, wfo_avg_is_sharpe=1.5, wfo_avg_oos_sharpe=1.2,
+        wfo_consistency_rate=0.70, wfo_n_windows=15, recommended_params={"p": 1},
+        mc_p_value=0.05, mc_significant=True, mc_underpowered=False, dsr=0.80,
+        dsr_max_expected_sharpe=3.0, stability=0.75, cliff_params=[], convergence=None,
+        divergent_params=[], validation=val, oos_is_ratio=0.75, bitget_transfer=0.70,
+        live_eligible=True, warnings=[], n_distinct_combos=200,
+    )
+
+
+def test_is_latest_dedup_across_timeframes(temp_db):
+    """Quand le meilleur TF change (1h→4h), seul 1 is_latest=1 par (strategy, asset)."""
+    r1 = _make_report("grid_atr", "BTC/USDT", "1h", 72.0, "2026-02-10T10:00:00")
+    save_result_sync(temp_db, r1, wfo_windows=None, duration=60.0, timeframe="1h")
+
+    r2 = _make_report("grid_atr", "BTC/USDT", "4h", 80.0, "2026-02-15T10:00:00")
+    save_result_sync(temp_db, r2, wfo_windows=None, duration=60.0, timeframe="4h")
+
+    conn = sqlite3.connect(temp_db)
+    rows = conn.execute(
+        "SELECT timeframe, is_latest FROM optimization_results ORDER BY created_at"
+    ).fetchall()
+    latest_count = conn.execute(
+        "SELECT COUNT(*) FROM optimization_results WHERE is_latest=1"
+    ).fetchone()[0]
+    conn.close()
+
+    assert len(rows) == 2
+    assert rows[0] == ("1h", 0)   # ancien TF → is_latest=0
+    assert rows[1] == ("4h", 1)   # nouveau TF → is_latest=1
+    assert latest_count == 1, "Un seul is_latest=1 par (strategy, asset)"
+
+
+def test_is_latest_different_strategies_independent(temp_db):
+    """grid_atr et grid_multi_tf sur le même asset ont chacun leur is_latest=1."""
+    r1 = _make_report("grid_atr", "BTC/USDT", "1h", 75.0, "2026-02-10T10:00:00")
+    r2 = _make_report("grid_multi_tf", "BTC/USDT", "1h", 70.0, "2026-02-10T11:00:00")
+    save_result_sync(temp_db, r1, wfo_windows=None, duration=60.0, timeframe="1h")
+    save_result_sync(temp_db, r2, wfo_windows=None, duration=60.0, timeframe="1h")
+
+    conn = sqlite3.connect(temp_db)
+    rows = conn.execute(
+        "SELECT strategy_name, is_latest FROM optimization_results ORDER BY strategy_name"
+    ).fetchall()
+    conn.close()
+
+    assert len(rows) == 2
+    assert all(r[1] == 1 for r in rows), "Chaque stratégie a son propre is_latest=1"
+
+
+def test_purge_script_keeps_best(temp_db):
+    """Purge : 3 is_latest=1 pour le même (strategy, asset) → garde MAX(total_score)."""
+    from scripts.purge_wfo_duplicates import purge_duplicates
+
+    # Insérer manuellement 3 doublons (simule l'ancien bug timeframe)
+    conn = sqlite3.connect(temp_db)
+    rows_data = [
+        ("grid_atr", "ETH/USDT", "1h", "2026-02-01T10:00:00", 55.0),
+        ("grid_atr", "ETH/USDT", "4h", "2026-02-10T10:00:00", 78.0),  # meilleur
+        ("grid_atr", "ETH/USDT", "1d", "2026-02-15T10:00:00", 62.0),
+    ]
+    for strat, asset, tf, ts, score in rows_data:
+        conn.execute(
+            """INSERT INTO optimization_results
+               (strategy_name, asset, timeframe, created_at, duration_seconds,
+                grade, total_score, n_windows, best_params, is_latest, source)
+               VALUES (?, ?, ?, ?, 60, 'B', ?, 10, '{}', 1, 'local')""",
+            (strat, asset, tf, ts, score),
+        )
+    conn.commit()
+    conn.close()
+
+    n_pairs, n_cleared = purge_duplicates(temp_db, dry_run=False)
+
+    conn = sqlite3.connect(temp_db)
+    rows = conn.execute(
+        "SELECT timeframe, total_score, is_latest FROM optimization_results ORDER BY total_score DESC"
+    ).fetchall()
+    conn.close()
+
+    assert n_pairs == 1
+    assert n_cleared == 2
+    # Seul le 4h (score=78) garde is_latest=1
+    assert rows[0] == ("4h", 78.0, 1)
+    assert rows[1][2] == 0
+    assert rows[2][2] == 0

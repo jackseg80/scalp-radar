@@ -113,8 +113,8 @@ def save_result_sync(
             # 1. Mettre is_latest=0 sur l'ancien (s'il existe)
             conn.execute(
                 """UPDATE optimization_results SET is_latest=0
-                   WHERE strategy_name=? AND asset=? AND timeframe=? AND is_latest=1""",
-                (report.strategy_name, report.symbol, timeframe),
+                   WHERE strategy_name=? AND asset=? AND is_latest=1""",
+                (report.strategy_name, report.symbol),
             )
             is_latest_val = 1
         else:
@@ -241,8 +241,8 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
         if n_combos >= 10:
             conn.execute(
                 """UPDATE optimization_results SET is_latest=0
-                   WHERE strategy_name=? AND asset=? AND timeframe=? AND is_latest=1 AND id!=?""",
-                (payload["strategy_name"], payload["asset"], payload["timeframe"], new_id),
+                   WHERE strategy_name=? AND asset=? AND is_latest=1 AND id!=?""",
+                (payload["strategy_name"], payload["asset"], new_id),
             )
         else:
             # Garder is_latest=0 sur le nouveau run (ne pas écraser le bon)

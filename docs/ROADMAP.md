@@ -3068,6 +3068,12 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Fast engine** mis à jour (`_build_entry_prices`, `_simulate_grid_common`) pour que le WFO optimise les nouveaux params
   - **Fichiers** : `backend/core/config.py`, `backend/strategies/grid_atr.py`, `backend/optimization/fast_multi_backtest.py`, `config/param_grids.yaml`
   - **14 nouveaux tests** (Section 7 dans `test_grid_atr.py`) → **1920 tests, 1920 passants**, 0 régression
+- **Sprint 47b — Fix is_latest + purge WFO** (25 fév 2026) — Correction d'un bug structurel dans la déduplication WFO :
+  - **Bug corrigé** : `UPDATE optimization_results SET is_latest=0 WHERE strategy_name=? AND asset=? AND timeframe=?` filtrait par timeframe, laissant plusieurs `is_latest=1` par (strategy, asset) quand le meilleur TF changeait entre deux runs. Corrigé dans `optimization_db.py` (chemins local + push).
+  - **Nouveau script** : `scripts/purge_wfo_duplicates.py` — détecte et corrige les doublons existants en base (conserve MAX(total_score)), supporte `--dry-run` et `--db-path`
+  - **3 nouveaux tests** dans `test_optimization_db.py` : dédup cross-TF, indépendance entre stratégies, purge par score
+  - **Fichiers** : `backend/optimization/optimization_db.py`, `scripts/purge_wfo_duplicates.py`, `tests/test_optimization_db.py`
+  - **3 nouveaux tests** → **1923 tests, 1923 passants**, 0 régression
 - **Prochaine étape** : Lancer WFO grid_atr v2 sur 14 assets pour mesurer l'impact de `min_grid_spacing_pct` et `min_profit_pct`. Objectif : réduire les cycles fee-negative sans dégrader le nombre de trades.
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
