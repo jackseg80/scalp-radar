@@ -2902,8 +2902,8 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (25 février 2026)
 
-- **1906 tests, 1906 passants** (0 régression), +66 depuis Sprint 44b
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations** + **Hotfix 46 React #310** + **Hotfix Tests Pré-existants** + **Sprint 46b Sélecteur Stratégie Global** + **Sprint 47 Grid ATR Adaptatif v2**
+- **1930 tests, 1930 passants** (0 régression), +90 depuis Sprint 44b
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations** + **Hotfix 46 React #310** + **Hotfix Tests Pré-existants** + **Sprint 46b Sélecteur Stratégie Global** + **Sprint 47 Grid ATR Adaptatif v2** + **Sprint 47b** + **Sprint 47c** + **Sprint 47d**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
@@ -3140,9 +3140,11 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ### État live (février 2026)
 
-- **grid_atr** : LIVE 4x (passé de 3x → 4x le 25 fév 2026)
-  - BCH/USDT : position fermée manuellement (-47.8%)
-  - Leçon : **ne jamais changer le leverage avec des positions ouvertes**
+- **grid_atr V2** : LIVE 4x, 13 assets (6 Grade A, 7 Grade B)
+  - `min_grid_spacing_pct` actif sur 17/21 assets (médiane 1.2%)
+  - `min_profit_pct` = 0.0 sur tous les assets (WFO préfère spacing > blocage TP)
+  - CRV/USDT retiré de la rotation V2
+  - BCH/USDT : position fermée manuellement (-47.8%) — leçon : **ne jamais changer le leverage avec des positions ouvertes**
 - **grid_multi_tf** : LIVE 3x (0 trades, filtre bear actif = correct)
 - **grid_boltrend** : PAPER 6x (BTC SHORT, 2 assets)
 
@@ -3267,9 +3269,9 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 ### Ordre de priorité
 
-1. **WFO grid_atr v2** — Lancer le WFO sur les 14 assets avec les nouveaux params adaptatifs (Sprint 47)
-   - Mesurer l'impact de `min_grid_spacing_pct` et `min_profit_pct` sur le nombre de cycles fee-negative
-   - Appliquer les résultats Grade A/B via `apply_from_db`
+1. **WFO grid_atr v2** — ✅ TERMINÉ (Sprint 47-47d) : 6 Grade A + 7 Grade B, +262% return, -6.6% DD, VIABLE
+   - `min_grid_spacing_pct` utilisé par 17/21 assets, résout les pertes fee-negative en basse vol
+   - `min_profit_pct` = 0.0 partout (WFO préfère correction en amont via spacing)
 
 2. **Pairs trading** — Spread mean-reversion ETH/BTC (Phase 3, refonte archi)
    - Market-neutral par construction (fonctionne tous régimes)

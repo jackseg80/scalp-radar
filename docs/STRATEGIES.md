@@ -72,7 +72,7 @@ Cap 25% du capital par asset. Margin guard global 70% (`max_margin_ratio` dans `
 
 ## Stratégies Grid/DCA (actives)
 
-### 1. grid_atr — Stratégie principale (paper trading actif)
+### 1. grid_atr — Stratégie principale (LIVE, 13 assets)
 
 **Concept** : Mean-reversion DCA avec enveloppes adaptatives basées sur l'ATR (volatilité). Quand le prix s'éloigne de la SMA, on accumule des positions (DCA). Quand il revient à la SMA, on prend les profits.
 
@@ -88,11 +88,14 @@ Cap 25% du capital par asset. Margin guard global 70% (`max_margin_ratio` dans `
 Les niveaux de la grille sont calculés comme des enveloppes autour de la SMA :
 
 ```
+effective_atr = max(ATR, close × min_grid_spacing_pct / 100)
 multiplier[i] = atr_multiplier_start + i × atr_multiplier_step
 
-LONG :  entry_price[i] = SMA - ATR × multiplier[i]
-SHORT : entry_price[i] = SMA + ATR × multiplier[i]
+LONG :  entry_price[i] = SMA - effective_atr × multiplier[i]
+SHORT : entry_price[i] = SMA + effective_atr × multiplier[i]
 ```
+
+**V2 (Sprint 47)** : `min_grid_spacing_pct` empêche les grilles microscopiques en basse volatilité. Si 0.0 = désactivé (comportement V1). Utilisé par 17/21 assets (médiane 1.2%).
 
 **Exemple numérique** : Si `SMA = 100`, `ATR = 5`, `atr_multiplier_start = 1.5`, `atr_multiplier_step = 1.0`, `num_levels = 3` :
 - Level 0 LONG : `100 - 5 × 1.5 = 92.50` (multiplier = 1.5)
@@ -101,11 +104,11 @@ SHORT : entry_price[i] = SMA + ATR × multiplier[i]
 
 Quand le prix touche un niveau, une position est ouverte à ce prix. Le DCA accumule : level 0 → 1 → 2 au fur et à mesure que le prix descend.
 
-L'ATR rend les enveloppes **adaptatives** : en haute volatilité, les niveaux s'écartent ; en basse volatilité, ils se resserrent.
+L'ATR rend les enveloppes **adaptatives** : en haute volatilité, les niveaux s'écartent ; en basse volatilité, ils se resserrent. Le plancher `min_grid_spacing_pct` garantit un espacement minimum.
 
 #### Logique de sortie (should_close_all)
 
-- **TP** : `close >= SMA` (LONG) ou `close <= SMA` (SHORT) → `"tp_global"`. Le TP est dynamique car la SMA bouge.
+- **TP** : `close >= SMA ET close >= avg_entry × (1 + min_profit_pct/100)` (LONG) ou `close <= SMA ET close <= avg_entry × (1 - min_profit_pct/100)` (SHORT) → `"tp_global"`. Le TP est dynamique car la SMA bouge. Le `min_profit_pct` (V2) bloque le TP si le profit ne couvre pas les fees (0.0 = désactivé).
 - **SL** : `close <= avg_entry_price × (1 - sl_percent/100)` → `"sl_global"`. Le SL est fixe en % du prix moyen d'entrée.
 
 **Exemple** : 3 positions LONG ouvertes à 92.50, 87.50 et 82.50. Prix moyen = 87.50. Avec `sl_percent = 20`, SL = `87.50 × 0.80 = 70.00`.
@@ -119,11 +122,13 @@ L'ATR rend les enveloppes **adaptatives** : en haute volatilité, les niveaux s'
 | `atr_multiplier_start` | Multiplicateur ATR du 1er niveau | 1.0 — 3.0 |
 | `atr_multiplier_step` | Ecart entre les niveaux | 0.5, 1.0, 1.5 |
 | `num_levels` | Nombre de niveaux DCA | 2, 3, 4 |
-| `sl_percent` | SL en % du prix moyen | 15, 20, 25, 30 |
+| `sl_percent` | SL en % du prix moyen | 15, 20, 25 |
+| `min_grid_spacing_pct` | Plancher espacement grille (% du prix) | 0, 0.8, 1.2, 1.8 |
+| `min_profit_pct` | Profit minimum au TP (%) | 0, 0.2, 0.4 |
 | `sides` | Directions autorisées | ["long"] par défaut |
-| `leverage` | Levier | 7 |
+| `leverage` | Levier | 4-7 |
 
-**WFO** : 3240 combos, fenêtres IS=180j / OOS=60j / step=60j. Grade A/B sur 14 assets.
+**WFO V2** : 12 960 combos, fenêtres IS=180j / OOS=60j / step=60j. 6 Grade A + 7 Grade B (13 assets éligibles).
 
 #### Limites
 

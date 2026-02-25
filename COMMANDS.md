@@ -786,7 +786,20 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 
 ---
 
-## 19. Scripts d'Audit & Analyse
+## 19. Maintenance WFO
+
+### Purger les doublons WFO (Sprint 47b)
+
+```powershell
+uv run python -m scripts.purge_wfo_duplicates --dry-run   # aperçu
+uv run python -m scripts.purge_wfo_duplicates             # correction
+```
+
+Détecte et corrige les doublons `is_latest=1` par (strategy, asset) en base. Conserve le meilleur score (`MAX(total_score)`). Supporte `--db-path` pour cibler une base spécifique.
+
+---
+
+## 20. Scripts d'Audit & Analyse
 
 Scripts d'analyse ponctuelle. Ne font aucune modification — lecture seule.
 

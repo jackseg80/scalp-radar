@@ -16,6 +16,7 @@ const DEFAULTS = {
   atrMultStep: 1.0,
   numLevels: 3,
   slPercent: 20,
+  minGridSpacingPct: 0,
 }
 
 // ─── Données brutes du scénario ───
@@ -59,12 +60,14 @@ const DISASTER_DATA = [
 // ─── Calcul dynamique des niveaux (paramétré) ───
 function computeLevels(dataPoint, params) {
   const levels = []
+  const floor = dataPoint.price * params.minGridSpacingPct / 100
+  const effectiveAtr = Math.max(dataPoint.atr, floor)
   for (let i = 0; i < params.numLevels; i++) {
     const mult = params.atrMultStart + i * params.atrMultStep
     levels.push({
       level: i + 1,
       mult,
-      price: dataPoint.sma - dataPoint.atr * mult,
+      price: dataPoint.sma - effectiveAtr * mult,
     })
   }
   return levels
@@ -115,8 +118,8 @@ const STEPS = [
   },
   {
     title: 'La grille adaptative',
-    desc: 'Les niveaux d\'achat sont positionnés dynamiquement : Niveau i = SMA - ATR × (start + i × step). Comme la SMA et l\'ATR bougent, la grille se déplace avec la volatilité — contrairement aux enveloppes à % fixe.',
-    keyInsight: 'Quand la volatilité augmente, les niveaux s\'écartent → on achète plus bas → meilleur prix moyen.',
+    desc: 'Les niveaux d\'achat sont positionnés dynamiquement : Niveau i = SMA - effective_atr × (start + i × step). En V2, un plancher (min_grid_spacing) empêche les niveaux de se rapprocher trop du prix en période calme. Essayez le slider ci-dessous !',
+    keyInsight: 'Quand la volatilité augmente, les niveaux s\'écartent → on achète plus bas → meilleur prix moyen. En basse vol, le plancher prend le relais.',
     show: { price: true, sma: true, levels: true },
   },
   {
@@ -240,6 +243,7 @@ export default function GridAtrGuide() {
     && params.atrMultStep === DEFAULTS.atrMultStep
     && params.numLevels === DEFAULTS.numLevels
     && params.slPercent === DEFAULTS.slPercent
+    && params.minGridSpacingPct === DEFAULTS.minGridSpacingPct
 
   return (
     <div>
@@ -428,6 +432,9 @@ export default function GridAtrGuide() {
         }}>
           <span style={{ color: '#888' }}>SMA: <b style={{ color: '#ffc53d' }}>${refPoint.sma.toLocaleString()}</b></span>
           <span style={{ color: '#888' }}>ATR: <b style={{ color: '#ff8c42' }}>${refPoint.atr}</b></span>
+          {params.minGridSpacingPct > 0 && (
+            <span style={{ color: '#888' }}>Eff. ATR: <b style={{ color: '#ff8c42' }}>${Math.max(refPoint.atr, refPoint.price * params.minGridSpacingPct / 100).toFixed(0)}</b></span>
+          )}
           {refLevels.map(l => (
             <span key={l.level} style={{ color: '#888' }}>
               Niv.{l.level} (×{l.mult.toFixed(1)}): <b style={{ color: '#00e68a' }}>${l.price.toFixed(0)}</b>
@@ -543,6 +550,13 @@ export default function GridAtrGuide() {
               min={5} max={40} step={5}
               onChange={v => setParams(p => ({ ...p, slPercent: v }))}
               format={v => `${v}%`}
+            />
+            <SliderRow
+              label="Min Spacing %"
+              value={params.minGridSpacingPct}
+              min={0} max={3} step={0.1}
+              onChange={v => setParams(p => ({ ...p, minGridSpacingPct: v }))}
+              format={v => v === 0 ? 'OFF' : `${v.toFixed(1)}%`}
             />
           </div>
         )}
