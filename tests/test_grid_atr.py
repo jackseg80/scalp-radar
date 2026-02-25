@@ -849,3 +849,219 @@ class TestGridATRExecutorHelpers:
         assert config_attr is not None
         assert hasattr(config_attr, "leverage")
         assert config_attr.leverage == 8
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Section 7 : Sprint 47 — min_grid_spacing_pct & min_profit_pct
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestGridATRMinGridSpacing:
+    """Tests du plancher ATR adaptatif (min_grid_spacing_pct)."""
+
+    def test_compute_grid_min_spacing_clamps_atr(self):
+        """ATR faible clampé par min_grid_spacing_pct."""
+        strategy = _make_strategy(
+            atr_multiplier_start=2.0, atr_multiplier_step=1.0,
+            num_levels=3, min_grid_spacing_pct=2.0,
+        )
+        # ATR=1.0, close=100 → min_atr = 100 * 2.0/100 = 2.0
+        # effective_atr = max(1.0, 2.0) = 2.0
+        # Niveaux : 100 - 2.0*2=96, 100 - 2.0*3=94, 100 - 2.0*4=92
+        ctx = _make_ctx(sma_val=100.0, atr_val=1.0, close=100.0)
+        levels = strategy.compute_grid(ctx, _make_grid_state())
+        assert len(levels) == 3
+        assert levels[0].entry_price == pytest.approx(96.0)
+        assert levels[1].entry_price == pytest.approx(94.0)
+        assert levels[2].entry_price == pytest.approx(92.0)
+
+    def test_compute_grid_min_spacing_no_effect_high_atr(self):
+        """ATR élevé > plancher → pas de clamping."""
+        strategy = _make_strategy(
+            atr_multiplier_start=2.0, atr_multiplier_step=1.0,
+            num_levels=2, min_grid_spacing_pct=1.0,
+        )
+        # ATR=5.0, close=100 → min_atr = 1.0, effective_atr = max(5.0, 1.0) = 5.0
+        ctx = _make_ctx(sma_val=100.0, atr_val=5.0, close=100.0)
+        levels = strategy.compute_grid(ctx, _make_grid_state())
+        assert levels[0].entry_price == pytest.approx(90.0)  # 100 - 5*2
+        assert levels[1].entry_price == pytest.approx(85.0)  # 100 - 5*3
+
+    def test_compute_grid_min_spacing_zero_disabled(self):
+        """min_grid_spacing_pct=0.0 → comportement classique."""
+        strat_classic = _make_strategy(
+            atr_multiplier_start=2.0, atr_multiplier_step=1.0,
+            num_levels=2, min_grid_spacing_pct=0.0,
+        )
+        strat_default = _make_strategy(
+            atr_multiplier_start=2.0, atr_multiplier_step=1.0,
+            num_levels=2,
+        )
+        ctx = _make_ctx(sma_val=100.0, atr_val=1.0, close=100.0)
+        gs = _make_grid_state()
+        levels_classic = strat_classic.compute_grid(ctx, gs)
+        levels_default = strat_default.compute_grid(ctx, gs)
+        assert levels_classic[0].entry_price == levels_default[0].entry_price
+        assert levels_classic[1].entry_price == levels_default[1].entry_price
+
+    def test_compute_grid_min_spacing_short(self):
+        """Plancher ATR en direction SHORT."""
+        strategy = _make_strategy(
+            sides=["short"],
+            atr_multiplier_start=2.0, atr_multiplier_step=1.0,
+            num_levels=2, min_grid_spacing_pct=2.0,
+        )
+        # ATR=1.0, close=100 → effective_atr = 2.0
+        # SHORT : 100 + 2.0*2=104, 100 + 2.0*3=106
+        ctx = _make_ctx(sma_val=100.0, atr_val=1.0, close=100.0)
+        levels = strategy.compute_grid(ctx, _make_grid_state())
+        assert len(levels) == 2
+        assert levels[0].entry_price == pytest.approx(104.0)
+        assert levels[1].entry_price == pytest.approx(106.0)
+
+
+class TestGridATRMinProfit:
+    """Tests du profit minimum au TP (min_profit_pct)."""
+
+    def test_tp_blocked_by_min_profit(self):
+        """close >= SMA mais profit < seuil → pas de TP."""
+        strategy = _make_strategy(min_profit_pct=1.0)
+        # Entry à 99, close=100 → profit = 1.01% ≈ 1.01%
+        # Mais on veut tester le cas bloqué : entry à 99.5, close=100
+        # profit = (100-99.5)/99.5 = 0.50% < 1.0% → bloqué
+        pos = _make_position(level=0, direction=Direction.LONG, entry_price=99.5)
+        grid_state = _make_grid_state([pos])
+        ctx = _make_ctx(sma_val=99.0, atr_val=5.0, close=100.0)
+        # close (100) >= sma (99) → condition SMA OK
+        # close (100) < avg_entry * 1.01 = 100.495 → condition profit KO
+        assert strategy.should_close_all(ctx, grid_state) is None
+
+    def test_tp_allowed_by_min_profit(self):
+        """close >= SMA ET profit >= seuil → TP fire."""
+        strategy = _make_strategy(min_profit_pct=1.0)
+        pos = _make_position(level=0, direction=Direction.LONG, entry_price=95.0)
+        grid_state = _make_grid_state([pos])
+        ctx = _make_ctx(sma_val=99.0, atr_val=5.0, close=100.0)
+        # close (100) >= sma (99) → OK
+        # close (100) >= 95 * 1.01 = 95.95 → OK
+        assert strategy.should_close_all(ctx, grid_state) == "tp_global"
+
+    def test_tp_min_profit_zero_classic(self):
+        """min_profit_pct=0.0 → TP classique (SMA seule)."""
+        strategy = _make_strategy(min_profit_pct=0.0)
+        pos = _make_position(level=0, direction=Direction.LONG, entry_price=99.9)
+        grid_state = _make_grid_state([pos])
+        ctx = _make_ctx(sma_val=100.0, atr_val=5.0, close=100.0)
+        # close (100) >= sma (100) → TP même avec profit quasi-nul
+        assert strategy.should_close_all(ctx, grid_state) == "tp_global"
+
+    def test_tp_min_profit_short_blocked(self):
+        """SHORT : close <= SMA mais pas assez de profit → pas de TP."""
+        strategy = _make_strategy(sides=["short"], min_profit_pct=1.0)
+        pos = _make_position(level=0, direction=Direction.SHORT, entry_price=100.5)
+        grid_state = _make_grid_state([pos])
+        ctx = _make_ctx(sma_val=101.0, atr_val=5.0, close=100.0)
+        # close (100) <= sma (101) → condition SMA OK
+        # close (100) <= avg_entry * (1 - 0.01) = 99.495 ? Non, 100 > 99.495 → bloqué
+        assert strategy.should_close_all(ctx, grid_state) is None
+
+    def test_tp_min_profit_short_hit(self):
+        """SHORT : les 2 conditions OK → TP."""
+        strategy = _make_strategy(sides=["short"], min_profit_pct=1.0)
+        pos = _make_position(level=0, direction=Direction.SHORT, entry_price=105.0)
+        grid_state = _make_grid_state([pos])
+        ctx = _make_ctx(sma_val=101.0, atr_val=5.0, close=100.0)
+        # close (100) <= sma (101) → OK
+        # close (100) <= 105 * 0.99 = 103.95 → OK
+        assert strategy.should_close_all(ctx, grid_state) == "tp_global"
+
+    def test_sl_ignores_min_profit(self):
+        """SL fonctionne normalement avec min_profit > 0."""
+        strategy = _make_strategy(sl_percent=20.0, min_profit_pct=5.0)
+        pos = _make_position(level=0, direction=Direction.LONG, entry_price=90.0)
+        grid_state = _make_grid_state([pos])
+        # SL = 90 * 0.8 = 72, close=70 < 72 → SL
+        ctx = _make_ctx(sma_val=100.0, atr_val=5.0, close=70.0)
+        assert strategy.should_close_all(ctx, grid_state) == "sl_global"
+
+
+class TestGridATRAdaptiveIntegration:
+    """Tests d'intégration Sprint 47."""
+
+    def test_get_params_includes_adaptive_fields(self):
+        """get_params retourne min_grid_spacing_pct et min_profit_pct."""
+        strategy = _make_strategy(min_grid_spacing_pct=1.2, min_profit_pct=0.3)
+        params = strategy.get_params()
+        assert params["min_grid_spacing_pct"] == 1.2
+        assert params["min_profit_pct"] == 0.3
+
+    def test_get_params_defaults_zero(self):
+        """get_params retourne 0.0 par défaut pour les nouveaux params."""
+        strategy = _make_strategy()
+        params = strategy.get_params()
+        assert params["min_grid_spacing_pct"] == 0.0
+        assert params["min_profit_pct"] == 0.0
+
+    def test_fast_engine_min_spacing(self, make_indicator_cache):
+        """Fast engine avec min_grid_spacing_pct élargit les grilles en basse vol."""
+        from backend.optimization.fast_multi_backtest import (
+            _build_entry_prices,
+        )
+
+        n = 100
+        prices = np.full(n, 100.0)
+        sma_arr = np.full(n, 100.0)
+        sma_arr[:14] = np.nan
+        atr_arr = np.full(n, 0.5)  # ATR très faible
+        atr_arr[:14] = np.nan
+
+        cache = make_indicator_cache(
+            n=n, closes=prices, bb_sma={14: sma_arr}, atr_by_period={14: atr_arr},
+        )
+
+        params_classic = {
+            "ma_period": 14, "atr_period": 14,
+            "atr_multiplier_start": 2.0, "atr_multiplier_step": 1.0,
+            "num_levels": 3, "min_grid_spacing_pct": 0.0,
+        }
+        params_floor = {
+            **params_classic, "min_grid_spacing_pct": 1.5,
+        }
+
+        ep_classic = _build_entry_prices("grid_atr", cache, params_classic, 3, 1)
+        ep_floor = _build_entry_prices("grid_atr", cache, params_floor, 3, 1)
+
+        # Avec plancher, les niveaux sont plus éloignés (entry_price plus bas pour LONG)
+        valid = ~np.isnan(ep_classic[:, 0])
+        assert np.all(ep_floor[valid, 0] <= ep_classic[valid, 0])
+
+    def test_fast_engine_backward_compat(self, make_indicator_cache):
+        """Fast engine avec params=0.0 donne résultat identique au classique."""
+        from backend.optimization.fast_multi_backtest import (
+            run_multi_backtest_from_cache,
+        )
+
+        candles = _make_sinusoidal_candles(n=500, amplitude=8.0, period=48)
+        from backend.optimization.indicator_cache import build_cache
+
+        params_base = {
+            "ma_period": 14, "atr_period": 14,
+            "atr_multiplier_start": 1.5, "atr_multiplier_step": 0.5,
+            "num_levels": 3, "sl_percent": 20.0,
+        }
+        params_v2 = {
+            **params_base,
+            "min_grid_spacing_pct": 0.0,
+            "min_profit_pct": 0.0,
+        }
+        param_grid_values = {k: [v] for k, v in params_base.items() if isinstance(v, (int, float))}
+        cache = build_cache({"1h": candles}, param_grid_values, "grid_atr", main_tf="1h")
+        bt_config = _make_bt_config()
+
+        r_base = run_multi_backtest_from_cache("grid_atr", params_base, cache, bt_config)
+        r_v2 = run_multi_backtest_from_cache("grid_atr", params_v2, cache, bt_config)
+
+        # Résultats bit-for-bit identiques
+        assert r_base[4] == r_v2[4], f"Trades: base={r_base[4]}, v2={r_v2[4]}"
+        assert r_base[1] == pytest.approx(r_v2[1], abs=1e-10), "Sharpe diverge"
+        assert r_base[2] == pytest.approx(r_v2[2], abs=1e-10), "Return diverge"

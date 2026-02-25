@@ -62,15 +62,21 @@ def _build_entry_prices(
     elif strategy_name == "grid_atr":
         sma_arr = cache.bb_sma[params["ma_period"]]
         atr_arr = cache.atr_by_period[params["atr_period"]]
+        # Plancher ATR adaptatif (basse vol)
+        min_spacing = params.get("min_grid_spacing_pct", 0.0)
+        if min_spacing > 0:
+            effective_atr = np.maximum(atr_arr, cache.closes * min_spacing / 100)
+        else:
+            effective_atr = atr_arr
         multipliers = [
             params["atr_multiplier_start"] + lvl * params["atr_multiplier_step"]
             for lvl in range(num_levels)
         ]
         for lvl in range(num_levels):
             if direction == 1:
-                entry_prices[:, lvl] = sma_arr - atr_arr * multipliers[lvl]
+                entry_prices[:, lvl] = sma_arr - effective_atr * multipliers[lvl]
             else:
-                entry_prices[:, lvl] = sma_arr + atr_arr * multipliers[lvl]
+                entry_prices[:, lvl] = sma_arr + effective_atr * multipliers[lvl]
         # ATR NaN ou <= 0 : forcer NaN (SMA NaN déjà propagé naturellement)
         invalid = np.isnan(atr_arr) | (atr_arr <= 0)
         entry_prices[invalid, :] = np.nan
@@ -140,6 +146,7 @@ def _simulate_grid_common(
     trail_mult: float = 0.0,
     trail_atr_arr: np.ndarray | None = None,
     max_hold_candles: int = 0,
+    min_profit_pct: float = 0.0,
 ) -> tuple[list[float], list[float], float]:
     """Boucle chaude unifiée pour toutes les stratégies grid/DCA.
 
@@ -280,8 +287,12 @@ def _simulate_grid_common(
 
                 if direction == 1:
                     tp_hit = cache.highs[i] >= tp_price
+                    if tp_hit and min_profit_pct > 0:
+                        tp_hit = cache.highs[i] >= avg_entry * (1 + min_profit_pct / 100)
                 else:
                     tp_hit = cache.lows[i] <= tp_price
+                    if tp_hit and min_profit_pct > 0:
+                        tp_hit = cache.lows[i] <= avg_entry * (1 - min_profit_pct / 100)
 
                 if tp_hit and sl_hit:
                     if direction == 1:
@@ -1503,6 +1514,7 @@ def _simulate_grid_atr(
     return _simulate_grid_common(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct, direction,
         max_hold_candles=params.get("max_hold_candles", 0),
+        min_profit_pct=params.get("min_profit_pct", 0.0),
     )
 
 

@@ -2903,7 +2903,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 ## ÉTAT ACTUEL (25 février 2026)
 
 - **1906 tests, 1906 passants** (0 régression), +66 depuis Sprint 44b
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations** + **Hotfix 46 React #310** + **Hotfix Tests Pré-existants** + **Sprint 46b Sélecteur Stratégie Global**
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations** + **Hotfix 46 React #310** + **Hotfix Tests Pré-existants** + **Sprint 46b Sélecteur Stratégie Global** + **Sprint 47 Grid ATR Adaptatif v2**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
@@ -3059,7 +3059,16 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Hotfix config** : `strategies.yaml::grid_atr.leverage` vide (None) → 4 (commit `grid_atr to 4x` avait laissé le champ vide, cassait la validation Pydantic → 34 tests en échec)
   - **Fichiers** : `backend/core/database.py`, `backend/api/journal_routes.py`, `frontend/src/components/ExecutorPanel.jsx`, `frontend/src/components/Header.jsx`, `frontend/src/components/JournalPage.jsx`, `tests/test_sprint46_journal.py`, `config/strategies.yaml`
   - **2 nouveaux tests** → **1906 tests, 1906 passants**, 0 régression
-- **Prochaine étape** : Paper trading grid_atr (VIABLE 7x) + grid_multi_tf (VIABLE 6x) + grid_boltrend (CAUTION 6x, surveillance 1 mois). Ou Workflow B : Grid adaptatif (ATR multiplier dynamique sur grid_atr).
+- **Sprint 47 — Grid ATR Adaptatif v2** (25 fév 2026) — 2 paramètres adaptatifs pour corriger les pertes en basse volatilité (exemple 25/02 : -2.32$ sur 7 assets simultanés, profit brut < fees) :
+  - **`min_grid_spacing_pct`** : plancher ATR en % du prix — `effective_atr = max(atr, close × pct/100)`. Empêche les grilles microscopiques quand l'ATR s'écrase. Default 0.0 = désactivé.
+  - **`min_profit_pct`** : condition de TP double — `close >= SMA AND close >= avg_entry × (1 + pct/100)`. Bloque le TP si le profit ne couvre pas les fees. Default 0.0 = TP classique SMA.
+  - **Backward compatible** : les 2 params à 0.0 → comportement identique à la V1 (vérifié bit-for-bit par test de parité numérique)
+  - **WFO A/B test** : `min_grid_spacing_pct: [0.0, 0.8, 1.2, 1.8]` et `min_profit_pct: [0.0, 0.2, 0.4]` dans la grille — 0.0 garde le classique comme option sélectionnable
+  - **Grille WFO remaniée** : `ma_period` restauré à [7,10,14,20], `atr_multiplier_start` restauré à [1.0-3.0] (valeurs actives en prod), `num_levels` réduit à [3,4] (2 jamais sélectionné), `sl_percent` réduit à [15,20,25] (30 jamais sélectionné) → **12 960 combos/tf** (~15 min/asset)
+  - **Fast engine** mis à jour (`_build_entry_prices`, `_simulate_grid_common`) pour que le WFO optimise les nouveaux params
+  - **Fichiers** : `backend/core/config.py`, `backend/strategies/grid_atr.py`, `backend/optimization/fast_multi_backtest.py`, `config/param_grids.yaml`
+  - **14 nouveaux tests** (Section 7 dans `test_grid_atr.py`) → **1920 tests, 1920 passants**, 0 régression
+- **Prochaine étape** : Lancer WFO grid_atr v2 sur 14 assets pour mesurer l'impact de `min_grid_spacing_pct` et `min_profit_pct`. Objectif : réduire les cycles fee-negative sans dégrader le nombre de trades.
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
@@ -3232,10 +3241,9 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 ### Ordre de priorité
 
-1. **Grid adaptatif** — ATR multiplier dynamique sur grid_atr (Workflow B, A/B test)
-   - Moduler la largeur de grille selon le régime de volatilité
-   - Objectif : améliorer résilience crash, pas décorrélation
-   - Pas une nouvelle stratégie, évolution de grid_atr existant
+1. **WFO grid_atr v2** — Lancer le WFO sur les 14 assets avec les nouveaux params adaptatifs (Sprint 47)
+   - Mesurer l'impact de `min_grid_spacing_pct` et `min_profit_pct` sur le nombre de cycles fee-negative
+   - Appliquer les résultats Grade A/B via `apply_from_db`
 
 2. **Pairs trading** — Spread mean-reversion ETH/BTC (Phase 3, refonte archi)
    - Market-neutral par construction (fonctionne tous régimes)
@@ -3270,7 +3278,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 1753 passants, 0 régression
+- **Tests** : 1920 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

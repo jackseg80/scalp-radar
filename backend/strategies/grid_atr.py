@@ -83,6 +83,14 @@ class GridATRStrategy(BaseGridStrategy):
         if np.isnan(sma_val) or np.isnan(atr_val) or atr_val <= 0:
             return []
 
+        # Plancher ATR adaptatif (basse vol)
+        close_val = indicators.get("close", float("nan"))
+        min_spacing = self._config.min_grid_spacing_pct
+        if min_spacing > 0 and close_val > 0:
+            effective_atr = max(atr_val, close_val * min_spacing / 100)
+        else:
+            effective_atr = atr_val
+
         filled_levels = {p.level for p in grid_state.positions}
 
         # Déterminer le côté actif
@@ -104,7 +112,7 @@ class GridATRStrategy(BaseGridStrategy):
             )
 
             if "long" in active_sides:
-                entry_price = sma_val - atr_val * multiplier
+                entry_price = sma_val - effective_atr * multiplier
                 if entry_price > 0:
                     levels.append(GridLevel(
                         index=i,
@@ -114,7 +122,7 @@ class GridATRStrategy(BaseGridStrategy):
                     ))
 
             if "short" in active_sides:
-                entry_price = sma_val + atr_val * multiplier
+                entry_price = sma_val + effective_atr * multiplier
                 levels.append(GridLevel(
                     index=i,
                     entry_price=entry_price,
@@ -140,11 +148,14 @@ class GridATRStrategy(BaseGridStrategy):
 
         direction = grid_state.positions[0].direction
 
-        # TP : retour à la SMA
+        # TP : retour à la SMA + contrainte profit minimum
+        min_profit = self._config.min_profit_pct
         if direction == Direction.LONG and close >= sma_val:
-            return "tp_global"
+            if min_profit <= 0 or close >= grid_state.avg_entry_price * (1 + min_profit / 100):
+                return "tp_global"
         if direction == Direction.SHORT and close <= sma_val:
-            return "tp_global"
+            if min_profit <= 0 or close <= grid_state.avg_entry_price * (1 - min_profit / 100):
+                return "tp_global"
 
         # SL : % fixe depuis prix moyen
         sl_pct = self._config.sl_percent / 100
@@ -203,4 +214,6 @@ class GridATRStrategy(BaseGridStrategy):
             "sides": self._config.sides,
             "leverage": self._config.leverage,
             "max_hold_candles": self._config.max_hold_candles,
+            "min_grid_spacing_pct": self._config.min_grid_spacing_pct,
+            "min_profit_pct": self._config.min_profit_pct,
         }
