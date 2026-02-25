@@ -3080,7 +3080,13 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **4 nouveaux tests** : score inférieur conserve l'ancien, score supérieur remplace, égalité → plus récent gagne, même logique via payload
   - **Fichiers** : `backend/optimization/optimization_db.py`, `tests/test_optimization_db.py`
   - **4 nouveaux tests** → **1927 tests, 1927 passants**, 0 régression
-- **Prochaine étape** : Lancer WFO grid_atr v2 sur 14 assets pour mesurer l'impact de `min_grid_spacing_pct` et `min_profit_pct`. Objectif : réduire les cycles fee-negative sans dégrader le nombre de trades.
+- **WFO grid_atr v2 — Déploiement résultats** (25 fév 2026) — WFO relancé après Sprint 47c (fixes is_latest) sur les assets live grid_atr :
+  - `min_grid_spacing_pct` et `min_profit_pct` intégrés dans tous les per_asset override (`strategies.yaml`)
+  - CRV/USDT retiré de la rotation (non sélectionné par WFO avec la nouvelle grille)
+  - Valeurs `min_grid_spacing_pct` sélectionnées par asset : 0.0 (LINK, BCH, UNI, XRP), 0.8 (BNB), 1.2 (ADA, AVAX, DYDX, FET), 1.8 (AAVE, DOGE, NEAR, SOL)
+  - `min_profit_pct` = 0.0 sur tous les assets (WFO préfère TP classique — correction du timing d'entrée via spacing plutôt que blocage TP)
+  - **Fichiers** : `config/strategies.yaml`
+- **Prochaine étape** : Surveiller les cycles basse volatilité sur le live grid_atr — valider que `min_grid_spacing_pct` réduit effectivement les fermetures fee-negative.
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
