@@ -61,4 +61,10 @@
 - `TestBalanceSnapshotPersist` (2) : best-effort DB error, sans DB
 - `TestDailyPnlCycleClose` (1) : cycle_close inclus dans daily PnL
 
-**Total** : 1904 tests collectés, 1898 passants (6 pré-existants non liés).
+**Total** : 1904 tests collectés, 1904 passants après Hotfix Tests Pré-existants (b3022a6).
+
+## Hotfix post-Sprint 46
+
+**React error #310** (commit `1ae9d14`) : `useApi` appelé après les early returns conditionnels dans
+`ExecutorPanel` → page noire en prod. Fix : hook déplacé avant les `if (!executor) return` et
+`if (executor.mode === 'paper') return`.

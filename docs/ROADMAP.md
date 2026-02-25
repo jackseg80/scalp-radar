@@ -2902,8 +2902,8 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (25 février 2026)
 
-- **1904 tests** (1898 passants, 6 pré-existants), +64 depuis Sprint 44b
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations**
+- **1906 tests, 1906 passants** (0 régression), +66 depuis Sprint 44b
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations** + **Hotfix 46 React #310** + **Hotfix Tests Pré-existants** + **Sprint 46b Sélecteur Stratégie Global**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
@@ -3043,7 +3043,22 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Max Drawdown enrichi** : `get_max_drawdown_from_snapshots()` (peak-to-trough), `/api/journal/live-stats` enrichit `max_drawdown_pct` si null
   - **Bugfix** : `cycle_close` manquant dans `get_live_daily_pnl` (trade_type IN clause)
   - **Fichiers** : `backend/core/database.py`, `backend/execution/executor.py`, `backend/api/journal_routes.py`, `frontend/src/components/ExecutorPanel.jsx`, `frontend/src/components/JournalPage.jsx`, `frontend/src/components/JournalPage.css`, `tests/test_sprint46_journal.py`
-  - **13 nouveaux tests** → **1904 tests** (1898 passants, 6 pré-existants)
+  - **13 nouveaux tests** → **1904 tests**
+- **Hotfix 46 — React error #310** (25 fév 2026) : `useApi('/api/journal/daily-pnl-summary')` appelé après un early return conditionnel dans `ExecutorPanel` → page noire en prod. Fix : hook déplacé avant les `if (!executor) return` / `if (executor.mode === 'paper') return`.
+- **Hotfix Tests Pré-existants** (25 fév 2026) — nettoyage 6 échecs de dette technique :
+  - `test_config_assets` : EXPECTED_COUNT 20→21, TOP6_ASSETS→TOP_SCALP_ASSETS (+ARB+SUI qui ont 5m/15m)
+  - `test_dataengine_autoheal::test_config_no_xtz_jup` : SUI re-ajouté dans config, count 20→21
+  - `test_dataengine_autoheal::test_no_heal_between_5_and_10min` : seuil stale changé 600s→300s au Sprint 45d ; test renommé `test_no_heal_below_threshold`, seuil 400s→200s
+  - `portfolio_db.save_from_payload` : champ `regime_analysis` absent du dict INSERT (colonne ajoutée Sprint 44 sans MAJ endpoint sync)
+  - **0 nouveau test** (corrections d'assertions) → **1904 tests, 1904 passants**
+- **Sprint 46b — Sélecteur stratégie global** (25 fév 2026) — `StrategyBar` visible sur toutes les pages + P&L contextuels :
+  - **Changement 1** : `StrategyBar` affiché sur toutes les pages du dashboard (suppression condition `activeTab === 'scanner'` dans `Header.jsx`) — le contexte global (`StrategyContext`) existait déjà, cette 1-ligne le rend universel
+  - **Changement 2** : `ExecutorPanel` consomme `useStrategyContext()`, appelle `/api/journal/daily-pnl-summary?strategy=X` — P&L Jour/Total filtrés par la stratégie sélectionnée
+  - **Changement 3** : `JournalPage::LiveJournal` écoute `strategyFilter` — `effectiveStrategy = strategyFilter || strategy`, dropdown local masqué si contexte global actif
+  - **Backend** : `get_daily_pnl_summary(strategy=None)` — filtre `AND strategy_name = ?` dans les 3 requêtes SQL ; `GET /daily-pnl-summary?strategy=` exposé
+  - **Hotfix config** : `strategies.yaml::grid_atr.leverage` vide (None) → 4 (commit `grid_atr to 4x` avait laissé le champ vide, cassait la validation Pydantic → 34 tests en échec)
+  - **Fichiers** : `backend/core/database.py`, `backend/api/journal_routes.py`, `frontend/src/components/ExecutorPanel.jsx`, `frontend/src/components/Header.jsx`, `frontend/src/components/JournalPage.jsx`, `tests/test_sprint46_journal.py`, `config/strategies.yaml`
+  - **2 nouveaux tests** → **1906 tests, 1906 passants**, 0 régression
 - **Prochaine étape** : Paper trading grid_atr (VIABLE 7x) + grid_multi_tf (VIABLE 6x) + grid_boltrend (CAUTION 6x, surveillance 1 mois). Ou Workflow B : Grid adaptatif (ATR multiplier dynamique sur grid_atr).
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
@@ -3090,7 +3105,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ### État live (février 2026)
 
-- **grid_atr** : LIVE 3x (baissé depuis 7x à cause du bear)
+- **grid_atr** : LIVE 4x (passé de 3x → 4x le 25 fév 2026)
   - BCH/USDT : position fermée manuellement (-47.8%)
   - Leçon : **ne jamais changer le leverage avec des positions ouvertes**
 - **grid_multi_tf** : LIVE 3x (0 trades, filtre bear actif = correct)
