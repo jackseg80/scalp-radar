@@ -1838,7 +1838,7 @@ class Database:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def get_daily_pnl_summary(self) -> dict:
+    async def get_daily_pnl_summary(self, strategy: str | None = None) -> dict:
         """P&L du jour + P&L total + date premier trade (Sprint 46)."""
         assert self._conn is not None
 
@@ -1846,12 +1846,14 @@ class Database:
             "('tp_close', 'sl_close', 'force_close', 'close', 'cycle_close')"
         )
         today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        strat_clause = "AND strategy_name = ?" if strategy else ""
+        strat_param = [strategy] if strategy else []
 
         # P&L du jour
         cursor = await self._conn.execute(
             f"SELECT COALESCE(SUM(pnl), 0) FROM live_trades "
-            f"WHERE trade_type IN {close_types} AND DATE(timestamp) = ?",
-            (today,),
+            f"WHERE trade_type IN {close_types} {strat_clause} AND DATE(timestamp) = ?",
+            (*strat_param, today),
         )
         row = await cursor.fetchone()
         daily_pnl = row[0] if row else 0
@@ -1859,7 +1861,8 @@ class Database:
         # P&L total
         cursor = await self._conn.execute(
             f"SELECT COALESCE(SUM(pnl), 0) FROM live_trades "
-            f"WHERE trade_type IN {close_types}",
+            f"WHERE trade_type IN {close_types} {strat_clause}",
+            strat_param,
         )
         row = await cursor.fetchone()
         total_pnl = row[0] if row else 0
@@ -1867,7 +1870,8 @@ class Database:
         # Date du premier trade
         cursor = await self._conn.execute(
             f"SELECT MIN(timestamp) FROM live_trades "
-            f"WHERE trade_type IN {close_types}",
+            f"WHERE trade_type IN {close_types} {strat_clause}",
+            strat_param,
         )
         row = await cursor.fetchone()
         first_trade_date = row[0] if row and row[0] else None

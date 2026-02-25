@@ -305,13 +305,16 @@ async def get_live_per_asset(
 
 
 @router.get("/daily-pnl-summary")
-async def get_daily_pnl_summary(request: Request) -> dict:
-    """P&L du jour + P&L total pour ExecutorPanel (Sprint 46)."""
+async def get_daily_pnl_summary(
+    request: Request,
+    strategy: str | None = Query(None),
+) -> dict:
+    """P&L du jour + P&L total pour ExecutorPanel (Sprint 46b : filtre strategy)."""
     db = getattr(request.app.state, "db", None)
     if db is None:
         return {"daily_pnl": None, "total_pnl": None, "first_trade_date": None}
 
-    return await db.get_daily_pnl_summary()
+    return await db.get_daily_pnl_summary(strategy=strategy)
 
 
 @router.get("/live-equity")

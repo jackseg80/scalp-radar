@@ -13,6 +13,7 @@
  */
 import { useState } from 'react'
 import { useApi } from '../hooks/useApi'
+import { useStrategyContext } from '../contexts/StrategyContext'
 import Tooltip from './Tooltip'
 import { formatPrice } from '../utils/format'
 
@@ -30,8 +31,10 @@ export default function ExecutorPanel({ wsData }) {
 
   const executor = wsData?.executor
 
-  // Sprint 46 : P&L Jour + P&L Total (hook AVANT les early returns)
-  const { data: pnlData } = useApi('/api/journal/daily-pnl-summary', 60000)
+  // Sprint 46b : contexte stratégie global pour filtrer le P&L (hook AVANT les early returns)
+  const { strategyFilter } = useStrategyContext()
+  const pnlStratQ = strategyFilter ? `?strategy=${encodeURIComponent(strategyFilter)}` : ''
+  const { data: pnlData } = useApi(`/api/journal/daily-pnl-summary${pnlStratQ}`, 60000)
 
   // Pas d'executor = mode simulation
   if (!executor) {

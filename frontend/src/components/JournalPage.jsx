@@ -4,6 +4,7 @@
  */
 import { useState, useMemo, useEffect } from 'react'
 import { useApi } from '../hooks/useApi'
+import { useStrategyContext } from '../contexts/StrategyContext'
 import { formatPrice } from '../utils/format'
 import CollapsibleCard from './CollapsibleCard'
 import './JournalPage.css'
@@ -118,6 +119,11 @@ export default function JournalPage({ wsData, onTabChange }) {
 function LiveJournal({ period, wsData }) {
   const [strategy, setStrategy] = useState('')
 
+  // Sprint 46b : contexte stratégie global (StrategyBar dans le header)
+  const { strategyFilter } = useStrategyContext()
+  // Le contexte global prime sur le dropdown local
+  const effectiveStrategy = strategyFilter || strategy || null
+
   // Détecter les stratégies live disponibles
   const { data: tradesData } = useApi(`/api/journal/live-trades?period=all&limit=500`, 60000)
   const liveStrategies = useMemo(() => {
@@ -125,12 +131,12 @@ function LiveJournal({ period, wsData }) {
     return [...new Set(trades.map(t => t.strategy_name).filter(Boolean))].sort()
   }, [tradesData])
 
-  const stratParam = strategy || null
+  const stratParam = effectiveStrategy
 
   return (
     <>
-      {/* Filtre stratégie global (Sprint 46) */}
-      {liveStrategies.length > 1 && (
+      {/* Filtre stratégie local — masqué si une stratégie globale est sélectionnée */}
+      {liveStrategies.length > 1 && !strategyFilter && (
         <div className="journal-strategy-filter">
           <select value={strategy} onChange={e => setStrategy(e.target.value)}>
             <option value="">Toutes les strategies</option>

@@ -95,6 +95,40 @@ class TestDailyPnlSummary:
         assert result["daily_pnl"] == 3.0
         assert result["total_pnl"] == -7.0
 
+    @pytest.mark.asyncio
+    async def test_daily_pnl_filter_by_strategy(self, db):
+        """get_daily_pnl_summary filtre par stratégie (Sprint 46b)."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%dT12:00:00+00:00")
+        await db.insert_live_trade(
+            _make_live_trade(timestamp=today, strategy_name="grid_atr", pnl=5.0),
+        )
+        await db.insert_live_trade(
+            _make_live_trade(timestamp=today, strategy_name="grid_multi_tf", pnl=-3.0),
+        )
+
+        result_atr = await db.get_daily_pnl_summary(strategy="grid_atr")
+        assert result_atr["daily_pnl"] == 5.0
+        assert result_atr["total_pnl"] == 5.0
+
+        result_mtf = await db.get_daily_pnl_summary(strategy="grid_multi_tf")
+        assert result_mtf["daily_pnl"] == -3.0
+        assert result_mtf["total_pnl"] == -3.0
+
+    @pytest.mark.asyncio
+    async def test_daily_pnl_no_strategy_returns_all(self, db):
+        """Sans filtre, retourne la somme de toutes stratégies (backward compat)."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%dT12:00:00+00:00")
+        await db.insert_live_trade(
+            _make_live_trade(timestamp=today, strategy_name="grid_atr", pnl=5.0),
+        )
+        await db.insert_live_trade(
+            _make_live_trade(timestamp=today, strategy_name="grid_multi_tf", pnl=-3.0),
+        )
+
+        result = await db.get_daily_pnl_summary()
+        assert result["daily_pnl"] == 2.0   # 5 + (-3)
+        assert result["total_pnl"] == 2.0
+
 
 # ─── Fix 2 : filtre stratégie ───────────────────────────────────────────
 
