@@ -1079,3 +1079,17 @@ docker compose logs backend 2>&1 | grep "Executor\[" | tail -20
 # Vérifier si clés dédiées vs partagées
 docker compose logs backend 2>&1 | grep "sous-compte" | tail -5
 ```
+
+---
+
+## Rapport Telegram hebdomadaire (Sprint 49)
+
+Résumé de performance envoyé automatiquement chaque lundi à 08:00 UTC.
+
+```powershell
+# Aperçu terminal (sans envoi Telegram)
+uv run python -m scripts.weekly_report --dry-run
+
+# Envoi réel via Telegram
+uv run python -m scripts.weekly_report
+```

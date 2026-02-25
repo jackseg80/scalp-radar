@@ -230,9 +230,10 @@ async def lifespan(app: FastAPI):
     app.state.risk_mgr = None  # Plus de singleton, utiliser executor_mgr.risk_managers
     app.state.selector = selector
 
-    # 5. Watchdog + Heartbeat (dépendances explicites)
+    # 5. Watchdog + Heartbeat + WeeklyReporter (dépendances explicites)
     watchdog: Watchdog | None = None
     heartbeat: Heartbeat | None = None
+    weekly_reporter = None
     if engine is not None and simulator is not None:
         watchdog = Watchdog(
             data_engine=engine, simulator=simulator, notifier=notifier,
@@ -248,6 +249,12 @@ async def lifespan(app: FastAPI):
             )
             await heartbeat.start()
 
+            # Sprint 49 : rapport hebdomadaire (lundi 08:00 UTC)
+            from backend.alerts.weekly_reporter import WeeklyReporter
+
+            weekly_reporter = WeeklyReporter(telegram, db, config)
+            await weekly_reporter.start()
+
     app.state.watchdog = watchdog
 
     # Notification startup
@@ -260,6 +267,8 @@ async def lifespan(app: FastAPI):
     # Shutdown (ordre inverse)
     if simulator:
         await notifier.notify_shutdown()
+    if weekly_reporter:
+        await weekly_reporter.stop()
     if heartbeat:
         await heartbeat.stop()
     if watchdog:
