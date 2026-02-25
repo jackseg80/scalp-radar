@@ -3074,6 +3074,12 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **3 nouveaux tests** dans `test_optimization_db.py` : dédup cross-TF, indépendance entre stratégies, purge par score
   - **Fichiers** : `backend/optimization/optimization_db.py`, `scripts/purge_wfo_duplicates.py`, `tests/test_optimization_db.py`
   - **3 nouveaux tests** → **1923 tests, 1923 passants**, 0 régression
+- **Sprint 47c — Fix is_latest garde le meilleur score** (25 fév 2026) — Correction d'un second bug WFO dans `optimization_db.py` :
+  - **Bug corrigé** : `is_latest=1` était attribué INCONDITIONNELLEMENT au dernier run inséré. Le WFO traitant les timeframes séquentiellement (1h → 4h → 1d), le dernier TF traité écrasait toujours le précédent, même si son score était inférieur. Exemple réel : BNB 1h score=95 Grade A → BNB 4h score=73 Grade B → is_latest=1 (perte de 22 points).
+  - **Logique corrigée** : `if nouveau_score >= score_existant → is_latest=1 (nouveau), sinon → is_latest=0`. Le `>=` garantit que les données plus fraîches gagnent en cas d'égalité. Appliqué dans les deux chemins : `save_result_sync()` (local) et `save_result_from_payload_sync()` (push serveur).
+  - **4 nouveaux tests** : score inférieur conserve l'ancien, score supérieur remplace, égalité → plus récent gagne, même logique via payload
+  - **Fichiers** : `backend/optimization/optimization_db.py`, `tests/test_optimization_db.py`
+  - **4 nouveaux tests** → **1927 tests, 1927 passants**, 0 régression
 - **Prochaine étape** : Lancer WFO grid_atr v2 sur 14 assets pour mesurer l'impact de `min_grid_spacing_pct` et `min_profit_pct`. Objectif : réduire les cycles fee-negative sans dégrader le nombre de trades.
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 

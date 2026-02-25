@@ -737,3 +737,110 @@ def test_purge_script_keeps_best(temp_db):
     assert rows[0] == ("4h", 78.0, 1)
     assert rows[1][2] == 0
     assert rows[2][2] == 0
+
+
+# ---------------------------------------------------------------------------
+# Sprint 47c — Tests is_latest garde le meilleur score
+# ---------------------------------------------------------------------------
+
+
+def _make_payload_with_score(
+    score: float, tf: str, ts: str, n_combos: int = 500
+) -> dict:
+    """Helper : payload minimal pour save_result_from_payload_sync()."""
+    return {
+        "strategy_name": "grid_atr",
+        "asset": "BTC/USDT",
+        "timeframe": tf,
+        "created_at": ts,
+        "duration_seconds": 60.0,
+        "grade": "B",
+        "total_score": score,
+        "oos_sharpe": 1.2,
+        "consistency": 0.70,
+        "oos_is_ratio": 0.75,
+        "dsr": 0.80,
+        "param_stability": 0.75,
+        "monte_carlo_pvalue": 0.05,
+        "mc_underpowered": 0,
+        "n_windows": 10,
+        "n_distinct_combos": n_combos,
+        "best_params": '{"ma_period": 14}',
+        "wfo_windows": None,
+        "monte_carlo_summary": None,
+        "validation_summary": None,
+        "warnings": "[]",
+        "source": "local",
+    }
+
+
+def test_is_latest_keeps_better_score(temp_db):
+    """Si le nouveau run a un score inférieur, l'ancien is_latest=1 est conservé."""
+    r_high = _make_report("grid_atr", "BTC/USDT", "1h", 95.0, "2026-02-10T10:00:00")
+    save_result_sync(temp_db, r_high, wfo_windows=None, duration=60.0, timeframe="1h")
+
+    r_low = _make_report("grid_atr", "BTC/USDT", "4h", 73.0, "2026-02-15T10:00:00")
+    save_result_sync(temp_db, r_low, wfo_windows=None, duration=60.0, timeframe="4h")
+
+    conn = sqlite3.connect(temp_db)
+    rows = conn.execute(
+        "SELECT timeframe, total_score, is_latest FROM optimization_results ORDER BY created_at"
+    ).fetchall()
+    conn.close()
+
+    assert rows[0] == ("1h", 95.0, 1)  # meilleur score → garde is_latest=1
+    assert rows[1] == ("4h", 73.0, 0)  # score inférieur → is_latest=0
+
+
+def test_is_latest_replaced_by_better_score(temp_db):
+    """Si le nouveau run est meilleur, il prend is_latest=1."""
+    r_low = _make_report("grid_atr", "BTC/USDT", "4h", 73.0, "2026-02-10T10:00:00")
+    save_result_sync(temp_db, r_low, wfo_windows=None, duration=60.0, timeframe="4h")
+
+    r_high = _make_report("grid_atr", "BTC/USDT", "1h", 95.0, "2026-02-15T10:00:00")
+    save_result_sync(temp_db, r_high, wfo_windows=None, duration=60.0, timeframe="1h")
+
+    conn = sqlite3.connect(temp_db)
+    rows = conn.execute(
+        "SELECT timeframe, total_score, is_latest FROM optimization_results ORDER BY total_score DESC"
+    ).fetchall()
+    conn.close()
+
+    assert rows[0] == ("1h", 95.0, 1)  # meilleur → is_latest=1
+    assert rows[1] == ("4h", 73.0, 0)  # ancien perd is_latest
+
+
+def test_is_latest_equal_score_newer_wins(temp_db):
+    """À score égal, le run le plus récent gagne (>= garantit les données fraîches)."""
+    r1 = _make_report("grid_atr", "BTC/USDT", "1h", 80.0, "2026-02-10T10:00:00")
+    save_result_sync(temp_db, r1, wfo_windows=None, duration=60.0, timeframe="1h")
+
+    r2 = _make_report("grid_atr", "BTC/USDT", "4h", 80.0, "2026-02-15T10:00:00")
+    save_result_sync(temp_db, r2, wfo_windows=None, duration=60.0, timeframe="4h")
+
+    conn = sqlite3.connect(temp_db)
+    rows = conn.execute(
+        "SELECT timeframe, is_latest FROM optimization_results ORDER BY created_at"
+    ).fetchall()
+    conn.close()
+
+    assert rows[0] == ("1h", 0)   # ancien écrasé par le nouveau à score égal
+    assert rows[1] == ("4h", 1)   # plus récent → is_latest=1
+
+
+def test_is_latest_payload_sync_keeps_better(temp_db):
+    """save_result_from_payload_sync() conserve is_latest si le score existant est meilleur."""
+    p_high = _make_payload_with_score(95.0, "1h", "2026-02-10T10:00:00")
+    p_low = _make_payload_with_score(73.0, "4h", "2026-02-15T10:00:00")
+
+    save_result_from_payload_sync(temp_db, p_high)
+    save_result_from_payload_sync(temp_db, p_low)
+
+    conn = sqlite3.connect(temp_db)
+    rows = conn.execute(
+        "SELECT timeframe, total_score, is_latest FROM optimization_results ORDER BY created_at"
+    ).fetchall()
+    conn.close()
+
+    assert rows[0] == ("1h", 95.0, 1)  # meilleur score conservé
+    assert rows[1] == ("4h", 73.0, 0)  # score inférieur → is_latest=0
