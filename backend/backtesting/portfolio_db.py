@@ -272,6 +272,48 @@ async def delete_backtest_async(
         return cursor.rowcount > 0
 
 
+# ─── Robustness (lecture async) ──────────────────────────────────────────
+
+_ROBUSTNESS_JSON_COLUMNS = (
+    "regime_stress_results",
+    "historical_stress_results",
+    "cvar_by_regime",
+    "verdict_details",
+)
+
+
+async def get_robustness_by_backtest_id_async(
+    db_path: str,
+    backtest_id: int,
+) -> dict | None:
+    """Charge les résultats de robustesse pour un backtest donné.
+
+    Retourne None si la table n'existe pas ou si aucun résultat trouvé.
+    """
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        # Vérifier que la table existe (graceful si jamais créée)
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='portfolio_robustness'"
+        )
+        if await cursor.fetchone() is None:
+            return None
+
+        cursor = await conn.execute(
+            "SELECT * FROM portfolio_robustness WHERE backtest_id = ? ORDER BY id DESC LIMIT 1",
+            (backtest_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+
+        d = dict(row)
+        for key in _ROBUSTNESS_JSON_COLUMNS:
+            if d.get(key):
+                d[key] = json.loads(d[key])
+        return d
+
+
 # ─── Sync local → serveur ────────────────────────────────────────────────
 
 

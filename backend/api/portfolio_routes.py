@@ -17,6 +17,7 @@ from backend.backtesting.portfolio_db import (
     delete_backtest_async,
     get_backtest_by_id_async,
     get_backtests_async,
+    get_robustness_by_backtest_id_async,
     push_portfolio_to_server,
     save_portfolio_from_payload_sync,
     save_result_async,
@@ -126,6 +127,16 @@ async def get_backtest_detail(request: Request, backtest_id: int):
     if result is None:
         raise HTTPException(404, f"Backtest {backtest_id} non trouvé")
     return result
+
+
+@router.get("/backtests/{backtest_id}/robustness")
+async def get_backtest_robustness(request: Request, backtest_id: int):
+    """Résultats de robustesse pour un backtest (Bootstrap, CVaR, Stress, Verdict)."""
+    db_path = _get_db_path(request)
+    result = await get_robustness_by_backtest_id_async(db_path, backtest_id)
+    if result is None:
+        return {"robustness": None}
+    return {"robustness": result}
 
 
 @router.delete("/backtests/{backtest_id}")

@@ -1,0 +1,194 @@
+/* ─── Robustness Panel ──────────────────────────────────────── */
+
+.robustness-panel {
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Header */
+.rob-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rob-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ccc;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Verdict Badge */
+.verdict-badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.verdict-viable {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.verdict-caution {
+  color: #ffc53d;
+  background: rgba(255, 197, 61, 0.12);
+  border: 1px solid rgba(255, 197, 61, 0.3);
+}
+
+.verdict-fail {
+  color: #ff4466;
+  background: rgba(255, 68, 102, 0.12);
+  border: 1px solid rgba(255, 68, 102, 0.3);
+}
+
+/* GO/NO-GO Criteria */
+.rob-criteria {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: #0d1117;
+  border-radius: 6px;
+  border: 1px solid #222;
+}
+
+.rob-criterion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.criterion-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.criterion-name {
+  color: #aaa;
+  flex: 1;
+}
+
+.criterion-value {
+  color: #fff;
+  font-weight: 600;
+}
+
+.criterion-pass .criterion-value {
+  color: #10b981;
+}
+
+.criterion-fail .criterion-value {
+  color: #ff4466;
+}
+
+/* Sections */
+.rob-section {
+  padding: 8px 0;
+}
+
+.rob-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #222;
+}
+
+.rob-sub-title {
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+/* Metrics Row */
+.rob-metrics-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.rob-metric {
+  background: #1a1a1a;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.rob-metric-label {
+  font-size: 10px;
+  color: #666;
+  margin-bottom: 3px;
+}
+
+.rob-metric-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* Tables */
+.rob-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.rob-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: #888;
+  font-weight: 600;
+  border-bottom: 1px solid #333;
+  font-size: 11px;
+}
+
+.rob-table td {
+  padding: 6px 8px;
+  color: #ccc;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.rob-table tbody tr:hover {
+  background: #1a1f2e;
+}
+
+/* Skip message */
+.rob-skip {
+  font-size: 12px;
+  color: #555;
+  font-style: italic;
+  padding: 6px 0;
+}
+
+/* Footer */
+.rob-footer {
+  font-size: 11px;
+  color: #555;
+  text-align: right;
+  border-top: 1px solid #222;
+  padding-top: 8px;
+}
+
+/* Loading */
+.rob-loading {
+  font-size: 12px;
+  color: #666;
+  padding: 12px;
+  text-align: center;
+}

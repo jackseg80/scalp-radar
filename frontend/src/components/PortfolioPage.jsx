@@ -1,11 +1,25 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import EquityCurveSVG from './EquityCurveSVG'
 import DrawdownChart from './DrawdownChart'
 import PortfolioCompare from './PortfolioCompare'
+import RobustnessPanel from './RobustnessPanel'
 import { usePersistedState } from '../hooks/usePersistedState'
 import './PortfolioPage.css'
 
 const API = ''
+
+const CONFIG_MIN = 240
+const CONFIG_MAX = 520
+const CONFIG_DEFAULT = 320
+
+function loadConfigWidth() {
+  const saved = localStorage.getItem('portfolio-config-width')
+  if (saved) {
+    const n = parseInt(saved, 10)
+    if (n >= CONFIG_MIN && n <= CONFIG_MAX) return n
+  }
+  return CONFIG_DEFAULT
+}
 
 function useApi(url) {
   const [data, setData] = useState(null)
@@ -397,9 +411,44 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
   // Collapse des runs précédents (réduit par défaut)
   const [runsCollapsed, setRunsCollapsed] = useState(true)
 
+  // Resize handle config panel
+  const [configWidth, setConfigWidth] = useState(loadConfigWidth)
+  const mainRef = useRef(null)
+  const dragging = useRef(false)
+
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!dragging.current || !mainRef.current) return
+      const rect = mainRef.current.getBoundingClientRect()
+      const newWidth = Math.max(CONFIG_MIN, Math.min(CONFIG_MAX, e.clientX - rect.left))
+      setConfigWidth(Math.round(newWidth))
+    }
+    const onMouseUp = () => {
+      if (dragging.current) {
+        dragging.current = false
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setConfigWidth(prev => {
+          localStorage.setItem('portfolio-config-width', String(prev))
+          return prev
+        })
+      }
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
+
   return (
     <div className="portfolio-page">
-      <div className="portfolio-main">
+      <div
+        className="portfolio-main"
+        ref={mainRef}
+        style={{ gridTemplateColumns: `${configWidth}px auto 1fr` }}
+      >
         {/* ─── Config Panel (gauche) ─── */}
         <div className="portfolio-config">
           <h3>Portfolio Backtest</h3>
@@ -593,6 +642,17 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
           )}
         </div>
 
+        {/* ─── Handle resize ─── */}
+        <div
+          className="pf-resize-handle"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            dragging.current = true
+            document.body.style.cursor = 'col-resize'
+            document.body.style.userSelect = 'none'
+          }}
+        />
+
         {/* ─── Résultats (droite) ─── */}
         <div className="portfolio-results">
           {!detail && (
@@ -628,6 +688,9 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
 
               {/* Benchmark BTC */}
               <BenchmarkBTC run={detail} />
+
+              {/* Robustness Analysis */}
+              <RobustnessPanel backtestId={detail.id} />
 
               {/* Table par asset */}
               <div>

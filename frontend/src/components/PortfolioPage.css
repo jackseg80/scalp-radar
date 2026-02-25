@@ -7,11 +7,27 @@
   padding: 16px;
 }
 
-/* Layout principal : Config + Résultats */
+/* Layout principal : Config + Handle + Résultats */
 .portfolio-main {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 16px;
+  /* grid-template-columns défini inline via style prop */
+  gap: 0;
+}
+
+/* Handle de resize entre config et résultats */
+.pf-resize-handle {
+  width: 8px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  border-radius: 3px;
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+.pf-resize-handle:hover,
+.pf-resize-handle.dragging {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 /* Panel de configuration (gauche) */
@@ -22,9 +38,8 @@
   padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-height: calc(100vh - 120px);
-  overflow-y: auto;
+  gap: 12px;
+  min-width: 0;
 }
 
 .portfolio-config h3 {
@@ -143,8 +158,6 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2px 4px;
-  max-height: 280px;
-  overflow-y: auto;
   padding: 10px;
   background: #0d1117;
   border: 1px solid #333;
@@ -511,11 +524,10 @@
 /* Responsive */
 @media (max-width: 1024px) {
   .portfolio-main {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-columns: 1fr !important;
   }
 
-  .portfolio-config {
-    max-height: none;
+  .pf-resize-handle {
+    display: none;
   }
 }

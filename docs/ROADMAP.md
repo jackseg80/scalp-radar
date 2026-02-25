@@ -3094,6 +3094,13 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Docs** : `WORKFLOW_WFO.md` note grid_atr V2 + commandes `purge_wfo_duplicates`, `COMMANDS.md` mis à jour
   - **Audit OK** : Config propagation ✅, `get_params_for_symbol()` sans whitelist ✅, `create_strategy_with_params()` fusion complète ✅, no whitelist de paramètres ✅
   - **3 nouveaux tests** (propagation per_asset) → **1930 tests, 1930 passants**, 0 régression
+- **Sprint 48 — Dashboard Robustness + Sidebar Portfolio** (25 fév 2026) — Affichage des résultats de robustness dans le dashboard + correction de la sidebar portfolio :
+  - **`RobustnessPanel`** : nouveau composant contextuel affiché sous les métriques du run sélectionné — verdict VIABLE/CAUTION/FAIL, critères GO/NO-GO, Bootstrap CI95, CVaR par régime, Regime Stress et Historical Stress tables. Invisible si aucune donnée robustness en DB.
+  - **Endpoint** `GET /api/portfolio/backtests/{backtest_id}/robustness` — retourne `{"robustness": {...}}` ou `{"robustness": null}` (jamais 404). Check `sqlite_master` pour graceful si table absente.
+  - **`get_robustness_by_backtest_id_async()`** dans `portfolio_db.py` — parse les 4 colonnes JSON (`regime_stress_results`, `historical_stress_results`, `cvar_by_regime`, `verdict_details`), retourne `None` si table absente ou résultat vide.
+  - **Sidebar portfolio fix (3 bugs)** : scroll vertical naturel (suppression des `max-height` sur `.assets-list` et `.portfolio-config`), assets-list pleine hauteur en mode manuel, resize handle drag (240–520px, persisté en localStorage) identique au pattern `App.jsx`.
+  - **Fichiers** : `backend/backtesting/portfolio_db.py`, `backend/api/portfolio_routes.py`, `frontend/src/components/RobustnessPanel.jsx` (créé), `frontend/src/components/RobustnessPanel.css` (créé), `frontend/src/components/PortfolioPage.jsx`, `frontend/src/components/PortfolioPage.css`, `tests/test_portfolio_robustness_routes.py` (créé)
+  - **3 nouveaux tests** → **1933 tests, 1933 passants**, 0 régression
 - **Prochaine étape** : Surveiller les cycles basse volatilité sur le live grid_atr — valider que `min_grid_spacing_pct` réduit effectivement les fermetures fee-negative.
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
