@@ -367,6 +367,7 @@ def save_portfolio_from_payload_sync(db_path: str, payload: dict) -> str:
             "btc_benchmark_sharpe": payload.get("btc_benchmark_sharpe"),
             "btc_equity_curve": payload.get("btc_equity_curve"),
             "alpha_vs_btc": payload.get("alpha_vs_btc"),
+            "regime_analysis": payload.get("regime_analysis"),
         }
         conn.execute(_INSERT_SQL, row)
         conn.commit()

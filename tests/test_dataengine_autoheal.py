@@ -160,8 +160,8 @@ class TestHeartbeatAutoHeal:
         engine.restart_stale_symbol.assert_awaited_once_with("STALE/USDT")
 
     @pytest.mark.asyncio
-    async def test_no_heal_between_5_and_10min(self):
-        """Symbol stale 400s (entre 5 et 10 min, age connu) → PAS de restart."""
+    async def test_no_heal_below_threshold(self):
+        """Symbol stale 200s (< 5 min = seuil 300s) → PAS de restart."""
         engine = _make_engine(["BTC/USDT", "ETH/USDT"])
         engine._heartbeat_interval = 9999
         engine._last_candle_received = time.time() - 10
@@ -170,7 +170,7 @@ class TestHeartbeatAutoHeal:
         now = datetime.now(tz=timezone.utc)
         engine._last_update_per_symbol = {
             "BTC/USDT": now - timedelta(seconds=30),    # actif
-            "ETH/USDT": now - timedelta(seconds=400),   # stale 6.6min < 10min
+            "ETH/USDT": now - timedelta(seconds=200),   # stale 3.3min < seuil 5min
         }
 
         engine.restart_stale_symbol = AsyncMock(return_value=True)
@@ -378,7 +378,7 @@ class TestStaleBackoff:
 class TestConfigAssets:
 
     def test_config_no_xtz_jup(self):
-        """XTZ/USDT et JUP/USDT ne sont plus dans assets.yaml, 20 assets (SUI/USDT retiré Grade C)."""
+        """XTZ/USDT et JUP/USDT ne sont plus dans assets.yaml (21 assets dont SUI/USDT re-ajouté)."""
         import yaml
 
         with open("config/assets.yaml") as f:
@@ -387,8 +387,7 @@ class TestConfigAssets:
         symbols = [a["symbol"] for a in data["assets"]]
         assert "XTZ/USDT" not in symbols, "XTZ/USDT encore présent"
         assert "JUP/USDT" not in symbols, "JUP/USDT encore présent"
-        assert "SUI/USDT" not in symbols, "SUI/USDT encore présent (retiré Grade C)"
-        assert len(symbols) == 20, f"Attendu 20 assets, trouvé {len(symbols)}"
+        assert len(symbols) == 21, f"Attendu 21 assets, trouvé {len(symbols)}"
 
 
 # ─── Test route prefix ────────────────────────────────────────────────────

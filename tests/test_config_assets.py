@@ -12,8 +12,8 @@ ASSETS_YAML = ROOT / "config" / "assets.yaml"
 STRATEGIES_YAML = ROOT / "config" / "strategies.yaml"
 
 REMOVED_ASSETS = {"ENJ/USDT", "SUSHI/USDT", "IMX/USDT", "SAND/USDT", "AR/USDT", "APE/USDT", "XTZ/USDT", "JUP/USDT"}
-NEW_ASSETS = {"XRP/USDT", "BCH/USDT", "BNB/USDT", "AAVE/USDT", "ARB/USDT", "OP/USDT"}
-EXPECTED_COUNT = 20
+NEW_ASSETS = {"XRP/USDT", "BCH/USDT", "BNB/USDT", "AAVE/USDT", "ARB/USDT", "OP/USDT", "SUI/USDT"}
+EXPECTED_COUNT = 21
 
 
 @pytest.fixture(scope="module")
@@ -81,7 +81,9 @@ def test_all_per_asset_symbols_in_assets(strategies_config, asset_symbols):
 
 # ─── Timeframes ──────────────────────────────────────────────────────────
 
-TOP6_ASSETS = {"BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "LINK/USDT", "XRP/USDT"}
+# Assets avec timeframes 5m/15m (scalp actif) — BTC/ETH/SOL/DOGE/LINK/XRP + ARB/SUI ajoutés haut-volume
+TOP_SCALP_ASSETS = {"BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "LINK/USDT", "XRP/USDT", "ARB/USDT", "SUI/USDT"}
+TOP6_ASSETS = TOP_SCALP_ASSETS  # alias rétrocompat
 
 
 def test_timeframes_all_have_1h_4h_1d(assets_config):
@@ -94,7 +96,7 @@ def test_timeframes_all_have_1h_4h_1d(assets_config):
 
 
 def test_timeframes_top6_have_5m_15m(assets_config):
-    """Les 6 assets top ont aussi 5m et 15m."""
+    """Les assets scalp (BTC/ETH/SOL/DOGE/LINK/XRP/ARB/SUI) ont aussi 5m et 15m."""
     for asset in assets_config["assets"]:
         if asset["symbol"] in TOP6_ASSETS:
             tfs = set(asset["timeframes"])
@@ -109,7 +111,7 @@ def test_timeframes_no_1m(assets_config):
 
 
 def test_timeframes_others_no_5m_15m(assets_config):
-    """Les 15 assets hors top 6 n'ont PAS 5m ni 15m."""
+    """Les assets hors scalp n'ont PAS 5m ni 15m."""
     for asset in assets_config["assets"]:
         if asset["symbol"] not in TOP6_ASSETS:
             tfs = set(asset["timeframes"])
