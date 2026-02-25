@@ -30,6 +30,9 @@ export default function ExecutorPanel({ wsData }) {
 
   const executor = wsData?.executor
 
+  // Sprint 46 : P&L Jour + P&L Total (hook AVANT les early returns)
+  const { data: pnlData } = useApi('/api/journal/daily-pnl-summary', 60000)
+
   // Pas d'executor = mode simulation
   if (!executor) {
     return (
@@ -54,8 +57,6 @@ export default function ExecutorPanel({ wsData }) {
   const positions = executor.positions || (executor.position ? [executor.position] : [])
 
   const isLive = enabled
-  // Sprint 46 : P&L Jour + P&L Total (remplace P&L Session)
-  const { data: pnlData } = useApi('/api/journal/daily-pnl-summary', 60000)
   const dailyPnl = pnlData?.daily_pnl ?? null
   const totalPnl = pnlData?.total_pnl ?? null
   const firstTradeDate = pnlData?.first_trade_date
