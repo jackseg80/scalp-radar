@@ -944,24 +944,23 @@ class GridStrategyRunner:
         })
 
         # Indicateurs supplémentaires (ex: Supertrend 4h pour grid_multi_tf)
-        # Skippé pendant le warm-up : indicateurs pas encore valides
-        if not self._is_warming_up:
-            buffers = getattr(self._indicator_engine, "_buffers", None)
-            if isinstance(buffers, dict):
-                candle_buf = buffers.get((symbol, self._strategy_tf), [])
-                if candle_buf:
-                    try:
-                        extra = self._strategy.compute_live_indicators(
-                            list(candle_buf),
-                        )
-                        for tf_key, tf_data in extra.items():
-                            indicators.setdefault(tf_key, {}).update(tf_data)
-                    except Exception as e:
-                        logger.error(
-                            "[{}] compute_live_indicators ERREUR pour {}: {}",
-                            self.name, symbol, e,
-                        )
-                        self._last_indicator_error = (symbol, str(e))
+        # compute_live_indicators() gère son propre min_candles check
+        buffers = getattr(self._indicator_engine, "_buffers", None)
+        if isinstance(buffers, dict):
+            candle_buf = buffers.get((symbol, self._strategy_tf), [])
+            if candle_buf:
+                try:
+                    extra = self._strategy.compute_live_indicators(
+                        list(candle_buf),
+                    )
+                    for tf_key, tf_data in extra.items():
+                        indicators.setdefault(tf_key, {}).update(tf_data)
+                except Exception as e:
+                    logger.error(
+                        "[{}] compute_live_indicators ERREUR pour {}: {}",
+                        self.name, symbol, e,
+                    )
+                    self._last_indicator_error = (symbol, str(e))
 
         # Détecter le régime (si ADX/ATR disponibles)
         main_ind = indicators.get(self._strategy_tf, {})
@@ -1329,7 +1328,7 @@ class GridStrategyRunner:
         )
 
     def build_context(self, symbol: str) -> StrategyContext | None:
-        """Construit un StrategyContext pour le dashboard (get_conditions)."""
+        """Construit un StrategyContext pour le dashboard et l'Executor live."""
         if not self._indicator_engine:
             return None
 
@@ -1345,6 +1344,21 @@ class GridStrategyRunner:
                 "sma": sma_val,
                 "close": closes[-1] if closes else 0.0,
             })
+
+        # Indicateurs supplémentaires (ex: Supertrend 4h pour grid_multi_tf)
+        # compute_live_indicators() gère son propre min_candles check
+        buffers = getattr(self._indicator_engine, "_buffers", None)
+        if isinstance(buffers, dict):
+            candle_buf = buffers.get((symbol, self._strategy_tf), [])
+            if candle_buf:
+                try:
+                    extra = self._strategy.compute_live_indicators(
+                        list(candle_buf),
+                    )
+                    for tf_key, tf_data in extra.items():
+                        indicators.setdefault(tf_key, {}).update(tf_data)
+                except Exception:
+                    pass  # Erreur loggée dans on_candle, pas besoin de dupliquer
 
         return StrategyContext(
             symbol=symbol,
