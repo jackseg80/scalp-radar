@@ -92,6 +92,25 @@ class GridMultiTFStrategy(BaseGridStrategy):
 
         return result
 
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        """Niveaux enrichis + gate Supertrend 4h pour le dashboard."""
+        conditions = super().get_current_conditions(ctx)
+
+        ind_4h = ctx.indicators.get("4h", {}) if ctx.indicators else {}
+        st_dir = ind_4h.get("st_direction")
+
+        st_valid = st_dir is not None and not (isinstance(st_dir, float) and math.isnan(st_dir))
+        st_label = "UP" if st_dir == 1 else "DOWN" if st_dir == -1 else "INDEFINI"
+
+        conditions.insert(0, {
+            "name": "Supertrend 4h",
+            "met": st_valid,
+            "value": st_label,
+            "threshold": "directionnel",
+            "gate": True,
+        })
+        return conditions
+
     def compute_grid(
         self, ctx: StrategyContext, grid_state: GridState
     ) -> list[GridLevel]:

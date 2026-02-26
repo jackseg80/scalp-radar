@@ -122,7 +122,12 @@ export default function Scanner({ wsData }) {
   }, [enrichedAssets, strategyFilter, watchedSymbols, inPositionSymbols])
 
   // Détecter quels types de stratégies sont actives
+  const GRID_STRATEGIES = new Set([
+    'grid_atr', 'grid_boltrend', 'grid_multi_tf', 'grid_range_atr',
+    'grid_trend', 'grid_funding', 'grid_momentum', 'envelope_dca', 'envelope_dca_short',
+  ])
   const hasGridStrategies = Object.keys(gridLookup).length > 0
+    || (strategyFilter && GRID_STRATEGIES.has(strategyFilter))
   const hasMonoStrategies = filteredAssets.some(a => {
     const strats = a.strategies || {}
     return Object.values(strats).some(s => {
@@ -242,7 +247,7 @@ export default function Scanner({ wsData }) {
                 <Fragment key={asset.symbol}>
                   <tr
                     className={`scanner-row ${isSelected ? 'selected' : ''} ${isInactive ? 'scanner-row--inactive' : ''}`}
-                    onClick={isInactive ? undefined : () => handleRowClick(asset.symbol)}
+                    onClick={() => handleRowClick(asset.symbol)}
                   >
                     <td style={{ fontWeight: 700 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
@@ -296,11 +301,19 @@ export default function Scanner({ wsData }) {
                     {hasGridStrategies && (
                       <td className="mono" style={{ textAlign: 'center' }}>
                         {(() => {
-                          // TP = SMA pour les stratégies grid → dist_sma = (price - sma) / sma
+                          // Si position grid : TP connu
                           if (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0) {
                             const dist = ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
                             const color = dist >= 0 ? 'var(--accent)' : 'var(--red)'
                             return <span style={{ color }}>{dist >= 0 ? '+' : ''}{dist.toFixed(1)}%</span>
+                          }
+                          // Sans position : distance du 1er level depuis conditions
+                          const conds = asset.strategies?.[strategyFilter]?.conditions || []
+                          const firstLevel = conds.find(c => !c.gate && c.distance_pct != null)
+                          if (firstLevel) {
+                            const d = firstLevel.distance_pct
+                            const color = Math.abs(d) < 1 ? 'var(--accent)' : Math.abs(d) < 3 ? 'var(--yellow)' : 'var(--muted)'
+                            return <span style={{ color }}>{d >= 0 ? '+' : ''}{d.toFixed(1)}%</span>
                           }
                           return <span className="muted">--</span>
                         })()}
@@ -319,13 +332,15 @@ export default function Scanner({ wsData }) {
                   {isSelected && (
                     <tr>
                       <td colSpan={colCount} style={{ padding: 0 }}>
-                        {gridInfo ? (
+                        {gridInfo || (strategyFilter && GRID_STRATEGIES.has(strategyFilter)) ? (
                           <GridDetail
                             symbol={asset.symbol}
                             gridInfo={gridInfo}
                             indicators={asset.indicators}
                             regime={asset.regime}
                             price={asset.price}
+                            conditions={asset.strategies?.[strategyFilter]?.conditions}
+                            strategyName={strategyFilter}
                           />
                         ) : (
                           <SignalDetail asset={asset} />

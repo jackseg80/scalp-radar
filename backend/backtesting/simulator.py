@@ -2405,16 +2405,15 @@ class Simulator:
                                 atr_val / close * 100, 2
                             )
 
-                # Conditions de la stratégie (uniquement pour les stratégies mono, pas grid)
-                # Les stratégies grid ont leur propre section dans grid_state
-                if not isinstance(runner, GridStrategyRunner):
-                    try:
-                        conditions = runner.strategy.get_current_conditions(ctx)
-                    except Exception:
-                        conditions = []
+                # Conditions de la stratégie (toutes les stratégies, y compris grid)
+                try:
+                    conditions = runner.strategy.get_current_conditions(ctx)
+                except Exception:
+                    conditions = []
 
-                    # Dernier signal (trade le plus récent de ce runner pour ce symbol)
-                    last_signal = None
+                # Dernier signal (uniquement pour stratégies mono, pas grid)
+                last_signal = None
+                if not isinstance(runner, GridStrategyRunner):
                     for trade_dict in self.get_all_trades():
                         if trade_dict["strategy"] == runner.name:
                             last_signal = {
@@ -2424,10 +2423,10 @@ class Simulator:
                             }
                             break
 
-                    asset_data["strategies"][runner.name] = {
-                        "last_signal": last_signal,
-                        "conditions": conditions,
-                    }
+                asset_data["strategies"][runner.name] = {
+                    "last_signal": last_signal,
+                    "conditions": conditions,
+                }
 
                 # Position ouverte sur cet asset (vérifier le symbol)
                 if runner._position is not None and runner._position_symbol == symbol:

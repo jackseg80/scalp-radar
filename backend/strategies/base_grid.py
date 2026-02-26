@@ -77,19 +77,42 @@ class BaseGridStrategy(BaseStrategy):
         return None
 
     def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
-        """Retourne les niveaux de la grille pour le dashboard."""
+        """Retourne les niveaux de la grille enrichis pour le dashboard.
+
+        Chaque level inclut distance_pct et proximity par rapport au prix courant.
+        """
         grid_state = GridState(
             positions=[], avg_entry_price=0, total_quantity=0,
             total_notional=0, unrealized_pnl=0,
         )
         levels = self.compute_grid(ctx, grid_state)
+
+        # Prix courant pour calcul de distance
+        main_tf = getattr(self._config, "timeframe", "1h")
+        main_ind = ctx.indicators.get(main_tf, {}) if ctx.indicators else {}
+        current_price = main_ind.get("close", 0) or 0
+
         conditions = []
         for lvl in levels:
+            entry = lvl.entry_price
+            if current_price > 0:
+                dist_pct = (entry - current_price) / current_price * 100
+            else:
+                dist_pct = 0.0
+            abs_dist = abs(dist_pct)
+            proximity = (
+                "imminent" if abs_dist < 1 else
+                "close" if abs_dist < 3 else
+                "medium" if abs_dist < 6 else
+                "far"
+            )
             conditions.append({
                 "name": f"Level {lvl.index + 1} ({lvl.direction.value})",
                 "met": False,
-                "value": f"{lvl.entry_price:.2f}",
+                "value": entry,
                 "threshold": "touch",
+                "distance_pct": round(dist_pct, 2),
+                "proximity": proximity,
             })
         return conditions
 

@@ -310,12 +310,11 @@ tr:last-child td { border-bottom: none; }
   background: rgba(0, 230, 138, 0.04);
 }
 .scanner-row--inactive {
-  opacity: 0.35;
-  cursor: default;
-  pointer-events: none;
+  opacity: 0.45;
+  cursor: pointer;
 }
 .scanner-row--inactive:hover {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.02);
 }
 .scanner-expand {
   padding: 12px 8px;

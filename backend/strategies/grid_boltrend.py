@@ -9,6 +9,7 @@ Timeframe : 1h (défaut).
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -94,6 +95,39 @@ class GridBolTrendStrategy(BaseGridStrategy):
                 }
             result[tf] = indicators
         return result
+
+    def get_current_conditions(self, ctx: StrategyContext) -> list[dict]:
+        """Niveaux enrichis + gate position Bollinger pour le dashboard."""
+        conditions = super().get_current_conditions(ctx)
+
+        main_tf = getattr(self._config, "timeframe", "1h")
+        ind = ctx.indicators.get(main_tf, {}) if ctx.indicators else {}
+        close = ind.get("close")
+        bb_upper = ind.get("bb_upper")
+        bb_lower = ind.get("bb_lower")
+
+        if close and bb_upper and bb_lower:
+            if close < bb_lower:
+                bb_label = "SOUS lower"
+                bb_met = True
+            elif close > bb_upper:
+                bb_label = "AU-DESSUS upper"
+                bb_met = True
+            else:
+                bb_label = "DANS les bandes"
+                bb_met = False
+        else:
+            bb_label = "INDEFINI"
+            bb_met = False
+
+        conditions.insert(0, {
+            "name": "Position Bollinger",
+            "met": bb_met,
+            "value": bb_label,
+            "threshold": "breakout",
+            "gate": True,
+        })
+        return conditions
 
     def compute_grid(
         self, ctx: StrategyContext, grid_state: GridState

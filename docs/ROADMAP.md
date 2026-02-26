@@ -3152,6 +3152,17 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Fichiers modifiés** : `backend/optimization/fast_multi_backtest.py`, `backend/execution/executor.py`
   - **Fichiers créés** : `tests/test_cooldown_fast_engine.py`
   - **18 nouveaux tests** (15 cooldown + 3 polling fees) → **2024 tests, 2023 passants**, 0 régression
+- **Sprint 52 — Scanner enrichi : assets grisés dépliables + vue spécifique par stratégie grid** (26 fév 2026) :
+  - **Assets grisés dépliables** : suppression `pointer-events: none`, `onClick` toujours actif — tous les assets watchés d'une stratégie sont maintenant cliquables, avec ou sans position
+  - **`get_conditions()` enrichi** : `simulator.py` appelle désormais `get_current_conditions()` pour tous les runners (y compris `GridStrategyRunner`), plus seulement les stratégies mono
+  - **`base_grid.get_current_conditions()`** : chaque level enrichi avec `distance_pct` (% entre level et prix courant) et `proximity` (imminent < 1%, close < 3%, medium < 6%, far) — valeur `entry_price` en float pleine précision pour tous les coins (DOGE, GALA)
+  - **gate Supertrend 4h** (`grid_multi_tf.py`) : override `get_current_conditions()` insère `{"name": "Supertrend 4h", "gate": True, "value": "UP"/"DOWN"/"INDEFINI", "met": bool}` en position 0
+  - **gate Bollinger** (`grid_boltrend.py`) : override similaire insère position BB ("SOUS lower" / "DANS les bandes" / "AU-DESSUS upper")
+  - **GridDetail refactorisé** : deux modes — mode position (inchangé + `formatPrice()` adaptatif) et mode conditions-only (gates colorés en haut, niveaux avec distance % et code couleur proximity)
+  - **`hasGridStrategies`** : détecte aussi les stratégies grid filtrées sans position ouverte (colonne Dist.SMA visible même avec 0 positions)
+  - **Dist.SMA** : fallback sur distance du 1er level calculé si pas de position (TP = None)
+  - **Fichiers modifiés** : `simulator.py`, `base_grid.py`, `grid_multi_tf.py`, `grid_boltrend.py`, `Scanner.jsx`, `GridDetail.jsx`, `styles.css`
+  - **0 nouveau test** (changements UI/dashboard uniquement) → **2024 tests, 2023 passants**, 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
