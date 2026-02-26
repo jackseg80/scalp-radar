@@ -38,6 +38,7 @@ class Database:
         self.db_path = str(db_path)
         self._conn: Optional[aiosqlite.Connection] = None
         self._maintenance_task: Optional[asyncio.Task[None]] = None
+        self._write_lock = asyncio.Lock()
 
     async def init(self) -> None:
         """Crée la connexion et les tables."""
@@ -46,6 +47,7 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
+        await self._conn.execute("PRAGMA busy_timeout=5000")
         await self._migrate_candles_exchange()
         await self._create_tables()
         logger.info("Database initialisée : {}", self.db_path)
@@ -550,13 +552,14 @@ class Database:
             )
             for c in candles
         ]
-        cursor = await self._conn.executemany(
-            """INSERT OR IGNORE INTO candles
-               (exchange, symbol, timeframe, timestamp, open, high, low, close, volume, vwap, mark_price)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            data,
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            cursor = await self._conn.executemany(
+                """INSERT OR IGNORE INTO candles
+                   (exchange, symbol, timeframe, timestamp, open, high, low, close, volume, vwap, mark_price)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                data,
+            )
+            await self._conn.commit()
         return cursor.rowcount
 
     async def get_candles(
@@ -708,58 +711,60 @@ class Database:
     async def insert_signal(self, signal: Signal, source: str = "backtest") -> None:
         assert self._conn is not None
         import json
-        await self._conn.execute(
-            """INSERT INTO signals
-               (timestamp, strategy, symbol, direction, strength, score,
-                entry_price, tp_price, sl_price, regime, metadata_json, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                signal.timestamp.isoformat(),
-                signal.strategy_name,
-                signal.symbol,
-                signal.direction.value,
-                signal.strength.value,
-                signal.score,
-                signal.entry_price,
-                signal.tp_price,
-                signal.sl_price,
-                signal.market_regime.value if signal.market_regime else None,
-                json.dumps(signal.metadata),
-                source,
-            ),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                """INSERT INTO signals
+                   (timestamp, strategy, symbol, direction, strength, score,
+                    entry_price, tp_price, sl_price, regime, metadata_json, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    signal.timestamp.isoformat(),
+                    signal.strategy_name,
+                    signal.symbol,
+                    signal.direction.value,
+                    signal.strength.value,
+                    signal.score,
+                    signal.entry_price,
+                    signal.tp_price,
+                    signal.sl_price,
+                    signal.market_regime.value if signal.market_regime else None,
+                    json.dumps(signal.metadata),
+                    source,
+                ),
+            )
+            await self._conn.commit()
 
     # ─── TRADES ─────────────────────────────────────────────────────────────
 
     async def insert_trade(self, trade: Trade, source: str = "backtest") -> None:
         assert self._conn is not None
-        await self._conn.execute(
-            """INSERT INTO trades
-               (id, symbol, direction, entry_price, exit_price, quantity, leverage,
-                gross_pnl, fee_cost, slippage_cost, net_pnl,
-                entry_time, exit_time, strategy, regime, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                trade.id,
-                trade.symbol,
-                trade.direction.value,
-                trade.entry_price,
-                trade.exit_price,
-                trade.quantity,
-                trade.leverage,
-                trade.gross_pnl,
-                trade.fee_cost,
-                trade.slippage_cost,
-                trade.net_pnl,
-                trade.entry_time.isoformat(),
-                trade.exit_time.isoformat(),
-                trade.strategy_name,
-                trade.market_regime.value if trade.market_regime else None,
-                source,
-            ),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                """INSERT INTO trades
+                   (id, symbol, direction, entry_price, exit_price, quantity, leverage,
+                    gross_pnl, fee_cost, slippage_cost, net_pnl,
+                    entry_time, exit_time, strategy, regime, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    trade.id,
+                    trade.symbol,
+                    trade.direction.value,
+                    trade.entry_price,
+                    trade.exit_price,
+                    trade.quantity,
+                    trade.leverage,
+                    trade.gross_pnl,
+                    trade.fee_cost,
+                    trade.slippage_cost,
+                    trade.net_pnl,
+                    trade.entry_time.isoformat(),
+                    trade.exit_time.isoformat(),
+                    trade.strategy_name,
+                    trade.market_regime.value if trade.market_regime else None,
+                    source,
+                ),
+            )
+            await self._conn.commit()
 
     # ─── FUNDING RATES ─────────────────────────────────────────────────────
 
@@ -772,13 +777,14 @@ class Database:
             (r["symbol"], r["exchange"], r["timestamp"], r["funding_rate"])
             for r in rates
         ]
-        cursor = await self._conn.executemany(
-            """INSERT OR IGNORE INTO funding_rates
-               (symbol, exchange, timestamp, funding_rate)
-               VALUES (?, ?, ?, ?)""",
-            data,
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            cursor = await self._conn.executemany(
+                """INSERT OR IGNORE INTO funding_rates
+                   (symbol, exchange, timestamp, funding_rate)
+                   VALUES (?, ?, ?, ?)""",
+                data,
+            )
+            await self._conn.commit()
         return cursor.rowcount
 
     async def get_funding_rates(
@@ -838,13 +844,14 @@ class Database:
             (r["symbol"], r["exchange"], r["timeframe"], r["timestamp"], r["oi"], r["oi_value"])
             for r in records
         ]
-        cursor = await self._conn.executemany(
-            """INSERT OR IGNORE INTO open_interest
-               (symbol, exchange, timeframe, timestamp, oi, oi_value)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            data,
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            cursor = await self._conn.executemany(
+                """INSERT OR IGNORE INTO open_interest
+                   (symbol, exchange, timeframe, timestamp, oi, oi_value)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                data,
+            )
+            await self._conn.commit()
         return cursor.rowcount
 
     async def get_open_interest(
@@ -1249,24 +1256,25 @@ class Database:
 
     async def save_session_state(self, state: SessionState) -> None:
         assert self._conn is not None
-        await self._conn.execute(
-            """INSERT OR REPLACE INTO session_state
-               (id, start_time, total_pnl, total_trades, wins, losses,
-                max_drawdown, available_margin, kill_switch_triggered, last_update)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                state.start_time.isoformat(),
-                state.total_pnl,
-                state.total_trades,
-                state.wins,
-                state.losses,
-                state.max_drawdown,
-                state.available_margin,
-                1 if state.kill_switch_triggered else 0,
-                datetime.now().isoformat(),
-            ),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                """INSERT OR REPLACE INTO session_state
+                   (id, start_time, total_pnl, total_trades, wins, losses,
+                    max_drawdown, available_margin, kill_switch_triggered, last_update)
+                   VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    state.start_time.isoformat(),
+                    state.total_pnl,
+                    state.total_trades,
+                    state.wins,
+                    state.losses,
+                    state.max_drawdown,
+                    state.available_margin,
+                    1 if state.kill_switch_triggered else 0,
+                    datetime.now().isoformat(),
+                ),
+            )
+            await self._conn.commit()
 
     async def load_session_state(self) -> Optional[SessionState]:
         assert self._conn is not None
@@ -1341,8 +1349,9 @@ class Database:
         backoff = 0.1
         for attempt in range(max_retries):
             try:
-                await self._conn.execute(query, params)
-                await self._conn.commit()
+                async with self._write_lock:
+                    await self._conn.execute(query, params)
+                    await self._conn.commit()
                 return
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < max_retries - 1:
@@ -1459,8 +1468,9 @@ class Database:
         Retourne {busy, log, checkpointed}.
         """
         assert self._conn is not None
-        cursor = await self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        row = await cursor.fetchone()
+        async with self._write_lock:
+            cursor = await self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            row = await cursor.fetchone()
         # row = (busy, log, checkpointed)
         result = {
             "busy": row[0],          # 1 si des frames n'ont pas pu être checkpointées

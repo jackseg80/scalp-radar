@@ -831,7 +831,7 @@ class DataEngine:
 
     # ─── FLUSH BUFFER ──────────────────────────────────────────────────────
 
-    _FLUSH_INTERVAL = 5  # secondes
+    _FLUSH_INTERVAL = 30  # secondes (réduit la contention SQLite)
 
     async def _flush_candle_buffer(self) -> None:
         """Flush périodique du buffer de candles vers la DB."""

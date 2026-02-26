@@ -3,6 +3,7 @@
 Chaque test utilise une base SQLite en mémoire pour l'isolation.
 """
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -186,3 +187,53 @@ class TestTrades:
             strategy_name="vwap_rsi",
         )
         await db.insert_trade(trade)
+
+
+@pytest.mark.asyncio
+class TestWriteLockConcurrency:
+    """Tests de concurrence : vérifie que le write lock empêche 'database is locked'."""
+
+    async def test_concurrent_writes_no_lock_error(self, db):
+        """10 écritures simultanées via asyncio.gather → 0 'locked'."""
+        candles_batches = [
+            [_make_candle(ts_offset=i * 100 + j) for j in range(50)]
+            for i in range(10)
+        ]
+        results = await asyncio.gather(
+            *[db.insert_candles_batch(batch) for batch in candles_batches]
+        )
+        assert all(r == 50 for r in results)
+        total = await db.get_candles("BTC/USDT", "5m", limit=1000)
+        assert len(total) == 500
+
+    async def test_flush_candles_during_snapshot(self, db):
+        """insert_candles_batch + insert_portfolio_snapshot en parallèle → pas d'erreur."""
+        candles = [_make_candle(ts_offset=i) for i in range(100)]
+        snapshot = {
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "equity": 10000.0,
+            "capital": 10000.0,
+            "margin_used": 500.0,
+            "margin_ratio": 0.05,
+            "realized_pnl": 100.0,
+            "unrealized_pnl": 50.0,
+            "n_positions": 3,
+            "n_assets": 2,
+            "breakdown": None,
+        }
+        results = await asyncio.gather(
+            db.insert_candles_batch(candles),
+            db.insert_portfolio_snapshot(snapshot),
+            return_exceptions=True,
+        )
+        assert not any(isinstance(r, Exception) for r in results)
+
+    async def test_wal_checkpoint_during_flush(self, db):
+        """wal_checkpoint + insert_candles_batch en parallèle → pas d'erreur."""
+        candles = [_make_candle(ts_offset=i) for i in range(100)]
+        results = await asyncio.gather(
+            db.insert_candles_batch(candles),
+            db.wal_checkpoint(),
+            return_exceptions=True,
+        )
+        assert not any(isinstance(r, Exception) for r in results)
