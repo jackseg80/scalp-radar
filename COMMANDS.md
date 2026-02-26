@@ -1093,3 +1093,45 @@ uv run python -m scripts.weekly_report --dry-run
 # Envoi réel via Telegram
 uv run python -m scripts.weekly_report
 ```
+
+---
+
+## 22. Analyse de Régime BTC (Sprint 50a)
+
+Scripts d'analyse de la détection de régime BTC. Lecture seule, aucune modification des données de production.
+
+### Prérequis : dépendances d'analyse
+
+```powershell
+uv sync --group analysis
+```
+
+### Phase 0 — Données
+
+```powershell
+# Backfill BTC 4h depuis 2017 (API publique Binance)
+uv run python -m scripts.backfill_candles --symbol BTC/USDT --timeframe 4h --since 2017-01-01
+
+# Exporter vers CSV standalone
+uv run python -m scripts.export_btc_4h
+```
+
+### Phase 1 — Ground Truth
+
+```powershell
+# Labeler les candles avec les événements YAML → CSV enrichi + plot
+uv run python -m scripts.regime_labeler
+```
+
+### Phase 2-3 — Détection et Analyse
+
+```powershell
+# Analyse complète (3 détecteurs, grid search, rapport)
+uv run python -m scripts.regime_analysis
+
+# Un seul détecteur
+uv run python -m scripts.regime_analysis --detector sma_stress
+
+# Sans plots (plus rapide)
+uv run python -m scripts.regime_analysis --skip-plots
+```

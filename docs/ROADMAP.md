@@ -2900,10 +2900,10 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
-## ÉTAT ACTUEL (25 février 2026)
+## ÉTAT ACTUEL (26 février 2026)
 
-- **1940 tests, 1940 passants** (0 régression), +10 depuis Sprint 48
-- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations** + **Hotfix 46 React #310** + **Hotfix Tests Pré-existants** + **Sprint 46b Sélecteur Stratégie Global** + **Sprint 47 Grid ATR Adaptatif v2** + **Sprint 47b** + **Sprint 47c** + **Sprint 47d** + **Sprint 48 Dashboard Robustness** + **Sprint 49 Rapport Telegram Hebdomadaire**
+- **1973 tests, 1973 passants** (0 régression), +33 depuis Sprint 49
+- **Phases 1-5 terminées + Sprint Perf + Sprint 23 + Sprint 23b + Micro-Sprint Audit + Sprint 24a + Sprint 24b + Sprint 25 + Sprint 26 + Sprint 27 + Hotfix 28a-e + Sprint 29a + Hotfix 30 + Hotfix 30b + Sprint 30b + Sprint 32 + Sprint 33 + Hotfix 33a + Hotfix 33b + Hotfix 34 + Hotfix 35 + Hotfix UI + Sprint 34a + Sprint 34b + Hotfix 36 + Sprint Executor Autonome + Sprint Backtest Réalisme + Hotfix Sync grid_states + Sprint 35 + Sprint Journal V2 + Hotfix Dashboard Leverage/Bug43 + Hotfix Sidebar Isolation + Hotfix Exit Monitor Source Unique + Audit Live Trading 2026-02-19 + Sprint Time-Stop + Cleanup Heatmap/RiskCalc + Hotfix WFO unhashable + --resume optimize + Hotfix UI Statut Paper/Live + Hotfix Exit Monitor Intra-candle + Hotfix Sync Live→Paper + Hotfix DataEngine Heartbeat + Hotfix DataEngine Candle Update + Hotfix DataEngine Monitoring Per-Symbol + Sprint Strategy Lab + Hotfix Auto-Guérison Symbols Stale + Sprint Strategy Lab V2 + Hotfix Résilience Explorateur WFO + Sprint Strategy Lab V3 + Sprint Multi-Timeframe WFO + Nettoyage Assets Low-Volume + Sprint Auto-Update Candles + Hotfix Nettoyage Timeframes + Sprint 36 Audit Backtest + Sprint 36a ACTIVE_STRATEGIES + Circuit Breaker + Hotfix P0 Ordres Orphelins + Sprint 37 Timeframe Coherence Guard + Hotfix 37b + Hotfix 37c + Hotfix 37d + Sprint 38 Shallow Validation Penalty + Sprint 38b Window Factor Fix + Hotfix Warmup Simplification + Phase 1 Entrées Autonomes Executor + Phase 2 Anti-churning Cooldown + Sprint 39 Métriques Live Enrichies + Audit #5 Grid States vs Bitget + Sprint 40 WFO Robustesse + Sprint 36b Multi-Executor + **Sprint grid_momentum** + **Sprint 41 grid_momentum WFO** + **Sprint 42 grid_funding WFO** + **Sprint 43 Post-WFO Deep Analysis** + **Sprint 43b Workflow Correction** + **Sprint 44 Portfolio Robustness** + **Sprint 44b Documentation Workflow** + **Sprint 45 Live Journal** + **Sprint 46 Journal Améliorations** + **Hotfix 46 React #310** + **Hotfix Tests Pré-existants** + **Sprint 46b Sélecteur Stratégie Global** + **Sprint 47 Grid ATR Adaptatif v2** + **Sprint 47b** + **Sprint 47c** + **Sprint 47d** + **Sprint 48 Dashboard Robustness** + **Sprint 49 Rapport Telegram Hebdomadaire** + **Sprint 50a Calibration Détecteur Régime BTC**
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **20 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP + SUI retiré Grade C)
@@ -3110,7 +3110,16 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Intégration server.py** : `WeeklyReporter` démarré dans le lifespan après le heartbeat (si `telegram` disponible), arrêté proprement au shutdown.
   - **Fichiers** : `backend/alerts/weekly_reporter.py` (créé), `scripts/weekly_report.py` (créé), `backend/api/server.py`, `COMMANDS.md`, `tests/test_weekly_report.py` (créé)
   - **7 nouveaux tests** → **1940 tests, 1940 passants**, 0 régression
-- **Prochaine étape** : Surveiller les cycles basse volatilité sur le live grid_atr — valider que `min_grid_spacing_pct` réduit effectivement les fermetures fee-negative.
+- **Sprint 50a — Calibration Détecteur Régime BTC** (26 fév 2026) — Sprint d'analyse pure (Phase 1) pour valider l'edge d'un détecteur de régime avant intégration en prod :
+  - **3 détecteurs implémentés** : `SMAStressDetector` (SMA(200) + drawdown glissant), `EMAATRDetector` (EMA cross + ATR ratio), `MultiMAVolDetector` (3 états MA + vol percentile)
+  - **Pipeline complet** : resample 4h→daily, detect_raw daily, remap 4h, hysteresis asymétrique (h_down candles 4h, h_up candles 4h)
+  - **828 combinaisons** grid search (324 + 432 + 72) avec métriques accuracy, F1 par régime, crash delay, stabilité, robustesse voisins
+  - **Ground truth** : `data/btc_regime_events.yaml` (20 événements 2017-2025 annotés manuellement)
+  - **Dépendances** : groupe optionnel `analysis` (matplotlib, pandas) — pas de modification image Docker prod
+  - **CLI** : `export_btc_4h` → `regime_labeler` → `regime_analysis` ; rapport auto-généré dans `docs/regime_detector_report.md`
+  - **Fichiers** : `scripts/export_btc_4h.py`, `scripts/regime_labeler.py`, `scripts/regime_detectors.py`, `scripts/regime_analysis.py`, `data/btc_regime_events.yaml`, `pyproject.toml`, `COMMANDS.md`
+  - **32 nouveaux tests** → **1973 tests, 1973 passants**, 0 régression
+- **Prochaine étape** : Backfill BTC 4h 2017-2025 → lancer `regime_analysis` → valider quel détecteur recommander pour Sprint 50b (intégration leverage adaptatif).
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
@@ -3322,7 +3331,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 1920 passants, 0 régression
+- **Tests** : 1973 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
