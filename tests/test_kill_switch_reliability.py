@@ -407,6 +407,57 @@ class TestApplyRestoredStateBug:
         assert runner._capital == 9_800.0
         assert runner._realized_pnl == -200.0
 
+    def test_restored_state_active_after_reset(self, tmp_path):
+        """Save (kill_switch=True) → reset → save → restore → is_active=True.
+
+        Scénario complet : le state JSON reflète le reset même après restore.
+        """
+        state_file = str(tmp_path / "state.json")
+        sm = StateManager(db=MagicMock(), state_file=state_file)
+
+        runner = _make_grid_runner()
+
+        # 1. Déclencher le kill switch
+        runner._kill_switch_triggered = True
+        runner._stats.is_active = False
+
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(
+            sm.save_runner_state(
+                [runner], global_kill_switch=True, kill_switch_reason={"drawdown_pct": 35.0},
+            )
+        )
+
+        # Vérifier que le state sauvegardé a kill_switch=True
+        data = json.loads((tmp_path / "state.json").read_text())
+        assert data["runners"]["grid_atr"]["kill_switch"] is True
+        assert data["runners"]["grid_atr"]["is_active"] is False
+        assert data["global_kill_switch"] is True
+
+        # 2. Reset du kill switch (comme le ferait simulator.reset_kill_switch)
+        runner._kill_switch_triggered = False
+        runner._stats.is_active = True
+
+        asyncio.get_event_loop().run_until_complete(
+            sm.save_runner_state(
+                [runner], global_kill_switch=False, kill_switch_reason=None,
+            )
+        )
+
+        # 3. Vérifier que le state post-reset a is_active=True
+        data = json.loads((tmp_path / "state.json").read_text())
+        assert data["runners"]["grid_atr"]["kill_switch"] is False
+        assert data["runners"]["grid_atr"]["is_active"] is True
+        assert data["global_kill_switch"] is False
+        assert data["kill_switch_reason"] is None
+
+        # 4. Restaurer dans un nouveau runner → doit être actif
+        new_runner = _make_grid_runner()
+        new_runner._apply_restored_state(data["runners"]["grid_atr"])
+        assert new_runner._kill_switch_triggered is False
+        assert new_runner._stats.is_active is True
+
     def test_reset_reactivates_globally_stopped_runner(self):
         """reset_kill_switch() réactive un runner stoppé par _stop_all_runners().
 
