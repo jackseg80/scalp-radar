@@ -19,7 +19,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from itertools import groupby
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from backend.regime.btc_regime_signal import RegimeSignal
 
 import numpy as np
 from loguru import logger
@@ -150,6 +153,10 @@ class PortfolioResult:
     # None si BTC candles indisponibles sur la période.
     regime_analysis: dict | None = None
 
+    # Leverage dynamique (Sprint 50b)
+    # Format : {"timestamp": ..., "runner": ..., "old": 7, "new": 4, "regime": "defensive"}
+    leverage_changes: list[dict] = field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Portfolio Backtester
@@ -183,6 +190,7 @@ class PortfolioBacktester:
         kill_switch_window_hours: int = 24,
         multi_strategies: list[tuple[str, list[str]]] | None = None,
         leverage: int | None = None,
+        regime_signal: RegimeSignal | None = None,
     ) -> None:
         self._config = config
         self._initial_capital = initial_capital
@@ -191,6 +199,7 @@ class PortfolioBacktester:
         self._kill_switch_pct = kill_switch_pct
         self._kill_switch_window_hours = kill_switch_window_hours
         self._leverage_override = leverage  # None = utilise le leverage de strategies.yaml
+        self._regime_signal = regime_signal  # Sprint 50b : leverage dynamique
 
         # Multi-stratégie : liste de (strategy_name, [symbols])
         if multi_strategies:
@@ -320,8 +329,10 @@ class PortfolioBacktester:
 
         # 4. Merge et simulate
         merged = self._merge_candles(valid_symbols)
-        snapshots, realized_trades, liquidation_event = await self._simulate(
-            runners, indicator_engine, merged, warmup_ends, progress_callback
+        snapshots, realized_trades, liquidation_event, leverage_changes = (
+            await self._simulate(
+                runners, indicator_engine, merged, warmup_ends, progress_callback
+            )
         )
 
         # 5. Force-close positions restantes (skip si liquidé — tout est déjà à 0)
@@ -347,6 +358,7 @@ class PortfolioBacktester:
             liquidation_event=liquidation_event,
             btc_benchmark=btc_benchmark,
             regime_analysis=regime_analysis,
+            leverage_changes=leverage_changes,
         )
 
     # ------------------------------------------------------------------
@@ -720,6 +732,26 @@ class PortfolioBacktester:
         return warmup_ends
 
     # ------------------------------------------------------------------
+    # Leverage dynamique (Sprint 50b)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _update_runner_leverage(
+        runner_key: str,
+        runner: GridStrategyRunner,
+        new_leverage: int,
+    ) -> None:
+        """Met à jour le leverage d'un runner (3 emplacements).
+
+        - runner._leverage : utilisé par _take_snapshot() pour le calcul de marge
+        - runner._gpm._config.leverage : utilisé par GridPositionManager pour le sizing
+        - runner._strategy._config.leverage : source d'init, peut être relu par la stratégie
+        """
+        runner._leverage = new_leverage
+        runner._gpm._config.leverage = new_leverage
+        runner._strategy._config.leverage = new_leverage
+
+    # ------------------------------------------------------------------
     # Merge & Simulation
     # ------------------------------------------------------------------
 
@@ -741,15 +773,16 @@ class PortfolioBacktester:
         merged_candles: list[Candle],
         warmup_ends: dict[str, int],
         progress_callback: Callable[[float, str], None] | None = None,
-    ) -> tuple[list[PortfolioSnapshot], list[tuple[str, TradeResult]], dict | None]:
+    ) -> tuple[list[PortfolioSnapshot], list[tuple[str, TradeResult]], dict | None, list[dict]]:
         """Boucle de simulation principale.
 
         Returns:
-            (snapshots, trades, liquidation_event or None)
+            (snapshots, trades, liquidation_event or None, leverage_changes)
         """
         snapshots: list[PortfolioSnapshot] = []
         all_trades: list[tuple[str, TradeResult]] = []
         liquidation_event: dict | None = None
+        leverage_changes: list[dict] = []  # Sprint 50b
 
         # Mapping symbol → [runner_keys] pour dispatcher une candle à tous les runners du symbol
         symbol_to_runners: dict[str, list[str]] = {}
@@ -764,6 +797,14 @@ class PortfolioBacktester:
 
         total = len(merged_candles)
         log_interval = max(total // 20, 1)
+
+        # --- Init leverage au démarrage (Sprint 50b) ---
+        if self._regime_signal is not None and merged_candles:
+            first_ts = merged_candles[0].timestamp
+            init_lev = self._regime_signal.get_leverage(first_ts)
+            for rk, r in runners.items():
+                if r._leverage != init_lev:
+                    self._update_runner_leverage(rk, r, init_lev)
 
         for i, candle in enumerate(merged_candles):
             symbol = candle.symbol
@@ -795,6 +836,28 @@ class PortfolioBacktester:
                         all_trades.append((runner_key, t[1]))
 
             last_closes[symbol] = candle.close
+
+            # --- Leverage dynamique (Sprint 50b) ---
+            if self._regime_signal is not None:
+                target_lev = self._regime_signal.get_leverage(candle.timestamp)
+                for rk in runner_keys:
+                    r = runners[rk]
+                    if r._leverage != target_lev:
+                        has_positions = any(
+                            positions for positions in r._positions.values()
+                        )
+                        if not has_positions:
+                            old_lev = r._leverage
+                            self._update_runner_leverage(rk, r, target_lev)
+                            leverage_changes.append({
+                                "timestamp": candle.timestamp.isoformat(),
+                                "runner": rk,
+                                "old": old_lev,
+                                "new": target_lev,
+                                "regime": self._regime_signal.get_regime_at(
+                                    candle.timestamp
+                                ),
+                            })
 
             # Snapshot à chaque changement de timestamp
             next_ts = merged_candles[i + 1].timestamp if i + 1 < total else None
@@ -860,7 +923,7 @@ class PortfolioBacktester:
                 if progress_callback:
                     progress_callback(round(pct, 1), f"Simulation {pct:.0f}%")
 
-        return snapshots, all_trades, liquidation_event
+        return snapshots, all_trades, liquidation_event, leverage_changes
 
     # Bitget USDT-M tier 1 maintenance margin rate
     MAINTENANCE_MARGIN_RATE = 0.004  # 0.4%
@@ -1089,6 +1152,7 @@ class PortfolioBacktester:
         liquidation_event: dict | None = None,
         btc_benchmark: dict | None = None,
         regime_analysis: dict | None = None,
+        leverage_changes: list[dict] | None = None,
     ) -> PortfolioResult:
         """Construit le PortfolioResult final."""
         # P&L
@@ -1204,6 +1268,7 @@ class PortfolioBacktester:
             btc_benchmark=btc_benchmark,
             alpha_vs_btc=alpha_vs_btc,
             regime_analysis=regime_analysis,
+            leverage_changes=leverage_changes or [],
         )
 
 

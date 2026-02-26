@@ -26,6 +26,91 @@ import pandas as pd
 SEVERITY = {"bull": 0, "range": 1, "bear": 2, "crash": 3}
 LABELS = ["bull", "bear", "range", "crash"]
 
+# ─── Classification binaire (Sprint 50a-bis) ────────────────────────────
+
+BINARY_NORMAL = {"bull", "range"}
+BINARY_DEFENSIVE = {"bear", "crash"}
+BINARY_LABELS = ["normal", "defensive"]
+LABEL_CHAR_MAP = {"bull": "b", "bear": "e", "range": "r", "crash": "c"}
+CHAR_LABEL_MAP = {v: k for k, v in LABEL_CHAR_MAP.items()}
+
+
+def to_binary_labels(labels: list[str]) -> list[str]:
+    """Regroupe 4 classes -> 2 classes binaires.
+
+    bull + range -> "normal", bear + crash -> "defensive".
+    """
+    return [
+        "defensive" if lbl in BINARY_DEFENSIVE else "normal"
+        for lbl in labels
+    ]
+
+
+def binary_metrics(
+    y_true_bin: list[str],
+    y_pred_bin: list[str],
+    candle_hours: float = 4.0,
+) -> dict:
+    """Metriques completes pour la classification binaire normal/defensive."""
+    total = len(y_true_bin) if y_true_bin else 1
+
+    # F1 par classe binaire (reutilise f1_per_class existant)
+    f1 = f1_per_class(y_true_bin, y_pred_bin, BINARY_LABELS)
+
+    # Precision / recall par classe
+    pr_rec: dict[str, dict[str, float]] = {}
+    for label in BINARY_LABELS:
+        tp = sum(1 for t, p in zip(y_true_bin, y_pred_bin) if t == label and p == label)
+        fp = sum(1 for t, p in zip(y_true_bin, y_pred_bin) if t != label and p == label)
+        fn = sum(1 for t, p in zip(y_true_bin, y_pred_bin) if t == label and p != label)
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        pr_rec[label] = {"precision": precision, "recall": recall}
+
+    # Accuracy
+    acc = accuracy(y_true_bin, y_pred_bin)
+
+    # time_in_defensive_pct : % du temps predit defensive
+    pred_defensive = y_pred_bin.count("defensive")
+    time_in_defensive_pct = pred_defensive / total * 100
+
+    # false_defensive_rate : GT normal predit defensive / total GT normal
+    gt_normal_count = y_true_bin.count("normal")
+    false_defensive = sum(
+        1 for t, p in zip(y_true_bin, y_pred_bin)
+        if t == "normal" and p == "defensive"
+    )
+    false_defensive_rate = (
+        false_defensive / gt_normal_count * 100 if gt_normal_count > 0 else 0.0
+    )
+
+    # missed_defensive_rate : GT defensive predit normal / total GT defensive
+    gt_defensive_count = y_true_bin.count("defensive")
+    missed_defensive = sum(
+        1 for t, p in zip(y_true_bin, y_pred_bin)
+        if t == "defensive" and p == "normal"
+    )
+    missed_defensive_rate = (
+        missed_defensive / gt_defensive_count * 100 if gt_defensive_count > 0 else 0.0
+    )
+
+    # transition_frequency : changements par an
+    total_hours = total * candle_hours
+    total_years = total_hours / (365.25 * 24) if total_hours > 0 else 1.0
+    transitions = n_transitions(y_pred_bin)
+    transition_frequency = transitions / total_years
+
+    return {
+        "binary_accuracy": acc,
+        "binary_f1": f1,
+        "precision_recall": pr_rec,
+        "time_in_defensive_pct": time_in_defensive_pct,
+        "false_defensive_rate": false_defensive_rate,
+        "missed_defensive_rate": missed_defensive_rate,
+        "transition_frequency": transition_frequency,
+        "n_transitions_binary": transitions,
+    }
+
 
 # ─── Resample 4h → Daily ─────────────────────────────────────────────────
 
@@ -571,6 +656,79 @@ def regime_distribution(labels: list[str]) -> dict[str, float]:
     """Pourcentage de temps dans chaque regime."""
     total = len(labels) if labels else 1
     return {r: labels.count(r) / total for r in LABELS}
+
+
+# ─── Indicateur de stress 4h (Sprint 50a-bis, couche 2) ─────────────────
+
+
+@dataclass
+class StressResult:
+    """Resultat du StressIndicator4h."""
+    stress_on: list[bool]
+    drawdown_pct: list[float]
+    rolling_max: list[float]
+    params: dict[str, Any]
+
+
+class StressIndicator4h:
+    """Indicateur de stress calcule directement sur les candles 4h.
+
+    Calcule le drawdown glissant sur N candles 4h.
+    Stress active quand drawdown < threshold_pct (e.g., -10%).
+
+    PAS un BaseDetector (indicateur continu booleen, pas un classifieur).
+    """
+
+    @staticmethod
+    def compute(
+        df_4h: pd.DataFrame,
+        lookback_candles: int = 12,
+        threshold_pct: float = -10.0,
+    ) -> StressResult:
+        """Calcule l'indicateur de stress.
+
+        Colonnes ajoutees conceptuellement :
+        - rolling_max : plus haut (high) des N dernieres candles
+        - drawdown_pct : (close - rolling_max) / rolling_max * 100
+        - stress_on : True si drawdown_pct < threshold_pct
+        """
+        high_vals = df_4h["high"].values
+        close_vals = df_4h["close"].values
+        n = len(close_vals)
+
+        rolling_max_arr = np.empty(n, dtype=float)
+        drawdown_arr = np.empty(n, dtype=float)
+        stress_list: list[bool] = [False] * n
+
+        for i in range(n):
+            start = max(0, i - lookback_candles + 1)
+            rm = float(np.max(high_vals[start:i + 1]))
+            rolling_max_arr[i] = rm
+            dd = (close_vals[i] - rm) / rm * 100 if rm > 0 else 0.0
+            drawdown_arr[i] = dd
+            stress_list[i] = bool(dd < threshold_pct)
+
+        return StressResult(
+            stress_on=stress_list,
+            drawdown_pct=drawdown_arr.tolist(),
+            rolling_max=rolling_max_arr.tolist(),
+            params={
+                "lookback_candles": lookback_candles,
+                "threshold_pct": threshold_pct,
+            },
+        )
+
+    @staticmethod
+    def param_grid() -> list[dict[str, Any]]:
+        """30 combinaisons : lookback x threshold."""
+        combos = itertools.product(
+            [6, 12, 18, 24, 48],                       # lookback_candles
+            [-5.0, -8.0, -10.0, -12.0, -15.0, -20.0],  # threshold_pct
+        )
+        return [
+            {"lookback_candles": c[0], "threshold_pct": c[1]}
+            for c in combos
+        ]
 
 
 # ─── Registre des detecteurs ─────────────────────────────────────────────

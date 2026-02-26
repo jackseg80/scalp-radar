@@ -210,6 +210,11 @@ async def main(args: argparse.Namespace) -> None:
 
     assets = args.assets.split(",") if args.assets else None
 
+    # --regime override --leverage (leverage piloté par le signal)
+    if getattr(args, "regime", False) and args.leverage is not None:
+        print("  ⚠ --leverage ignoré car --regime est actif")
+        args.leverage = None
+
     # Override leverage dans la config (sans toucher au YAML)
     if args.leverage is not None:
         # Détermine les noms de stratégies impliquées
@@ -282,6 +287,24 @@ async def main(args: argparse.Namespace) -> None:
 
     print(f"  Kill switch         : {ks_pct:.0f}% / {ks_hours}h")
 
+    # --- Regime signal (Sprint 50b) ---
+    regime_signal = None
+    if getattr(args, "regime", False):
+        from backend.regime.btc_regime_signal import compute_regime_signal
+
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(days=days) if days else None
+        regime_signal = await compute_regime_signal(
+            db_path=args.db,
+            start=start_dt,
+            end=end_dt,
+            exchange=args.exchange,
+        )
+        n_trans = len(regime_signal.transitions)
+        print(f"  Regime signal       : {n_trans} transitions")
+        print(f"  Normal leverage     : {args.regime_normal}x")
+        print(f"  Defensive leverage  : {args.regime_defensive}x")
+
     backtester = PortfolioBacktester(
         config=config,
         initial_capital=args.capital,
@@ -291,6 +314,7 @@ async def main(args: argparse.Namespace) -> None:
         kill_switch_pct=ks_pct,
         kill_switch_window_hours=ks_hours,
         multi_strategies=multi_strategies,
+        regime_signal=regime_signal,
     )
 
     end = datetime.now(timezone.utc)
@@ -455,6 +479,25 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Override params stratégie (ex: 'max_hold_candles=48,sl_percent=15')",
+    )
+
+    # --- Regime BTC (Sprint 50b) ---
+    parser.add_argument(
+        "--regime",
+        action="store_true",
+        help="Leverage dynamique piloté par régime BTC (ema_atr)",
+    )
+    parser.add_argument(
+        "--regime-normal",
+        type=int,
+        default=7,
+        help="Leverage en mode normal (défaut: 7)",
+    )
+    parser.add_argument(
+        "--regime-defensive",
+        type=int,
+        default=4,
+        help="Leverage en mode defensive (défaut: 4)",
     )
 
     args = parser.parse_args()

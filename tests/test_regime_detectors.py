@@ -18,13 +18,16 @@ import pandas as pd
 import pytest
 
 from scripts.regime_detectors import (
+    BINARY_LABELS,
     EMAATRDetector,
     LABELS,
     MultiMAVolDetector,
     SMAStressDetector,
+    StressIndicator4h,
     accuracy,
     apply_hysteresis,
     avg_regime_duration,
+    binary_metrics,
     confusion_matrix_manual,
     crash_detection_delay,
     f1_per_class,
@@ -32,6 +35,7 @@ from scripts.regime_detectors import (
     regime_distribution,
     resample_4h_to_daily,
     stability_score,
+    to_binary_labels,
 )
 from scripts.regime_labeler import label_candles
 
@@ -401,3 +405,99 @@ class TestMetrics:
         assert dist["bull"] == pytest.approx(0.5)
         assert dist["bear"] == pytest.approx(0.5)
         assert dist["crash"] == pytest.approx(0.0)
+
+
+# ─── TestBinaryMetrics (Sprint 50a-bis) ─────────────────────────────────
+
+
+class TestBinaryMetrics:
+    def test_conversion_correctness(self):
+        """bull/range -> normal, bear/crash -> defensive."""
+        labels = ["bull", "range", "bear", "crash", "bull"]
+        binary = to_binary_labels(labels)
+        assert binary == ["normal", "normal", "defensive", "defensive", "normal"]
+
+    def test_binary_f1_perfect(self):
+        """Labels parfaits -> F1 = 1.0 pour les deux classes."""
+        y_true = ["bull", "range", "bear", "crash"] * 25
+        y_true_bin = to_binary_labels(y_true)
+        bm = binary_metrics(y_true_bin, y_true_bin)
+        assert bm["binary_f1"]["normal"] == pytest.approx(1.0)
+        assert bm["binary_f1"]["defensive"] == pytest.approx(1.0)
+        assert bm["binary_accuracy"] == pytest.approx(1.0)
+
+    def test_false_defensive_rate(self):
+        """10 faux defensive sur 80 GT normal = 12.5%."""
+        y_true_bin = ["normal"] * 80 + ["defensive"] * 20
+        y_pred_bin = ["normal"] * 70 + ["defensive"] * 10 + ["defensive"] * 20
+        bm = binary_metrics(y_true_bin, y_pred_bin)
+        assert bm["false_defensive_rate"] == pytest.approx(12.5)
+
+    def test_missed_defensive_rate(self):
+        """5 defensive manques sur 20 GT defensive = 25%."""
+        y_true_bin = ["normal"] * 80 + ["defensive"] * 20
+        y_pred_bin = ["normal"] * 80 + ["normal"] * 5 + ["defensive"] * 15
+        bm = binary_metrics(y_true_bin, y_pred_bin)
+        assert bm["missed_defensive_rate"] == pytest.approx(25.0)
+
+
+# ─── TestStressIndicator4h (Sprint 50a-bis) ─────────────────────────────
+
+
+class TestStressIndicator4h:
+    def test_drawdown_calc(self):
+        """Prix chute 100->90 : drawdown = -10%."""
+        df = make_4h_df(10, base_price=100, volatility=0.0)
+        # Forcer des prix connus
+        n = len(df)
+        half = n // 2
+        df["close"] = [100.0] * half + [90.0] * (n - half)
+        df["high"] = [100.0] * half + [90.0] * (n - half)
+        sr = StressIndicator4h.compute(df, lookback_candles=6, threshold_pct=-5.0)
+        # Premiere candle a 90 : rolling max inclut les 100 precedents
+        assert sr.drawdown_pct[half] == pytest.approx(-10.0)
+
+    def test_stress_on_activation(self):
+        """Drawdown -15% avec threshold -10% -> stress ON."""
+        df = make_4h_df(10, base_price=100, volatility=0.0)
+        n = len(df)
+        half = n // 2
+        df["close"] = [100.0] * half + [85.0] * (n - half)
+        df["high"] = [100.0] * half + [85.0] * (n - half)
+        sr = StressIndicator4h.compute(df, lookback_candles=6, threshold_pct=-10.0)
+        assert sr.stress_on[half] is True
+
+    def test_stress_on_deactivation(self):
+        """Prix remonte dans la fenetre -> stress OFF."""
+        df = make_4h_df(20, base_price=100, volatility=0.0)
+        n = len(df)
+        # Flat 100 -> drop 85 (6 candles) -> recovery 100
+        prices = [100.0] * 30 + [85.0] * 6 + [100.0] * (n - 36)
+        df["close"] = prices[:n]
+        df["high"] = prices[:n]
+        sr = StressIndicator4h.compute(df, lookback_candles=6, threshold_pct=-10.0)
+        # Apres recovery, quand la fenetre ne contient plus que 100
+        # candle 42 : window [37:42] = que des 100 -> drawdown = 0
+        assert sr.stress_on[min(42, n - 1)] is False
+
+    def test_lookback_12_uses_48h(self):
+        """lookback_candles=12 exclut les candles hors fenetre."""
+        df = make_4h_df(30, base_price=95, volatility=0.0)
+        n = len(df)
+        # Un pic a 100 a la candle 0, puis flat a 95
+        df["high"] = 95.0
+        df.loc[0, "high"] = 100.0
+        df["close"] = 95.0
+        sr = StressIndicator4h.compute(df, lookback_candles=12, threshold_pct=-10.0)
+        # Candle 11 : window [0:11], rolling_max = 100 (candle 0 incluse)
+        assert sr.rolling_max[11] == pytest.approx(100.0)
+        # Candle 12 : window [1:12], candle 0 exclue -> rolling_max = 95
+        assert sr.rolling_max[12] == pytest.approx(95.0)
+
+    def test_no_stress_flat_data(self):
+        """Prix constant -> aucun stress."""
+        df = make_4h_df(30, base_price=50000, volatility=0.0)
+        df["close"] = 50000.0
+        df["high"] = 50000.0
+        sr = StressIndicator4h.compute(df, lookback_candles=12, threshold_pct=-5.0)
+        assert not any(sr.stress_on)

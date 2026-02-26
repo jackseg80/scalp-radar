@@ -634,13 +634,14 @@ class TestSimulation:
         backtester._kill_switch_pct = 30.0
         backtester._kill_switch_window_hours = 24
         backtester._kill_freeze_until = None
+        backtester._regime_signal = None
 
         warmup_ends = backtester._warmup_runners(
             runners, {"AAA/USDT": candles}, engine, warmup_count=50
         )
 
         merged = PortfolioBacktester._merge_candles({"AAA/USDT": candles})
-        snapshots, realized, _liq_event = await backtester._simulate(
+        snapshots, realized, _liq_event, _lev_changes = await backtester._simulate(
             runners, engine, merged, warmup_ends
         )
 
@@ -1062,7 +1063,7 @@ class TestMultiStrategySameSymbolDispatched:
 
         # Simulate
         merged = PortfolioBacktester._merge_candles({"AAA/USDT": candles})
-        snapshots, trades, _liq_event = await backtester._simulate(
+        snapshots, trades, _liq_event, _lev_changes = await backtester._simulate(
             runners, engine, merged, warmup_ends
         )
 

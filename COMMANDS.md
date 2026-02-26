@@ -562,6 +562,12 @@ uv run python -m scripts.portfolio_backtest --capital 1000 --leverage 6
 # Sortie JSON avec sauvegarde en DB
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 90 --json --save --label "q1_2025"
 
+# Leverage dynamique piloté par régime BTC (Sprint 50b)
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --regime --days auto
+
+# Leverages custom pour le mode régime
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --regime --regime-normal 7 --regime-defensive 4
+
 # A/B test d'un paramètre (params WFO existants, un seul changement)
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --save --label "grid_atr_baseline_hold0"
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --save --label "grid_atr_test_hold48" --params "max_hold_candles=48"
@@ -587,6 +593,9 @@ uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --sa
 | `--output` | — | Fichier de sortie |
 | `--save` | false | Sauvegarder en DB |
 | `--label` | — | Label du run |
+| `--regime` | false | Leverage dynamique piloté par régime BTC (Sprint 50b) |
+| `--regime-normal` | `7` | Leverage en mode normal |
+| `--regime-defensive` | `4` | Leverage en mode defensive |
 
 ---
 
@@ -1135,3 +1144,51 @@ uv run python -m scripts.regime_analysis --detector sma_stress
 # Sans plots (plus rapide)
 uv run python -m scripts.regime_analysis --skip-plots
 ```
+
+---
+
+## 23. Impact Portfolio — Leverage Dynamique (Sprint 50b)
+
+Comparaison A/B/C de l'impact du leverage dynamique piloté par le régime BTC (ema_atr).
+
+- **Run A** : leverage fixe 7x (baseline)
+- **Run B** : leverage fixe 4x (borne conservative)
+- **Run C** : leverage dynamique 7x/4x piloté par ema_atr
+
+### Prérequis
+
+```powershell
+# BTC 4h doit être en DB (voir section 22, Phase 0)
+uv run python -m scripts.backfill_candles --symbol BTC/USDT --timeframe 4h --since 2017-01-01
+```
+
+### Comparaison complète A/B/C
+
+```powershell
+# Comparaison standard (auto-détection période)
+uv run python -m scripts.regime_backtest_compare --strategy grid_atr
+
+# Période fixe
+uv run python -m scripts.regime_backtest_compare --strategy grid_atr --days 365
+
+# Leverages custom
+uv run python -m scripts.regime_backtest_compare --strategy grid_atr --lev-normal 7 --lev-defensive 3
+
+# Output custom
+uv run python -m scripts.regime_backtest_compare --output docs/custom_report.md --plot docs/images/custom_plot.png
+```
+
+### Sorties
+
+- `docs/regime_impact_report.md` — Rapport comparatif (tableau A/B/C, transitions, verdict)
+- `docs/images/regime_equity_curves.png` — Equity curves + drawdown + bandes régime
+
+### Verdict Go/No-Go
+
+| Critère | Condition |
+|---------|-----------|
+| Return OK | Return C >= 80% de Return A |
+| DD OK | \|DD C\| < \|DD A\| |
+| Sharpe OK | Sharpe C >= Sharpe A |
+
+2/3 critères → **GO** | 1/3 → **BORDERLINE** | 0/3 → **NO-GO**
