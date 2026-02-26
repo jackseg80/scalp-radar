@@ -3170,6 +3170,13 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Fichiers modifiés** : `backend/backtesting/multi_engine.py`, `backend/core/logging_setup.py`
   - **Tests mis à jour** : `tests/test_config_assets.py`, `tests/test_dataengine_autoheal.py` (cohérence 20 assets)
   - **4 nouveaux tests** (resampling 4h/1d) → **2028 tests, 2024 passants**, 0 régression
+- **Sprint 54 — Fix leverage WFO : source valeur YAML au lieu du default Pydantic** (fév 2026) :
+  - **Audit** : WFO simulait toutes les stratégies grid avec leverage=6 (default Pydantic hardcodé dans `GridATRConfig`) au lieu de leverage=7 (valeur `strategies.yaml`). `fast_multi_backtest.py` utilisait déjà `bt_config.leverage` correctement dans `_simulate_grid_common()` — seule la source était fausse.
+  - **Root cause** : `walk_forward.py` construisait `default_cfg = config_cls()` (instance Pydantic sans args = defaults hardcodés), puis `bt_config.leverage = default_cfg.leverage` = 6. Même bug dans `report.py` `_validate_leverage_sl()` → warning affichait "leverage 6x" au lieu de "7x".
+  - **Fix `walk_forward.py`** (lignes 573-577) : lecture depuis `get_config().strategies.{strategy_name}.leverage` — singleton thread-safe, pas de rechargement par fenêtre WFO.
+  - **Fix `report.py`** `_validate_leverage_sl()` (lignes 701-705) : même correction pour l'affichage du warning SL × leverage.
+  - **Fichiers modifiés** : `backend/optimization/walk_forward.py`, `backend/optimization/report.py`
+  - **6 nouveaux tests** (propagation YAML, scaling PnL 7x, régression 1x, warning 7x) → **2034 tests, 2034 passants**, 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

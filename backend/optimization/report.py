@@ -700,7 +700,9 @@ def _validate_leverage_sl(strategy_name: str, params: dict) -> list[str]:
 
     config_cls, _ = entry
     default_cfg = config_cls()
-    leverage = getattr(default_cfg, "leverage", 6)
+    from backend.core.config import get_config
+    _yaml_strat = getattr(get_config().strategies, strategy_name, None)
+    leverage = getattr(_yaml_strat, "leverage", None) or getattr(default_cfg, "leverage", 6)
 
     loss_per_margin = sl_pct * leverage / 100
 

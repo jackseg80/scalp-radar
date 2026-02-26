@@ -570,9 +570,11 @@ class WalkForwardOptimizer:
             start_date=data_start,
             end_date=data_end,
         )
-        # Override leverage si la stratégie en spécifie un (ex: envelope_dca=6)
+        # Override leverage depuis strategies.yaml (la valeur réelle, pas le default Pydantic)
         if hasattr(default_cfg, 'leverage'):
-            bt_config.leverage = default_cfg.leverage
+            from backend.core.config import get_config
+            _yaml_strat = getattr(get_config().strategies, strategy_name, None)
+            bt_config.leverage = getattr(_yaml_strat, 'leverage', default_cfg.leverage)
         bt_config_dict = {
             "symbol": bt_config.symbol,
             "start_date": bt_config.start_date,
