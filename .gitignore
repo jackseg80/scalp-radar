@@ -55,3 +55,8 @@ Thumbs.db
 *.bak.*
 *.tmp
 nul
+
+# Docs — contenu généré ou prototype privé
+docs/images/
+docs/prototypes/
+config/old/
