@@ -160,8 +160,8 @@ def test_save_result_sync_updates_is_latest(temp_db):
     assert rows[1][1] == 1  # is_latest=1 pour le nouveau
 
 
-def test_save_result_sync_small_combos_no_steal_is_latest(temp_db):
-    """Un run avec < 10 combos ne doit PAS voler is_latest d'un run complet."""
+def test_save_result_sync_small_combos_takes_is_latest(temp_db):
+    """Le run le plus récent prend is_latest=1 même avec peu de combos."""
     validation = ValidationResult(
         bitget_sharpe=1.0, bitget_net_return_pct=5.0, bitget_trades=20,
         bitget_sharpe_ci_low=0.5, bitget_sharpe_ci_high=1.5,
@@ -203,8 +203,8 @@ def test_save_result_sync_small_combos_no_steal_is_latest(temp_db):
     conn.close()
 
     assert len(rows) == 2
-    assert rows[0] == ("C", 60, 328, 1)  # run complet garde is_latest=1
-    assert rows[1] == ("A", 85, 2, 0)    # petit run a is_latest=0
+    assert rows[0] == ("C", 60, 328, 0)  # ancien run perd is_latest
+    assert rows[1] == ("A", 85, 2, 1)    # run le plus récent prend is_latest=1
 
 
 @pytest.mark.asyncio
@@ -740,7 +740,7 @@ def test_purge_script_keeps_best(temp_db):
 
 
 # ---------------------------------------------------------------------------
-# Sprint 47c — Tests is_latest garde le meilleur score
+# Sprint 47c/54 — Tests is_latest : le run le plus récent prime toujours
 # ---------------------------------------------------------------------------
 
 
@@ -774,8 +774,8 @@ def _make_payload_with_score(
     }
 
 
-def test_is_latest_keeps_better_score(temp_db):
-    """Si le nouveau run a un score inférieur, l'ancien is_latest=1 est conservé."""
+def test_is_latest_newest_wins_regardless_of_score(temp_db):
+    """Le run le plus récent prend is_latest=1, même si son score est inférieur."""
     r_high = _make_report("grid_atr", "BTC/USDT", "1h", 95.0, "2026-02-10T10:00:00")
     save_result_sync(temp_db, r_high, wfo_windows=None, duration=60.0, timeframe="1h")
 
@@ -788,8 +788,8 @@ def test_is_latest_keeps_better_score(temp_db):
     ).fetchall()
     conn.close()
 
-    assert rows[0] == ("1h", 95.0, 1)  # meilleur score → garde is_latest=1
-    assert rows[1] == ("4h", 73.0, 0)  # score inférieur → is_latest=0
+    assert rows[0] == ("1h", 95.0, 0)  # ancien perd is_latest même avec meilleur score
+    assert rows[1] == ("4h", 73.0, 1)  # plus récent → is_latest=1 toujours
 
 
 def test_is_latest_replaced_by_better_score(temp_db):
@@ -828,8 +828,8 @@ def test_is_latest_equal_score_newer_wins(temp_db):
     assert rows[1] == ("4h", 1)   # plus récent → is_latest=1
 
 
-def test_is_latest_payload_sync_keeps_better(temp_db):
-    """save_result_from_payload_sync() conserve is_latest si le score existant est meilleur."""
+def test_is_latest_payload_sync_newest_wins(temp_db):
+    """save_result_from_payload_sync() : le run le plus récent prend is_latest=1."""
     p_high = _make_payload_with_score(95.0, "1h", "2026-02-10T10:00:00")
     p_low = _make_payload_with_score(73.0, "4h", "2026-02-15T10:00:00")
 
@@ -842,5 +842,5 @@ def test_is_latest_payload_sync_keeps_better(temp_db):
     ).fetchall()
     conn.close()
 
-    assert rows[0] == ("1h", 95.0, 1)  # meilleur score conservé
-    assert rows[1] == ("4h", 73.0, 0)  # score inférieur → is_latest=0
+    assert rows[0] == ("1h", 95.0, 0)  # ancien perd is_latest même avec meilleur score
+    assert rows[1] == ("4h", 73.0, 1)  # plus récent → is_latest=1

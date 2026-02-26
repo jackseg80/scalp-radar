@@ -107,39 +107,14 @@ def save_result_sync(
 
         n_combos = report.n_distinct_combos or 0
 
-        # Protection : un run avec très peu de combos (< 10, ex: Explorer avec
-        # grille restreinte) ne doit PAS voler is_latest d'un run complet.
-        if n_combos >= 10:
-            # 1. Vérifier si un résultat existant a un meilleur score
-            existing = conn.execute(
-                """SELECT id, total_score FROM optimization_results
-                   WHERE strategy_name=? AND asset=? AND is_latest=1""",
-                (report.strategy_name, report.symbol),
-            ).fetchone()
-
-            if existing is None or report.total_score >= existing[1]:
-                # Nouveau meilleur ou égal (>= pour préférer les données plus fraîches)
-                if existing is not None:
-                    conn.execute(
-                        """UPDATE optimization_results SET is_latest=0
-                           WHERE strategy_name=? AND asset=? AND is_latest=1""",
-                        (report.strategy_name, report.symbol),
-                    )
-                is_latest_val = 1
-            else:
-                # Ancien résultat meilleur → garder l'ancien, ne pas écraser
-                is_latest_val = 0
-                logger.info(
-                    "Résultat existant meilleur ({:.2f} > {:.2f}), is_latest conservé : {} × {}",
-                    existing[1], report.total_score,
-                    report.strategy_name, report.symbol,
-                )
-        else:
-            is_latest_val = 0
-            logger.warning(
-                "Run local avec peu de combos (n={}), is_latest non modifié : {} × {}",
-                n_combos, report.strategy_name, report.symbol,
-            )
+        # Le run le plus récent est toujours is_latest=1, indépendamment du score.
+        # Les anciens runs peuvent avoir des bugs (ex: mauvais levier) — le nouveau run prime.
+        conn.execute(
+            """UPDATE optimization_results SET is_latest=0
+               WHERE strategy_name=? AND asset=? AND is_latest=1""",
+            (report.strategy_name, report.symbol),
+        )
+        is_latest_val = 1
 
         # 2. Insérer le nouveau
         cursor = conn.execute(
@@ -252,48 +227,16 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
         new_id = cursor.lastrowid
         n_combos = payload.get("n_distinct_combos") or 0
 
-        # Protection : un run avec très peu de combos (< 10) ne doit PAS
-        # voler le flag is_latest d'un run complet existant (push serveur
-        # avec grille restreinte → ne doit pas écraser un run local à 324 combos)
-        new_score = payload.get("total_score") or 0.0
+        # Le run le plus récent est toujours is_latest=1, indépendamment du score.
         strategy = payload["strategy_name"]
         asset = payload["asset"]
 
-        if n_combos >= 10:
-            existing = conn.execute(
-                """SELECT id, total_score FROM optimization_results
-                   WHERE strategy_name=? AND asset=? AND is_latest=1 AND id!=?""",
-                (strategy, asset, new_id),
-            ).fetchone()
-
-            if existing is None or new_score >= existing[1]:
-                # Nouveau meilleur ou égal → il prend is_latest, ancien passe à 0
-                conn.execute(
-                    """UPDATE optimization_results SET is_latest=0
-                       WHERE strategy_name=? AND asset=? AND is_latest=1 AND id!=?""",
-                    (strategy, asset, new_id),
-                )
-                # is_latest reste 1 (inséré avec is_latest=1)
-            else:
-                # Ancien meilleur → rétrograder le nouveau
-                conn.execute(
-                    "UPDATE optimization_results SET is_latest=0 WHERE id=?",
-                    (new_id,),
-                )
-                logger.info(
-                    "Résultat existant meilleur ({:.2f} > {:.2f}), is_latest conservé : {} × {}",
-                    existing[1], new_score, strategy, asset,
-                )
-        else:
-            # Garder is_latest=0 sur le nouveau run (ne pas écraser le bon)
-            conn.execute(
-                "UPDATE optimization_results SET is_latest=0 WHERE id=?",
-                (new_id,),
-            )
-            logger.warning(
-                "Run pushé avec peu de combos (n={}), is_latest non modifié : {} × {}",
-                n_combos, strategy, asset,
-            )
+        conn.execute(
+            """UPDATE optimization_results SET is_latest=0
+               WHERE strategy_name=? AND asset=? AND is_latest=1 AND id!=?""",
+            (strategy, asset, new_id),
+        )
+        # is_latest reste 1 (inséré avec is_latest=1 par défaut)
 
         conn.commit()
 
