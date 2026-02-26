@@ -130,10 +130,7 @@ export default function Scanner({ wsData }) {
     || (strategyFilter && GRID_STRATEGIES.has(strategyFilter))
   const hasMonoStrategies = filteredAssets.some(a => {
     const strats = a.strategies || {}
-    return Object.values(strats).some(s => {
-      const conditions = s.conditions || []
-      return conditions.length > 0 && conditions.some(c => c.name && !c.name.startsWith('Level'))
-    })
+    return Object.keys(strats).some(name => !GRID_STRATEGIES.has(name) && (strats[name].conditions || []).length > 0)
   })
 
   // Nombre de colonnes dynamique pour colSpan du détail

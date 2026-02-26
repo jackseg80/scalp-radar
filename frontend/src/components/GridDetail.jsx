@@ -202,7 +202,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
               <IndicatorRow
                 label="Avg entry"
                 value={formatPrice(gridInfo.avg_entry)}
-                tooltip="Prix d'entr\u00e9e moyen pond\u00e9r\u00e9"
+                tooltip="Prix d'entrée moyen pondéré"
               />
             )}
             {distSma != null && (
@@ -210,7 +210,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
                 label="Dist.SMA"
                 value={`${distSma >= 0 ? '+' : ''}${distSma.toFixed(1)}%`}
                 color={distSma >= 0 ? 'var(--accent)' : 'var(--red)'}
-                tooltip="Distance du prix \u00e0 la SMA (TP grid). 0% = proche du TP"
+                tooltip="Distance du prix à la SMA (TP grid). 0% = proche du TP"
               />
             )}
             {rsi != null && (
@@ -218,7 +218,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
                 label="RSI"
                 value={Number(rsi).toFixed(1)}
                 color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null}
-                tooltip="RSI (14 p\u00e9riodes)"
+                tooltip="RSI (14 périodes)"
               />
             )}
             {adx != null && (
@@ -232,15 +232,15 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
               <IndicatorRow
                 label="ATR %"
                 value={`${Number(atrPct).toFixed(2)}%`}
-                tooltip="Volatilit\u00e9 moyenne (ATR / prix)"
+                tooltip="Volatilité moyenne (ATR / prix)"
               />
             )}
             {regime && (
               <IndicatorRow
-                label="R\u00e9gime"
+                label="Régime"
                 value={regime}
                 badge
-                tooltip="R\u00e9gime de march\u00e9 d\u00e9tect\u00e9"
+                tooltip="Régime de marché détecté"
               />
             )}
           </div>
