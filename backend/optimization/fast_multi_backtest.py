@@ -147,6 +147,7 @@ def _simulate_grid_common(
     trail_atr_arr: np.ndarray | None = None,
     max_hold_candles: int = 0,
     min_profit_pct: float = 0.0,
+    cooldown_candles: int = 0,
 ) -> tuple[list[float], list[float], float]:
     """Boucle chaude unifiée pour toutes les stratégies grid/DCA.
 
@@ -182,6 +183,7 @@ def _simulate_grid_common(
     hwm = 0.0  # High Water Mark (LONG) ou Low Water Mark (SHORT)
     neutral_zone = False
     first_entry_idx = -1  # candle index de la première ouverture du cycle
+    last_exit_candle_idx = -999  # cooldown tracking
 
     # Guard max drawdown WFO
     peak_capital = capital
@@ -224,6 +226,7 @@ def _simulate_grid_common(
                     positions = []
                     hwm = 0.0
                     first_entry_idx = -1
+                    last_exit_candle_idx = i
                 last_dir = cur_dir_int
                 direction = cur_dir_int  # Override le scalar pour TP/SL et entry
 
@@ -348,6 +351,7 @@ def _simulate_grid_common(
                 positions = []
                 hwm = 0.0
                 first_entry_idx = -1
+                last_exit_candle_idx = i
                 # Guard max drawdown WFO — arrêt si peak → capital chute de >80%
                 if capital > peak_capital:
                     peak_capital = capital
@@ -372,7 +376,13 @@ def _simulate_grid_common(
             continue
 
         # 5. Ouvrir de nouvelles positions si niveaux touchés
-        if len(positions) < num_levels:
+        # Cooldown flag — bloque uniquement l'ouverture, pas les exits/trailing
+        can_open_new = not (
+            cooldown_candles > 0
+            and not positions
+            and (i - last_exit_candle_idx) < cooldown_candles
+        )
+        if can_open_new and len(positions) < num_levels:
             filled = {p[0] for p in positions}
             for lvl in range(num_levels):
                 if lvl in filled:
@@ -469,6 +479,7 @@ def _simulate_grid_trend(
         directions=dir_arr,
         trail_mult=trail_mult,
         trail_atr_arr=atr_arr,
+        cooldown_candles=params.get("cooldown_candles", 0),
     )
 
 
@@ -513,6 +524,8 @@ def _simulate_grid_range(
 
     # Positions : (slot_idx, direction, entry_price, qty, entry_fee, entry_sma)
     positions: list[tuple[int, int, float, float, float, float]] = []
+    cooldown_candles = params.get("cooldown_candles", 0)
+    last_exit_candle_idx = -999  # cooldown tracking
 
     # Funding settlement mask (00:00, 08:00, 16:00 UTC)
     funding_rates = cache.funding_rates_1h
@@ -605,6 +618,8 @@ def _simulate_grid_range(
             # Retirer les positions fermées (ordre inverse)
             for idx in reversed(closed_indices):
                 positions.pop(idx)
+            if closed_indices and not positions:
+                last_exit_candle_idx = i
 
         # --- 2. Funding costs aux settlements 8h ---
         if positions and settlement_mask[i] and funding_rates is not None:
@@ -623,7 +638,13 @@ def _simulate_grid_range(
             continue
 
         # --- 5. Ouvrir de nouvelles positions si niveaux touchés ---
-        if len(positions) < total_slots:
+        # Cooldown flag — bloque uniquement l'ouverture
+        can_open_new = not (
+            cooldown_candles > 0
+            and not positions
+            and (i - last_exit_candle_idx) < cooldown_candles
+        )
+        if can_open_new and len(positions) < total_slots:
             filled_slots = {p[0] for p in positions}
             spacing = cur_atr * spacing_mult
 
@@ -943,6 +964,8 @@ def _simulate_grid_boltrend(
     direction = 0  # 0=inactif, 1=LONG, -1=SHORT
     breakout_candle_idx = -1  # candle index du breakout (= première entrée possible)
     max_hold = params.get("max_hold_candles", 0)
+    cooldown_candles = params.get("cooldown_candles", 0)
+    last_exit_candle_idx = -999  # cooldown tracking
 
     # Start index : besoin de SMA long terme valide
     start_idx = max(bol_window, long_ma_window) + 1
@@ -1025,6 +1048,7 @@ def _simulate_grid_boltrend(
                 entry_levels = []
                 direction = 0
                 breakout_candle_idx = -1
+                last_exit_candle_idx = i
                 continue
 
         # === 2. Funding costs aux settlements 8h ===
@@ -1072,7 +1096,14 @@ def _simulate_grid_boltrend(
                     positions.append((lvl, ep, qty, entry_fee))
 
         # === 5. Breakout detection (si grid inactif) ===
-        if direction == 0 and not positions:
+        # Cooldown flag — bloque uniquement le breakout detection, pas les exits
+        can_open_new = not (
+            cooldown_candles > 0
+            and direction == 0
+            and not positions
+            and (i - last_exit_candle_idx) < cooldown_candles
+        )
+        if can_open_new and direction == 0 and not positions:
             prev_close = closes[i - 1]
             prev_upper = bb_upper[i - 1]
             prev_lower = bb_lower[i - 1]
@@ -1419,16 +1450,6 @@ def run_multi_backtest_from_cache(
 
     Retourne (params, sharpe, net_return_pct, profit_factor, n_trades).
     """
-    # Warning cooldown non implémenté (sauf grid_momentum qui le gère nativement)
-    cooldown = params.get("cooldown_candles", 0)
-    if cooldown > 0 and strategy_name != "grid_momentum":
-        import warnings
-        warnings.warn(
-            f"cooldown_candles={cooldown} non implémenté dans le fast engine — "
-            "résultats de backtest optimistes (pas de cooldown)",
-            stacklevel=2,
-        )
-
     if strategy_name == "envelope_dca":
         trade_pnls, trade_returns, final_capital = _simulate_envelope_dca(
             cache, params, bt_config, direction=1,
@@ -1494,6 +1515,7 @@ def _simulate_envelope_dca(
     entry_prices = _build_entry_prices(strategy_name, cache, params, num_levels, direction)
     return _simulate_grid_common(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct, direction,
+        cooldown_candles=params.get("cooldown_candles", 0),
     )
 
 
@@ -1515,6 +1537,7 @@ def _simulate_grid_atr(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct, direction,
         max_hold_candles=params.get("max_hold_candles", 0),
         min_profit_pct=params.get("min_profit_pct", 0.0),
+        cooldown_candles=params.get("cooldown_candles", 0),
     )
 
 
@@ -1537,6 +1560,7 @@ def _simulate_grid_multi_tf(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct,
         direction=1,
         directions=dir_arr,
+        cooldown_candles=params.get("cooldown_candles", 0),
     )
 
 

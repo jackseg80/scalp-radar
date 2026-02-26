@@ -432,3 +432,90 @@ class TestDataclasses:
             entry_price=100, quantity=1, entry_order_id="e1",
         )
         assert pos.entry_fee == 0.0
+
+
+# ─── TestPollingFeeExtraction (Sprint 51 — Hotfix 34 completion) ─────────
+
+
+class TestPollingFeeExtraction:
+    """Tests extraction fees réelles dans les méthodes polling."""
+
+    @pytest.mark.asyncio
+    async def test_polling_position_extracts_fee(self):
+        """_check_position_still_open extrait exit_fee via _fetch_fill_price."""
+        executor = _make_executor()
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=50_000.0, quantity=0.001,
+            entry_order_id="entry_1",
+            sl_order_id="sl_1", tp_order_id="tp_1",
+        )
+
+        # Exchange dit : position fermée
+        executor._exchange.fetch_positions = AsyncMock(return_value=[
+            {"contracts": 0},
+        ])
+        # _fetch_exit_price → 51_000.0
+        executor._fetch_exit_price = AsyncMock(return_value=51_000.0)
+        executor._determine_exit_reason = AsyncMock(return_value="tp_hit")
+        # _fetch_fill_price → (51_000.0, 0.12) — fee réelle
+        executor._fetch_fill_price = AsyncMock(return_value=(51_000.0, 0.12))
+        executor._handle_exchange_close = AsyncMock()
+
+        await executor._check_position_still_open("BTC/USDT:USDT")
+
+        # Vérifier que _handle_exchange_close reçoit exit_fee=0.12
+        executor._handle_exchange_close.assert_awaited_once()
+        call_args = executor._handle_exchange_close.call_args
+        assert call_args[0] == ("BTC/USDT:USDT", 51_000.0, "tp_hit", 0.12)
+
+    @pytest.mark.asyncio
+    async def test_polling_grid_extracts_fee(self):
+        """_check_grid_still_open extrait exit_fee via _fetch_fill_price."""
+        executor = _make_executor()
+        _setup_grid_state(executor)  # Crée un grid state avec sl_order_id="sl_1"
+
+        # Exchange dit : position fermée
+        executor._exchange.fetch_positions = AsyncMock(return_value=[
+            {"contracts": 0},
+        ])
+        executor._fetch_exit_price = AsyncMock(return_value=40_000.0)
+        # _fetch_fill_price → (40_000.0, 0.08) — fee réelle
+        executor._fetch_fill_price = AsyncMock(return_value=(40_000.0, 0.08))
+        executor._handle_grid_sl_executed = AsyncMock()
+
+        await executor._check_grid_still_open("BTC/USDT:USDT")
+
+        executor._handle_grid_sl_executed.assert_awaited_once()
+        call_args = executor._handle_grid_sl_executed.call_args
+        # (symbol, state, exit_price, exit_fee)
+        assert call_args[0][0] == "BTC/USDT:USDT"
+        assert call_args[0][2] == 40_000.0
+        assert call_args[0][3] == 0.08
+
+    @pytest.mark.asyncio
+    async def test_polling_fallback_no_fee(self):
+        """Si _fetch_fill_price échoue, exit_fee=None (fallback estimé)."""
+        executor = _make_executor()
+        executor._positions["BTC/USDT:USDT"] = LivePosition(
+            symbol="BTC/USDT:USDT", direction="LONG",
+            entry_price=50_000.0, quantity=0.001,
+            entry_order_id="entry_1",
+            sl_order_id="sl_1", tp_order_id="tp_1",
+        )
+
+        executor._exchange.fetch_positions = AsyncMock(return_value=[
+            {"contracts": 0},
+        ])
+        executor._fetch_exit_price = AsyncMock(return_value=51_000.0)
+        executor._determine_exit_reason = AsyncMock(return_value="sl_hit")
+        # _fetch_fill_price lève une exception
+        executor._fetch_fill_price = AsyncMock(side_effect=Exception("API error"))
+        executor._handle_exchange_close = AsyncMock()
+
+        await executor._check_position_still_open("BTC/USDT:USDT")
+
+        executor._handle_exchange_close.assert_awaited_once()
+        call_args = executor._handle_exchange_close.call_args
+        # exit_fee doit être None (fallback)
+        assert call_args[0] == ("BTC/USDT:USDT", 51_000.0, "sl_hit", None)

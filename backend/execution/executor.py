@@ -2112,10 +2112,7 @@ class Executor:
                 logger.warning("Executor: erreur polling: {}", e)
 
     async def _check_position_still_open(self, symbol: str) -> None:
-        """Vérifie si une position est toujours ouverte sur l'exchange.
-
-        TODO Hotfix 34 : extraire fees depuis fetch_my_trades dans le polling.
-        """
+        """Vérifie si une position est toujours ouverte sur l'exchange."""
         pos = self._positions.get(symbol)
         if pos is None:
             return
@@ -2134,13 +2131,25 @@ class Executor:
             # Tenter de récupérer le prix de sortie réel
             exit_price = await self._fetch_exit_price(symbol)
             exit_reason = await self._determine_exit_reason(symbol)
-            await self._handle_exchange_close(symbol, exit_price, exit_reason)
+
+            # Hotfix 34 completion : extraire fees réelles
+            exit_fee: float | None = None
+            try:
+                if pos.sl_order_id or pos.tp_order_id:
+                    order_id = pos.tp_order_id or pos.sl_order_id or ""
+                    _, exit_fee = await self._fetch_fill_price(
+                        order_id, symbol, exit_price,
+                    )
+            except Exception:
+                logger.warning(
+                    "Executor: fee extraction failed for {}, using estimate", symbol,
+                )
+                exit_fee = None
+
+            await self._handle_exchange_close(symbol, exit_price, exit_reason, exit_fee)
 
     async def _check_grid_still_open(self, symbol: str) -> None:
-        """Vérifie si la position grid est toujours ouverte sur l'exchange.
-
-        TODO Hotfix 34 : extraire fees depuis fetch_my_trades dans le polling.
-        """
+        """Vérifie si la position grid est toujours ouverte sur l'exchange."""
         state = self._grid_states.get(symbol)
         if state is None:
             return
@@ -2153,7 +2162,22 @@ class Executor:
                 "Executor: grid {} fermée côté exchange (détectée par polling)", symbol,
             )
             exit_price = await self._fetch_exit_price(symbol)
-            await self._handle_grid_sl_executed(symbol, state, exit_price)
+
+            # Hotfix 34 completion : extraire fees réelles
+            exit_fee: float | None = None
+            try:
+                if state.sl_order_id:
+                    _, exit_fee = await self._fetch_fill_price(
+                        state.sl_order_id, symbol, exit_price,
+                    )
+            except Exception:
+                logger.warning(
+                    "Executor: fee extraction failed for grid {}, using estimate",
+                    symbol,
+                )
+                exit_fee = None
+
+            await self._handle_grid_sl_executed(symbol, state, exit_price, exit_fee)
 
     async def _handle_exchange_close(
         self, symbol: str, exit_price: float, exit_reason: str,

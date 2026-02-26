@@ -62,6 +62,33 @@ class MultiPositionEngine:
         precomputed_indicators: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> BacktestResult:
         """Lance le backtest multi-position."""
+        # Copie mutable pour pouvoir ajouter les TF resampleés
+        candles_by_tf = dict(candles_by_tf)
+
+        # Resampleer les TFs manquants depuis 1h si possible
+        # (cas : WFO sélectionne timeframe="4h" mais candles_by_tf n'a que "1h")
+        candles_1h = candles_by_tf.get("1h", [])
+        if candles_1h:
+            needed_tfs: set[str] = set(self._strategy.min_candles.keys())
+            if hasattr(self._strategy, "_config") and hasattr(self._strategy._config, "timeframe"):
+                needed_tfs.add(self._strategy._config.timeframe)
+            for tf in needed_tfs:
+                if tf != "1h" and tf in ("4h", "1d") and not candles_by_tf.get(tf):
+                    from backend.optimization.indicator_cache import resample_candles
+                    resampled = resample_candles(candles_1h, tf)
+                    if resampled:
+                        candles_by_tf[tf] = resampled
+                        logger.info(
+                            "TF {} : resampleé depuis 1h ({} bougies → {} bougies)",
+                            tf, len(candles_1h), len(resampled),
+                        )
+
+        # Ajuster main_tf au TF natif de la stratégie si différent du 1h
+        if hasattr(self._strategy, "_config") and hasattr(self._strategy._config, "timeframe"):
+            strategy_tf = self._strategy._config.timeframe
+            if strategy_tf != main_tf and candles_by_tf.get(strategy_tf):
+                main_tf = strategy_tf
+
         if main_tf not in candles_by_tf or not candles_by_tf[main_tf]:
             raise ValueError(f"Pas de données pour le timeframe principal {main_tf}")
 

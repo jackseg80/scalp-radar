@@ -650,5 +650,160 @@ class TestFastMultiBacktest:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 33-36 : Resampling 1h → 4h/1d dans multi_engine (Sprint 51)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMultiEngineResampling:
+    """Tests du resampling automatique 1h → 4h/1d dans MultiPositionEngine."""
+
+    def test_resample_utc_boundaries_4h(self):
+        """resample_candles respecte les frontières UTC 4h (00h/04h/08h/...)."""
+        from backend.optimization.indicator_cache import resample_candles
+
+        base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        candles_1h = [
+            Candle(
+                symbol="BTC/USDT", exchange="binance", timeframe="1h",
+                timestamp=base + timedelta(hours=i),
+                open=100.0, high=101.0, low=99.0, close=100.0,
+                volume=100.0,
+            )
+            for i in range(8)
+        ]
+
+        result = resample_candles(candles_1h, "4h")
+
+        assert len(result) == 2
+        assert result[0].timestamp == datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        assert result[1].timestamp == datetime(2024, 1, 1, 4, 0, tzinfo=timezone.utc)
+        assert result[0].high == 101.0
+        assert result[0].low == 99.0
+        assert result[0].close == 100.0  # close de la dernière candle 1h du bucket
+
+    def test_resample_utc_boundaries_1d(self):
+        """resample_candles regroupe 24 candles 1h en 1 candle 1d."""
+        from backend.optimization.indicator_cache import resample_candles
+
+        base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        candles_1h = [
+            Candle(
+                symbol="BTC/USDT", exchange="binance", timeframe="1h",
+                timestamp=base + timedelta(hours=i),
+                open=100.0 + i,
+                high=101.0 + i,
+                low=99.0 + i,
+                close=100.0 + i,
+                volume=50.0,
+            )
+            for i in range(48)  # 2 jours complets
+        ]
+
+        result = resample_candles(candles_1h, "1d")
+
+        assert len(result) == 2
+        assert result[0].timestamp == datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        assert result[1].timestamp == datetime(2024, 1, 2, 0, 0, tzinfo=timezone.utc)
+        # Jour 1 : high = max des 24 highs = 101+23 = 124, low = 99+0 = 99
+        assert result[0].high == pytest.approx(124.0)
+        assert result[0].low == pytest.approx(99.0)
+        assert result[0].close == pytest.approx(123.0)  # dernière candle du jour
+
+    def test_multi_engine_4h_resamples_and_produces_trades(self):
+        """multi_engine avec timeframe=4h et seulement des candles 1h produit des trades.
+
+        Reproduit le bug Sprint 51 : WFO sélectionne timeframe=4h, les Phases 2/3
+        ne trouvent pas les candles 4h en DB → 0 trades. Le fix resampleé depuis 1h.
+        """
+        from backend.backtesting.engine import BacktestConfig
+        from backend.backtesting.multi_engine import run_multi_backtest_single
+
+        # 200 candles 1h démarrant à 00:00 UTC (→ 50 candles 4h exactement)
+        base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        candles_1h = [
+            Candle(
+                symbol="BTC/USDT", exchange="binance", timeframe="1h",
+                timestamp=base + timedelta(hours=i),
+                open=100.0, high=101.0, low=99.0, close=100.0,
+                volume=100.0,
+            )
+            for i in range(200)
+        ]
+
+        # grid_atr avec timeframe=4h (le best combo WFO a sélectionné 4h)
+        params = {
+            "timeframe": "4h",
+            "ma_period": 7,
+            "atr_period": 7,
+            "num_levels": 1,
+            "atr_multiplier_start": 0.5,  # entry = SMA - 0.5*ATR ≈ 99.0 → touché par low=99
+            "atr_multiplier_step": 0.5,
+            "sl_percent": 50.0,
+            "leverage": 6,
+        }
+        bt_config = BacktestConfig(
+            symbol="BTC/USDT",
+            start_date=base,
+            end_date=base + timedelta(hours=199),
+            leverage=6,
+        )
+
+        result = run_multi_backtest_single(
+            "grid_atr", params, {"1h": candles_1h}, bt_config, main_tf="1h",
+        )
+
+        # La boucle principale doit tourner sur les 50 candles 4h (pas les 200 candles 1h)
+        assert len(result.equity_curve) == 50, (
+            f"Attendu 50 points equity (granularité 4h), obtenu {len(result.equity_curve)}"
+        )
+        # Des trades doivent avoir été générés (resampling + indicateurs OK)
+        assert len(result.trades) > 0, (
+            "Attendu des trades après resampling 1h→4h — 0 trades indique que les "
+            "indicateurs n'ont pas été calculés (bug original)"
+        )
+
+    def test_multi_engine_1h_unchanged_no_resampling(self):
+        """multi_engine avec timeframe=1h et candles 1h fonctionne sans resampling (régression)."""
+        from backend.backtesting.engine import BacktestConfig
+        from backend.backtesting.multi_engine import run_multi_backtest_single
+
+        base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        candles_1h = [
+            Candle(
+                symbol="BTC/USDT", exchange="binance", timeframe="1h",
+                timestamp=base + timedelta(hours=i),
+                open=100.0, high=101.0, low=99.0, close=100.0,
+                volume=100.0,
+            )
+            for i in range(100)
+        ]
+
+        params = {
+            "timeframe": "1h",
+            "ma_period": 7,
+            "atr_period": 7,
+            "num_levels": 1,
+            "atr_multiplier_start": 0.5,
+            "atr_multiplier_step": 0.5,
+            "sl_percent": 50.0,
+            "leverage": 6,
+        }
+        bt_config = BacktestConfig(
+            symbol="BTC/USDT",
+            start_date=base,
+            end_date=base + timedelta(hours=99),
+            leverage=6,
+        )
+
+        result = run_multi_backtest_single(
+            "grid_atr", params, {"1h": candles_1h}, bt_config, main_tf="1h",
+        )
+
+        # Boucle sur 100 candles 1h (pas de resampling)
+        assert len(result.equity_curve) == 100
+        assert len(result.trades) > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Registry tests → centralisés dans test_strategy_registry.py
 # ═══════════════════════════════════════════════════════════════════════════

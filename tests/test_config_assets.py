@@ -11,9 +11,9 @@ ROOT = Path(__file__).parent.parent
 ASSETS_YAML = ROOT / "config" / "assets.yaml"
 STRATEGIES_YAML = ROOT / "config" / "strategies.yaml"
 
-REMOVED_ASSETS = {"ENJ/USDT", "SUSHI/USDT", "IMX/USDT", "SAND/USDT", "AR/USDT", "APE/USDT", "XTZ/USDT", "JUP/USDT"}
-NEW_ASSETS = {"XRP/USDT", "BCH/USDT", "BNB/USDT", "AAVE/USDT", "ARB/USDT", "OP/USDT", "SUI/USDT"}
-EXPECTED_COUNT = 21
+REMOVED_ASSETS = {"ENJ/USDT", "SUSHI/USDT", "IMX/USDT", "SAND/USDT", "AR/USDT", "APE/USDT", "XTZ/USDT", "JUP/USDT", "ARB/USDT"}
+NEW_ASSETS = {"XRP/USDT", "BCH/USDT", "BNB/USDT", "AAVE/USDT", "OP/USDT", "SUI/USDT"}
+EXPECTED_COUNT = 20
 
 
 @pytest.fixture(scope="module")
@@ -81,13 +81,13 @@ def test_all_per_asset_symbols_in_assets(strategies_config, asset_symbols):
 
 # ─── Timeframes ──────────────────────────────────────────────────────────
 
-# Assets avec timeframes 5m/15m (scalp actif) — BTC/ETH/SOL/DOGE/LINK/XRP + ARB/SUI ajoutés haut-volume
-TOP_SCALP_ASSETS = {"BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "LINK/USDT", "XRP/USDT", "ARB/USDT", "SUI/USDT"}
+# Assets avec timeframes 5m/15m (scalp actif) — BTC/ETH/SOL/DOGE/LINK/XRP/SUI
+TOP_SCALP_ASSETS = {"BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "LINK/USDT", "XRP/USDT", "SUI/USDT"}
 TOP6_ASSETS = TOP_SCALP_ASSETS  # alias rétrocompat
 
 
 def test_timeframes_all_have_1h_4h_1d(assets_config):
-    """Tous les 21 assets ont au moins [1h, 4h, 1d] dans leurs timeframes."""
+    """Tous les 20 assets ont au moins [1h, 4h, 1d] dans leurs timeframes."""
     required = {"1h", "4h", "1d"}
     for asset in assets_config["assets"]:
         tfs = set(asset["timeframes"])

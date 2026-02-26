@@ -7,11 +7,14 @@ Sprint 31 : sink WS pour broadcast WARNING+ en temps réel.
 from __future__ import annotations
 
 import asyncio
+import platform
 import sys
 from collections import deque
 from pathlib import Path
 
 from loguru import logger
+
+_IS_WINDOWS = platform.system() == "Windows"
 
 
 # ─── WS Log Broadcast (Sprint 31) ────────────────────────────────────────
@@ -102,25 +105,39 @@ def setup_logging(
     )
 
     # Fichier principal : JSON structuré, rotation 50MB, rétention 30 jours
+    # Windows : {time} dans le nom évite os.rename() à la rotation
+    # (PermissionError WinError 32 quand antivirus/indexeur verrouille le fichier)
+    # compression désactivée sur Windows pour la même raison (gzip relock le fichier)
+    if _IS_WINDOWS:
+        main_log = log_path / "scalp_radar_{time:YYYY-MM-DD_HH-mm-ss}.log"
+        error_log = log_path / "errors_{time:YYYY-MM-DD_HH-mm-ss}.log"
+        compression = None
+    else:
+        main_log = log_path / "scalp_radar.log"
+        error_log = log_path / "errors.log"
+        compression = "gz"
+
     logger.add(
-        log_path / "scalp_radar.log",
+        main_log,
         level=level,
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}",
         rotation="50 MB",
         retention="30 days",
-        compression="gz",
+        compression=compression,
         serialize=True,
+        enqueue=True,
     )
 
     # Fichier erreurs séparé
     logger.add(
-        log_path / "errors.log",
+        error_log,
         level="ERROR",
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}",
         rotation="50 MB",
         retention="30 days",
-        compression="gz",
+        compression=compression,
         serialize=True,
+        enqueue=True,
     )
 
     # Sink WS : broadcast WARNING+ vers les clients WebSocket connectés

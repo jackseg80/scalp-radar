@@ -220,19 +220,6 @@ assets:
   min_order_size: 0.1
   tick_size: 0.0001
   correlation_group: altcoins
-- symbol: ARB/USDT
-  exchange: bitget
-  type: futures
-  timeframes:
-  - 5m
-  - 15m
-  - 1h
-  - 4h
-  - 1d
-  max_leverage: 20
-  min_order_size: 0.01
-  tick_size: 0.0001
-  correlation_group: crypto_alt
 - symbol: SUI/USDT
   exchange: bitget
   type: futures
