@@ -197,6 +197,24 @@ class TestResetEndpoint:
         assert resp.json()["status"] == "not_triggered"
 
     @pytest.mark.asyncio
+    async def test_reset_endpoint_runner_triggered_without_global(self):
+        """POST reset quand global=False mais un runner a kill_switch_triggered=True."""
+        mock_app = _setup_mock_app(kill_switch=False)
+        # Simuler un runner avec kill switch individuel déclenché
+        mock_app.state.simulator.runners[0]._kill_switch_triggered = True
+        mock_app.state.simulator.reset_kill_switch.return_value = 1
+
+        transport = ASGITransport(app=mock_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/simulator/kill-switch/reset", headers={"X-API-Key": _TEST_API_KEY})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "reset"
+        assert data["runners_reactivated"] == 1
+        mock_app.state.simulator.reset_kill_switch.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_reset_endpoint_notifies_telegram(self):
         """POST reset envoie une alerte Telegram."""
         mock_app = _setup_mock_app(kill_switch=True)

@@ -121,7 +121,10 @@ async def reset_kill_switch(request: Request) -> dict:
     if simulator is None:
         return {"error": "Simulator non disponible", "status": "error"}
 
-    if not simulator._global_kill_switch:
+    any_runner_triggered = any(
+        r._kill_switch_triggered for r in simulator.runners
+    )
+    if not simulator._global_kill_switch and not any_runner_triggered:
         return {"status": "not_triggered", "message": "Kill switch non actif"}
 
     reactivated = simulator.reset_kill_switch()
