@@ -212,24 +212,24 @@ grid_atr:
   weight: 0.2
   per_asset:
     AAVE/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 1.0
-      atr_period: 14
+      atr_multiplier_start: 2.5
+      atr_multiplier_step: 1.5
+      atr_period: 20
       ma_period: 7
       min_grid_spacing_pct: 1.8
       min_profit_pct: 0.0
       num_levels: 4
-      sl_percent: 20.0
+      sl_percent: 25.0
       timeframe: 1h
     ADA/USDT:
-      atr_multiplier_start: 2.5
-      atr_multiplier_step: 1.0
+      atr_multiplier_start: 3.0
+      atr_multiplier_step: 1.5
       atr_period: 14
-      ma_period: 7
+      ma_period: 10
       min_grid_spacing_pct: 1.2
       min_profit_pct: 0.0
       num_levels: 4
-      sl_percent: 20.0
+      sl_percent: 15.0
       timeframe: 1h
     AVAX/USDT:
       atr_multiplier_start: 2.5
@@ -261,26 +261,6 @@ grid_atr:
       num_levels: 4
       sl_percent: 15.0
       timeframe: 1h
-    BTC/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 14
-      ma_period: 7
-      min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 20.0
-      timeframe: 1h
-    CRV/USDT:
-      atr_multiplier_start: 1.0
-      atr_multiplier_step: 1.0
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 25.0
-      timeframe: 1h
     DOGE/USDT:
       atr_multiplier_start: 2.0
       atr_multiplier_step: 1.0
@@ -294,12 +274,22 @@ grid_atr:
     DYDX/USDT:
       atr_multiplier_start: 3.0
       atr_multiplier_step: 1.5
-      atr_period: 20
+      atr_period: 14
+      ma_period: 7
+      min_grid_spacing_pct: 1.2
+      min_profit_pct: 0.4
+      num_levels: 4
+      sl_percent: 20.0
+      timeframe: 1h
+    ETH/USDT:
+      atr_multiplier_start: 2.5
+      atr_multiplier_step: 1.0
+      atr_period: 10
       ma_period: 7
       min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.2
-      num_levels: 3
-      sl_percent: 15.0
+      min_profit_pct: 0.0
+      num_levels: 4
+      sl_percent: 25.0
       timeframe: 1h
     FET/USDT:
       atr_multiplier_start: 1.0
@@ -316,49 +306,19 @@ grid_atr:
       atr_multiplier_step: 1.5
       atr_period: 10
       ma_period: 7
-      min_grid_spacing_pct: 1.2
-      min_profit_pct: 0.2
+      min_grid_spacing_pct: 1.8
+      min_profit_pct: 0.0
       num_levels: 3
       sl_percent: 20.0
       timeframe: 1h
-    ICP/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.5
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.0
-      num_levels: 3
-      sl_percent: 25.0
-      timeframe: 1h
-    LINK/USDT:
-      atr_multiplier_start: 1.0
-      atr_multiplier_step: 1.0
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 25.0
-      timeframe: 1h
     NEAR/USDT:
       atr_multiplier_start: 2.5
-      atr_multiplier_step: 1.0
+      atr_multiplier_step: 1.5
       atr_period: 14
       ma_period: 7
       min_grid_spacing_pct: 1.8
       min_profit_pct: 0.0
       num_levels: 4
-      sl_percent: 20.0
-      timeframe: 1h
-    OP/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.5
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.0
-      num_levels: 3
       sl_percent: 25.0
       timeframe: 1h
     SOL/USDT:
@@ -369,26 +329,6 @@ grid_atr:
       min_grid_spacing_pct: 1.8
       min_profit_pct: 0.0
       num_levels: 4
-      sl_percent: 25.0
-      timeframe: 1h
-    SUI/USDT:
-      atr_multiplier_start: 1.0
-      atr_multiplier_step: 1.5
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.0
-      num_levels: 3
-      sl_percent: 25.0
-      timeframe: 1h
-    UNI/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.5
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.0
-      num_levels: 3
       sl_percent: 25.0
       timeframe: 1h
     XRP/USDT:
