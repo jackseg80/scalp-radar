@@ -110,14 +110,16 @@ def _find_trough_details(
     )
 
 
-def _print_detail(d: TroughDetail, initial_capital: float) -> None:
+def _print_detail(d: TroughDetail, initial_capital: float, n_days: int = 365) -> None:
     """Affiche les détails du max DD pour un leverage donné."""
     print(f"\n{'='*60}")
     print(f"  LEVERAGE : {d.leverage}x")
     print(f"{'='*60}")
     print(f"  Return total         : {d.total_return_pct:+.1f}%")
     print(f"  Max DD               : {d.max_dd_pct:.1f}%")
-    print(f"  Calmar               : {d.total_return_pct / abs(d.max_dd_pct):.2f}")
+    n_years = max(n_days / 365.25, 0.1)
+    calmar_val = (d.total_return_pct / n_years) / abs(d.max_dd_pct) if d.max_dd_pct != 0 else 0.0
+    print(f"  Calmar (ann.)        : {calmar_val:.2f}")
     print()
     print(f"  Peak equity          : {d.peak_equity:,.0f}$ ({d.peak_date.strftime('%Y-%m-%d')})")
     print(f"  Trough equity        : {d.trough_equity:,.0f}$ ({d.trough_date.strftime('%Y-%m-%d')})")
@@ -148,7 +150,7 @@ def _print_detail(d: TroughDetail, initial_capital: float) -> None:
         print(f"    → Mainly unrealized losses (positions DCA toujours ouvertes)")
 
 
-def _compare(details: list[TroughDetail]) -> None:
+def _compare(details: list[TroughDetail], n_days: int = 365) -> None:
     """Compare les dates et métriques clés entre leverages."""
     if len(details) < 2:
         return
@@ -172,7 +174,8 @@ def _compare(details: list[TroughDetail]) -> None:
     print(f"  {'Lev':>4}  {'Return%':>9}  {'DD%':>7}  {'Calmar':>7}  {'Positions':>9}  {'MarginR%':>9}")
     print(f"  {'-'*4}  {'-'*9}  {'-'*7}  {'-'*7}  {'-'*9}  {'-'*9}")
     for d in details:
-        calmar = d.total_return_pct / abs(d.max_dd_pct) if d.max_dd_pct != 0 else 999
+        n_yr = max(n_days / 365.25, 0.1) if n_days else 1.0
+        calmar = (d.total_return_pct / n_yr) / abs(d.max_dd_pct) if d.max_dd_pct != 0 else 999
         print(
             f"  {d.leverage:>3}x  {d.total_return_pct:>+8.1f}%  {d.max_dd_pct:>6.1f}%"
             f"  {calmar:>7.2f}  {d.trough_positions:>9d}  {d.trough_margin_ratio*100:>8.1f}%"
@@ -254,10 +257,10 @@ async def _main(
         detail = _find_trough_details(result.snapshots, capital, lev)
         if detail:
             results.append(detail)
-            _print_detail(detail, capital)
+            _print_detail(detail, capital, n_days=days)
 
     if len(results) >= 2:
-        _compare(results)
+        _compare(results, n_days=days)
 
     await db.close()
 

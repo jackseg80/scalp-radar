@@ -889,11 +889,14 @@ class TestGridTrendFastEngine:
         dir_arr[long_mask] = 1.0
         dir_arr[short_mask] = -1.0
 
-        for i in range(n):
+        # Après shift look-ahead (sprint 56), ep[i] utilise indicateurs de [i-1]
+        # i=0 est toujours NaN (pas de candle précédente)
+        assert np.isnan(ep[0, 0]), "i=0 doit être NaN (pas de candle précédente)"
+        for i in range(1, n):
             has_entry = not np.isnan(ep[i, 0])
-            has_direction = dir_arr[i] != 0
+            has_direction = dir_arr[i - 1] != 0  # indicateurs de i-1
             assert has_entry == has_direction, (
-                f"Bougie {i}: entry_nan={not has_entry}, dir={dir_arr[i]}"
+                f"Bougie {i}: entry_nan={not has_entry}, dir[{i-1}]={dir_arr[i-1]}"
             )
 
     def test_multiple_levels_filled(self, make_indicator_cache):

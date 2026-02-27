@@ -54,9 +54,13 @@ def _calc_sharpe(snapshots: list[PortfolioSnapshot]) -> float:
     return (mean_r / std_r * (24 * 365) ** 0.5) if std_r > 0 else 0.0
 
 
-def _calc_calmar(total_return_pct: float, max_dd_pct: float) -> float:
-    """Calmar ratio = return / abs(max_dd)."""
-    return total_return_pct / abs(max_dd_pct) if max_dd_pct != 0 else 0.0
+def _calc_calmar(total_return_pct: float, max_dd_pct: float, n_days: int = 365) -> float:
+    """Calmar annualisé = (return_pct / n_years) / |max_dd_pct|."""
+    if max_dd_pct == 0:
+        return float("inf") if total_return_pct > 0 else 0.0
+    n_years = max(n_days / 365.25, 0.1)
+    annual_return_pct = total_return_pct / n_years
+    return round(annual_return_pct / abs(max_dd_pct), 2)
 
 
 def _compute_verdict(
@@ -402,9 +406,9 @@ async def main(args: argparse.Namespace) -> None:
     sharpe_a = _calc_sharpe(result_a.snapshots)
     sharpe_b = _calc_sharpe(result_b.snapshots)
     sharpe_c = _calc_sharpe(result_c.snapshots)
-    calmar_a = _calc_calmar(result_a.total_return_pct, result_a.max_drawdown_pct)
-    calmar_b = _calc_calmar(result_b.total_return_pct, result_b.max_drawdown_pct)
-    calmar_c = _calc_calmar(result_c.total_return_pct, result_c.max_drawdown_pct)
+    calmar_a = _calc_calmar(result_a.total_return_pct, result_a.max_drawdown_pct, days)
+    calmar_b = _calc_calmar(result_b.total_return_pct, result_b.max_drawdown_pct, days)
+    calmar_c = _calc_calmar(result_c.total_return_pct, result_c.max_drawdown_pct, days)
 
     verdict, criteria = _compute_verdict(
         return_a=result_a.total_return_pct,

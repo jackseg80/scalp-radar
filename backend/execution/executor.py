@@ -864,9 +864,22 @@ class Executor:
                 if quantity <= 0:
                     continue
 
+                # Sprint 56: margin guard 70% — bloquer si marge totale dépasse le seuil
+                level_margin = level.size_fraction * allocated_balance
+                max_margin_ratio = getattr(self._config.risk, "max_margin_ratio", 0.70)
+                if not isinstance(max_margin_ratio, (int, float)):
+                    max_margin_ratio = 0.70
+                if available_balance > 0:
+                    total_margin_used = self._pending_notional
+                    if (total_margin_used + level_margin) / available_balance > max_margin_ratio:
+                        logger.warning(
+                            "Executor: margin guard {:.0f}% — skip {} level {}",
+                            max_margin_ratio * 100, futures_sym, level.index,
+                        )
+                        continue
+
                 # Marquer comme pending AVANT l'appel async
                 self._pending_levels.add(pending_key)
-                level_margin = level.size_fraction * allocated_balance
                 self._pending_notional += level_margin
 
                 event = TradeEvent(

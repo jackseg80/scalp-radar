@@ -193,9 +193,12 @@ class TestBuildEntryPrices:
         }
         ep = _build_entry_prices("grid_atr", cache, params, 2, direction=1)
 
-        assert math.isnan(ep[5, 0])   # ATR NaN
-        assert math.isnan(ep[10, 0])  # ATR = 0
-        assert math.isnan(ep[15, 0])  # ATR < 0
+        # Après le shift look-ahead (i utilise i-1), les NaN sont à i+1
+        assert math.isnan(ep[6, 0])   # ATR NaN at [5] → visible at [6]
+        assert math.isnan(ep[11, 0])  # ATR = 0 at [10] → visible at [11]
+        assert math.isnan(ep[16, 0])  # ATR < 0 at [15] → visible at [16]
+        # i=0 toujours NaN (pas de candle précédente)
+        assert math.isnan(ep[0, 0])
         # Candle valide
         assert not math.isnan(ep[20, 0])
 
@@ -291,10 +294,10 @@ class TestFastEngineStrategies:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-# Valeurs capturées post-Sprint 53 (kill switch 25% DD, seed=42, n=500, vol=2.0)
-_EXPECTED_ENVELOPE_DCA = (55.07379699608408, 17747.027984128632, 16.15486693516688, 44)
-_EXPECTED_ENVELOPE_DCA_SHORT = (46.24361182650609, 3566.0674700235595, 11.466820297539478, 34)
-_EXPECTED_GRID_ATR = (39.7917268828769, 12630.531820709128, 3.4890308788469926, 57)
+# Valeurs capturées post-Sprint 56 (look-ahead fix, slippage, margin guard, seed=42, n=500, vol=2.0)
+_EXPECTED_ENVELOPE_DCA = (51.45587921202072, 24579.84946368663, 14.350727779463098, 48)
+_EXPECTED_ENVELOPE_DCA_SHORT = (45.571870934729766, 4266.514200648141, 10.619894422789638, 38)
+_EXPECTED_GRID_ATR = (33.29853014825827, 5633.459636806401, 3.2603291267265373, 54)
 
 
 class TestParityBitwise:

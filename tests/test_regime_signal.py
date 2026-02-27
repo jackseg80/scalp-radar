@@ -347,13 +347,15 @@ class TestReportMetrics:
         assert sharpe > 0  # Equity croissante → Sharpe positif
 
     def test_calmar_calculation(self):
-        """Calmar = return / abs(max_dd)."""
+        """Calmar annualisé = (return / n_years) / abs(max_dd)."""
         from scripts.regime_backtest_compare import _calc_calmar
 
-        assert _calc_calmar(100.0, -10.0) == pytest.approx(10.0)
-        assert _calc_calmar(50.0, -25.0) == pytest.approx(2.0)
+        # 365j ≈ 1 an (365/365.25 = 0.9993)
+        n_yr = 365 / 365.25
+        assert _calc_calmar(100.0, -10.0) == pytest.approx(round((100 / n_yr) / 10, 2))
+        assert _calc_calmar(50.0, -25.0) == pytest.approx(round((50 / n_yr) / 25, 2))
         assert _calc_calmar(0.0, -5.0) == pytest.approx(0.0)
-        assert _calc_calmar(10.0, 0.0) == 0.0  # Division par zéro
+        assert _calc_calmar(10.0, 0.0) == float("inf")  # return > 0, dd = 0 → inf
 
     def test_verdict_go(self):
         """2/3 critères → GO."""

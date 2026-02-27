@@ -73,6 +73,8 @@ class WFOResult:
     recommended_params: dict[str, Any]
     all_oos_trades: list[TradeResult]
     n_distinct_combos: int
+    # Sprint 56: trades OOS groupés par fenêtre (pas mélangés entre combos)
+    oos_trades_by_window: list[list[TradeResult]] = field(default_factory=list)
     combo_results: list[dict[str, Any]] = field(default_factory=list)
     window_regimes: list[dict[str, Any]] = field(default_factory=list)
     regime_analysis: dict[str, dict[str, Any]] | None = None
@@ -211,15 +213,13 @@ def _filter_sl_leverage(
     grid: list[dict[str, Any]],
     leverage: int | float,
     threshold: float = 1.5,
-    min_combos: int = 50,
 ) -> list[dict[str, Any]]:
     """Filtre les combos dont sl_percent × leverage / 100 > threshold.
 
     Un SL trop large par rapport au levier rend la position irréaliste
     (perte par SL dépasse la marge en cross margin).
 
-    Si le filtre réduit à moins de *min_combos*, on garde les N combos
-    avec le sl_percent le plus bas (moins risqués).
+    Aucun fallback : tous les combos invalides sont exclus sans exception.
     """
     if not grid or "sl_percent" not in grid[0]:
         return grid
@@ -232,19 +232,16 @@ def _filter_sl_leverage(
     before = len(grid)
     after = len(filtered)
 
-    if after < min_combos and before > 0:
-        sorted_by_sl = sorted(grid, key=lambda c: c["sl_percent"])
-        filtered = sorted_by_sl[: min(min_combos, before)]
-        after = len(filtered)
-        logger.warning(
-            "Filtre SL×leverage trop agressif ({} → {} combos), "
-            "garde {} combos triés par SL croissant (leverage={}x)",
-            before, before - after, after, leverage,
-        )
-    elif before != after:
+    if before != after:
         logger.info(
             "Filtre SL×leverage (seuil {:.0%}) : {} → {} combos (leverage={}x)",
             threshold, before, after, leverage,
+        )
+    if after == 0 and before > 0:
+        logger.warning(
+            "Filtre SL×leverage a exclu TOUS les combos (leverage={}x, seuil {:.0%}). "
+            "Vérifier param_grids.yaml — sl_percent min trop élevé.",
+            leverage, threshold,
         )
 
     return filtered
@@ -486,6 +483,10 @@ class WalkForwardOptimizer:
 
         # Stratégie config pour le timeframe
         from backend.optimization import STRATEGY_REGISTRY, is_grid_strategy
+
+        # Sprint 56: embargo default 7j pour les stratégies grid (positions 3-7j)
+        if embargo_days == 0 and is_grid_strategy(strategy_name):
+            embargo_days = 7
         if strategy_name not in STRATEGY_REGISTRY:
             raise ValueError(f"Stratégie '{strategy_name}' non optimisable")
 
@@ -596,18 +597,7 @@ class WalkForwardOptimizer:
         grid_values = {**strategy_grids.get("default", {}), **strategy_grids.get(symbol, {})}
         logger.info("Grid complet : {} combinaisons", len(full_grid))
 
-        # Grid search en 2 passes
-        coarse_max = 200
-        if len(full_grid) > coarse_max:
-            coarse_grid = _latin_hypercube_sample(full_grid, coarse_max)
-            logger.info("Coarse pass : {} combinaisons (LHS)", len(coarse_grid))
-        else:
-            coarse_grid = full_grid
-
-        n_workers = max_workers or min(os.cpu_count() or 8, 8)
-        n_distinct_combos = len(coarse_grid)
-
-        # Backtest config
+        # Backtest config (avant filtrage — leverage nécessaire pour le filtre)
         bt_config = BacktestConfig(
             symbol=symbol,
             start_date=data_start,
@@ -619,8 +609,19 @@ class WalkForwardOptimizer:
             _yaml_strat = getattr(get_config().strategies, strategy_name, None)
             bt_config.leverage = getattr(_yaml_strat, 'leverage', default_cfg.leverage)
 
-        # Sprint 53 : filtrer SL × leverage > 150% (irréaliste en cross margin)
+        # Sprint 53 : filtrer SL × leverage > 150% AVANT le sampling coarse
         full_grid = _filter_sl_leverage(full_grid, bt_config.leverage)
+
+        # Grid search en 2 passes
+        coarse_max = 200
+        if len(full_grid) > coarse_max:
+            coarse_grid = _latin_hypercube_sample(full_grid, coarse_max)
+            logger.info("Coarse pass : {} combinaisons (LHS)", len(coarse_grid))
+        else:
+            coarse_grid = full_grid
+
+        n_workers = max_workers or min(os.cpu_count() or 8, 8)
+        n_distinct_combos = len(coarse_grid)
 
         bt_config_dict = {
             "symbol": bt_config.symbol,
@@ -640,6 +641,7 @@ class WalkForwardOptimizer:
         # Optimisation par fenêtre
         window_results: list[WindowResult] = []
         all_oos_trades: list[TradeResult] = []
+        oos_trades_by_window: list[list[TradeResult]] = []
 
         # Accumulateur combo results cross-fenêtre (Sprint 14b)
         # Skip si stratégie sans fast engine (trop lent)
@@ -827,6 +829,7 @@ class WalkForwardOptimizer:
                 oos_metrics = calculate_metrics(oos_result)
 
                 all_oos_trades.extend(oos_result.trades)
+                oos_trades_by_window.append(list(oos_result.trades))
 
                 # OOS Sharpe = NaN si < 3 trades (non significatif)
                 oos_sharpe = (
@@ -1011,6 +1014,7 @@ class WalkForwardOptimizer:
             consistency_rate=consistency,
             recommended_params=recommended,
             all_oos_trades=all_oos_trades,
+            oos_trades_by_window=oos_trades_by_window,
             n_distinct_combos=n_distinct_combos,
             combo_results=combo_results,
             window_regimes=window_regimes,

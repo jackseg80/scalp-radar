@@ -142,7 +142,11 @@ class OverfitDetector:
         seed: int | None = 42,
         observed_sharpe: float | None = None,
     ) -> MonteCarloResult:
-        """Permute des blocs de trades consécutifs pour respecter la corrélation temporelle.
+        """Circular block bootstrap avec resample (tirage avec remplacement).
+
+        Tire n_blocks blocs avec remplacement pour créer chaque séquence simulée.
+        Cela brise la structure temporelle des rendements tout en préservant
+        l'autocorrélation intra-bloc → le Sharpe simulé VARIE entre simulations.
 
         Block size fixe à 7 pour préserver la corrélation temporelle des trades
         (essentiel pour les stratégies DCA dont l'edge repose sur le timing).
@@ -155,11 +159,11 @@ class OverfitDetector:
             block_size: Taille des blocs (défaut 7).
             seed: Graine pour reproductibilité. None = aléatoire.
             observed_sharpe: Sharpe OOS du best combo. Si fourni, le MC compare
-                les shuffles à cette valeur au lieu du Sharpe calculé depuis les
+                les bootstraps à cette valeur au lieu du Sharpe calculé depuis les
                 trades (qui mélangent plusieurs jeux de params).
 
         Returns:
-            MonteCarloResult avec p_value et distribution des Sharpe permutés.
+            MonteCarloResult avec p_value et distribution des Sharpe bootstrappés.
         """
         if len(trades) < 5:
             return MonteCarloResult(
@@ -190,16 +194,17 @@ class OverfitDetector:
         for i in range(0, len(returns), block_size):
             blocks.append(returns[i:i + block_size])
 
+        n_blocks = len(blocks)
         rng = np.random.default_rng(seed)
         distribution = []
 
         for _ in range(n_sims):
-            # Shuffle les blocs
-            shuffled_indices = rng.permutation(len(blocks))
-            shuffled_returns = []
-            for idx in shuffled_indices:
-                shuffled_returns.extend(blocks[idx])
-            sim_sharpe = self._sharpe_from_returns(shuffled_returns)
+            # Circular block bootstrap : tirage AVEC remplacement
+            sampled_indices = rng.integers(0, n_blocks, size=n_blocks)
+            bootstrapped_returns = []
+            for idx in sampled_indices:
+                bootstrapped_returns.extend(blocks[idx])
+            sim_sharpe = self._sharpe_from_returns(bootstrapped_returns)
             distribution.append(sim_sharpe)
 
         # p-value = % de simulations avec Sharpe >= Sharpe observé
@@ -239,10 +244,13 @@ class OverfitDetector:
         e_max_sr = self._expected_max_sharpe(n_trials)
 
         # PSR avec correction skew/kurtosis
+        # Sprint 56 fix: _kurtosis() retourne le raw kurtosis (4e moment), pas excess.
+        # Formule BLdP: (excess_kurtosis - 1)/4 = (raw_kurtosis - 3 - 1)/4 = (raw - 4)/4
+        excess_kurtosis = kurtosis - 3.0  # raw → excess
         denom_sq = (
             1
             - skewness * observed_sharpe
-            + (kurtosis - 1) / 4 * observed_sharpe ** 2
+            + (excess_kurtosis - 1) / 4 * observed_sharpe ** 2
         )
         if denom_sq <= 0:
             denom_sq = 1e-6

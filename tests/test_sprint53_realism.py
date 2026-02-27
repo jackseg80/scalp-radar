@@ -5,6 +5,7 @@ Couvre :
 - Section 2 : Kill switch grid engine (3 tests)
 - Section 3 : Kill switch scalp engine (1 test)
 - Section 4 : Filtre fine_grid (1 test)
+- Section 5 : Pipeline complet coarse+fine — aucun combo invalide (1 test)
 """
 
 from __future__ import annotations
@@ -61,8 +62,7 @@ class TestFilterSlLeverage:
             {"sl_percent": 20.0, "ma_period": 7},
             {"sl_percent": 25.0, "ma_period": 7},
         ]
-        # min_combos=1 pour ne pas déclencher le guard (grille de test petite)
-        filtered = _filter_sl_leverage(grid, leverage=7, threshold=1.5, min_combos=1)
+        filtered = _filter_sl_leverage(grid, leverage=7, threshold=1.5)
         assert len(filtered) == 2
         assert all(c["sl_percent"] <= 20.0 for c in filtered)
 
@@ -75,19 +75,16 @@ class TestFilterSlLeverage:
         filtered = _filter_sl_leverage(grid, leverage=7)
         assert len(filtered) == 2
 
-    def test_min_combos_guard(self):
-        """Si tous invalides, garde min_combos triés par SL croissant."""
+    def test_all_invalid_returns_empty(self):
+        """Si tous invalides, retourne une liste vide (pas de fallback)."""
         grid = [
             {"sl_percent": 30.0, "other": 1},
             {"sl_percent": 25.0, "other": 2},
             {"sl_percent": 35.0, "other": 3},
         ]
-        # Tous dépassent 150% à 7x, mais min_combos=2
-        filtered = _filter_sl_leverage(grid, leverage=7, threshold=1.5, min_combos=2)
-        assert len(filtered) == 2
-        # Les deux avec le SL le plus bas
-        assert filtered[0]["sl_percent"] == 25.0
-        assert filtered[1]["sl_percent"] == 30.0
+        # Tous dépassent 150% à 7x → aucun combo retourné
+        filtered = _filter_sl_leverage(grid, leverage=7, threshold=1.5)
+        assert len(filtered) == 0
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -300,6 +297,63 @@ class TestFilterFineGrid:
         assert has_25, "Fine grid devrait générer sl_percent=25 via ±1 step"
 
         # Après filtre à 7x : sl=25 × 7 / 100 = 1.75 > 1.5 → filtré
-        filtered = _filter_sl_leverage(fine, leverage=7, threshold=1.5, min_combos=1)
+        filtered = _filter_sl_leverage(fine, leverage=7, threshold=1.5)
         has_25_after = any(c["sl_percent"] == 25.0 for c in filtered)
         assert not has_25_after, "sl_percent=25 à 7x devrait être filtré"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Section 5 : Pipeline complet — aucun combo SL×lev > 150% ne passe
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class TestNoInvalidComboInPipeline:
+    def test_full_pipeline_no_invalid_sl(self):
+        """Simule le pipeline coarse → fine : aucun combo sl×lev > 1.5 ne survit."""
+        from backend.optimization.walk_forward import _latin_hypercube_sample
+
+        leverage = 7
+        threshold = 1.5
+
+        # Grille réaliste : certains combos invalides à 7x
+        grid_values = {
+            "ma_period": [7, 10, 14, 21],
+            "sl_percent": [10.0, 15.0, 20.0, 25.0, 30.0],
+        }
+        full_grid = [
+            {"ma_period": m, "sl_percent": s}
+            for m in grid_values["ma_period"]
+            for s in grid_values["sl_percent"]
+        ]
+        assert len(full_grid) == 20
+
+        # 1. Filtre full_grid AVANT coarse sampling (comme le fix)
+        full_grid = _filter_sl_leverage(full_grid, leverage, threshold)
+        assert all(
+            c["sl_percent"] / 100 * leverage <= threshold for c in full_grid
+        ), "full_grid doit être propre après filtre"
+
+        # 2. Coarse = sample de full_grid filtré
+        coarse_grid = _latin_hypercube_sample(full_grid, min(10, len(full_grid)))
+        assert all(
+            c["sl_percent"] / 100 * leverage <= threshold for c in coarse_grid
+        ), "coarse_grid ne doit contenir aucun combo invalide"
+
+        # 3. Fine grid autour du top (simuler un top avec sl=20, le max valide)
+        top_params = [{"ma_period": 14, "sl_percent": 20.0}]
+        fine_grid = _fine_grid_around_top(top_params, grid_values)
+        # Fine grid PEUT contenir sl=25 (±1 step) — le filtre le supprime
+        fine_grid = _filter_sl_leverage(fine_grid, leverage, threshold)
+        assert all(
+            c["sl_percent"] / 100 * leverage <= threshold for c in fine_grid
+        ), "fine_grid ne doit contenir aucun combo invalide après filtre"
+
+        # 4. Résultats combinés
+        all_combos = coarse_grid + fine_grid
+        invalid = [
+            c for c in all_combos
+            if c["sl_percent"] / 100 * leverage > threshold
+        ]
+        assert invalid == [], (
+            f"Combos invalides dans le pipeline : {invalid}"
+        )

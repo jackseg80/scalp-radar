@@ -2902,11 +2902,11 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (27 février 2026)
 
-- **2058 tests, 2054 passants** (4 TestLeverageValidation échouent depuis Sprint 52 leverage 5x), +16 Sprint 56 partial fill
-- **Phases 1-5 terminées + Sprints 1-55 + **Sprint 56 Partial Fill Protection****
-- **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
+- **2081 tests, 2081 passants** (0 échec), +19 Sprint 57 réalisme backtest + 10 mis à jour
+- **Phases 1-5 terminées + Sprints 1-57**
+- **Phase 6 en cours** — pipeline backtest corrigé (11 biais/erreurs éliminés), WFO à relancer
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
-- **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP, SUI)
+- **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **grid_momentum** : **ABANDONNÉ** — WFO terminé (1 Grade B / 21 assets, faux breakouts crypto)
@@ -3194,6 +3194,21 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **`AnomalyType.PARTIAL_FILL`** ajouté dans `notifier.py` (cooldown 60s, alerte Telegram à chaque occurrence).
   - **Fichiers modifiés** : `backend/alerts/notifier.py`, `backend/execution/executor.py`
   - **16 nouveaux tests** → **2058 tests, 2054 passants** (4 TestLeverageValidation échouent depuis Sprint 52, pré-existant), 0 régression
+- **Sprint 57 — Réalisme Backtest Complet : 11 fixes P0→P3** (27 fév 2026) :
+  - **Contexte** : audit complet du pipeline de backtesting révèle 29 biais/erreurs. Tous les résultats WFO antérieurs invalidés. Sprint corrige les 11 problèmes les plus critiques.
+  - **P0 #17 — Monte Carlo bootstrap** (`overfitting.py`) : permutation sans remplacement → distribution Sharpe dégénérée (std ≈ 0, p-value toujours ~0.5). Fix : circular block bootstrap avec `rng.integers(0, n_blocks, size=n_blocks)` (tirage avec remplacement).
+  - **P0 #10 — Kill switch peak equity** (`portfolio_engine.py`) : comparaison vs equity début de fenêtre (window_start_equity) → manquait les pics intermédiaires. Fix : loop dans la fenêtre pour `max(equity)`. Corrigé aux 2 emplacements (boucle real-time + `_check_kill_switch()`).
+  - **P1 #1 — Look-ahead bias** (`fast_multi_backtest.py`) : entry prices calculés avec indicateurs de la bougie courante (sma[i], atr[i]) — données futures non connues. Fix : shift de 1 → `entry_prices[1:] = entry_prices[:-1].copy(); entry_prices[0, :] = np.nan`.
+  - **P1 #2 — Margin guard 70% fast engine** (`fast_multi_backtest.py`) : aucune limite de marge → backtest pouvait utiliser 100% du capital. Fix : `used_margin / total_equity >= max_margin_ratio (0.70)` bloque les nouvelles entrées.
+  - **P1 #3+#13 — Entry slippage** (`fast_multi_backtest.py` + `grid_position_manager.py`) : entrée exacte au prix calculé (taker market order ignoré). Fix : `actual_ep = ep × (1 ± slippage_pct)` dans les deux moteurs.
+  - **P2 #5+#11 — SL gap slippage** (`fast_multi_backtest.py` + `grid_position_manager.py`) : fill exact au SL même si low << sl_price. Fix : `exit_price = sl_price - 0.5 × max(0, sl_price - low)` pour LONG.
+  - **P2 #20 — DSR kurtosis** (`overfitting.py`) : raw kurtosis (≈3 normale) au lieu d'excess kurtosis (≈0). Fix : `excess_kurtosis = kurtosis - 3.0` puis `(excess_kurtosis - 1) / 4`.
+  - **P2 #21 — Embargo 7j** (`walk_forward.py`) : certaines stratégies grid sans `embargo_days` dans yaml → data leakage possible. Fix : fallback code `if embargo_days == 0 and is_grid_strategy(name): embargo_days = 7`.
+  - **P3 #18 — oos_trades_by_window** (`walk_forward.py`) : trades OOS mélangés toutes fenêtres. Fix : champ `oos_trades_by_window: list[list[TradeResult]]` peuplé par fenêtre dans `WFOResult`.
+  - **P3 #25 — Parité executor** (`executor.py`) : margin guard absent en live alors que backtest l'avait. Fix : check `(total_margin_used + level_margin) / available_balance > max_margin_ratio` dans `_on_candle()`.
+  - **Calmar annualisé** (`regime_backtest_compare.py`, `diagnose_dd_leverage.py`) : `calmar = return / DD` non annualisé → non comparable entre périodes. Fix : `calmar = (return / n_years) / abs(DD)`.
+  - **Tests** : 19 nouveaux (`test_sprint56_realism.py`) + 10 tests existants mis à jour (régressions attendues des fixes). Audit A (partie manuelle + pytest) : tous les 11 fixes confirmés dans le code.
+  - **19 nouveaux tests, 10 mis à jour** → **2081 tests, 2081 passants** (0 échec, 2 warnings asyncio pré-existants)
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

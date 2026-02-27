@@ -885,21 +885,23 @@ class PortfolioBacktester:
                     }
                     break
 
-                # Kill switch temps réel (Sprint 24a)
+                # Kill switch temps réel (Sprint 24a, fix Sprint 56: peak equity)
                 if len(snapshots) >= 2:
                     window_hours = self._kill_switch_window_hours
                     current_ts = snap.timestamp
 
-                    window_start_equity = snap.total_equity
+                    # Sprint 56 fix: utiliser le MAX d'equity dans la fenêtre (pas le début)
+                    peak_equity = snap.total_equity
                     window_secs = window_hours * 3600
                     for j in range(len(snapshots) - 2, -1, -1):
                         prev_snap = snapshots[j]
                         if (current_ts - prev_snap.timestamp).total_seconds() > window_secs:
                             break
-                        window_start_equity = prev_snap.total_equity
+                        if prev_snap.total_equity > peak_equity:
+                            peak_equity = prev_snap.total_equity
 
-                    if window_start_equity > 0:
-                        dd_pct = (1 - snap.total_equity / window_start_equity) * 100
+                    if peak_equity > 0:
+                        dd_pct = (1 - snap.total_equity / peak_equity) * 100
                         if dd_pct >= self._kill_switch_pct:
                             if not any(r._kill_switch_triggered for r in runners.values()):
                                 logger.warning(
@@ -1096,7 +1098,10 @@ class PortfolioBacktester:
         self,
         snapshots: list[PortfolioSnapshot],
     ) -> list[dict]:
-        """Détecte les déclenchements du kill switch (fenêtre glissante)."""
+        """Détecte les déclenchements du kill switch (fenêtre glissante).
+
+        Sprint 56 fix: utilise max(equity) dans la fenêtre au lieu du début.
+        """
         events: list[dict] = []
         if not snapshots:
             return events
@@ -1116,12 +1121,15 @@ class PortfolioBacktester:
             ):
                 window_start_idx += 1
 
-            # Equity au début de la fenêtre
-            start_equity = snapshots[window_start_idx].total_equity
-            if start_equity <= 0:
+            # Sprint 56 fix: max(equity) dans la fenêtre (pas equity au début)
+            peak_equity = 0.0
+            for j in range(window_start_idx, i + 1):
+                if snapshots[j].total_equity > peak_equity:
+                    peak_equity = snapshots[j].total_equity
+            if peak_equity <= 0:
                 continue
 
-            dd_pct = (1 - snap.total_equity / start_equity) * 100
+            dd_pct = (1 - snap.total_equity / peak_equity) * 100
 
             if dd_pct >= threshold and not in_trigger:
                 in_trigger = True
@@ -1129,7 +1137,7 @@ class PortfolioBacktester:
                     "timestamp": snap.timestamp.isoformat(),
                     "drawdown_pct": round(dd_pct, 2),
                     "equity": round(snap.total_equity, 2),
-                    "window_start_equity": round(start_equity, 2),
+                    "window_start_equity": round(peak_equity, 2),
                 })
             elif dd_pct < threshold * 0.5:
                 # Sortie de zone critique (reset pour détecter le prochain)

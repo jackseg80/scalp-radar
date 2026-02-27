@@ -127,10 +127,13 @@ class TestGridPositionManager:
 
         assert pos is not None
         # notional = 10000 * (1/3) * 6 = 20000
+        # Sprint 56: entry price ajusté par slippage (LONG → +slippage)
         expected_notional = 10_000 * (1 / 3) * 6
-        expected_qty = expected_notional / 100.0
-        assert abs(pos.quantity - expected_qty) < 0.001
-        assert pos.entry_price == 100.0
+        slippage_pct = 0.0005  # from _make_pm_config
+        expected_entry = 100.0 * (1 + slippage_pct)
+        expected_qty = expected_notional / expected_entry
+        assert abs(pos.quantity - expected_qty) < 0.01
+        assert abs(pos.entry_price - expected_entry) < 1e-6
         assert pos.level == 0
         assert pos.direction == Direction.LONG
 
@@ -215,7 +218,8 @@ class TestGridPositionManager:
         reason, price = gpm.check_global_tp_sl(positions, candle, tp_price=110.0, sl_price=90.0)
 
         assert reason == "sl_global"
-        assert price == 90.0
+        # SL gap slippage (sprint 56) : gap = 90 - 89 = 1, exit = 90 - 0.5*1 = 89.5
+        assert abs(price - 89.5) < 1e-6
 
     def test_compute_grid_state(self):
         """Calcul de l'état agrégé."""

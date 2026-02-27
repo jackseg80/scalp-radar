@@ -441,7 +441,7 @@ class TestApplyRestoredStateBug:
 
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             sm.save_runner_state(
                 [runner], global_kill_switch=True, kill_switch_reason={"drawdown_pct": 35.0},
             )
@@ -457,7 +457,7 @@ class TestApplyRestoredStateBug:
         runner._kill_switch_triggered = False
         runner._stats.is_active = True
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             sm.save_runner_state(
                 [runner], global_kill_switch=False, kill_switch_reason=None,
             )

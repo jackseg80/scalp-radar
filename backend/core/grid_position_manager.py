@@ -43,13 +43,20 @@ class GridPositionManager:
         if level.entry_price <= 0 or capital <= 0:
             return None
 
+        # Sprint 56: slippage à l'entrée (prix d'exécution défavorable)
+        slippage_pct = self._config.slippage_pct
+        if level.direction == Direction.LONG:
+            actual_entry = level.entry_price * (1 + slippage_pct)
+        else:
+            actual_entry = level.entry_price * (1 - slippage_pct)
+
         notional = capital * (1.0 / total_levels) * self._config.leverage
-        quantity = notional / level.entry_price
+        quantity = notional / actual_entry
 
         if quantity <= 0:
             return None
 
-        entry_fee = quantity * level.entry_price * self._config.taker_fee
+        entry_fee = quantity * actual_entry * self._config.taker_fee
 
         if entry_fee >= capital:
             return None
@@ -57,7 +64,7 @@ class GridPositionManager:
         return GridPosition(
             level=level.index,
             direction=level.direction,
-            entry_price=level.entry_price,
+            entry_price=actual_entry,
             quantity=quantity,
             entry_time=timestamp,
             entry_fee=entry_fee,
@@ -196,7 +203,16 @@ class GridPositionManager:
 
         if exit_reason == "tp_global":
             return exit_reason, tp_price
-        return exit_reason, sl_price
+
+        # Sprint 56: SL gap slippage — fill mi-chemin entre SL et extrême
+        actual_sl = sl_price
+        if direction == Direction.LONG:
+            gap = max(0.0, sl_price - candle.low)
+            actual_sl = sl_price - 0.5 * gap
+        else:
+            gap = max(0.0, candle.high - sl_price)
+            actual_sl = sl_price + 0.5 * gap
+        return exit_reason, actual_sl
 
     def compute_grid_state(
         self,

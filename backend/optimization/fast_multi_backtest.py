@@ -131,6 +131,12 @@ def _build_entry_prices(
     else:
         raise ValueError(f"Stratégie grid inconnue pour _build_entry_prices: {strategy_name}")
 
+    # Sprint 56 fix: look-ahead bias — entry prices à la candle i doivent être
+    # basés sur les indicateurs de la candle i-1 (pas connus avant la clôture de i-1).
+    # Décalage de 1 : entry_prices[i] = ancien entry_prices[i-1], row 0 = NaN.
+    entry_prices[1:] = entry_prices[:-1].copy()
+    entry_prices[0, :] = np.nan
+
     return entry_prices
 
 
@@ -166,10 +172,12 @@ def _simulate_grid_common(
         trail_atr_arr: array ATR pour le calcul du trailing stop distance.
     """
     capital = bt_config.initial_capital
+    initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
     maker_fee = bt_config.maker_fee
     slippage_pct = bt_config.slippage_pct
+    max_margin_ratio = bt_config.max_margin_ratio
     max_dd_threshold = bt_config.max_wfo_drawdown_pct / 100
     n = cache.n_candles
 
@@ -178,6 +186,7 @@ def _simulate_grid_common(
 
     # Positions : list of (level_idx, entry_price, quantity, entry_fee)
     positions: list[tuple[int, float, float, float]] = []
+    used_margin = 0.0  # Sprint 56: margin guard tracking
 
     # Direction tracking pour le mode dynamique
     last_dir = 0  # 0 = pas encore initialisé
@@ -228,6 +237,7 @@ def _simulate_grid_common(
                         trade_returns.append(pnl / capital)
                     capital += pnl
                     positions = []
+                    used_margin = 0.0
                     hwm = 0.0
                     first_entry_idx = -1
                     last_exit_candle_idx = i
@@ -336,6 +346,16 @@ def _simulate_grid_common(
                         exit_price = cache.closes[i]
 
             if exit_reason is not None:
+                # Sprint 56: SL gap slippage — si le prix a gappé au-delà du SL,
+                # le fill est plus défavorable (mi-chemin entre SL et extrême)
+                if exit_reason in ("sl_global", "trail_stop"):
+                    if direction == 1:
+                        gap = max(0.0, exit_price - cache.lows[i])
+                        exit_price -= 0.5 * gap  # Fill entre SL et low
+                    else:
+                        gap = max(0.0, cache.highs[i] - exit_price)
+                        exit_price += 0.5 * gap  # Fill entre SL et high
+
                 # Tous les exits = taker fee + slippage (market order en live)
                 # Le TP dynamique (retour SMA) est détecté sur la candle puis
                 # exécuté via market order par l'executor → pas un limit order
@@ -353,6 +373,7 @@ def _simulate_grid_common(
                     trade_returns.append(pnl / capital)
                 capital += pnl
                 positions = []
+                used_margin = 0.0
                 hwm = 0.0
                 first_entry_idx = -1
                 last_exit_candle_idx = i
@@ -413,9 +434,18 @@ def _simulate_grid_common(
                     triggered = cache.highs[i] >= ep
 
                 if triggered:
+                    # Sprint 56: margin guard — bloquer si marge utilisée >= max_margin_ratio
+                    total_equity = capital + used_margin
+                    if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
+                        break  # Plus de marge disponible pour ce cycle
+                    # Sprint 56: slippage à l'entrée (prix d'exécution défavorable)
+                    if direction == 1:
+                        actual_ep = ep * (1 + slippage_pct)  # LONG: prix plus haut
+                    else:
+                        actual_ep = ep * (1 - slippage_pct)  # SHORT: prix plus bas
                     # Allocation fixe par niveau
                     notional = capital * (1.0 / num_levels) * leverage
-                    qty = notional / ep
+                    qty = notional / actual_ep
                     if qty <= 0:
                         continue
                     # Margin deduction (cohérent avec GridStrategyRunner)
@@ -423,8 +453,9 @@ def _simulate_grid_common(
                     if capital < margin:
                         continue
                     capital -= margin
-                    entry_fee = qty * ep * taker_fee
-                    positions.append((lvl, ep, qty, entry_fee))
+                    used_margin += margin
+                    entry_fee = qty * actual_ep * taker_fee
+                    positions.append((lvl, actual_ep, qty, entry_fee))
                     if len(positions) == 1:
                         first_entry_idx = i
                     # Init HWM à la première ouverture (trailing stop)

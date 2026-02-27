@@ -209,7 +209,9 @@ class TestGridRunnerOnCandle:
 
         positions = runner._positions.get("BTC/USDT", [])
         assert len(positions) == 1
-        assert positions[0].entry_price == 95_000.0
+        # Entry price inclut le slippage (0.05% pour LONG)
+        expected_entry = 95_000.0 * (1 + 0.0005)
+        assert abs(positions[0].entry_price - expected_entry) < 0.01
         assert positions[0].direction == Direction.LONG
         assert "BTC/USDT" in runner._positions
 
