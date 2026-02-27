@@ -145,11 +145,16 @@ def _compute_sharpe(snapshots: list) -> float:
     return round((mean_r / std_r) * math.sqrt(8760), 2)
 
 
-def _compute_calmar(total_return_pct: float, max_drawdown_pct: float) -> float:
-    """Calmar = Return% / |Max DD%|. Retourne float('inf') si DD=0 et return>0."""
+def _compute_calmar(total_return_pct: float, max_drawdown_pct: float, n_days: int = 365) -> float:
+    """Calmar annualisé = (Return% / n_years) / |Max DD%|.
+
+    Retourne float('inf') si DD=0 et return>0.
+    """
     if max_drawdown_pct == 0:
         return float("inf") if total_return_pct > 0 else 0.0
-    return round(total_return_pct / abs(max_drawdown_pct), 2)
+    n_years = max(n_days / 365.25, 0.1)  # floor à ~36j pour éviter division extrême
+    annual_return_pct = total_return_pct / n_years
+    return round(annual_return_pct / abs(max_drawdown_pct), 2)
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +276,8 @@ result = asyncio.run(_run())
 # Calculs métriques
 from scripts.stress_test_leverage import _compute_calmar, _compute_sharpe, _count_ks_triggers, KS_THRESHOLDS
 
-calmar = _compute_calmar(result.total_return_pct, result.max_drawdown_pct)
+n_days = (end_dt - start_dt).days
+calmar = _compute_calmar(result.total_return_pct, result.max_drawdown_pct, n_days)
 sharpe = _compute_sharpe(result.snapshots)
 ks_counts = {thr: _count_ks_triggers(result.snapshots, thr, ks_window_hours) for thr in KS_THRESHOLDS}
 
