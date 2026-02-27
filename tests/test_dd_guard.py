@@ -85,11 +85,11 @@ class TestDDGuardBehavior:
         assert final_capital > 0, f"Capital final doit être > 0, got {final_capital}"
 
     def test_progressive_dd_stops_simulation(self, make_indicator_cache):
-        """Pertes progressives (~20%/trade) → guard 80% s'arrête avant guard 9999%.
+        """Guard DD 15% stoppe avant le kill switch 25% (Sprint 53).
 
-        Avec leverage=2 et sl_pct=0.1, chaque SL perd ~20% du capital courant.
-        Après ~8 trades, DD peak→courant dépasse 80% → guard déclenche.
-        Sans guard (9999%), la simulation continue sur 90+ bougies.
+        Avec leverage=2 et sl_pct=0.05, chaque SL perd ~10% du capital courant.
+        Guard 15% : stoppe après ~2 trades (DD ≈ 19%).
+        Kill switch 25% (sans guard) : stoppe après ~3 trades (DD ≈ 27%).
         """
         from backend.optimization.fast_multi_backtest import _simulate_grid_common
 
@@ -97,8 +97,8 @@ class TestDDGuardBehavior:
         ma_period = 5
         sma = np.full(n, 100.0)
         closes = np.full(n, 95.0)
-        # SL déclenché immédiatement : sl_price = entry*(1-0.1) = 85.5
-        # lows=80 ≤ 85.5 → SL à chaque bougie après entrée
+        # SL déclenché immédiatement : sl_price = entry*(1-0.05) = 90.25
+        # lows=80 ≤ 90.25 → SL à chaque bougie après entrée
         lows = np.full(n, 80.0)
         highs = np.full(n, 99.0)  # < SMA=100 → pas de TP
 
@@ -111,15 +111,15 @@ class TestDDGuardBehavior:
             bb_sma={ma_period: sma},
         )
 
-        # leverage=2, sl_pct=0.1 : perte ~20%/trade (du capital courant)
-        # → ~8 trades pour DD > 80% du peak
+        # leverage=2, sl_pct=0.05 : perte ~10%/trade (du capital courant)
+        # Guard à 15% : stoppe avant le kill switch à 25%
         bt_with_guard = _make_bt_config(
             initial_capital=10_000.0,
             leverage=2,
             maker_fee=0.0,
             taker_fee=0.0,
             slippage_pct=0.0,
-            max_wfo_drawdown_pct=80.0,
+            max_wfo_drawdown_pct=15.0,
         )
 
         bt_without_guard = _make_bt_config(
@@ -128,28 +128,27 @@ class TestDDGuardBehavior:
             maker_fee=0.0,
             taker_fee=0.0,
             slippage_pct=0.0,
-            max_wfo_drawdown_pct=9999.0,  # Guard essentiellement désactivé
+            max_wfo_drawdown_pct=9999.0,  # Guard désactivé, kill switch 25% reste actif
         )
 
         pnls_with, _, cap_with = _simulate_grid_common(
             entry_prices, sma, cache, bt_with_guard,
-            num_levels=1, sl_pct=0.1, direction=1,
+            num_levels=1, sl_pct=0.05, direction=1,
         )
 
         pnls_without, _, cap_without = _simulate_grid_common(
             entry_prices, sma, cache, bt_without_guard,
-            num_levels=1, sl_pct=0.1, direction=1,
+            num_levels=1, sl_pct=0.05, direction=1,
         )
 
-        # Avec guard DD : ~8 trades puis arrêt
-        # Sans guard : ~95 trades (200-2*ma_period bougies = ~190/2=95 cycles)
+        # Guard 15% stoppe avant kill switch 25%
         assert len(pnls_with) < len(pnls_without), (
-            f"Guard DD doit arrêter la simulation tôt. "
+            f"Guard DD 15% doit arrêter avant kill switch 25%. "
             f"Avec guard: {len(pnls_with)} trades, sans: {len(pnls_without)}"
         )
-        # Le guard 80% doit s'arrêter après ~8-12 trades
-        assert len(pnls_with) <= 15, (
-            f"Guard 80% doit s'arrêter dans les 15 premiers trades, "
+        # Le guard 15% doit s'arrêter après ~2-3 trades
+        assert len(pnls_with) <= 5, (
+            f"Guard 15% doit s'arrêter dans les 5 premiers trades, "
             f"got {len(pnls_with)}"
         )
 

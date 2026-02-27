@@ -625,12 +625,16 @@ class TestGridMultiTFFastEngine:
         assert fast_n_trades > 0, f"Fast engine: 0 trades"
         assert normal_n_trades > 0, f"Normal engine: 0 trades"
 
-        # Parité : ±1 trade, ±2% return
-        assert abs(fast_n_trades - normal_n_trades) <= 1, (
-            f"Trades divergent: fast={fast_n_trades}, normal={normal_n_trades}"
+        # Sprint 53 : le fast engine a un kill switch 25% DD que le normal engine n'a pas.
+        # Sur données perdantes, le fast engine stoppe plus tôt → moins de trades.
+        assert fast_n_trades <= normal_n_trades + 1, (
+            f"Fast engine ne devrait pas avoir plus de trades : "
+            f"fast={fast_n_trades}, normal={normal_n_trades}"
         )
-        assert abs(fast_return - normal_return) <= 2.0, (
-            f"Return divergent: fast={fast_return:.2f}%, normal={normal_return:.2f}%"
+
+        # Les deux engines doivent avoir le même signe de return
+        assert (fast_return < 0) == (normal_return < 0), (
+            f"Direction PnL incohérente: fast={fast_return:.2f}%, normal={normal_return:.2f}%"
         )
 
 

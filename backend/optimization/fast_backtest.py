@@ -35,6 +35,9 @@ except ImportError:  # pragma: no cover
 # Type retour léger (même que walk_forward._ISResult)
 _ISResult = tuple[dict[str, Any], float, float, float, int]
 
+# Sprint 53 : kill switch WFO — cohérent avec risk.yaml grid_max_session_loss_percent
+KILL_SWITCH_DD_PCT = 0.25
+
 # Régimes en int8 (voir indicator_cache.REGIME_TO_INT)
 _RANGING = 0
 _HIGH_VOL = 3
@@ -484,6 +487,9 @@ def _simulate_vwap_rsi_numba(
         n_trades += 1
 
     return trade_pnls, trade_returns, n_trades, capital
+
+
+# TODO Sprint 54 : ajouter kill switch 25% DD dans les versions numba
 
 
 def _run_simulate_vwap_rsi(
@@ -1334,6 +1340,7 @@ def _simulate_trades(
     high_vol_slippage_mult = bt_config.high_vol_slippage_mult
     max_risk_per_trade = bt_config.max_risk_per_trade
     leverage = bt_config.leverage
+    peak_capital = capital  # Sprint 53 : kill switch tracking
 
     # État position
     in_position = False
@@ -1386,6 +1393,12 @@ def _simulate_trades(
                 capital += net_pnl
                 trade_pnls.append(net_pnl)
                 in_position = False
+
+                # Sprint 53 : kill switch 25% DD
+                if capital > peak_capital:
+                    peak_capital = capital
+                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                    break
 
         # 2. Si pas de position : entrée
         if not in_position and (longs[i] or shorts[i]):

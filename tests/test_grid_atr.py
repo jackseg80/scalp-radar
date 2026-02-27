@@ -680,21 +680,21 @@ class TestGridATRParity:
 
         metrics = calculate_metrics(normal_result)
 
-        # Vérifications : données sinusoïdales doivent produire des trades
-        assert fast_n_trades >= 3, f"Fast engine n'a produit que {fast_n_trades} trades"
+        # Vérifications : les deux engines produisent des trades
+        assert fast_n_trades >= 2, f"Fast engine n'a produit que {fast_n_trades} trades"
         assert metrics.total_trades >= 3, f"Normal engine n'a produit que {metrics.total_trades} trades"
 
-        # Parité ±1 trade (les heuristiques OHLC peuvent varier marginalement)
-        assert abs(fast_n_trades - metrics.total_trades) <= 1, (
-            f"Trades: fast={fast_n_trades}, normal={metrics.total_trades}"
+        # Sprint 53 : le fast engine a un kill switch 25% DD que le normal engine n'a pas.
+        # Sur données sinusoïdales perdantes, le fast engine stoppe plus tôt → moins de trades.
+        assert fast_n_trades <= metrics.total_trades + 1, (
+            f"Fast engine ne devrait pas avoir plus de trades : "
+            f"fast={fast_n_trades}, normal={metrics.total_trades}"
         )
 
-        # Parité return ±5% relatif (tolérance plus large car OHLC heuristique)
-        if abs(metrics.net_return_pct) > 0.1:
-            ratio = abs(fast_return - metrics.net_return_pct) / abs(metrics.net_return_pct)
-            assert ratio < 0.05, (
-                f"Return: fast={fast_return:.2f}%, normal={metrics.net_return_pct:.2f}%"
-            )
+        # Les deux engines doivent avoir le même signe de return (même direction de PnL)
+        assert (fast_return < 0) == (metrics.net_return_pct < 0), (
+            f"Direction PnL incohérente: fast={fast_return:.2f}%, normal={metrics.net_return_pct:.2f}%"
+        )
 
     def test_fast_engine_speed(self):
         """Fast engine au moins 10× plus rapide que MultiPositionEngine."""

@@ -207,6 +207,49 @@ def _fine_grid_around_top(
     ]
 
 
+def _filter_sl_leverage(
+    grid: list[dict[str, Any]],
+    leverage: int | float,
+    threshold: float = 1.5,
+    min_combos: int = 50,
+) -> list[dict[str, Any]]:
+    """Filtre les combos dont sl_percent × leverage / 100 > threshold.
+
+    Un SL trop large par rapport au levier rend la position irréaliste
+    (perte par SL dépasse la marge en cross margin).
+
+    Si le filtre réduit à moins de *min_combos*, on garde les N combos
+    avec le sl_percent le plus bas (moins risqués).
+    """
+    if not grid or "sl_percent" not in grid[0]:
+        return grid
+
+    filtered = [
+        combo for combo in grid
+        if combo["sl_percent"] / 100 * leverage <= threshold
+    ]
+
+    before = len(grid)
+    after = len(filtered)
+
+    if after < min_combos and before > 0:
+        sorted_by_sl = sorted(grid, key=lambda c: c["sl_percent"])
+        filtered = sorted_by_sl[: min(min_combos, before)]
+        after = len(filtered)
+        logger.warning(
+            "Filtre SL×leverage trop agressif ({} → {} combos), "
+            "garde {} combos triés par SL croissant (leverage={}x)",
+            before, before - after, after, leverage,
+        )
+    elif before != after:
+        logger.info(
+            "Filtre SL×leverage (seuil {:.0%}) : {} → {} combos (leverage={}x)",
+            threshold, before, after, leverage,
+        )
+
+    return filtered
+
+
 def _median_params(
     all_best_params: list[dict[str, Any]],
     grid_values: dict[str, list],
@@ -575,6 +618,10 @@ class WalkForwardOptimizer:
             from backend.core.config import get_config
             _yaml_strat = getattr(get_config().strategies, strategy_name, None)
             bt_config.leverage = getattr(_yaml_strat, 'leverage', default_cfg.leverage)
+
+        # Sprint 53 : filtrer SL × leverage > 150% (irréaliste en cross margin)
+        full_grid = _filter_sl_leverage(full_grid, bt_config.leverage)
+
         bt_config_dict = {
             "symbol": bt_config.symbol,
             "start_date": bt_config.start_date,
@@ -648,6 +695,8 @@ class WalkForwardOptimizer:
                 # --- Fine pass ---
                 top_20_params = [r[0] for r in top_20]
                 fine_grid = _fine_grid_around_top(top_20_params, grid_values)
+                # Sprint 53 : filtrer aussi le fine_grid (±1 step peut créer des combos invalides)
+                fine_grid = _filter_sl_leverage(fine_grid, bt_config.leverage)
                 n_distinct_combos = max(n_distinct_combos, len(coarse_grid) + len(fine_grid))
 
                 if fine_grid:

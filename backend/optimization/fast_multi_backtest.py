@@ -22,6 +22,9 @@ from backend.optimization.indicator_cache import IndicatorCache
 # Type retour léger (même que walk_forward._ISResult)
 _ISResult = tuple[dict[str, Any], float, float, float, int]
 
+# Sprint 53 : kill switch WFO — cohérent avec risk.yaml grid_max_session_loss_percent
+KILL_SWITCH_DD_PCT = 0.25
+
 
 # ─── Factory entry prices ──────────────────────────────────────────────────
 
@@ -187,6 +190,7 @@ def _simulate_grid_common(
 
     # Guard max drawdown WFO
     peak_capital = capital
+    kill_switch_triggered = False  # Sprint 53 : soft kill switch 25% DD
 
     # Funding settlement mask (00:00, 08:00, 16:00 UTC)
     funding_rates = cache.funding_rates_1h
@@ -352,10 +356,19 @@ def _simulate_grid_common(
                 hwm = 0.0
                 first_entry_idx = -1
                 last_exit_candle_idx = i
-                # Guard max drawdown WFO — arrêt si peak → capital chute de >80%
+                # Guard max drawdown WFO
                 if capital > peak_capital:
                     peak_capital = capital
-                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > max_dd_threshold:
+                elif peak_capital > 0:
+                    dd_pct = (peak_capital - capital) / peak_capital
+                    # Hard break 80% (safety net)
+                    if dd_pct > max_dd_threshold:
+                        break
+                    # Sprint 53 : soft kill switch 25% — stop new entries
+                    if dd_pct > KILL_SWITCH_DD_PCT:
+                        kill_switch_triggered = True
+                # Kill switch actif + toutes positions fermées → arrêt
+                if kill_switch_triggered:
                     break
                 continue
 
@@ -382,7 +395,7 @@ def _simulate_grid_common(
             and not positions
             and (i - last_exit_candle_idx) < cooldown_candles
         )
-        if can_open_new and len(positions) < num_levels:
+        if can_open_new and not kill_switch_triggered and len(positions) < num_levels:
             filled = {p[0] for p in positions}
             for lvl in range(num_levels):
                 if lvl in filled:
@@ -514,6 +527,8 @@ def _simulate_grid_range(
 
     trade_pnls: list[float] = []
     trade_returns: list[float] = []
+    peak_capital = capital  # Sprint 53 : kill switch tracking
+    kill_switch_triggered = False
 
     # Slots : 0..N-1 = LONG, N..2N-1 = SHORT
     n_long = num_levels if "long" in sides else 0
@@ -620,6 +635,14 @@ def _simulate_grid_range(
                 positions.pop(idx)
             if closed_indices and not positions:
                 last_exit_candle_idx = i
+            # Sprint 53 : kill switch DD check after any close
+            if closed_indices:
+                if capital > peak_capital:
+                    peak_capital = capital
+                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                    kill_switch_triggered = True
+                    if not positions:
+                        break
 
         # --- 2. Funding costs aux settlements 8h ---
         if positions and settlement_mask[i] and funding_rates is not None:
@@ -644,7 +667,7 @@ def _simulate_grid_range(
             and not positions
             and (i - last_exit_candle_idx) < cooldown_candles
         )
-        if can_open_new and len(positions) < total_slots:
+        if can_open_new and not kill_switch_triggered and len(positions) < total_slots:
             filled_slots = {p[0] for p in positions}
             spacing = cur_atr * spacing_mult
 
@@ -813,6 +836,8 @@ def _simulate_grid_funding(
     filled_levels: set[int] = set()
     trade_pnls: list[float] = []
     trade_returns: list[float] = []
+    peak_capital = capital  # Sprint 53 : kill switch tracking
+    kill_switch_triggered = False
 
     start_idx = ma_period + 1  # attendre SMA valide
 
@@ -860,10 +885,16 @@ def _simulate_grid_funding(
                 capital += pnl
                 positions = []
                 filled_levels = set()
+                # Sprint 53 : kill switch DD check
+                if capital > peak_capital:
+                    peak_capital = capital
+                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                    kill_switch_triggered = True
+                    break
                 continue
 
         # === CHECK ENTRY ===
-        if capital > 0:
+        if capital > 0 and not kill_switch_triggered:
             for lvl in range(num_levels):
                 if lvl not in filled_levels and entry_signals[i, lvl]:
                     margin_per_level = capital / num_levels
@@ -956,6 +987,8 @@ def _simulate_grid_boltrend(
 
     trade_pnls: list[float] = []
     trade_returns: list[float] = []
+    peak_capital = capital  # Sprint 53 : kill switch tracking
+    kill_switch_triggered = False
 
     # State machine
     # positions: list of (level_idx, entry_price, quantity, entry_fee)
@@ -1049,6 +1082,12 @@ def _simulate_grid_boltrend(
                 direction = 0
                 breakout_candle_idx = -1
                 last_exit_candle_idx = i
+                # Sprint 53 : kill switch DD check
+                if capital > peak_capital:
+                    peak_capital = capital
+                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                    kill_switch_triggered = True
+                    break  # positions already cleared
                 continue
 
         # === 2. Funding costs aux settlements 8h ===
@@ -1063,8 +1102,8 @@ def _simulate_grid_boltrend(
         if capital <= 0:
             continue
 
-        # === 4. DCA filling (si grid actif) ===
-        if direction != 0 and entry_levels:
+        # === 4. DCA filling (si grid actif, pas kill switch) ===
+        if direction != 0 and entry_levels and not kill_switch_triggered:
             filled = {p[0] for p in positions}
             for lvl in range(num_levels):
                 if lvl in filled or lvl >= len(entry_levels):
@@ -1103,7 +1142,7 @@ def _simulate_grid_boltrend(
             and not positions
             and (i - last_exit_candle_idx) < cooldown_candles
         )
-        if can_open_new and direction == 0 and not positions:
+        if can_open_new and not kill_switch_triggered and direction == 0 and not positions:
             prev_close = closes[i - 1]
             prev_upper = bb_upper[i - 1]
             prev_lower = bb_lower[i - 1]
@@ -1229,6 +1268,8 @@ def _simulate_grid_momentum(
 
     trade_pnls: list[float] = []
     trade_returns: list[float] = []
+    peak_capital = capital  # Sprint 53 : kill switch tracking
+    kill_switch_triggered = False
 
     # State machine
     positions: list[tuple[int, float, float, float]] = []
@@ -1322,14 +1363,20 @@ def _simulate_grid_momentum(
                 direction = 0
                 hwm = 0.0
                 last_exit_candle_idx = i
+                # Sprint 53 : kill switch DD check
+                if capital > peak_capital:
+                    peak_capital = capital
+                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                    kill_switch_triggered = True
+                    break  # positions already cleared
                 continue
 
         # === 2. Guard capital épuisé ===
         if capital <= 0:
             continue
 
-        # === 3. DCA filling (si grid actif) ===
-        if direction != 0 and entry_levels:
+        # === 3. DCA filling (si grid actif, pas kill switch) ===
+        if direction != 0 and entry_levels and not kill_switch_triggered:
             filled = {p[0] for p in positions}
             for lvl in range(num_levels):
                 if lvl in filled or lvl >= len(entry_levels):
@@ -1360,7 +1407,7 @@ def _simulate_grid_momentum(
                     positions.append((lvl, ep, qty, entry_fee))
 
         # === 4. Breakout detection (si grid inactif) ===
-        if direction == 0 and not positions:
+        if not kill_switch_triggered and direction == 0 and not positions:
             # Cooldown check
             if cooldown_candles > 0 and (i - last_exit_candle_idx) < cooldown_candles:
                 continue
