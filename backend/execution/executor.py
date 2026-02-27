@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from backend.alerts.notifier import AnomalyType
 from backend.core.models import Direction
 
 if TYPE_CHECKING:
@@ -1697,13 +1698,14 @@ class Executor:
             await self._cancel_all_open_orders(futures_sym)
 
         # 2. Market close (sauf si SL déjà exécuté sur exchange)
+        close_qty = self._round_quantity(state.total_quantity, futures_sym)
         if event.exit_reason != "sl_global":
             try:
                 close_order = await self._exchange.create_order(
-                    futures_sym, "market", close_side, state.total_quantity,
+                    futures_sym, "market", close_side, close_qty,
                     params={"reduceOnly": True},
                 )
-                self._record_order("close", futures_sym, close_side, state.total_quantity, close_order, state.strategy_name, "grid_cycle", paper_price=event.exit_price or 0.0)
+                self._record_order("close", futures_sym, close_side, close_qty, close_order, state.strategy_name, "grid_cycle", paper_price=event.exit_price or 0.0)
                 # Hotfix 34 : prix de fill réel + fees
                 exit_price_raw = close_order.get("average")
                 exit_fee: float | None = None
@@ -1717,6 +1719,14 @@ class Executor:
                     )
                 # Sprint Journal V2 : retropropager le prix reel dans l'historique
                 self._update_order_price(close_order.get("id", ""), exit_price, exit_fee)
+
+                # Partial fill protection : vérifier que le fill est complet
+                filled_qty = float(close_order.get("filled") or 0)
+                if filled_qty > 0:
+                    await self._handle_partial_close_fill(
+                        futures_sym, close_side, close_qty,
+                        filled_qty, state.strategy_name,
+                    )
             except Exception as e:
                 logger.error("Executor: échec close grid {}: {}", futures_sym, e)
                 self._risk_manager.unregister_position(futures_sym)
@@ -1787,7 +1797,12 @@ class Executor:
         self._record_grid_close(futures_sym)
         del self._grid_states[futures_sym]
 
-        # 7. Sync fermeture vers le runner paper (même prix, même moment)
+        # 7. Filet de sécurité : vérifier qu'il n'y a plus de position sur Bitget
+        await self._verify_no_residual_position(
+            futures_sym, close_side, state.strategy_name,
+        )
+
+        # 8. Sync fermeture vers le runner paper (même prix, même moment)
         if self._simulator is not None:
             try:
                 spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
@@ -1866,6 +1881,12 @@ class Executor:
 
         self._record_grid_close(futures_sym)
         del self._grid_states[futures_sym]
+
+        # Filet de sécurité : vérifier qu'il n'y a plus de position sur Bitget
+        close_side = "sell" if state.direction == "LONG" else "buy"
+        await self._verify_no_residual_position(
+            futures_sym, close_side, state.strategy_name,
+        )
 
         # Sync SL vers le runner paper
         if self._simulator is not None:
@@ -2593,6 +2614,118 @@ class Executor:
                     pass
 
         return "unknown"
+
+    # ─── Partial fill protection ─────────────────────────────────────
+
+    def _get_min_quantity(self, futures_sym: str) -> float:
+        """Retourne la quantité minimale tradeable pour un symbol."""
+        market = self._markets.get(futures_sym)
+        if market:
+            return float(
+                market.get("limits", {}).get("amount", {}).get("min") or 0
+            )
+        return 0.0
+
+    async def _handle_partial_close_fill(
+        self,
+        futures_sym: str,
+        close_side: str,
+        requested_qty: float,
+        filled_qty: float,
+        strategy_name: str,
+    ) -> None:
+        """Gère un fill partiel sur un close grid.
+
+        Compare filled vs requested avec tolérance min_qty.
+        Si résidu significatif : retry market order, sinon ignore.
+        """
+        min_qty = self._get_min_quantity(futures_sym)
+        residual_raw = abs(requested_qty - filled_qty)
+
+        if residual_raw < min_qty:
+            return  # Full fill (ou résidu < min tradeable)
+
+        residual = self._round_quantity(residual_raw, futures_sym)
+
+        logger.critical(
+            "Executor: PARTIAL FILL close {} — demandé={}, rempli={}, résidu={}",
+            futures_sym, requested_qty, filled_qty, residual,
+        )
+
+        # Retry : 2ème market order sur le résidu
+        try:
+            retry_order = await self._exchange.create_order(
+                futures_sym, "market", close_side, residual,
+                params={"reduceOnly": True},
+            )
+            self._record_order(
+                "close_residual", futures_sym, close_side, residual,
+                retry_order, strategy_name, "partial_fill_retry",
+            )
+            logger.info(
+                "Executor: résidu {} fermé — 2ème market order {}", futures_sym, residual,
+            )
+        except Exception as e:
+            logger.critical(
+                "Executor: ÉCHEC fermeture résidu {} : {}", futures_sym, e,
+            )
+
+        await self._notifier.notify_anomaly(
+            AnomalyType.PARTIAL_FILL,
+            f"Partial fill {futures_sym}: rempli={filled_qty}/{requested_qty}, résidu={residual}",
+        )
+
+    async def _verify_no_residual_position(
+        self,
+        futures_sym: str,
+        close_side: str,
+        strategy_name: str,
+    ) -> None:
+        """Vérifie via fetch_positions qu'il n'y a plus de position sur ce symbol.
+
+        Filet de sécurité post-close : si Bitget montre encore une position,
+        envoie un market close immédiat.
+        """
+        await asyncio.sleep(1.5)  # laisser Bitget propager le fill
+        try:
+            positions = await self._fetch_positions_safe(futures_sym)
+        except Exception as e:
+            logger.warning(
+                "Executor: vérif post-close {} échouée: {}", futures_sym, e,
+            )
+            return
+
+        for pos in positions:
+            contracts = abs(float(pos.get("contracts") or 0))
+            if contracts > 0:
+                logger.critical(
+                    "Executor: POSITION RÉSIDUELLE après close {} : {} contracts",
+                    futures_sym, contracts,
+                )
+                rounded = self._round_quantity(contracts, futures_sym)
+                try:
+                    cleanup_order = await self._exchange.create_order(
+                        futures_sym, "market", close_side, rounded,
+                        params={"reduceOnly": True},
+                    )
+                    self._record_order(
+                        "close_residual", futures_sym, close_side, rounded,
+                        cleanup_order, strategy_name, "post_close_cleanup",
+                    )
+                    logger.info(
+                        "Executor: position résiduelle {} fermée ({} contracts)",
+                        futures_sym, rounded,
+                    )
+                except Exception as e:
+                    logger.critical(
+                        "Executor: ÉCHEC cleanup résidu {} : {}", futures_sym, e,
+                    )
+
+                await self._notifier.notify_anomaly(
+                    AnomalyType.PARTIAL_FILL,
+                    f"Position résiduelle {futures_sym}: {contracts} contracts après close",
+                )
+                return
 
     # ─── Helpers ───────────────────────────────────────────────────────
 

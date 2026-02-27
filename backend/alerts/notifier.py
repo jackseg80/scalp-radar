@@ -29,6 +29,7 @@ class AnomalyType(str, Enum):
     INDICATOR_ERROR = "indicator_error"
     CIRCUIT_BREAKER = "circuit_breaker"
     DISK_FULL = "disk_full"
+    PARTIAL_FILL = "partial_fill"
 
 
 # Messages formatés par type d'anomalie
@@ -43,6 +44,7 @@ _ANOMALY_MESSAGES = {
     AnomalyType.INDICATOR_ERROR: "Erreur compute_live_indicators",
     AnomalyType.CIRCUIT_BREAKER: "Circuit breaker déclenché — runner désactivé",
     AnomalyType.DISK_FULL: "Disque presque plein (>85%)",
+    AnomalyType.PARTIAL_FILL: "Partial fill détecté — position résiduelle traitée",
 }
 
 
@@ -58,6 +60,7 @@ _ANOMALY_COOLDOWNS: dict[AnomalyType, int] = {
     AnomalyType.INDICATOR_ERROR: 3600,            # 1h — erreur persistante
     AnomalyType.CIRCUIT_BREAKER: 3600,            # 1h — ne se résout que par restart
     AnomalyType.DISK_FULL: 3600,                  # 1h — état persistant
+    AnomalyType.PARTIAL_FILL: 60,                  # 1 min — critique, chaque occurrence compte
 }
 _DEFAULT_COOLDOWN = 600  # 10 min pour tout type non listé
 

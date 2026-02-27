@@ -2902,8 +2902,8 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (27 février 2026)
 
-- **2042 tests, 2038 passants** (4 TestLeverageValidation échouent depuis Sprint 52 leverage 5x, 1 test asyncio flaky pré-existant), +8 Sprint 55 réalisme WFO
-- **Phases 1-5 terminées + Sprints 1-52 + Sprint 53 Multi-Engine 4h/1d + Sprint 54 Fix Leverage WFO + **Sprint 55 Réalisme Fast Engine WFO****
+- **2058 tests, 2054 passants** (4 TestLeverageValidation échouent depuis Sprint 52 leverage 5x), +16 Sprint 56 partial fill
+- **Phases 1-5 terminées + Sprints 1-55 + **Sprint 56 Partial Fill Protection****
 - **Phase 6 en cours** — bot safe pour live après audit (3 P0 + 3 P1 corrigés)
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **21 assets** (14 historiques conservés + 7 nouveaux haut-volume : XRP, BCH, BNB, AAVE, ARB, OP, SUI)
@@ -3186,6 +3186,14 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Fichiers modifiés** : `backend/optimization/walk_forward.py`, `backend/optimization/fast_multi_backtest.py`, `backend/optimization/fast_backtest.py`
   - **Tests modifiés** : `tests/test_dd_guard.py`, `tests/test_fast_engine_refactor.py`, `tests/test_grid_atr.py`, `tests/test_grid_multi_tf.py`
   - **8 nouveaux tests** (3 filtre SL×leverage + 3 kill switch grid + 1 kill switch scalp + 1 fine grid) → **2042 tests, 2038 passants** (4 TestLeverageValidation échouent depuis Sprint 52 leverage 5x, 1 test asyncio flaky pré-existant), 0 régression Sprint 55
+- **Sprint 56 — Protection partial fill close grid** (27 fév 2026) :
+  - **Contexte** : bug critique vécu en prod (ETH SHORT grid_multi_tf) — market close 0.07 rempli à 0.06 par Bitget, floating point `0.03+0.03+0.01 = 0.0699...` → bot croit tout fermé → 0.01 résiduel sans SL pendant des heures
+  - **Fix Niveau 1** : `_close_grid_cycle()` envoie désormais `_round_quantity(total_quantity)` pour éviter le floating point dès l'envoi. Après le fill, `_handle_partial_close_fill()` compare filled vs requested (tolérance `< min_qty`) et envoie un 2ème market order si résidu tradeable.
+  - **Fix Niveau 2** : `_verify_no_residual_position()` — filet de sécurité post-close via `fetch_positions` — ferme tout résidu détecté.
+  - **Deux chemins protégés** : `_close_grid_cycle()` ET `_handle_grid_sl_executed()` (SL trigger partiel).
+  - **`AnomalyType.PARTIAL_FILL`** ajouté dans `notifier.py` (cooldown 60s, alerte Telegram à chaque occurrence).
+  - **Fichiers modifiés** : `backend/alerts/notifier.py`, `backend/execution/executor.py`
+  - **16 nouveaux tests** → **2058 tests, 2054 passants** (4 TestLeverageValidation échouent depuis Sprint 52, pré-existant), 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
