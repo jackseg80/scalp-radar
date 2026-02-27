@@ -180,6 +180,13 @@ body {
 }
 .strategy-dot--live { color: var(--accent); font-size: 10px; }
 .strategy-dot--paper { color: var(--yellow); font-size: 10px; }
+.strategy-btn--draggable { cursor: grab; }
+.strategy-btn--draggable:active { cursor: grabbing; }
+.strategy-btn.drag-over {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: -2px 0 0 var(--accent);
+}
 
 /* ─── TABS ─────────────────────────────────────────────────────────────── */
 .tabs {
