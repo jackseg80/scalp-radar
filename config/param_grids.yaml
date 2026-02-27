@@ -158,17 +158,17 @@ grid_atr:
     is_days: 180
     oos_days: 60
     step_days: 60
-    embargo_days: 7  # Tampon IS→OOS pour éviter contamination des positions en cours
+    embargo_days: 7
   default:
-    timeframe: ["1h", "4h", "1d"]
-    ma_period: [7, 10, 14, 20]
-    atr_period: [10, 14, 20]
-    atr_multiplier_start: [1.0, 1.5, 2.0, 2.5, 3.0]
+    timeframe: ["1h"]
+    ma_period: [7, 10, 14]
+    atr_period: [10, 14]
+    atr_multiplier_start: [2.0, 2.5, 3.0]
     atr_multiplier_step: [0.5, 1.0, 1.5]
     num_levels: [3, 4]
-    sl_percent: [15.0, 20.0, 25.0]
-    min_grid_spacing_pct: [0.0, 0.8, 1.2, 1.8]
-    min_profit_pct: [0.0, 0.2, 0.4]
+    sl_percent: [15.0, 20.0]
+    min_grid_spacing_pct: [1.2, 1.8]
+    min_profit_pct: [0.0, 0.4]
 
 # Grid Range ATR : 2160 combos (4×3×5×2×3×3×2)
 grid_range_atr:
@@ -189,7 +189,7 @@ grid_range_atr:
       - ["short"]
     tp_mode: ["dynamic_sma", "fixed_center"]
 
-# Grid Multi-TF : 384 combos (2×2×2×2×2×2×2×3), ~2 min/asset
+# Grid Multi-TF : 768 combos (2×2×3×2×2×2×2×3×2), ~4 min/asset
 grid_multi_tf:
   wfo:
     is_days: 180
@@ -205,6 +205,7 @@ grid_multi_tf:
     atr_multiplier_step: [0.5, 1.0]
     num_levels: [2, 3]
     sl_percent: [15.0, 20.0, 25.0]
+    min_grid_spacing_pct: [0.0, 0.8]
 
 # Grid Funding : 2592 combos (4×3×2×3×4×3×3), ~8 min/asset
 grid_funding:

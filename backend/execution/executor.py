@@ -1974,7 +1974,8 @@ class Executor:
         trade_type = "sl_close" if event.exit_reason in ("sl",) else "tp_close"
         if event.exit_reason in ("force_close", "emergency_close"):
             trade_type = "force_close"
-        margin = pos.entry_price * pos.quantity / 3  # default leverage 3x
+        leverage = self._config.risk.position.default_leverage
+        margin = pos.entry_price * pos.quantity / leverage
         pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
         await self._persist_live_trade(
             trade_type, futures_sym, close_side, pos.direction,
@@ -1984,6 +1985,7 @@ class Executor:
             fee=exit_fee or 0,
             pnl=round(net_pnl, 4),
             pnl_pct=round(pnl_pct, 2),
+            leverage=leverage,
             context=f"mono_{event.exit_reason or 'unknown'}",
         )
 
@@ -2244,7 +2246,8 @@ class Executor:
         # Sprint 45 : persist exchange close
         close_side = "sell" if pos.direction == "LONG" else "buy"
         trade_type = "sl_close" if exit_reason == "sl" else "tp_close"
-        margin = pos.entry_price * pos.quantity / 3
+        leverage = self._config.risk.position.default_leverage
+        margin = pos.entry_price * pos.quantity / leverage
         pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
         await self._persist_live_trade(
             trade_type, symbol, close_side, pos.direction,
@@ -2253,6 +2256,7 @@ class Executor:
             fee=exit_fee or 0,
             pnl=round(net_pnl, 4),
             pnl_pct=round(pnl_pct, 2),
+            leverage=leverage,
             context=f"exchange_{exit_reason}",
         )
 

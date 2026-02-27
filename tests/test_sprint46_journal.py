@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +11,8 @@ import pytest
 import pytest_asyncio
 
 from backend.core.database import Database
+
+_order_counter = itertools.count(1)
 
 
 @pytest_asyncio.fixture
@@ -32,7 +35,7 @@ def _make_live_trade(**overrides) -> dict:
         "side": "sell",
         "quantity": 0.01,
         "price": 96000.0,
-        "order_id": "order_123",
+        "order_id": f"order_{next(_order_counter)}",
         "fee": 0.57,
         "pnl": 5.0,
         "pnl_pct": 1.2,

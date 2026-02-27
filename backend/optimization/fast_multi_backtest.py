@@ -87,6 +87,10 @@ def _build_entry_prices(
     elif strategy_name == "grid_multi_tf":
         sma_arr = cache.bb_sma[params["ma_period"]]
         atr_arr = cache.atr_by_period[params["atr_period"]]
+        # Plancher ATR adaptatif (parité grid_atr, fix R2 Sprint 57b)
+        min_spacing = params.get("min_grid_spacing_pct", 0.0)
+        if min_spacing > 0:
+            atr_arr = np.maximum(atr_arr, cache.closes * min_spacing / 100)
         st_key = (params["st_atr_period"], params["st_atr_multiplier"])
         st_dir = cache.supertrend_dir_4h[st_key]
         multipliers = [
@@ -99,7 +103,7 @@ def _build_entry_prices(
             entry_prices[long_mask, lvl] = sma_arr[long_mask] - atr_arr[long_mask] * multipliers[lvl]
             entry_prices[short_mask, lvl] = sma_arr[short_mask] + atr_arr[short_mask] * multipliers[lvl]
         # NaN propagation : ATR invalide ou pas de direction Supertrend
-        invalid = np.isnan(atr_arr) | (atr_arr <= 0) | np.isnan(st_dir)
+        invalid = np.isnan(cache.atr_by_period[params["atr_period"]]) | (cache.atr_by_period[params["atr_period"]] <= 0) | np.isnan(st_dir)
         entry_prices[invalid, :] = np.nan
 
     elif strategy_name == "grid_trend":
@@ -1638,6 +1642,8 @@ def _simulate_grid_multi_tf(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct,
         direction=1,
         directions=dir_arr,
+        max_hold_candles=params.get("max_hold_candles", 0),
+        min_profit_pct=params.get("min_profit_pct", 0.0),
         cooldown_candles=params.get("cooldown_candles", 0),
     )
 

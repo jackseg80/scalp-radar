@@ -191,7 +191,7 @@ class LiveRiskManager:
             if self._notifier:
                 try:
                     from backend.alerts.notifier import AnomalyType
-                    asyncio.get_event_loop().create_task(
+                    asyncio.get_running_loop().create_task(
                         self._notifier.notify_anomaly(
                             AnomalyType.KILL_SWITCH_GLOBAL,
                             f"KILL SWITCH LIVE déclenché ! perte={loss_pct:.1f}% "
@@ -250,7 +250,7 @@ class LiveRiskManager:
             if self._notifier:
                 try:
                     from backend.alerts.notifier import AnomalyType
-                    asyncio.get_event_loop().create_task(
+                    asyncio.get_running_loop().create_task(
                         self._notifier.notify_anomaly(
                             AnomalyType.KILL_SWITCH_GLOBAL,
                             f"KILL SWITCH LIVE GLOBAL ! drawdown={drawdown_pct:.1f}% "

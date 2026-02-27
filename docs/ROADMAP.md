@@ -2903,8 +2903,8 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 ## ÉTAT ACTUEL (27 février 2026)
 
 - **2081 tests, 2081 passants** (0 échec), +19 Sprint 57 réalisme backtest + 10 mis à jour
-- **Phases 1-5 terminées + Sprints 1-57**
-- **Phase 6 en cours** — pipeline backtest corrigé (11 biais/erreurs éliminés), WFO à relancer
+- **Phases 1-5 terminées + Sprints 1-57b**
+- **Phase 6 en cours** — pipeline backtest corrigé (11 biais/erreurs éliminés), moteur live audité (6 fixes appliqués), WFO à relancer sur 26 assets
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
@@ -3209,6 +3209,18 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Calmar annualisé** (`regime_backtest_compare.py`, `diagnose_dd_leverage.py`) : `calmar = return / DD` non annualisé → non comparable entre périodes. Fix : `calmar = (return / n_years) / abs(DD)`.
   - **Tests** : 19 nouveaux (`test_sprint56_realism.py`) + 10 tests existants mis à jour (régressions attendues des fixes). Audit A (partie manuelle + pytest) : tous les 11 fixes confirmés dans le code.
   - **19 nouveaux tests, 10 mis à jour** → **2081 tests, 2081 passants** (0 échec, 2 warnings asyncio pré-existants)
+- **Sprint 57b — Audit moteur live + 6 fixes critiques avant déploiement 26 assets** (27 fév 2026) :
+  - **Phase 1 (Sprint 57 audit)** : audit complet du moteur live/paper sur 7 axes (signal→order, position management, multi-strategy isolation, kill switch/safety, supertrend direction_flip, edge cases, logging). Résultat : 3 bugs (B1-B3), 12 risques (R1-R12), 10 points forts. Rapport `docs/audit/audit-live-paper-sprint57-20260227.md`.
+  - **Phase 2 (Sprint 57b fixes)** : 6 corrections prioritaires :
+    - **B1** (`risk_manager.py`) : `asyncio.get_event_loop()` → `get_running_loop()` pour alertes kill switch (crash silencieux possible au shutdown)
+    - **B2** (`database.py`) : index UNIQUE partiel sur `order_id` dans `live_trades` (empêche doublons d'ordres)
+    - **B3** (`config.py`, `grid_multi_tf.py`) : ajout `cooldown_candles=3`, `min_grid_spacing_pct`, `max_hold_candles` à `GridMultiTFConfig` (parité grid_atr)
+    - **R2** (`fast_multi_backtest.py`) : plancher ATR vectorisé `min_grid_spacing_pct` dans fast engine grid_multi_tf + propagation `max_hold_candles`/`cooldown_candles` dans `_simulate_grid_common`
+    - **R4** (`state_manager.py`) : `f.flush()` + `os.fsync()` avant `os.replace()` dans `_write_json_file()` (protection corruption state file)
+    - **R9** (`executor.py`) : leverage dynamique `self._config.risk.position.default_leverage` au lieu de `/3` hardcodé dans `pnl_pct` mono (2 endroits)
+  - **param_grids.yaml** : `min_grid_spacing_pct: [0.0, 0.8]` ajouté à grid_multi_tf (384 → 768 combos)
+  - **Test fix** : `test_sprint46_journal.py` `order_id` auto-incrémenté (conflit avec nouvel index UNIQUE)
+  - **0 nouveaux tests** → **2081 tests, 2081 passants**, 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

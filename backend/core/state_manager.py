@@ -182,6 +182,8 @@ class StateManager:
         try:
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp_file, file_path)
         except OSError as e:
             logger.error("StateManager: erreur écriture {}: {}", file_path, e)

@@ -1532,6 +1532,8 @@ class Database:
                 ON live_trades(strategy_name);
             CREATE INDEX IF NOT EXISTS idx_live_trades_order
                 ON live_trades(order_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trades_order_unique
+                ON live_trades(order_id) WHERE order_id IS NOT NULL AND order_id != '';
         """)
 
     async def insert_live_trade(self, trade: dict) -> int:

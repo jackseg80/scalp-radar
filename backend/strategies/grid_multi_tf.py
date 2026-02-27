@@ -128,6 +128,12 @@ class GridMultiTFStrategy(BaseGridStrategy):
         if np.isnan(sma_val) or np.isnan(atr_val) or atr_val <= 0:
             return []
 
+        # Plancher ATR adaptatif (parité grid_atr, fix R2 Sprint 57b)
+        close_val = indicators.get("close", float("nan"))
+        min_spacing = self._config.min_grid_spacing_pct
+        if min_spacing > 0 and not np.isnan(close_val) and close_val > 0:
+            atr_val = max(atr_val, close_val * min_spacing / 100)
+
         # Lire la direction Supertrend 4h
         ind_4h = ctx.indicators.get("4h", {})
         st_direction = ind_4h.get("st_direction")
@@ -281,6 +287,9 @@ class GridMultiTFStrategy(BaseGridStrategy):
             "sl_percent": self._config.sl_percent,
             "sides": self._config.sides,
             "leverage": self._config.leverage,
+            "max_hold_candles": self._config.max_hold_candles,
+            "cooldown_candles": self._config.cooldown_candles,
+            "min_grid_spacing_pct": self._config.min_grid_spacing_pct,
         }
 
 
