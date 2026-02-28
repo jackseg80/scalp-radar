@@ -583,9 +583,11 @@ def apply_from_db(
     with open(yaml_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
-    # Backup horodaté
+    # Backup horodaté dans old/
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = yaml_path.with_name(f"{yaml_path.stem}.yaml.bak.{ts}")
+    old_dir = yaml_path.parent / "old"
+    old_dir.mkdir(exist_ok=True)
+    backup_path = old_dir / f"{yaml_path.stem}.yaml.bak.{ts}"
     shutil.copy2(str(yaml_path), str(backup_path))
 
     changed = False
