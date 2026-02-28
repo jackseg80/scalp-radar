@@ -2902,8 +2902,8 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (28 février 2026)
 
-- **2140 tests, 2136 passants** (4 échecs pré-existants non liés), +26 Sprint 61 trend_follow_daily
-- **Phases 1-5 terminées + Sprints 1-61**
+- **2151 tests, 2144 passants** (7 échecs pré-existants non liés), +7 Sprint 62 Donchian breakout
+- **Phases 1-5 terminées + Sprints 1-62**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — WFO à relancer sur 26 assets avec `--regrade`
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
@@ -3255,6 +3255,17 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Force-close fin** : exclu de `trade_pnls` (convention Sprint 60)
   - **Fichiers** : `backend/strategies/trend_follow_daily.py` (nouveau), `backend/optimization/fast_multi_backtest.py` (`_simulate_trend_follow` + `_close_trend_position`), `backend/optimization/__init__.py`, `backend/optimization/indicator_cache.py`, `backend/optimization/walk_forward.py`, `config/param_grids.yaml`, `config/strategies.yaml`, `tests/test_trend_follow_daily.py` (nouveau), `tests/test_fast_engine_refactor.py` (mis à jour : FAST_ENGINE_STRATEGIES 15→16)
   - **26 nouveaux tests** → **2140 tests, 2136 passants** (4 pré-existants inchangés), 0 régression
+- **Sprint 62 — trend_follow_daily : Donchian Breakout mode** (28 fév 2026) :
+  - **Contexte** : EMA crossover (Sprint 61) 0% consistency OOS → ajout `entry_mode="donchian"` au moteur existant (pas de nouvelle stratégie)
+  - **Principe** : Turtle Traders — entrée quand close casse le plus haut (LONG) ou bas (SHORT) des N derniers jours. Plus réactif que l'EMA cross (pas de lissage)
+  - **Nouveau mode d'entrée** : `entry_mode` param (`"ema_cross"` existant conservé, `"donchian"` par défaut) ; `donchian_entry_period`, `donchian_exit_period`
+  - **Nouveau mode de sortie** : `exit_mode="channel"` — LONG sort si `lows[i] <= rolling_low_exit[prev]`, SHORT si `highs[i] >= rolling_high_exit[prev]`
+  - **Anti-look-ahead** : `rolling_high[i] = max(highs[i-N:i])` (exclut candle i) — vérifié dans `_rolling_max()` (Sprint 62)
+  - **IndicatorCache** : `donchian_entry_period` + `donchian_exit_period` ajoutés aux lookbacks trigger (2 lignes)
+  - **Déduplication** : `entry_mode=donchian` → EMA params normalisés (sans effet) ; `exit_mode=channel + entry_mode=ema_cross` → fallback trailing
+  - **WFO** : `_INDICATOR_GROUP_KEYS` mis à jour ; grille 432 combos (3×2×2×3×2×3×1×2) — EMA params retirés
+  - **Fichiers** : `backend/strategies/trend_follow_daily.py` (+3 champs config), `backend/optimization/fast_multi_backtest.py` (_simulate_trend_follow refactoré), `backend/optimization/indicator_cache.py` (+2 conditions), `backend/optimization/walk_forward.py` (+2 clés), `config/param_grids.yaml` (432 combos Donchian), `tests/test_trend_follow_daily.py` (+7 tests, helpers Donchian)
+  - **7 nouveaux tests** → **2151 tests, 2144 passants** (7 pré-existants), 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

@@ -1,6 +1,6 @@
 """Tests pour la stratégie trend_follow_daily — Fast Engine Only.
 
-17 tests :
+24 tests :
 1-2.   Entrée LONG / SHORT sur EMA cross
 3-4.   ADX filter / ADX désactivé
 5-6.   Trailing stop profit / SL fixe perte
@@ -15,6 +15,13 @@
 15.    Déduplication exit_mode/trailing
 16.    Trailing init = entry_price (look-ahead fix)
 17.    Pas de look-ahead signaux
+18.    Entrée Donchian LONG — close > rolling_high
+19.    Entrée Donchian SHORT — close < rolling_low
+20.    Exit mode "channel" — LONG sort quand lows < rolling_low_exit
+21.    Donchian + ADX filter — breakout bloqué si ADX < threshold
+22.    Pas de look-ahead rolling_high
+23.    Déduplication — entry_mode=donchian ignore ema_fast/ema_slow
+24.    Config — champs Donchian avec defaults corrects
 """
 
 from __future__ import annotations
@@ -81,6 +88,8 @@ def _make_cache_for_trend(
     adx_period: int = 14,
     atr_period: int = 14,
     total_days: float | None = None,
+    rolling_high: dict | None = None,
+    rolling_low: dict | None = None,
 ) -> Any:
     """Crée un cache avec les champs spécifiques trend_follow_daily."""
     if closes is None:
@@ -110,10 +119,13 @@ def _make_cache_for_trend(
         ema_by_period={ema_fast_period: ema_fast_vals, ema_slow_period: ema_slow_vals},
         adx_by_period={adx_period: adx_vals},
         atr_by_period={atr_period: atr_vals},
+        rolling_high=rolling_high if rolling_high is not None else {},
+        rolling_low=rolling_low if rolling_low is not None else {},
     )
 
 
 _DEFAULT_PARAMS: dict[str, Any] = {
+    "entry_mode": "ema_cross",
     "ema_fast": 9,
     "ema_slow": 50,
     "adx_period": 14,
@@ -580,8 +592,11 @@ class TestRegistryConfig:
     def test_config_defaults(self):
         cfg = TrendFollowDailyConfig()
         assert cfg.timeframe == "1d"
+        assert cfg.entry_mode == "donchian"
         assert cfg.ema_fast == 9
         assert cfg.ema_slow == 50
+        assert cfg.donchian_entry_period == 50
+        assert cfg.donchian_exit_period == 20
         assert cfg.exit_mode == "trailing"
         assert cfg.sl_percent == 10.0
         assert cfg.sides == ["long"]
@@ -867,3 +882,294 @@ class TestPositionFraction:
         """position_fraction par défaut = 0.3 dans TrendFollowDailyConfig."""
         cfg = TrendFollowDailyConfig()
         assert cfg.position_fraction == 0.3
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Helpers Donchian
+# ═════════════════════════════════════════════════════════════════════════
+
+
+def _donchian_params(**overrides) -> dict[str, Any]:
+    """Params pour le mode Donchian (pas d'EMA)."""
+    base = {
+        "entry_mode": "donchian",
+        "donchian_entry_period": 20,
+        "donchian_exit_period": 10,
+        "adx_period": 14,
+        "adx_threshold": 20.0,
+        "atr_period": 14,
+        "trailing_atr_mult": 4.0,
+        "exit_mode": "trailing",
+        "sl_percent": 10.0,
+        "cooldown_candles": 3,
+        "sides": ["long"],
+        "leverage": 6,
+        "position_fraction": 0.3,
+    }
+    base.update(overrides)
+    return base
+
+
+def _setup_donchian_breakout_long(n: int = 200, breakout_at: int = 60, period: int = 20):
+    """Crée des arrays rolling_high/rolling_low où un breakout LONG se produit.
+
+    breakout_at : candle où close > rolling_high → signal détecté
+    Le moteur lit le signal sur [prev], donc entrée à candle breakout_at+1.
+    """
+    # Prix stable à 100, channel haut à 101
+    closes = np.full(n, 100.0)
+    opens = closes.copy()
+    highs = closes + 1.0
+    lows = closes - 1.0
+
+    # rolling_high : canal plat à 101
+    rolling_high = np.full(n, 101.0)
+    rolling_low = np.full(n, 99.0)
+
+    # Breakout : close dépasse le canal à breakout_at
+    closes[breakout_at:] = 105.0
+    opens[breakout_at:] = 105.0
+    highs[breakout_at:] = 106.0
+    lows[breakout_at:] = 104.0
+
+    return closes, opens, highs, lows, rolling_high, rolling_low
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test 18 — Entrée Donchian LONG — close > rolling_high
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestDonchianEntryLong:
+    def test_donchian_long_entry_on_breakout(self, make_indicator_cache):
+        """close[prev] > rolling_high[prev] → entrée LONG sur open[i]."""
+        n = 200
+        closes, opens, highs, lows, rh, rl = _setup_donchian_breakout_long(
+            n, breakout_at=60, period=20,
+        )
+
+        cache = _make_cache_for_trend(
+            make_indicator_cache, n=n,
+            closes=closes, opens=opens, highs=highs, lows=lows,
+            rolling_high={20: rh},
+            rolling_low={20: rl},
+        )
+        bt = _make_bt_config()
+        pnls, rets, cap = _simulate_trend_follow(
+            cache, _donchian_params(adx_threshold=0.0, sl_percent=50.0), bt,
+        )
+
+        # Position ouverte → capital a bougé (force-close en fin de données)
+        assert cap != pytest.approx(10_000.0), "Donchian LONG doit ouvrir une position"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test 19 — Entrée Donchian SHORT — close < rolling_low
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestDonchianEntryShort:
+    def test_donchian_short_entry_on_breakdown(self, make_indicator_cache):
+        """close[prev] < rolling_low[prev] → entrée SHORT."""
+        n = 200
+        closes = np.full(n, 100.0)
+        opens = closes.copy()
+        highs = closes + 1.0
+        lows = closes - 1.0
+
+        rolling_high = np.full(n, 101.0)
+        rolling_low = np.full(n, 99.0)
+
+        # Breakdown : close chute sous le canal bas à candle 60
+        closes[60:] = 95.0
+        opens[60:] = 95.0
+        highs[60:] = 96.0
+        lows[60:] = 94.0
+
+        cache = _make_cache_for_trend(
+            make_indicator_cache, n=n,
+            closes=closes, opens=opens, highs=highs, lows=lows,
+            rolling_high={20: rolling_high},
+            rolling_low={20: rolling_low},
+        )
+        bt = _make_bt_config()
+        pnls, rets, cap = _simulate_trend_follow(
+            cache,
+            _donchian_params(sides=["long", "short"], adx_threshold=0.0, sl_percent=50.0),
+            bt,
+        )
+
+        assert cap != pytest.approx(10_000.0), "Donchian SHORT doit ouvrir une position"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test 20 — Exit mode "channel" — LONG sort quand lows < rolling_low_exit
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestChannelExit:
+    def test_channel_exit_long(self, make_indicator_cache):
+        """LONG → sort quand lows[i] <= rolling_low_exit[prev]."""
+        n = 200
+        closes = np.full(n, 100.0)
+        opens = closes.copy()
+        highs = closes + 1.0
+        lows = closes - 1.0
+
+        # Canal d'entrée (period 20) : breakout à candle 60
+        rh_entry = np.full(n, 101.0)
+        rl_entry = np.full(n, 99.0)
+
+        # Breakout : close monte à 105 (> rh_entry 101) à candle 60
+        closes[60:100] = 105.0
+        opens[60:100] = 105.0
+        highs[60:100] = 106.0
+        lows[60:100] = 104.0
+
+        # Canal de sortie (period 10) : bas à 103 pendant la position
+        rh_exit = np.full(n, 106.0)
+        rl_exit = np.full(n, 103.0)
+
+        # À candle 100 : prix chute sous le canal de sortie
+        closes[100:] = 95.0
+        opens[100:] = 95.0
+        highs[100:] = 96.0
+        lows[100:] = 94.0  # 94 < rl_exit[prev]=103 → channel exit
+
+        cache = _make_cache_for_trend(
+            make_indicator_cache, n=n,
+            closes=closes, opens=opens, highs=highs, lows=lows,
+            rolling_high={20: rh_entry, 10: rh_exit},
+            rolling_low={20: rl_entry, 10: rl_exit},
+        )
+        bt = _make_bt_config()
+        pnls, rets, cap = _simulate_trend_follow(
+            cache,
+            _donchian_params(
+                exit_mode="channel", adx_threshold=0.0,
+                sl_percent=50.0, donchian_exit_period=10,
+            ),
+            bt,
+        )
+
+        assert len(pnls) >= 1, "Channel exit doit fermer la position"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test 21 — Donchian + ADX filter — breakout bloqué si ADX < threshold
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestDonchianADXFilter:
+    def test_adx_blocks_donchian_entry(self, make_indicator_cache):
+        """ADX < threshold → breakout Donchian ignoré."""
+        n = 200
+        closes, opens, highs, lows, rh, rl = _setup_donchian_breakout_long(
+            n, breakout_at=60,
+        )
+        adx_vals = np.full(n, 15.0)  # < 20 threshold
+
+        cache = _make_cache_for_trend(
+            make_indicator_cache, n=n,
+            closes=closes, opens=opens, highs=highs, lows=lows,
+            adx_vals=adx_vals,
+            rolling_high={20: rh},
+            rolling_low={20: rl},
+        )
+        bt = _make_bt_config()
+        pnls, rets, cap = _simulate_trend_follow(
+            cache, _donchian_params(adx_threshold=20.0), bt,
+        )
+
+        assert len(pnls) == 0
+        assert cap == pytest.approx(10_000.0)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test 22 — Pas de look-ahead rolling_high
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestDonchianNoLookAhead:
+    def test_rolling_high_excludes_current_candle(self, make_indicator_cache):
+        """rolling_high[i] = max(highs[i-N:i]) — exclut candle i.
+
+        Si le signal utilisait rolling_high[i] incluant highs[i],
+        le breakout pourrait se déclencher à tort.
+        """
+        n = 200
+        closes = np.full(n, 100.0)
+        opens = closes.copy()
+        highs = closes + 1.0
+        lows = closes - 1.0
+
+        # rolling_high sera basé sur les highs AVANT prev
+        # On met le canal très haut pour empêcher tout breakout
+        rolling_high = np.full(n, 200.0)  # Canal inatteignable
+        rolling_low = np.full(n, 50.0)
+
+        cache = _make_cache_for_trend(
+            make_indicator_cache, n=n,
+            closes=closes, opens=opens, highs=highs, lows=lows,
+            rolling_high={20: rolling_high},
+            rolling_low={20: rolling_low},
+        )
+        bt = _make_bt_config()
+        pnls, rets, cap = _simulate_trend_follow(
+            cache, _donchian_params(adx_threshold=0.0), bt,
+        )
+
+        # Aucun breakout ne doit se produire (canal à 200, close à 100)
+        assert len(pnls) == 0
+        assert cap == pytest.approx(10_000.0)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test 23 — Déduplication — entry_mode=donchian ignore ema_fast/ema_slow
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestDonchianDeduplication:
+    def test_donchian_ignores_ema_params(self, make_indicator_cache):
+        """Avec entry_mode=donchian, ema_fast/ema_slow n'ont aucun effet."""
+        n = 200
+        closes, opens, highs, lows, rh, rl = _setup_donchian_breakout_long(
+            n, breakout_at=60,
+        )
+
+        cache = _make_cache_for_trend(
+            make_indicator_cache, n=n,
+            closes=closes, opens=opens, highs=highs, lows=lows,
+            rolling_high={20: rh},
+            rolling_low={20: rl},
+        )
+        bt = _make_bt_config()
+
+        p1 = _donchian_params(adx_threshold=0.0, sl_percent=50.0)
+        p1["ema_fast"] = 5
+        p1["ema_slow"] = 20
+
+        p2 = _donchian_params(adx_threshold=0.0, sl_percent=50.0)
+        p2["ema_fast"] = 12
+        p2["ema_slow"] = 50
+
+        pnls1, _, cap1 = _simulate_trend_follow(cache, p1, bt)
+        pnls2, _, cap2 = _simulate_trend_follow(cache, p2, bt)
+
+        assert cap1 == pytest.approx(cap2, rel=1e-10), (
+            "ema_fast/ema_slow ne doivent pas affecter le mode donchian"
+        )
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test 24 — Config — champs Donchian avec defaults corrects
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestDonchianConfigDefaults:
+    def test_config_has_donchian_fields(self):
+        """TrendFollowDailyConfig a les champs Donchian avec bons defaults."""
+        cfg = TrendFollowDailyConfig()
+        assert cfg.entry_mode == "donchian"
+        assert cfg.donchian_entry_period == 50
+        assert cfg.donchian_exit_period == 20

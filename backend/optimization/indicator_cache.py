@@ -311,6 +311,10 @@ def build_cache(
         lookbacks.update(param_grid_values["entry_lookback"])
     if "donchian_period" in param_grid_values:
         lookbacks.update(param_grid_values["donchian_period"])
+    if "donchian_entry_period" in param_grid_values:
+        lookbacks.update(param_grid_values["donchian_entry_period"])
+    if "donchian_exit_period" in param_grid_values:
+        lookbacks.update(param_grid_values["donchian_exit_period"])
     rolling_high_dict = {lb: _rolling_max(highs, lb) for lb in lookbacks}
     rolling_low_dict = {lb: _rolling_min(lows, lb) for lb in lookbacks}
 
