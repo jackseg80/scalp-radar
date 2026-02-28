@@ -207,7 +207,7 @@ grid_atr:
   sl_percent: 20.0
   sides:
   - long
-  leverage: 5
+  leverage: 6
   cooldown_candles: 3
   weight: 0.2
   per_asset:
@@ -251,24 +251,14 @@ grid_atr:
       num_levels: 4
       sl_percent: 15.0
       timeframe: 1h
-    DOGE/USDT:
-      atr_multiplier_start: 3.0
-      atr_multiplier_step: 0.5
-      atr_period: 14
-      ma_period: 7
-      min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 20.0
-      timeframe: 1h
-    DYDX/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 1.5
+    BTC/USDT:
+      atr_multiplier_start: 2.5
+      atr_multiplier_step: 1.0
       atr_period: 10
       ma_period: 7
       min_grid_spacing_pct: 1.8
       min_profit_pct: 0.0
-      num_levels: 4
+      num_levels: 3
       sl_percent: 20.0
       timeframe: 1h
     ETH/USDT:
@@ -291,6 +281,16 @@ grid_atr:
       num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
+    LINK/USDT:
+      atr_multiplier_start: 3.0
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 14
+      min_grid_spacing_pct: 1.8
+      min_profit_pct: 0.0
+      num_levels: 3
+      sl_percent: 15.0
+      timeframe: 1h
     NEAR/USDT:
       atr_multiplier_start: 3.0
       atr_multiplier_step: 1.0
@@ -298,6 +298,16 @@ grid_atr:
       ma_period: 7
       min_grid_spacing_pct: 1.8
       min_profit_pct: 0.4
+      num_levels: 4
+      sl_percent: 20.0
+      timeframe: 1h
+    OP/USDT:
+      atr_multiplier_start: 3.0
+      atr_multiplier_step: 0.5
+      atr_period: 20
+      ma_period: 7
+      min_grid_spacing_pct: 1.2
+      min_profit_pct: 0.0
       num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
@@ -310,6 +320,16 @@ grid_atr:
       min_profit_pct: 0.0
       num_levels: 3
       sl_percent: 20.0
+      timeframe: 1h
+    SUI/USDT:
+      atr_multiplier_start: 2.0
+      atr_multiplier_step: 1.5
+      atr_period: 10
+      ma_period: 7
+      min_grid_spacing_pct: 1.8
+      min_profit_pct: 0.0
+      num_levels: 3
+      sl_percent: 15.0
       timeframe: 1h
     XRP/USDT:
       atr_multiplier_start: 2.5
@@ -529,7 +549,7 @@ grid_boltrend:
   sides:
   - long
   - short
-  leverage: 6
+  leverage: 5
   cooldown_candles: 3
   weight: 0.2
   per_asset:
