@@ -321,10 +321,9 @@ class TestGridRangeATRFastEngine:
         opens = np.full(n, 100.0)
         highs = np.full(n, 101.0)
         lows = np.full(n, 99.0)
-        # Candle 0 : LONG entry (low touche SMA - 1*10*0.3 = 97)
-        lows[0] = 96.0
-        # Candle 1 : TP (high >= SMA = 100)
-        highs[1] = 101.0
+        # Candle 1 : LONG entry (low touche SMA[0] - 1*ATR[0]*0.3 = 97) — Sprint 56 look-ahead
+        lows[1] = 96.0
+        # Candle 2+ : TP (high >= SMA = 100, highs=101 par défaut)
 
         cache = make_indicator_cache(
             n=n, closes=closes, opens=opens, highs=highs, lows=lows,
@@ -380,12 +379,9 @@ class TestGridRangeATRFastEngine:
         opens = np.full(n, 100.0)
         highs = np.full(n, 101.0)
         lows = np.full(n, 99.0)
-        # Candle 0 : SHORT entry (high touche SMA + 1*10*0.3 = 103)
-        highs[0] = 104.0
-        # Candle 1 : TP (low <= SMA = 100)
-        lows[1] = 99.0
-        closes[1] = 99.5
-        opens[1] = 100.5  # bougie rouge → TP SHORT
+        # Candle 1 : SHORT entry (high touche SMA[0] + 1*ATR[0]*0.3 = 103) — Sprint 56 look-ahead
+        highs[1] = 104.0
+        # Candle 2+ : TP (low <= SMA = 100, lows=99 par défaut)
 
         cache = make_indicator_cache(
             n=n, closes=closes, opens=opens, highs=highs, lows=lows,
@@ -454,12 +450,12 @@ class TestGridRangeATRFastEngine:
         highs = np.full(n, 101.0)
         lows = np.full(n, 99.0)
 
-        # Cycle 1 : candle 0 ouvre LONG, candle 2 ferme (TP)
-        lows[0] = 96.0  # entry LONG level 0 à 97
-        highs[2] = 101.0  # TP à SMA=100
+        # Cycle 1 : candle 1 ouvre LONG (Sprint 56: look-ahead, entry sur candle 1)
+        # TP déclenche dès la candle suivante (highs=101 >= SMA=100 toujours)
+        lows[1] = 96.0  # entry LONG level 0 à 97
 
-        # Cycle 2 : candle 5 réouvre le même level
-        lows[5] = 96.0  # entry LONG level 0 à 97
+        # Cycle 2 : candle 6 réouvre le même level
+        lows[6] = 96.0  # entry LONG level 0 à 97
 
         cache = make_indicator_cache(
             n=n, closes=closes, opens=opens, highs=highs, lows=lows,
@@ -486,8 +482,8 @@ class TestGridRangeATRFastEngine:
         opens_tp = np.full(n, 100.0)
         highs_tp = np.full(n, 101.0)
         lows_tp = np.full(n, 99.0)
-        lows_tp[0] = 96.0  # entry à 97
-        highs_tp[1] = 101.0  # TP
+        lows_tp[1] = 96.0  # entry à 97 (Sprint 56: look-ahead, candle 1)
+        # highs_tp = 101 partout → TP à la candle suivante (>= SMA=100)
 
         cache_tp = make_indicator_cache(
             n=n, closes=closes_tp, opens=opens_tp, highs=highs_tp, lows=lows_tp,
@@ -576,12 +572,10 @@ class TestGridRangeATRFastEngine:
         highs = np.full(n, 101.0)
         lows = np.full(n, 99.0)
 
-        # Candle 0 : entry LONG (low=96 < 97) et SHORT (high=104 > 103)
-        lows[0] = 95.0
-        highs[0] = 104.0
-        # Candle 1 : TP LONG (high=101 >= SMA=100) et TP SHORT (low=99 <= SMA=100)
-        highs[1] = 101.0
-        lows[1] = 99.0
+        # Candle 1 : entry LONG (low=95 < 97) et SHORT (high=104 > 103) — Sprint 56 look-ahead
+        lows[1] = 95.0
+        highs[1] = 104.0
+        # Candle 2+ : TP LONG (highs=101 >= SMA) et TP SHORT (lows=99 <= SMA) par défaut
 
         cache = make_indicator_cache(
             n=n, closes=closes, opens=opens, highs=highs, lows=lows,

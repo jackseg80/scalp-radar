@@ -558,12 +558,14 @@ def _simulate_grid_range(
     taker_fee = bt_config.taker_fee
     maker_fee = bt_config.maker_fee
     slippage_pct = bt_config.slippage_pct
+    max_margin_ratio = bt_config.max_margin_ratio  # Sprint 56: margin guard
     n = cache.n_candles
 
     trade_pnls: list[float] = []
     trade_returns: list[float] = []
     peak_capital = capital  # Sprint 53 : kill switch tracking
     kill_switch_triggered = False
+    used_margin = 0.0  # Sprint 56: margin guard tracking
 
     # Slots : 0..N-1 = LONG, N..2N-1 = SHORT
     n_long = num_levels if "long" in sides else 0
@@ -640,6 +642,13 @@ def _simulate_grid_range(
                     exit_price = tp_price
                 elif exit_reason == "sl":
                     exit_price = sl_price
+                    # Sprint 56: SL gap slippage — fill défavorable si gap
+                    if direction == 1:
+                        gap = max(0.0, exit_price - cache.lows[i])
+                        exit_price -= 0.5 * gap
+                    else:
+                        gap = max(0.0, cache.highs[i] - exit_price)
+                        exit_price += 0.5 * gap
 
                 if exit_reason is not None:
                     # Tous les exits = taker fee + slippage (market order en live)
@@ -659,6 +668,7 @@ def _simulate_grid_range(
                     # Restaurer la marge de cette position
                     margin_to_return = ep * qty / leverage
                     capital += margin_to_return
+                    used_margin -= margin_to_return  # Sprint 56: margin guard tracking
                     trade_pnls.append(net)
                     if capital > 0:
                         trade_returns.append(net / capital)
@@ -703,8 +713,16 @@ def _simulate_grid_range(
             and (i - last_exit_candle_idx) < cooldown_candles
         )
         if can_open_new and not kill_switch_triggered and len(positions) < total_slots:
+            # Sprint 56: look-ahead fix — entry prices basés sur indicateurs [i-1]
+            if i == 0:
+                continue
+            prev_sma = sma_arr[i - 1]
+            prev_atr = atr_arr[i - 1]
+            if math.isnan(prev_sma) or math.isnan(prev_atr) or prev_atr <= 0:
+                continue
+            spacing = prev_atr * spacing_mult
+
             filled_slots = {p[0] for p in positions}
-            spacing = cur_atr * spacing_mult
 
             for lvl in range(num_levels):
                 if len(positions) >= total_slots or capital <= 0:
@@ -712,29 +730,43 @@ def _simulate_grid_range(
 
                 # LONG slot
                 if "long" in sides and lvl not in filled_slots:
-                    ep = cur_sma - (lvl + 1) * spacing
+                    ep = prev_sma - (lvl + 1) * spacing
                     if ep > 0 and cache.lows[i] <= ep:
+                        # Sprint 56: margin guard
+                        total_equity = capital + used_margin
+                        if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
+                            break
+                        # Sprint 56: slippage à l'entrée
+                        actual_ep = ep * (1 + slippage_pct)
                         notional = capital * (1.0 / total_slots) * leverage
-                        qty = notional / ep
+                        qty = notional / actual_ep
                         margin = notional / leverage
                         if qty > 0 and capital >= margin:
                             capital -= margin
-                            entry_fee = qty * ep * taker_fee
-                            positions.append((lvl, 1, ep, qty, entry_fee, cur_sma))
+                            used_margin += margin
+                            entry_fee = qty * actual_ep * taker_fee
+                            positions.append((lvl, 1, actual_ep, qty, entry_fee, prev_sma))
                             filled_slots.add(lvl)
 
                 # SHORT slot
                 short_slot = num_levels + lvl
                 if "short" in sides and short_slot not in filled_slots:
-                    ep = cur_sma + (lvl + 1) * spacing
+                    ep = prev_sma + (lvl + 1) * spacing
                     if cache.highs[i] >= ep:
+                        # Sprint 56: margin guard
+                        total_equity = capital + used_margin
+                        if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
+                            break
+                        # Sprint 56: slippage à l'entrée
+                        actual_ep = ep * (1 - slippage_pct)
                         notional = capital * (1.0 / total_slots) * leverage
-                        qty = notional / ep
+                        qty = notional / actual_ep
                         margin = notional / leverage
                         if qty > 0 and capital >= margin:
                             capital -= margin
-                            entry_fee = qty * ep * taker_fee
-                            positions.append((short_slot, -1, ep, qty, entry_fee, cur_sma))
+                            used_margin += margin
+                            entry_fee = qty * actual_ep * taker_fee
+                            positions.append((short_slot, -1, actual_ep, qty, entry_fee, prev_sma))
                             filled_slots.add(short_slot)
 
     # Force close fin de données
@@ -1012,6 +1044,7 @@ def _simulate_grid_boltrend(
     taker_fee = bt_config.taker_fee
     maker_fee = bt_config.maker_fee
     slippage_pct = bt_config.slippage_pct
+    max_margin_ratio = bt_config.max_margin_ratio  # Sprint 56: margin guard
 
     # Funding settlement mask (00:00, 08:00, 16:00 UTC)
     funding_rates = cache.funding_rates_1h
@@ -1024,6 +1057,7 @@ def _simulate_grid_boltrend(
     trade_returns: list[float] = []
     peak_capital = capital  # Sprint 53 : kill switch tracking
     kill_switch_triggered = False
+    used_margin = 0.0  # Sprint 56: margin guard tracking
 
     # State machine
     # positions: list of (level_idx, entry_price, quantity, entry_fee)
@@ -1098,6 +1132,15 @@ def _simulate_grid_boltrend(
                         exit_price = close_i
 
             if exit_reason is not None:
+                # Sprint 56: SL gap slippage — fill défavorable si le prix a gappé
+                if exit_reason == "sl_global":
+                    if direction == 1:
+                        gap = max(0.0, exit_price - lows[i])
+                        exit_price -= 0.5 * gap  # Fill entre SL et low
+                    else:
+                        gap = max(0.0, highs[i] - exit_price)
+                        exit_price += 0.5 * gap  # Fill entre SL et high
+
                 # signal_exit, sl_global, time_stop = clôture marché (taker fee + slippage)
                 fee = taker_fee
                 slip = slippage_pct
@@ -1113,6 +1156,7 @@ def _simulate_grid_boltrend(
                     trade_returns.append(pnl / capital)
                 capital += pnl
                 positions = []
+                used_margin = 0.0
                 entry_levels = []
                 direction = 0
                 breakout_candle_idx = -1
@@ -1157,8 +1201,14 @@ def _simulate_grid_boltrend(
                     triggered = highs[i] >= ep
 
                 if triggered:
+                    # Sprint 56: margin guard — bloquer si marge utilisée >= max_margin_ratio
+                    total_equity = capital + used_margin
+                    if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
+                        break  # Plus de marge disponible pour ce cycle
+                    # Sprint 56: slippage à l'entrée (prix d'exécution défavorable)
+                    actual_ep = ep * (1 + slippage_pct) if direction == 1 else ep * (1 - slippage_pct)
                     notional = capital * (1.0 / num_levels) * leverage
-                    qty = notional / ep
+                    qty = notional / actual_ep
                     if qty <= 0:
                         continue
                     # Margin deduction (cohérent avec GridStrategyRunner)
@@ -1166,8 +1216,9 @@ def _simulate_grid_boltrend(
                     if capital < margin:
                         continue
                     capital -= margin
-                    entry_fee = qty * ep * taker_fee
-                    positions.append((lvl, ep, qty, entry_fee))
+                    used_margin += margin
+                    entry_fee = qty * actual_ep * taker_fee
+                    positions.append((lvl, actual_ep, qty, entry_fee))
 
         # === 5. Breakout detection (si grid inactif) ===
         # Cooldown flag — bloque uniquement le breakout detection, pas les exits
@@ -1183,8 +1234,8 @@ def _simulate_grid_boltrend(
             prev_lower = bb_lower[i - 1]
             curr_upper = bb_upper[i]
             curr_lower = bb_lower[i]
-            long_ma_val = long_ma[i]
-            atr_val = atr_arr[i]
+            long_ma_val = long_ma[i - 1]  # Sprint 56: look-ahead fix
+            atr_val = atr_arr[i - 1]       # Sprint 56: look-ahead fix
 
             if any(math.isnan(v) for v in [prev_close, prev_upper, prev_lower, curr_upper, curr_lower, long_ma_val, atr_val]):
                 continue
@@ -1229,14 +1280,22 @@ def _simulate_grid_boltrend(
                 # Level 0 = close → trigger immédiat (lows[i] <= close toujours vrai LONG)
                 ep0 = entry_levels[0]
                 if ep0 > 0 and capital > 0:
-                    notional = capital * (1.0 / num_levels) * leverage
-                    qty = notional / ep0
-                    margin = notional / leverage
-                    if qty > 0 and capital >= margin:
-                        capital -= margin
-                        entry_fee = qty * ep0 * taker_fee
-                        positions.append((0, ep0, qty, entry_fee))
-                        breakout_candle_idx = i
+                    # Sprint 56: margin guard
+                    total_equity = capital + used_margin
+                    if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
+                        pass  # Plus de marge disponible
+                    else:
+                        # Sprint 56: slippage à l'entrée
+                        actual_ep0 = ep0 * (1 + slippage_pct) if direction == 1 else ep0 * (1 - slippage_pct)
+                        notional = capital * (1.0 / num_levels) * leverage
+                        qty = notional / actual_ep0
+                        margin = notional / leverage
+                        if qty > 0 and capital >= margin:
+                            capital -= margin
+                            used_margin += margin
+                            entry_fee = qty * actual_ep0 * taker_fee
+                            positions.append((0, actual_ep0, qty, entry_fee))
+                            breakout_candle_idx = i
 
     # Force close fin de données
     if positions:
@@ -1300,11 +1359,13 @@ def _simulate_grid_momentum(
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
     slippage_pct = bt_config.slippage_pct
+    max_margin_ratio = bt_config.max_margin_ratio  # Sprint 56: margin guard
 
     trade_pnls: list[float] = []
     trade_returns: list[float] = []
     peak_capital = capital  # Sprint 53 : kill switch tracking
     kill_switch_triggered = False
+    used_margin = 0.0  # Sprint 56: margin guard tracking
 
     # State machine
     positions: list[tuple[int, float, float, float]] = []
@@ -1384,6 +1445,15 @@ def _simulate_grid_momentum(
                 exit_price = close_i
 
             if exit_reason is not None:
+                # Sprint 56: SL gap slippage
+                if exit_reason in ("sl_global", "trail_stop"):
+                    if direction == 1:
+                        gap = max(0.0, exit_price - lows[i])
+                        exit_price -= 0.5 * gap
+                    else:
+                        gap = max(0.0, highs[i] - exit_price)
+                        exit_price += 0.5 * gap
+
                 margin_to_return = sum(
                     ep * qty / leverage for _l, ep, qty, _f in positions
                 )
@@ -1394,6 +1464,7 @@ def _simulate_grid_momentum(
                     trade_returns.append(pnl / capital)
                 capital += pnl
                 positions = []
+                used_margin = 0.0
                 entry_levels = []
                 direction = 0
                 hwm = 0.0
@@ -1430,16 +1501,23 @@ def _simulate_grid_momentum(
                     triggered = highs[i] >= ep
 
                 if triggered:
+                    # Sprint 56: margin guard
+                    total_equity = capital + used_margin
+                    if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
+                        break  # Plus de marge disponible pour ce cycle
+                    # Sprint 56: slippage à l'entrée
+                    actual_ep = ep * (1 + slippage_pct) if direction == 1 else ep * (1 - slippage_pct)
                     notional = capital * (1.0 / num_levels) * leverage
-                    qty = notional / ep
+                    qty = notional / actual_ep
                     if qty <= 0:
                         continue
                     margin = notional / leverage
                     if capital < margin:
                         continue
                     capital -= margin
-                    entry_fee = qty * ep * taker_fee
-                    positions.append((lvl, ep, qty, entry_fee))
+                    used_margin += margin
+                    entry_fee = qty * actual_ep * taker_fee
+                    positions.append((lvl, actual_ep, qty, entry_fee))
 
         # === 4. Breakout detection (si grid inactif) ===
         if not kill_switch_triggered and direction == 0 and not positions:
@@ -1447,10 +1525,11 @@ def _simulate_grid_momentum(
             if cooldown_candles > 0 and (i - last_exit_candle_idx) < cooldown_candles:
                 continue
 
-            dh = rolling_high[i]
-            dl = rolling_low[i]
-            atr_val = atr_arr[i]
-            vs = vol_sma[i]
+            # Sprint 56: look-ahead fix — utiliser indicateurs [i-1] pour entry prices
+            dh = rolling_high[i - 1]
+            dl = rolling_low[i - 1]
+            atr_val = atr_arr[i - 1]
+            vs = vol_sma[i - 1]
 
             if any(math.isnan(v) for v in [dh, dl, atr_val]):
                 continue
@@ -1463,7 +1542,7 @@ def _simulate_grid_momentum(
             # Filtre ADX (optionnel)
             adx_ok = True
             if adx_threshold > 0:
-                adx_val = adx_arr[i]
+                adx_val = adx_arr[i - 1]
                 if math.isnan(adx_val) or adx_val < adx_threshold:
                     adx_ok = False
 
@@ -1490,18 +1569,24 @@ def _simulate_grid_momentum(
                 # Level 0 = close → trigger immédiat
                 ep0 = entry_levels[0]
                 if ep0 > 0 and capital > 0:
-                    notional = capital * (1.0 / num_levels) * leverage
-                    qty = notional / ep0
-                    margin = notional / leverage
-                    if qty > 0 and capital >= margin:
-                        capital -= margin
-                        entry_fee = qty * ep0 * taker_fee
-                        positions.append((0, ep0, qty, entry_fee))
-                        # Init HWM
-                        if direction == 1:
-                            hwm = highs[i]
-                        else:
-                            hwm = lows[i]
+                    # Sprint 56: margin guard
+                    total_equity = capital + used_margin
+                    if total_equity <= 0 or used_margin / total_equity < max_margin_ratio:
+                        # Sprint 56: slippage à l'entrée
+                        actual_ep0 = ep0 * (1 + slippage_pct) if direction == 1 else ep0 * (1 - slippage_pct)
+                        notional = capital * (1.0 / num_levels) * leverage
+                        qty = notional / actual_ep0
+                        margin = notional / leverage
+                        if qty > 0 and capital >= margin:
+                            capital -= margin
+                            used_margin += margin
+                            entry_fee = qty * actual_ep0 * taker_fee
+                            positions.append((0, actual_ep0, qty, entry_fee))
+                            # Init HWM
+                            if direction == 1:
+                                hwm = highs[i]
+                            else:
+                                hwm = lows[i]
 
     # Force close fin de données
     if positions:
@@ -1610,7 +1695,15 @@ def _simulate_grid_atr(
     """Simulation multi-position Grid ATR (LONG ou SHORT).
 
     Wrapper backward-compat — délègue à _build_entry_prices + _simulate_grid_common.
+    Si params contient "sides", on en déduit la direction :
+    - ["short"] → direction=-1
+    - ["long"] ou ["long","short"] → direction=1 (LONG prioritaire)
     """
+    sides = params.get("sides", ["long"])
+    if "short" in sides and "long" not in sides:
+        direction = -1
+    elif "long" in sides:
+        direction = 1
     num_levels = params["num_levels"]
     sl_pct = params["sl_percent"] / 100
     sma_arr = cache.bb_sma[params["ma_period"]]

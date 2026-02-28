@@ -3221,6 +3221,15 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **param_grids.yaml** : `min_grid_spacing_pct: [0.0, 0.8]` ajouté à grid_multi_tf (384 → 768 combos)
   - **Test fix** : `test_sprint46_journal.py` `order_id` auto-incrémenté (conflit avec nouvel index UNIQUE)
   - **0 nouveaux tests** → **2081 tests, 2081 passants**, 0 régression
+- **Sprint 58 — Parité Sprint 56 : 4 fixes réalisme sur 3 fast engines** (28 fév 2026) :
+  - **Contexte** : Sprint 56 avait introduit 4 fixes réalisme dans `_simulate_grid_common()` (look-ahead, margin guard 70%, entry slippage, SL gap slippage). Les 3 autres moteurs dédiés (`_simulate_grid_boltrend`, `_simulate_grid_range`, `_simulate_grid_momentum`) n'avaient pas reçu ces fixes. `_simulate_grid_trend` délègue à `_simulate_grid_common` → déjà couvert.
+  - **Fix 1 — Look-ahead bias** : indicateurs au candle `[i-1]` (pas `[i]`) pour le calcul des prix d'entrée. Guard `if i == 0: continue` ajouté dans `_simulate_grid_range`.
+  - **Fix 2 — Margin guard 70%** : tracking `used_margin` (incrémenté à l'ouverture, décrémenté/remis à zéro à la fermeture). Check `used_margin / total_equity >= max_margin_ratio` avant chaque nouvelle position.
+  - **Fix 3 — Entry slippage** : LONG `actual_ep = ep × (1 + slippage_pct)`, SHORT `actual_ep = ep × (1 - slippage_pct)`. Qty et fees calculés sur `actual_ep`.
+  - **Fix 4 — SL gap slippage** : fill midway quand le prix gap au-delà du SL. LONG `exit_price -= 0.5 × gap`, SHORT `exit_price += 0.5 × gap`.
+  - **Fichiers** : `backend/optimization/fast_multi_backtest.py` (3 fonctions), `tests/test_grid_range_atr.py` (5 scénarios décalés candle 0→1 suite au guard look-ahead)
+  - **Plan archivé** : `docs/plans/sprint-58-parite-sprint56-fast-engines.md`
+  - **0 nouveaux tests, 5 tests mis à jour** → **2081 tests, 2081 passants**, 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale
