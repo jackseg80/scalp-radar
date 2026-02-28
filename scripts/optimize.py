@@ -930,11 +930,15 @@ def _run_subprocess_optimization(
 
 
 def _regrade_from_db(strategy_name: str, config_dir: str = "config") -> None:
-    """Relit les résultats is_latest=1 et recalcule les grades avec la formule actuelle."""
+    """Relit les résultats is_latest=1 et recalcule les grades avec la formule V2."""
     import json
     import sqlite3
 
-    from backend.optimization.report import compute_grade
+    from backend.optimization.report import (
+        compute_grade,
+        compute_tail_ratio,
+        compute_win_rate_oos,
+    )
 
     config = get_config(config_dir)
     db_url = config.secrets.database_url
@@ -945,9 +949,8 @@ def _regrade_from_db(strategy_name: str, config_dir: str = "config") -> None:
     try:
         rows = conn.execute(
             """SELECT r.id, r.asset, r.grade, r.total_score, r.n_windows,
-                      r.oos_is_ratio, r.consistency, r.dsr, r.param_stability,
-                      r.monte_carlo_pvalue, r.mc_underpowered,
-                      r.validation_summary, r.wfo_windows
+                      r.oos_sharpe, r.consistency, r.dsr, r.param_stability,
+                      r.wfo_windows
                FROM optimization_results r
                WHERE r.strategy_name = ? AND r.is_latest = 1
                ORDER BY r.asset""",
@@ -963,77 +966,74 @@ def _regrade_from_db(strategy_name: str, config_dir: str = "config") -> None:
         conn.close()
         return
 
-    print(f"\n{'=' * 72}")
-    print(f"  REGRADE {strategy_name.upper()} ({len(rows)} assets)")
-    print(f"{'=' * 72}")
-    print(f"  {'Asset':<15s} {'Old':>4s} {'New':>4s} {'OldS':>5s} {'NewS':>5s} {'RawS':>5s} {'Win':>4s}  Shallow")
-    print(f"  {'─' * 64}")
+    print(f"\n{'=' * 82}")
+    print(f"  REGRADE V2 {strategy_name.upper()} ({len(rows)} assets)")
+    print(f"{'=' * 82}")
+    print(f"  {'Asset':<15s} {'Old':>4s} {'New':>4s} {'OldS':>6s} {'NewS':>6s} "
+          f"{'WinR':>5s} {'Tail':>5s} {'Win':>4s}  Shallow")
+    print(f"  {'─' * 74}")
 
     changes = 0
     skipped = 0
     for row in rows:
         asset = row["asset"]
 
-        # Vérifier métriques clés
-        if row["oos_is_ratio"] is None:
-            logger.warning("  {} : oos_is_ratio manquant → skip", asset)
+        # Parse wfo_windows JSON pour calculer les nouvelles métriques
+        windows = []
+        wfo_windows_json = row["wfo_windows"]
+        if wfo_windows_json:
+            try:
+                windows_data = json.loads(wfo_windows_json)
+                windows = windows_data.get("windows", []) if isinstance(windows_data, dict) else windows_data
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if not windows:
+            logger.warning("  {} : wfo_windows manquant → skip", asset)
             skipped += 1
             continue
 
-        # Parse validation_summary JSON
-        val_summary = {}
-        if row["validation_summary"]:
-            try:
-                val_summary = json.loads(row["validation_summary"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        bitget_trades = val_summary.get("bitget_trades", 0)
-        transfer_significant = val_summary.get("transfer_significant", True)
-        transfer_ratio = val_summary.get("transfer_ratio", 0.0)
+        win_rate_oos = compute_win_rate_oos(windows)
+        tail_ratio = compute_tail_ratio(windows)
 
         # total_trades : best combo → wfo_windows sum → 0
         best_combo_trades = _get_best_combo_trades(conn, row["id"])
         if best_combo_trades == 0:
-            wfo_windows_json = row["wfo_windows"]
-            if wfo_windows_json:
-                try:
-                    windows_data = json.loads(wfo_windows_json)
-                    windows = windows_data.get("windows", []) if isinstance(windows_data, dict) else windows_data
-                    best_combo_trades = sum(w.get("oos_trades", 0) for w in windows if isinstance(w, dict))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            best_combo_trades = sum(
+                w.get("oos_trades", 0) for w in windows if isinstance(w, dict)
+            )
 
         result = compute_grade(
-            oos_is_ratio=row["oos_is_ratio"] or 0.0,
-            mc_p_value=row["monte_carlo_pvalue"] if row["monte_carlo_pvalue"] is not None else 1.0,
+            oos_sharpe=row["oos_sharpe"] or 0.0,
+            win_rate_oos=win_rate_oos,
+            tail_ratio=tail_ratio,
             dsr=row["dsr"] or 0.0,
-            stability=row["param_stability"] or 0.0,
-            bitget_transfer=transfer_ratio or 0.0,
-            mc_underpowered=bool(row["mc_underpowered"]),
-            total_trades=best_combo_trades,
+            param_stability=row["param_stability"] or 0.0,
             consistency=row["consistency"] or 1.0,
-            transfer_significant=transfer_significant,
-            bitget_trades=bitget_trades or 0,
+            total_trades=best_combo_trades,
             n_windows=row["n_windows"],
         )
 
         old_grade = row["grade"]
-        old_score = int(row["total_score"] or 0)
-        changed = (result.grade != old_grade or result.score != old_score)
+        old_score = float(row["total_score"] or 0)
+        changed = (result.grade != old_grade or abs(result.score - old_score) > 0.05)
         penalty = result.raw_score - result.score
-        shallow_str = f"-{penalty}pts" if result.is_shallow and penalty > 0 else ""
+        shallow_str = f"-{penalty:.1f}pts" if result.is_shallow and penalty > 0 else ""
         mark = " *" if changed else ""
 
         print(
             f"  {asset:<15s} {old_grade:>4s} {result.grade:>4s} "
-            f"{int(old_score):>5d} {result.score:>5d} {result.raw_score:>5d} "
+            f"{old_score:>6.1f} {result.score:>6.1f} "
+            f"{win_rate_oos:>5.0%} {tail_ratio:>5.2f} "
             f"{row['n_windows'] or 0:>4d}  {shallow_str:<10s}{mark}"
         )
 
         if changed:
             conn.execute(
-                "UPDATE optimization_results SET grade = ?, total_score = ? WHERE id = ?",
-                (result.grade, result.score, row["id"]),
+                """UPDATE optimization_results
+                   SET grade = ?, total_score = ?, win_rate_oos = ?, tail_risk_ratio = ?
+                   WHERE id = ?""",
+                (result.grade, result.score, win_rate_oos, tail_ratio, row["id"]),
             )
             changes += 1
 

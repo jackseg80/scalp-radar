@@ -100,12 +100,11 @@ async def migrate_json_files(
                 val_data = data.get("validation", {})
 
                 _result = compute_grade(
-                    oos_is_ratio=wfo_data.get("oos_is_ratio", 0.0),
-                    mc_p_value=overfit_data.get("mc_p_value", 1.0),
+                    oos_sharpe=wfo_data.get("avg_oos_sharpe", 0.0),
+                    win_rate_oos=0.0,   # legacy — pas de données fenêtres
+                    tail_ratio=1.0,     # legacy — conservateur
                     dsr=overfit_data.get("dsr", 0.0),
-                    stability=overfit_data.get("stability", 0.0),
-                    bitget_transfer=val_data.get("transfer_ratio", 0.0),
-                    mc_underpowered=overfit_data.get("mc_underpowered", False),
+                    param_stability=overfit_data.get("stability", 0.0),
                 )
                 total_score = _result.score
 

@@ -241,23 +241,23 @@ def test_regime_analysis_uses_all_windows():
 
 
 def test_consistency_impacts_grade():
-    """ETH à 68% consistance ne peut pas obtenir 100/100.
+    """Consistance < 1.0 réduit le score (V2 — scoring continu).
 
-    Avec consistance=0.68 → 8/20 pts consistance (tranche ≥60%, au lieu de 20/20).
-    Score = 20+20+15+8+10+15 = 88, pas 100.
+    Avec consistance=0.68 → 0.68*10 = 6.8 pts (au lieu de 10/10).
+    Score parfait avec cons=1.0 = 100, donc cons=0.68 → 100 - 3.2 = 96.8.
     """
     from backend.optimization.report import compute_grade
 
     # Cas parfait SAUF consistance = 68%
     result = compute_grade(
-        oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
-        stability=0.85, bitget_transfer=0.60,
+        oos_sharpe=6.0, win_rate_oos=1.0, tail_ratio=0.0,
+        dsr=1.0, param_stability=1.0,
         consistency=0.68,
     )
     assert result.score < 100, f"Score {result.score} devrait être < 100 avec consistency=68%"
-    # 68% → ≥60% bracket → 8/20 pts, score = 20+20+15+8+10+15 = 88
-    assert result.score == 88
-    assert result.grade == "A"  # 88 ≥ 85
+    # 20+20+15+15+15+6.8+5 = 96.8
+    assert result.score == pytest.approx(96.8)
+    assert result.grade == "A"  # 96.8 ≥ 85
 
 
 def test_top5_sorted_by_combo_score():

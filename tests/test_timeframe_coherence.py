@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS optimization_results (
     warnings TEXT,
     is_latest INTEGER DEFAULT 1,
     source TEXT DEFAULT 'local',
+    win_rate_oos REAL,
+    tail_risk_ratio REAL,
     UNIQUE(strategy_name, asset, timeframe, created_at)
 )
 """

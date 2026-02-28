@@ -45,6 +45,8 @@ def temp_env(tmp_path):
             validation_summary TEXT,
             warnings TEXT,
             is_latest INTEGER DEFAULT 1,
+            win_rate_oos REAL,
+            tail_risk_ratio REAL,
             UNIQUE(strategy_name, asset, timeframe, created_at)
         );
     """)

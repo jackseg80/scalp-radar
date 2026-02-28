@@ -110,6 +110,8 @@ def temp_db(tmp_path):
             is_latest INTEGER DEFAULT 1,
             source TEXT DEFAULT 'local',
             regime_analysis TEXT,
+            win_rate_oos REAL,
+            tail_risk_ratio REAL,
             UNIQUE(strategy_name, asset, timeframe, created_at)
         );
     """)

@@ -123,8 +123,9 @@ def save_result_sync(
                 grade, total_score, oos_sharpe, consistency, oos_is_ratio, dsr,
                 param_stability, monte_carlo_pvalue, mc_underpowered, n_windows, n_distinct_combos,
                 best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings,
-                is_latest, source, regime_analysis
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                is_latest, source, regime_analysis,
+                win_rate_oos, tail_risk_ratio
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 report.strategy_name,
                 report.symbol,
@@ -150,6 +151,8 @@ def save_result_sync(
                 is_latest_val,
                 source,
                 regime_analysis_json,
+                _sanitize_json_value(getattr(report, "win_rate_oos", None)),
+                _sanitize_json_value(getattr(report, "tail_risk_ratio", None)),
             ),
         )
         result_id = cursor.lastrowid

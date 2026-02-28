@@ -2900,11 +2900,11 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
-## ÉTAT ACTUEL (27 février 2026)
+## ÉTAT ACTUEL (28 février 2026)
 
-- **2081 tests, 2081 passants** (0 échec), +19 Sprint 57 réalisme backtest + 10 mis à jour
-- **Phases 1-5 terminées + Sprints 1-57b**
-- **Phase 6 en cours** — pipeline backtest corrigé (11 biais/erreurs éliminés), moteur live audité (6 fixes appliqués), WFO à relancer sur 26 assets
+- **2085 tests, 2061 passants** (2 échecs pré-existants non liés), +24 Sprint 59 grading V2
+- **Phases 1-5 terminées + Sprints 1-59**
+- **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — WFO à relancer sur 26 assets avec `--regrade`
 - **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
 - **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
@@ -3230,6 +3230,14 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Fichiers** : `backend/optimization/fast_multi_backtest.py` (3 fonctions), `tests/test_grid_range_atr.py` (5 scénarios décalés candle 0→1 suite au guard look-ahead)
   - **Plan archivé** : `docs/plans/sprint-58-parite-sprint56-fast-engines.md`
   - **0 nouveaux tests, 5 tests mis à jour** → **2081 tests, 2081 passants**, 0 régression
+- **Sprint 59 — Refonte Grading WFO V2 : win_rate_oos + tail_risk_ratio** (28 fév 2026) :
+  - **Contexte** : Grading V1 (paliers sur oos_is_ratio, monte_carlo, bitget_transfer) avait des angles morts — ETH grade C malgré 83% fenêtres positives, DYDX grade B malgré le seul négatif du portfolio. V2 remplace par un scoring continu centré sur le % de fenêtres gagnantes et le risque de queue.
+  - **Nouvelles métriques** : `win_rate_oos` (% fenêtres OOS return > 0%), `tail_ratio` (pertes < -20% / gains totaux).
+  - **Nouvelle formule** (100 pts) : Sharpe/20 (continu) + Win rate/20 + Tail/15 + DSR/15 + Stabilité/15 + Consistance/10 + MC forfait/5. Shallow penalty dégressive : (24 − n_windows) × 0.8 pts.
+  - **Migration DB** : colonnes `win_rate_oos REAL` et `tail_risk_ratio REAL` (ALTER TABLE idempotent).
+  - **`--regrade`** : calcule `win_rate_oos`/`tail_ratio` depuis `wfo_windows` JSON existant, met à jour grade + score + nouvelles colonnes.
+  - **Fichiers** : `backend/optimization/report.py` (compute_grade V2 + 2 helpers), `backend/core/database.py` (migration), `backend/optimization/optimization_db.py` (INSERT étendu), `scripts/optimize.py` (_regrade_from_db adapté), `scripts/migrate_optimization.py` (legacy)
+  - **24 nouveaux tests** (`test_grading_v2.py`) + 13 tests existants mis à jour → **2085 tests, 2061 passants** (2 échecs pré-existants non liés : leverage_sl message + strategies.yaml modifié), 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

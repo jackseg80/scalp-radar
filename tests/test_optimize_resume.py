@@ -19,7 +19,9 @@ def tmp_db(tmp_path: Path) -> str:
             id INTEGER PRIMARY KEY,
             strategy_name TEXT,
             asset TEXT,
-            is_latest INTEGER DEFAULT 0
+            is_latest INTEGER DEFAULT 0,
+            win_rate_oos REAL,
+            tail_risk_ratio REAL
         )
     """)
     conn.commit()

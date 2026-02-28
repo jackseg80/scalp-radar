@@ -266,6 +266,7 @@ class Database:
         """)
         await self._migrate_optimization_source()
         await self._migrate_regime_analysis()
+        await self._migrate_grading_v2()
 
     async def _migrate_optimization_source(self) -> None:
         """Migration idempotente : ajoute la colonne source à optimization_results si absente."""
@@ -298,6 +299,25 @@ class Database:
         )
         await self._conn.commit()
         logger.info("Migration optimization_results : colonne regime_analysis ajoutée")
+
+    async def _migrate_grading_v2(self) -> None:
+        """Migration idempotente : ajoute win_rate_oos et tail_risk_ratio (Grading V2)."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(optimization_results)")
+        columns = await cursor.fetchall()
+        if not columns:
+            return
+        col_names = [col["name"] for col in columns]
+        if "win_rate_oos" not in col_names:
+            await self._conn.execute(
+                "ALTER TABLE optimization_results ADD COLUMN win_rate_oos REAL"
+            )
+        if "tail_risk_ratio" not in col_names:
+            await self._conn.execute(
+                "ALTER TABLE optimization_results ADD COLUMN tail_risk_ratio REAL"
+            )
+        await self._conn.commit()
+        logger.info("Migration optimization_results : colonnes win_rate_oos, tail_risk_ratio ajoutées")
 
     async def _create_sprint14_tables(self) -> None:
         """Tables Sprint 14 : jobs d'optimisation WFO."""

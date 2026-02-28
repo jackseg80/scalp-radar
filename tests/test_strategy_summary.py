@@ -42,7 +42,9 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             warnings TEXT,
             is_latest INTEGER NOT NULL DEFAULT 1,
             source TEXT DEFAULT 'local',
-            regime_analysis TEXT
+            regime_analysis TEXT,
+            win_rate_oos REAL,
+            tail_risk_ratio REAL
         );
 
         CREATE TABLE IF NOT EXISTS portfolio_backtests (

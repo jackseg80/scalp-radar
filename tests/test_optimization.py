@@ -373,105 +373,71 @@ class TestConvergence:
 
 
 class TestGrading:
+    """Tests grading V2 — scoring continu."""
+
+    # Params parfaits donnant 100/100
+    PERFECT_V2 = dict(
+        oos_sharpe=6.0, win_rate_oos=1.0, tail_ratio=0.0,
+        dsr=1.0, param_stability=1.0, consistency=1.0,
+    )
+
     def test_grade_a(self):
-        result = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
-            stability=0.85, bitget_transfer=0.60,
-        )
+        result = compute_grade(**self.PERFECT_V2, total_trades=100)
         assert result.grade == "A"
-        assert result.score == 100
+        assert result.score == pytest.approx(100)
         assert result.is_shallow is False
-        assert result.raw_score == 100
+        assert result.raw_score == pytest.approx(100)
 
     def test_grade_f(self):
         result = compute_grade(
-            oos_is_ratio=0.1, mc_p_value=0.5, dsr=0.3,
-            stability=0.2, bitget_transfer=0.1,
-            consistency=0.0,
+            oos_sharpe=0.0, win_rate_oos=0.0, tail_ratio=1.0,
+            dsr=0.0, param_stability=0.0, consistency=0.0,
         )
         assert result.grade == "F"
-        assert result.score == 0
+        assert result.score == pytest.approx(5.0)  # forfait MC
 
     def test_grade_c(self):
+        """Score moyen → C ou D."""
         result = compute_grade(
-            oos_is_ratio=0.45, mc_p_value=0.08, dsr=0.85,
-            stability=0.65, bitget_transfer=0.35,
+            oos_sharpe=2.0, win_rate_oos=0.5, tail_ratio=0.3,
+            dsr=0.6, param_stability=0.5, consistency=0.5,
         )
-        assert result.grade in ("C", "D")  # ~55 points
+        # 7+10+8.25+9+7.5+5+5 = 51.75
+        assert result.grade in ("C", "D")
 
     def test_grade_boundary_b(self):
+        """Score ~70 → B."""
         result = compute_grade(
-            oos_is_ratio=0.55, mc_p_value=0.03, dsr=0.92,
-            stability=0.70, bitget_transfer=0.40,
+            oos_sharpe=3.0, win_rate_oos=0.7, tail_ratio=0.15,
+            dsr=0.8, param_stability=0.7, consistency=0.65,
         )
-        assert result.grade in ("B", "C")
-
-    def test_grade_mc_underpowered(self):
-        """mc_underpowered=True → 10/20 pts MC (neutre), pas de pénalité."""
-        r_underpowered = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
-            stability=0.85, bitget_transfer=0.60,
-            mc_underpowered=True,
-        )
-        r_penalized = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.50, dsr=0.97,
-            stability=0.85, bitget_transfer=0.60,
-            mc_underpowered=False,
-        )
-        # underpowered donne 10 pts de plus que pénalisé (0 → 10)
-        assert r_underpowered.grade < r_penalized.grade  # "A" < "B" alphabétiquement = meilleur grade
-        assert r_underpowered.grade in ("A", "B")
+        # 10.5+14+11.625+12+10.5+6.5+5 = 70.125
+        assert result.grade == "B"
 
     def test_grade_capped_at_c_under_30_trades(self):
         """6 trades OOS, score 100 → Grade C (pas A)."""
-        result = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
-            stability=0.85, bitget_transfer=0.60,
-            total_trades=6,
-        )
-        assert result.score == 100  # Score brut inchangé
+        result = compute_grade(**self.PERFECT_V2, total_trades=6)
+        assert result.score == pytest.approx(100)  # Score brut inchangé
         assert result.grade == "C"  # Plafonné à C
 
     def test_grade_capped_at_b_under_50_trades(self):
         """40 trades OOS, score 100 → Grade B (pas A)."""
-        result = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
-            stability=0.85, bitget_transfer=0.60,
-            total_trades=40,
-        )
-        assert result.score == 100
+        result = compute_grade(**self.PERFECT_V2, total_trades=40)
+        assert result.score == pytest.approx(100)
         assert result.grade == "B"  # Plafonné à B
 
     def test_grade_not_capped_above_50_trades(self):
         """100 trades OOS, score 100 → Grade A (pas de plafond)."""
-        result = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
-            stability=0.85, bitget_transfer=0.60,
-            total_trades=100,
-        )
-        assert result.score == 100
+        result = compute_grade(**self.PERFECT_V2, total_trades=100)
+        assert result.score == pytest.approx(100)
         assert result.grade == "A"
 
-    def test_grade_transfer_not_significant(self):
-        """transfer_significant=False → 10/15 au lieu de 15/15, score 95, grade A."""
-        result = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
-            stability=0.85, bitget_transfer=0.60,
-            transfer_significant=False,
-        )
-        assert result.score == 95  # 10/15 au lieu de 15/15
-        assert result.grade == "A"
-
-    def test_grade_few_bitget_trades(self):
-        """bitget_transfer=0.90, bitget_trades=7 → capped à 8/15."""
-        result = compute_grade(
-            oos_is_ratio=0.65, mc_p_value=0.01, dsr=0.97,
-            stability=0.85, bitget_transfer=0.90,
-            bitget_trades=7,
-        )
-        # 20 + 20 + 15 + 20 + 10 + 8 (capped de 15 à 8) = 93
-        assert result.score == 93
-        assert result.grade == "A"
+    def test_consistency_reduces_score(self):
+        """Consistance faible réduit le score (10 pts max)."""
+        r_high = compute_grade(**self.PERFECT_V2)
+        r_low = compute_grade(**{**self.PERFECT_V2, "consistency": 0.5})
+        assert r_high.score > r_low.score
+        assert r_high.score - r_low.score == pytest.approx(5.0)  # (1.0-0.5)*10
 
 
 # ─── Tests Bootstrap CI ──────────────────────────────────────────────────
@@ -518,9 +484,25 @@ class TestReport:
         assert "vwap_rsi" in filepath.name
 
     def test_build_final_report(self):
+        # Créer des fenêtres OOS réalistes pour le grading V2
+        from datetime import timedelta
+        base = datetime(2025, 1, 1)
+        test_windows = [
+            WindowResult(
+                window_index=i, is_start=base, is_end=base + timedelta(days=90),
+                oos_start=base + timedelta(days=90), oos_end=base + timedelta(days=120),
+                best_params={"rsi_period": 14}, is_sharpe=1.5, is_net_return_pct=10.0,
+                is_profit_factor=2.0, is_trades=50, oos_sharpe=0.8,
+                oos_net_return_pct=ret, oos_profit_factor=1.5, oos_trades=20,
+                top_n_params=[],
+            )
+            for i, ret in enumerate([5.0, 8.0, -2.0, 12.0, 3.0, 6.0, -1.0, 10.0,
+                                     4.0, 7.0, -3.0, 9.0, 2.0, 5.0, 11.0, -4.0,
+                                     6.0, 8.0, -1.0, 3.0, 7.0, 4.0, 9.0, 5.0])
+        ]
         wfo = WFOResult(
             strategy_name="vwap_rsi", symbol="BTC/USDT",
-            windows=[], avg_is_sharpe=1.5, avg_oos_sharpe=0.8,
+            windows=test_windows, avg_is_sharpe=1.5, avg_oos_sharpe=3.0,
             oos_is_ratio=0.53, consistency_rate=0.7,
             recommended_params={"rsi_period": 14},
             all_oos_trades=[], n_distinct_combos=500,
@@ -541,6 +523,8 @@ class TestReport:
         report = build_final_report(wfo, overfit, validation)
         assert report.grade in ("A", "B", "C")
         assert report.strategy_name == "vwap_rsi"
+        assert report.win_rate_oos > 0
+        assert report.tail_risk_ratio >= 0
 
 
 # ─── Tests per_asset Config ──────────────────────────────────────────────
@@ -728,6 +712,8 @@ class TestApplyFromDb:
                 warnings TEXT,
                 source TEXT DEFAULT 'local',
                 regime_analysis TEXT,
+                win_rate_oos REAL,
+                tail_risk_ratio REAL,
                 UNIQUE(strategy_name, asset, timeframe, created_at)
             )
         """)
@@ -858,6 +844,8 @@ class TestApplyFromDb:
                 warnings TEXT,
                 source TEXT DEFAULT 'local',
                 regime_analysis TEXT,
+                win_rate_oos REAL,
+                tail_risk_ratio REAL,
                 UNIQUE(strategy_name, asset, timeframe, created_at)
             )
         """)
@@ -921,6 +909,8 @@ class TestApplyFromDb:
                 warnings TEXT,
                 source TEXT DEFAULT 'local',
                 regime_analysis TEXT,
+                win_rate_oos REAL,
+                tail_risk_ratio REAL,
                 UNIQUE(strategy_name, asset, timeframe, created_at)
             )
         """)

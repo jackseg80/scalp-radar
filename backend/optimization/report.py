@@ -55,7 +55,7 @@ class FinalReport:
     symbol: str
     timestamp: datetime
     grade: str
-    total_score: int  # Score numérique 0-100
+    total_score: float  # Score numérique 0-100
 
     # WFO
     wfo_avg_is_sharpe: float
@@ -87,8 +87,10 @@ class FinalReport:
     warnings: list[str]
     n_distinct_combos: int
     shallow: bool = False
-    raw_score: int = 0
+    raw_score: float = 0
     fee_sensitivity: dict[str, float] | None = None  # scenario → Sharpe re-simulé
+    win_rate_oos: float = 0.0
+    tail_risk_ratio: float = 1.0
 
 
 @dataclass
@@ -96,42 +98,67 @@ class GradeResult:
     """Résultat du grading avec pénalité shallow."""
 
     grade: str        # Lettre finale (A-F) après pénalité + caps
-    score: int        # Score final après pénalité shallow (cap trades ne modifie PAS le score)
+    score: float      # Score final après pénalité shallow (cap trades ne modifie PAS le score)
     is_shallow: bool  # True si n_windows < 24
-    raw_score: int    # Score brut avant pénalité
+    raw_score: float  # Score brut avant pénalité
 
 
-# ─── Grading ───────────────────────────────────────────────────────────────
+# ─── Grading V2 — Métriques ────────────────────────────────────────────────
+
+
+def compute_win_rate_oos(windows: list) -> float:
+    """Pourcentage de fenêtres OOS avec return > 0%."""
+    returns = [
+        w.oos_net_return_pct if hasattr(w, "oos_net_return_pct")
+        else w.get("oos_net_return_pct", 0)
+        for w in windows
+    ]
+    if not returns:
+        return 0.0
+    return sum(1 for r in returns if r > 0) / len(returns)
+
+
+def compute_tail_ratio(windows: list) -> float:
+    """Ratio pertes sévères (<-20%) / gains. 0=aucune catastrophe, 1=mangent tous les gains."""
+    returns = [
+        w.oos_net_return_pct if hasattr(w, "oos_net_return_pct")
+        else w.get("oos_net_return_pct", 0)
+        for w in windows
+    ]
+    pos_sum = sum(r for r in returns if r > 0)
+    neg_bad = sum(r for r in returns if r < -20)  # valeur négative
+    if pos_sum <= 0:
+        return 1.0
+    return abs(neg_bad) / pos_sum
+
+
+# ─── Grading V2 — Scoring ─────────────────────────────────────────────────
 
 
 def compute_grade(
-    oos_is_ratio: float,
-    mc_p_value: float,
+    oos_sharpe: float,
+    win_rate_oos: float,
+    tail_ratio: float,
     dsr: float,
-    stability: float,
-    bitget_transfer: float,
-    mc_underpowered: bool = False,
-    total_trades: int = 0,
+    param_stability: float,
     consistency: float = 1.0,
-    transfer_significant: bool = True,
-    bitget_trades: int = 0,
+    total_trades: int = 0,
     n_windows: int | None = None,
 ) -> GradeResult:
-    """Calcule le grade A-F et le score numérique 0-100.
+    """Calcule le grade A-F et le score numérique 0-100 (V2 — scoring continu).
 
     Barème (100 pts) :
-        OOS/IS ratio    20 pts
-        Monte Carlo     20 pts
-        DSR             15 pts
-        Consistance     20 pts
-        Stabilité       10 pts
-        Bitget transfer 15 pts
+        Sharpe OOS      20 pts  (min(20, oos_sharpe × 3.5))
+        Win rate OOS    20 pts  (win_rate_oos × 20)
+        Tail risk       15 pts  (max(0, 15 × (1 - tail_ratio × 1.5)))
+        DSR             15 pts  (dsr × 15)
+        Stabilité       15 pts  (param_stability × 15)
+        Consistance     10 pts  (consistency × 10)
+        Monte Carlo      5 pts  (forfait — p-value ≈ 0 pour tous)
 
-    Pénalité shallow validation (soustraite du score brut) :
-        ≥ 24 fenêtres : 0 pts
-        18–23          : -10 pts
-        12–17          : -20 pts
-        < 12           : -25 pts
+    Pénalité shallow validation (dégressive) :
+        < 24 fenêtres : (24 - n_windows) × 0.8 pts soustraits
+        ≥ 24          : 0
 
     Garde-fou trades : < 30 trades → plafond C, < 50 trades → plafond B.
     Note : le cap trades modifie la lettre, pas le score.
@@ -142,94 +169,25 @@ def compute_grade(
     Returns:
         GradeResult avec grade, score, is_shallow, raw_score.
     """
-    score = 0
-    breakdown: dict[str, int] = {}
+    # Composantes continues (total = 100 points max)
+    sharpe_score = min(20, oos_sharpe * 3.5)
+    win_rate_score = win_rate_oos * 20
+    tail_score = max(0, 15 * (1 - tail_ratio * 1.5))
+    dsr_score = dsr * 15
+    stability_score = param_stability * 15
+    consistency_score = consistency * 10
+    mc_score = 5  # forfait — passe partout
 
-    # OOS/IS ratio (max 20 points)
-    if oos_is_ratio > 0.6:
-        breakdown["oos_is_ratio"] = 20
-    elif oos_is_ratio > 0.5:
-        breakdown["oos_is_ratio"] = 16
-    elif oos_is_ratio > 0.4:
-        breakdown["oos_is_ratio"] = 12
-    elif oos_is_ratio > 0.3:
-        breakdown["oos_is_ratio"] = 8
-    else:
-        breakdown["oos_is_ratio"] = 0
+    raw_score = (
+        sharpe_score + win_rate_score + tail_score
+        + dsr_score + stability_score + consistency_score + mc_score
+    )
 
-    # Monte Carlo (max 20 points)
-    if mc_underpowered:
-        breakdown["monte_carlo"] = 10
-    elif mc_p_value < 0.05:
-        breakdown["monte_carlo"] = 20
-    elif mc_p_value < 0.10:
-        breakdown["monte_carlo"] = 12
-    else:
-        breakdown["monte_carlo"] = 0
-
-    # DSR (max 15 points)
-    if dsr > 0.95:
-        breakdown["dsr"] = 15
-    elif dsr > 0.90:
-        breakdown["dsr"] = 12
-    elif dsr > 0.80:
-        breakdown["dsr"] = 8
-    else:
-        breakdown["dsr"] = 0
-
-    # Consistance OOS (max 20 points)
-    if consistency >= 0.90:
-        breakdown["consistency"] = 20
-    elif consistency >= 0.80:
-        breakdown["consistency"] = 16
-    elif consistency >= 0.70:
-        breakdown["consistency"] = 12
-    elif consistency >= 0.60:
-        breakdown["consistency"] = 8
-    elif consistency >= 0.50:
-        breakdown["consistency"] = 4
-    else:
-        breakdown["consistency"] = 0
-
-    # Stability (max 10 points)
-    if stability > 0.80:
-        breakdown["stability"] = 10
-    elif stability > 0.60:
-        breakdown["stability"] = 7
-    elif stability > 0.40:
-        breakdown["stability"] = 4
-    else:
-        breakdown["stability"] = 0
-
-    # Bitget transfer (max 15 points)
-    if bitget_transfer > 0.50 and transfer_significant:
-        breakdown["bitget_transfer"] = 15
-    elif bitget_transfer > 0.50:  # ratio bon mais CI inclut zéro
-        breakdown["bitget_transfer"] = 10
-    elif bitget_transfer > 0.30:
-        breakdown["bitget_transfer"] = 5
-    else:
-        breakdown["bitget_transfer"] = 0
-
-    # Guard : peu de trades Bitget → cap le score transfer
-    if 0 < bitget_trades < 15:
-        breakdown["bitget_transfer"] = min(breakdown["bitget_transfer"], 8)
-
-    score = sum(breakdown.values())
-    raw_score = score
-
-    # Pénalité shallow validation (n_windows insuffisantes)
-    shallow_penalty = 0
-    if n_windows is not None:
-        if n_windows >= 24:
-            shallow_penalty = 0
-        elif n_windows >= 18:
-            shallow_penalty = 10
-        elif n_windows >= 12:
-            shallow_penalty = 20
-        else:
-            shallow_penalty = 25
-        score = max(0, score - shallow_penalty)
+    # Pénalité shallow validation dégressive
+    shallow_penalty = 0.0
+    if n_windows is not None and n_windows < 24:
+        shallow_penalty = max(0, (24 - n_windows) * 0.8)
+    score = raw_score - shallow_penalty
     is_shallow = n_windows is not None and n_windows < 24
 
     # Déterminer la lettre
@@ -258,19 +216,22 @@ def compute_grade(
                 grade = max_grade
 
     logger.info(
-        "compute_grade: {} ({}/100{}, trades={}{}) — oos_is={:.2f}→{}/20, "
-        "mc_p={:.3f}(underpow={})→{}/20, dsr={:.2f}→{}/15, "
-        "consistency={:.2f}→{}/20, stability={:.2f}→{}/10, bitget={:.2f}→{}/15",
+        "compute_grade: {} ({:.1f}/100{}, trades={}{}) — "
+        "sharpe={:.2f}→{:.1f}/20, win_rate={:.2f}→{:.1f}/20, "
+        "tail={:.2f}→{:.1f}/15, dsr={:.2f}→{:.1f}/15, "
+        "stability={:.2f}→{:.1f}/15, consistency={:.2f}→{:.1f}/10, mc={}/5",
         grade, score,
-        f" raw={raw_score} shallow=-{shallow_penalty} n_win={n_windows}" if shallow_penalty > 0 else "",
+        f" raw={raw_score:.1f} shallow=-{shallow_penalty:.1f} n_win={n_windows}"
+        if shallow_penalty > 0 else "",
         total_trades,
         f" cap {grade_before_cap}→{grade}" if grade != grade_before_cap else "",
-        oos_is_ratio, breakdown["oos_is_ratio"],
-        mc_p_value, mc_underpowered, breakdown["monte_carlo"],
-        dsr, breakdown["dsr"],
-        consistency, breakdown["consistency"],
-        stability, breakdown["stability"],
-        bitget_transfer, breakdown["bitget_transfer"],
+        oos_sharpe, sharpe_score,
+        win_rate_oos, win_rate_score,
+        tail_ratio, tail_score,
+        dsr, dsr_score,
+        param_stability, stability_score,
+        consistency, consistency_score,
+        mc_score,
     )
 
     return GradeResult(grade=grade, score=score, is_shallow=is_shallow, raw_score=raw_score)
@@ -790,17 +751,17 @@ def build_final_report(
     if best_combo_trades == 0:
         best_combo_trades = len(wfo.all_oos_trades)
 
+    win_rate_oos = compute_win_rate_oos(wfo.windows)
+    tail_ratio_val = compute_tail_ratio(wfo.windows)
+
     grade_result = compute_grade(
-        oos_is_ratio=wfo.oos_is_ratio,
-        mc_p_value=overfit.monte_carlo.p_value,
+        oos_sharpe=wfo.avg_oos_sharpe,
+        win_rate_oos=win_rate_oos,
+        tail_ratio=tail_ratio_val,
         dsr=overfit.dsr.dsr,
-        stability=overfit.stability.overall_stability,
-        bitget_transfer=validation.transfer_ratio,
-        mc_underpowered=overfit.monte_carlo.underpowered,
-        total_trades=best_combo_trades,
+        param_stability=overfit.stability.overall_stability,
         consistency=wfo.consistency_rate,
-        transfer_significant=validation.transfer_significant,
-        bitget_trades=validation.bitget_trades,
+        total_trades=best_combo_trades,
         n_windows=len(wfo.windows),
     )
     grade = grade_result.grade
@@ -834,6 +795,10 @@ def build_final_report(
         warnings.append(
             f"DSR faible ({overfit.dsr.dsr:.2f}) — risque de data mining"
         )
+    if win_rate_oos < 0.6:
+        warnings.append(f"Win rate OOS faible ({win_rate_oos:.0%})")
+    if tail_ratio_val > 0.5:
+        warnings.append(f"Tail risk élevé ({tail_ratio_val:.2f})")
 
     # --- Diagnostic régimes incomplets ---
     ALL_REGIMES = {"crash", "bull", "range", "bear"}
@@ -885,7 +850,7 @@ def build_final_report(
     if grade_result.is_shallow:
         penalty = grade_result.raw_score - grade_result.score
         warnings.append(
-            f"Shallow validation ({len(wfo.windows)} fenêtres < 24) — pénalité -{penalty} pts"
+            f"Shallow validation ({len(wfo.windows)} fenêtres < 24) — pénalité -{penalty:.1f} pts"
         )
 
     # Validation leverage × SL en cross margin
@@ -932,4 +897,6 @@ def build_final_report(
         shallow=grade_result.is_shallow,
         raw_score=grade_result.raw_score,
         fee_sensitivity=fee_sensitivity if fee_sensitivity else None,
+        win_rate_oos=win_rate_oos,
+        tail_risk_ratio=tail_ratio_val,
     )
