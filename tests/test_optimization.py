@@ -883,18 +883,15 @@ class TestApplyFromDb:
         assert result["applied"] == []
         assert result["removed"] == []
         assert result["grades"] == {}
-        assert result["assets_added"] == []
         # Backup supprimé quand aucun changement
         backups = list(tmp_path.glob("strategies.yaml.bak.*"))
         assert len(backups) == 0
 
-    @patch("scripts.optimize._fetch_market_specs")
-    def test_apply_auto_adds_assets(self, mock_specs, tmp_path):
-        """Asset Grade A absent de assets.yaml → auto-ajouté avec specs ccxt."""
+    def test_apply_never_modifies_assets_yaml(self, tmp_path):
+        """--apply ne doit JAMAIS modifier assets.yaml (même avec Grade F)."""
         import json
         import sqlite3
 
-        # DB avec 1 résultat Grade A pour NEWCOIN/USDT
         db_path = str(tmp_path / "test.db")
         conn = sqlite3.connect(db_path)
         conn.executescript("""
@@ -927,208 +924,73 @@ class TestApplyFromDb:
                 UNIQUE(strategy_name, asset, timeframe, created_at)
             )
         """)
+        # BTC Grade A, ARB Grade F
         conn.execute(
             """INSERT INTO optimization_results
                (strategy_name, asset, timeframe, created_at, grade, total_score,
                 best_params, is_latest, n_windows)
                VALUES (?, ?, ?, ?, ?, ?, ?, 1, 12)""",
-            ("envelope_dca", "NEWCOIN/USDT", "1h", "2026-02-15T10:00:00",
-             "A", 88, json.dumps({"ma_period": 7, "num_levels": 3})),
+            ("grid_atr", "BTC/USDT", "1h", "2026-02-20T10:00:00",
+             "A", 85, json.dumps({"atr_period": 14, "sl_mult": 2.0})),
         )
-        conn.commit()
-        conn.close()
-
-        # assets.yaml avec uniquement BTC
-        assets_path = tmp_path / "assets.yaml"
-        assets_path.write_text(yaml.dump({
-            "assets": [
-                {
-                    "symbol": "BTC/USDT",
-                    "exchange": "bitget",
-                    "type": "futures",
-                    "timeframes": ["1m", "5m", "15m", "1h"],
-                    "max_leverage": 20,
-                    "min_order_size": 0.001,
-                    "tick_size": 0.1,
-                    "correlation_group": "crypto_major",
-                },
-            ],
-        }))
-
-        # strategies.yaml
-        yaml_path = tmp_path / "strategies.yaml"
-        yaml_path.write_text(yaml.dump({
-            "envelope_dca": {
-                "enabled": True,
-                "leverage": 6,
-                "per_asset": {},
-            },
-        }))
-
-        # Mock _fetch_market_specs
-        mock_specs.return_value = {
-            "NEWCOIN/USDT": {
-                "tick_size": 0.0001,
-                "min_order_size": 1.0,
-                "max_leverage": 20,
-            },
-        }
-
-        result = apply_from_db(
-            ["envelope_dca"],
-            config_dir=str(tmp_path),
-            db_path=db_path,
-        )
-
-        # Vérifier le dict retourné
-        assert result["changed"] is True
-        assert "NEWCOIN/USDT" in result["applied"]
-        assert result["assets_added"] == ["NEWCOIN/USDT"]
-
-        # Vérifier que assets.yaml contient le nouvel asset
-        with open(assets_path, encoding="utf-8") as f:
-            assets_data = yaml.safe_load(f)
-        symbols = [a["symbol"] for a in assets_data["assets"]]
-        assert "NEWCOIN/USDT" in symbols  # Nouveau ajouté
-        # BTC/USDT retiré car absent de tout per_asset
-        assert "BTC/USDT" not in symbols
-
-        new_asset = next(a for a in assets_data["assets"] if a["symbol"] == "NEWCOIN/USDT")
-        assert new_asset["tick_size"] == 0.0001
-        assert new_asset["min_order_size"] == 1.0
-        assert new_asset["max_leverage"] == 20
-        assert new_asset["timeframes"] == ["1h"]
-        assert new_asset["correlation_group"] == "altcoins"
-
-        # Backup assets.yaml créé
-        assets_backups = list(tmp_path.glob("assets.yaml.bak.*"))
-        assert len(assets_backups) == 1
-
-    def test_apply_syncs_assets_yaml(self, tmp_path):
-        """--apply retire de assets.yaml les assets absents de tout per_asset."""
-        import json
-        import sqlite3
-
-        # DB : 2 assets Grade A pour grid_atr, 1 Grade A pour grid_boltrend
-        db_path = str(tmp_path / "test.db")
-        conn = sqlite3.connect(db_path)
-        conn.executescript("""
-            CREATE TABLE optimization_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy_name TEXT NOT NULL,
-                asset TEXT NOT NULL,
-                timeframe TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                grade TEXT NOT NULL,
-                total_score REAL NOT NULL,
-                best_params TEXT NOT NULL,
-                is_latest INTEGER DEFAULT 1,
-                duration_seconds REAL,
-                oos_sharpe REAL,
-                consistency REAL,
-                oos_is_ratio REAL,
-                dsr REAL,
-                param_stability REAL,
-                monte_carlo_pvalue REAL,
-                mc_underpowered INTEGER DEFAULT 0,
-                n_windows INTEGER NOT NULL,
-                n_distinct_combos INTEGER,
-                wfo_windows TEXT,
-                monte_carlo_summary TEXT,
-                validation_summary TEXT,
-                warnings TEXT,
-                source TEXT DEFAULT 'local',
-                regime_analysis TEXT,
-                UNIQUE(strategy_name, asset, timeframe, created_at)
-            )
-        """)
-        # grid_atr: BTC + DOGE Grade A
-        for asset in ["BTC/USDT", "DOGE/USDT"]:
-            conn.execute(
-                """INSERT INTO optimization_results
-                   (strategy_name, asset, timeframe, created_at, grade, total_score,
-                    best_params, is_latest, n_windows)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, 12)""",
-                ("grid_atr", asset, "1h", "2026-02-20T10:00:00",
-                 "A", 85, json.dumps({"ma_period": 7, "sl_percent": 20.0})),
-            )
-        # grid_boltrend: ETH Grade A (uniquement ici, pas dans grid_atr)
         conn.execute(
             """INSERT INTO optimization_results
                (strategy_name, asset, timeframe, created_at, grade, total_score,
                 best_params, is_latest, n_windows)
                VALUES (?, ?, ?, ?, ?, ?, ?, 1, 12)""",
-            ("grid_boltrend", "ETH/USDT", "1h", "2026-02-20T11:00:00",
-             "A", 83, json.dumps({"bol_window": 100, "long_ma_window": 400})),
+            ("grid_atr", "ARB/USDT", "1h", "2026-02-20T10:00:00",
+             "F", 20, json.dumps({"atr_period": 14, "sl_mult": 3.0})),
         )
         conn.commit()
         conn.close()
 
-        # strategies.yaml avec 2 stratégies
-        yaml_path = tmp_path / "strategies.yaml"
-        yaml_path.write_text(yaml.dump({
-            "grid_atr": {
-                "enabled": True,
-                "leverage": 6,
-                "per_asset": {},
-            },
-            "grid_boltrend": {
-                "enabled": True,
-                "leverage": 8,
-                "per_asset": {},
-            },
-        }))
-
-        # assets.yaml avec 4 assets (SOL et LINK n'ont aucun Grade A/B)
+        # assets.yaml avec BTC, ARB et SOL (SOL sans résultat WFO)
         assets_path = tmp_path / "assets.yaml"
-        assets_path.write_text(yaml.dump({
+        assets_content = yaml.dump({
             "assets": [
                 {"symbol": "BTC/USDT", "exchange": "bitget", "type": "futures",
                  "timeframes": ["1h"], "max_leverage": 20, "min_order_size": 0.001,
                  "tick_size": 0.1, "correlation_group": "crypto_major"},
-                {"symbol": "ETH/USDT", "exchange": "bitget", "type": "futures",
-                 "timeframes": ["1h"], "max_leverage": 20, "min_order_size": 0.01,
-                 "tick_size": 0.01, "correlation_group": "crypto_major"},
-                {"symbol": "DOGE/USDT", "exchange": "bitget", "type": "futures",
-                 "timeframes": ["1h"], "max_leverage": 20, "min_order_size": 10,
-                 "tick_size": 0.00001, "correlation_group": "altcoins"},
+                {"symbol": "ARB/USDT", "exchange": "bitget", "type": "futures",
+                 "timeframes": ["1h"], "max_leverage": 20, "min_order_size": 1,
+                 "tick_size": 0.0001, "correlation_group": "altcoins"},
                 {"symbol": "SOL/USDT", "exchange": "bitget", "type": "futures",
                  "timeframes": ["1h"], "max_leverage": 20, "min_order_size": 0.1,
                  "tick_size": 0.001, "correlation_group": "crypto_major"},
-                {"symbol": "LINK/USDT", "exchange": "bitget", "type": "futures",
-                 "timeframes": ["1h"], "max_leverage": 20, "min_order_size": 0.1,
-                 "tick_size": 0.001, "correlation_group": "altcoins"},
             ],
-            "correlation_groups": {
-                "crypto_major": {"max_concurrent_same_direction": 2, "max_exposure_percent": 60},
-                "altcoins": {"max_concurrent_same_direction": 10, "max_exposure_percent": 80},
+        })
+        assets_path.write_text(assets_content)
+
+        # strategies.yaml
+        yaml_path = tmp_path / "strategies.yaml"
+        yaml_path.write_text(yaml.dump({
+            "grid_atr": {
+                "enabled": True,
+                "leverage": 7,
+                "per_asset": {
+                    "ARB/USDT": {"atr_period": 14, "sl_mult": 2.5},
+                },
             },
         }))
 
         result = apply_from_db(
-            ["grid_atr", "grid_boltrend"],
+            ["grid_atr"],
             config_dir=str(tmp_path),
             db_path=db_path,
         )
 
         assert result["changed"] is True
-        # BTC, DOGE dans grid_atr; ETH dans grid_boltrend
-        assert "assets_removed" in result
-        assert set(result["assets_removed"]) == {"SOL/USDT", "LINK/USDT"}
+        # BTC appliqué, ARB retiré de per_asset
+        assert "BTC/USDT" in result["applied"]
+        assert any("ARB/USDT" in r for r in result["removed"])
 
-        # Relire assets.yaml — seuls BTC, ETH, DOGE doivent rester
-        with open(assets_path, encoding="utf-8") as f:
-            assets_data = yaml.safe_load(f)
-        symbols = [a["symbol"] for a in assets_data["assets"]]
-        assert sorted(symbols) == ["BTC/USDT", "DOGE/USDT", "ETH/USDT"]
+        # assets.yaml doit être IDENTIQUE (octet pour octet)
+        assert assets_path.read_text() == assets_content
 
-        # SOL et LINK retirés
-        assert "SOL/USDT" not in symbols
-        assert "LINK/USDT" not in symbols
-
-        # correlation_groups préservés
-        assert "correlation_groups" in assets_data
-
-        # Backup assets.yaml créé
+        # Aucun backup assets.yaml créé
         assets_backups = list(tmp_path.glob("assets.yaml.bak.*"))
-        assert len(assets_backups) >= 1
+        assert len(assets_backups) == 0
+
+        # Pas de clés assets_added/assets_removed dans le résultat
+        assert "assets_added" not in result
+        assert "assets_removed" not in result

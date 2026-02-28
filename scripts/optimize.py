@@ -491,36 +491,6 @@ def _print_report(
     print()
 
 
-def _fetch_market_specs(symbols: list[str]) -> dict[str, dict]:
-    """Fetch tick_size, min_order_size, max_leverage depuis ccxt Bitget (sync).
-
-    Un seul load_markets() pour tous les symbols.
-    Retourne {} si ccxt échoue (réseau down, etc.).
-    """
-    try:
-        import ccxt as _ccxt
-
-        exchange = _ccxt.bitget({"options": {"defaultType": "swap"}})
-        exchange.load_markets()
-    except Exception as e:
-        logger.warning("ccxt load_markets() échoué — skip auto-add assets.yaml : {}", e)
-        return {}
-
-    result: dict[str, dict] = {}
-    for symbol in symbols:
-        key = f"{symbol}:USDT"
-        if key not in exchange.markets:
-            logger.warning("{} non trouvé sur Bitget (clé {})", symbol, key)
-            continue
-        m = exchange.markets[key]
-        max_lev = int(m.get("limits", {}).get("leverage", {}).get("max", 20))
-        result[symbol] = {
-            "tick_size": m["precision"]["price"],
-            "min_order_size": m["limits"]["amount"]["min"],
-            "max_leverage": min(max_lev, 20),
-        }
-    return result
-
 
 def _params_equal(old: dict, new: dict) -> bool:
     """Compare deux dicts de paramètres avec normalisation des types.
@@ -691,7 +661,6 @@ def apply_from_db(
                     "excluded": [],
                     "grades": {},
                     "backup": None,
-                    "assets_added": [],
                 }
 
             if outliers and ignore_tf_conflicts:
@@ -781,43 +750,6 @@ def apply_from_db(
         if unchanged:
             print(f"    = Inchangés : {', '.join(unchanged)}")
 
-    # Auto-add assets manquants dans assets.yaml
-    assets_yaml_path = Path(f"{config_dir}/assets.yaml")
-    assets_added: list[str] = []
-
-    if all_applied and assets_yaml_path.exists():
-        with open(assets_yaml_path, encoding="utf-8") as f:
-            assets_data = yaml.safe_load(f) or {}
-        existing_symbols = {a["symbol"] for a in assets_data.get("assets", [])}
-
-        missing = [s for s in all_applied if s not in existing_symbols]
-        if missing:
-            specs = _fetch_market_specs(missing)
-            for symbol in missing:
-                if symbol not in specs:
-                    continue
-                sp = specs[symbol]
-                new_entry = {
-                    "symbol": symbol,
-                    "exchange": "bitget",
-                    "type": "futures",
-                    "timeframes": ["1h"],
-                    "max_leverage": sp["max_leverage"],
-                    "min_order_size": sp["min_order_size"],
-                    "tick_size": sp["tick_size"],
-                    "correlation_group": "altcoins",
-                }
-                assets_data.setdefault("assets", []).append(new_entry)
-                assets_added.append(symbol)
-                print(f"    + AUTO-AJOUTÉ dans assets.yaml : {symbol}"
-                      f" (tick={sp['tick_size']}, min_order={sp['min_order_size']}, lev={sp['max_leverage']})")
-
-            if assets_added:
-                assets_bak = assets_yaml_path.with_name(f"assets.yaml.bak.{ts}")
-                shutil.copy2(str(assets_yaml_path), str(assets_bak))
-                with open(assets_yaml_path, "w", encoding="utf-8") as f:
-                    yaml.dump(assets_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
     # Sauvegarder strategies.yaml
     backup_name: str | None = None
     if changed:
@@ -829,38 +761,6 @@ def apply_from_db(
         print("\n  Aucun changement détecté — strategies.yaml inchangé")
         backup_path.unlink()  # Supprimer le backup inutile
 
-    # Sync assets.yaml : retirer les assets absents de TOUT per_asset
-    assets_removed_from_yaml: list[str] = []
-    if assets_yaml_path.exists():
-        # Collecter l'union des assets de TOUTES les stratégies ayant per_asset
-        all_per_asset_symbols: set[str] = set()
-        for strat_key, strat_val in data.items():
-            if isinstance(strat_val, dict):
-                pa = strat_val.get("per_asset")
-                if pa and isinstance(pa, dict):
-                    all_per_asset_symbols.update(pa.keys())
-
-        if all_per_asset_symbols:
-            with open(assets_yaml_path, encoding="utf-8") as f:
-                assets_data = yaml.safe_load(f) or {}
-            original_assets = assets_data.get("assets", [])
-            filtered_assets = []
-            for asset_entry in original_assets:
-                if asset_entry["symbol"] in all_per_asset_symbols:
-                    filtered_assets.append(asset_entry)
-                else:
-                    assets_removed_from_yaml.append(asset_entry["symbol"])
-
-            if assets_removed_from_yaml:
-                assets_data["assets"] = filtered_assets
-                assets_bak = assets_yaml_path.with_name(f"assets.yaml.bak.{ts}")
-                if not assets_bak.exists():
-                    shutil.copy2(str(assets_yaml_path), str(assets_bak))
-                with open(assets_yaml_path, "w", encoding="utf-8") as f:
-                    yaml.dump(assets_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-                print(f"\n  Assets retirés de assets.yaml : {', '.join(assets_removed_from_yaml)}"
-                      f" (aucune stratégie active)")
-
     print()
     return {
         "changed": changed,
@@ -869,8 +769,6 @@ def apply_from_db(
         "excluded": all_excluded,
         "grades": all_grades,
         "backup": backup_name,
-        "assets_added": assets_added,
-        "assets_removed": assets_removed_from_yaml,
     }
 
 
