@@ -207,56 +207,36 @@ grid_atr:
   sl_percent: 20.0
   sides:
   - long
-  leverage: 7
+  leverage: 5
   cooldown_candles: 3
   weight: 0.2
   per_asset:
-    AAVE/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 1.5
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.0
-      num_levels: 3
-      sl_percent: 15.0
-      timeframe: 1h
     ADA/USDT:
       atr_multiplier_start: 3.0
-      atr_multiplier_step: 1.5
-      atr_period: 20
-      ma_period: 10
-      min_grid_spacing_pct: 1.2
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 15.0
-      timeframe: 1h
-    ARB/USDT:
-      atr_multiplier_start: 2.0
       atr_multiplier_step: 1.0
-      atr_period: 14
-      ma_period: 7
+      atr_period: 10
+      ma_period: 10
       min_grid_spacing_pct: 1.2
       min_profit_pct: 0.0
       num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
     AVAX/USDT:
-      atr_multiplier_start: 2.5
+      atr_multiplier_start: 3.0
       atr_multiplier_step: 1.0
       atr_period: 10
-      ma_period: 7
+      ma_period: 10
       min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.4
+      min_profit_pct: 0.0
       num_levels: 3
       sl_percent: 20.0
       timeframe: 1h
     BCH/USDT:
-      atr_multiplier_start: 1.5
-      atr_multiplier_step: 1.0
+      atr_multiplier_start: 3.0
+      atr_multiplier_step: 1.5
       atr_period: 14
-      ma_period: 7
-      min_grid_spacing_pct: 1.2
+      ma_period: 14
+      min_grid_spacing_pct: 1.8
       min_profit_pct: 0.0
       num_levels: 4
       sl_percent: 20.0
@@ -266,89 +246,79 @@ grid_atr:
       atr_multiplier_step: 1.0
       atr_period: 10
       ma_period: 7
-      min_grid_spacing_pct: 0.0
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 15.0
-      timeframe: 1h
-    BTC/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 0.5
-      atr_period: 10
-      ma_period: 7
       min_grid_spacing_pct: 1.8
       min_profit_pct: 0.0
       num_levels: 4
       sl_percent: 15.0
-      timeframe: 1h
-    CRV/USDT:
-      atr_multiplier_start: 1.0
-      atr_multiplier_step: 1.0
-      atr_period: 14
-      ma_period: 7
-      min_grid_spacing_pct: 1.2
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 20.0
       timeframe: 1h
     DOGE/USDT:
-      atr_multiplier_start: 2.5
-      atr_multiplier_step: 1.0
-      atr_period: 10
+      atr_multiplier_start: 3.0
+      atr_multiplier_step: 0.5
+      atr_period: 14
       ma_period: 7
       min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.4
-      num_levels: 3
+      min_profit_pct: 0.0
+      num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
     DYDX/USDT:
-      atr_multiplier_start: 2.5
+      atr_multiplier_start: 2.0
       atr_multiplier_step: 1.5
-      atr_period: 14
-      ma_period: 7
-      min_grid_spacing_pct: 1.2
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 15.0
-      timeframe: 1h
-    GALA/USDT:
-      atr_multiplier_start: 3.0
-      atr_multiplier_step: 1.0
       atr_period: 10
       ma_period: 7
       min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.0
-      num_levels: 3
-      sl_percent: 15.0
-      timeframe: 1h
-    NEAR/USDT:
-      atr_multiplier_start: 2.5
-      atr_multiplier_step: 1.5
-      atr_period: 14
-      ma_period: 7
-      min_grid_spacing_pct: 1.2
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 15.0
-      timeframe: 1h
-    SOL/USDT:
-      atr_multiplier_start: 3.0
-      atr_multiplier_step: 0.5
-      atr_period: 20
-      ma_period: 7
-      min_grid_spacing_pct: 1.2
       min_profit_pct: 0.0
       num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
-    XRP/USDT:
+    ETH/USDT:
       atr_multiplier_start: 3.0
-      atr_multiplier_step: 0.5
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 14
+      min_grid_spacing_pct: 1.8
+      min_profit_pct: 0.0
+      num_levels: 3
+      sl_percent: 15.0
+      timeframe: 1h
+    ICP/USDT:
+      atr_multiplier_start: 2.5
+      atr_multiplier_step: 1.5
       atr_period: 10
-      ma_period: 10
+      ma_period: 7
+      min_grid_spacing_pct: 1.8
+      min_profit_pct: 0.0
+      num_levels: 4
+      sl_percent: 20.0
+      timeframe: 1h
+    NEAR/USDT:
+      atr_multiplier_start: 3.0
+      atr_multiplier_step: 1.0
+      atr_period: 14
+      ma_period: 7
       min_grid_spacing_pct: 1.8
       min_profit_pct: 0.4
+      num_levels: 4
+      sl_percent: 20.0
+      timeframe: 1h
+    SOL/USDT:
+      atr_multiplier_start: 3.0
+      atr_multiplier_step: 1.5
+      atr_period: 10
+      ma_period: 7
+      min_grid_spacing_pct: 1.8
+      min_profit_pct: 0.0
       num_levels: 3
+      sl_percent: 20.0
+      timeframe: 1h
+    XRP/USDT:
+      atr_multiplier_start: 2.5
+      atr_multiplier_step: 1.5
+      atr_period: 14
+      ma_period: 7
+      min_grid_spacing_pct: 1.8
+      min_profit_pct: 0.0
+      num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
 grid_range_atr:
@@ -368,7 +338,7 @@ grid_range_atr:
   weight: 0.2
   per_asset: {}
 grid_multi_tf:
-  enabled: true
+  enabled: false
   live_eligible: true
   timeframe: 1h
   st_atr_period: 10
