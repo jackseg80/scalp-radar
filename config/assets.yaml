@@ -12,6 +12,7 @@ assets:
   min_order_size: 0.001
   tick_size: 0.1
   correlation_group: crypto_major
+
 - symbol: ETH/USDT
   exchange: bitget
   type: futures
@@ -25,6 +26,7 @@ assets:
   min_order_size: 0.01
   tick_size: 0.01
   correlation_group: crypto_major
+
 - symbol: SOL/USDT
   exchange: bitget
   type: futures
@@ -38,6 +40,7 @@ assets:
   min_order_size: 0.1
   tick_size: 0.001
   correlation_group: crypto_major
+
 - symbol: DOGE/USDT
   exchange: bitget
   type: futures
@@ -51,6 +54,7 @@ assets:
   min_order_size: 10
   tick_size: 1.0e-05
   correlation_group: altcoins
+
 - symbol: LINK/USDT
   exchange: bitget
   type: futures
@@ -64,6 +68,7 @@ assets:
   min_order_size: 0.1
   tick_size: 0.001
   correlation_group: altcoins
+
 - symbol: ADA/USDT
   exchange: bitget
   type: futures
@@ -75,6 +80,7 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: altcoins
+
 - symbol: AVAX/USDT
   exchange: bitget
   type: futures
@@ -86,6 +92,7 @@ assets:
   min_order_size: 0.1
   tick_size: 0.001
   correlation_group: altcoins
+
 - symbol: CRV/USDT
   exchange: bitget
   type: futures
@@ -97,6 +104,7 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: altcoins
+
 - symbol: DYDX/USDT
   exchange: bitget
   type: futures
@@ -108,6 +116,7 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: altcoins
+
 - symbol: FET/USDT
   exchange: bitget
   type: futures
@@ -119,6 +128,7 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: altcoins
+
 - symbol: GALA/USDT
   exchange: bitget
   type: futures
@@ -130,6 +140,7 @@ assets:
   min_order_size: 1.0
   tick_size: 1e-06
   correlation_group: altcoins
+
 - symbol: ICP/USDT
   exchange: bitget
   type: futures
@@ -141,6 +152,7 @@ assets:
   min_order_size: 0.01
   tick_size: 0.001
   correlation_group: altcoins
+
 - symbol: NEAR/USDT
   exchange: bitget
   type: futures
@@ -152,6 +164,7 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: altcoins
+
 - symbol: UNI/USDT
   exchange: bitget
   type: futures
@@ -163,6 +176,7 @@ assets:
   min_order_size: 1.0
   tick_size: 0.001
   correlation_group: altcoins
+
 - symbol: XRP/USDT
   exchange: bitget
   type: futures
@@ -176,6 +190,7 @@ assets:
   min_order_size: 1.0
   tick_size: 0.0001
   correlation_group: crypto_major
+
 - symbol: BCH/USDT
   exchange: bitget
   type: futures
@@ -187,6 +202,7 @@ assets:
   min_order_size: 0.01
   tick_size: 0.01
   correlation_group: crypto_major
+
 - symbol: BNB/USDT
   exchange: bitget
   type: futures
@@ -198,6 +214,7 @@ assets:
   min_order_size: 0.01
   tick_size: 0.01
   correlation_group: crypto_major
+
 - symbol: AAVE/USDT
   exchange: bitget
   type: futures
@@ -209,6 +226,7 @@ assets:
   min_order_size: 0.1
   tick_size: 0.01
   correlation_group: altcoins
+
 - symbol: ARB/USDT
   exchange: bitget
   type: futures
@@ -222,6 +240,7 @@ assets:
   min_order_size: 0.01
   tick_size: 0.0001
   correlation_group: crypto_alt
+
 - symbol: OP/USDT
   exchange: bitget
   type: futures
@@ -239,6 +258,70 @@ assets:
   min_order_size: 0.1
   tick_size: 0.0001
   correlation_group: altcoins
+
+- symbol: DOT/USDT
+  exchange: bitget
+  type: futures
+  timeframes: ['1h', '4h', '1d']
+  max_leverage: 20
+  min_order_size: 0.1
+  tick_size: 0.001
+  correlation_group: altcoins
+
+- symbol: ATOM/USDT
+  exchange: bitget
+  type: futures
+  timeframes: ['1h', '4h', '1d']
+  max_leverage: 20
+  min_order_size: 0.1
+  tick_size: 0.001
+  correlation_group: altcoins
+
+- symbol: LTC/USDT
+  exchange: bitget
+  type: futures
+  timeframes: ['1h', '4h', '1d']
+  max_leverage: 20
+  min_order_size: 0.01
+  tick_size: 0.01
+  correlation_group: crypto_major
+
+- symbol: FIL/USDT
+  exchange: bitget
+  type: futures
+  timeframes: ['1h', '4h', '1d']
+  max_leverage: 20
+  min_order_size: 0.1
+  tick_size: 0.001
+  correlation_group: altcoins
+
+- symbol: ETC/USDT
+  exchange: bitget
+  type: futures
+  timeframes: ['1h', '4h', '1d']
+  max_leverage: 20
+  min_order_size: 0.1
+  tick_size: 0.01
+  correlation_group: crypto_major
+
+- symbol: TRX/USDT
+  exchange: bitget
+  type: futures
+  timeframes: ['1h', '4h', '1d']
+  max_leverage: 20
+  min_order_size: 1.0
+  tick_size: 0.00001
+  correlation_group: altcoins
+
+- symbol: XLM/USDT
+  exchange: bitget
+  type: futures
+  timeframes: ['1h', '4h', '1d']
+  max_leverage: 20
+  min_order_size: 1.0
+  tick_size: 0.00001
+  correlation_group: altcoins
+
 correlation_groups:
   crypto_major:
     max_concurrent_same_direction: 2

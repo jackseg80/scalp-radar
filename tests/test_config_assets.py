@@ -13,7 +13,7 @@ STRATEGIES_YAML = ROOT / "config" / "strategies.yaml"
 
 REMOVED_ASSETS = {"ENJ/USDT", "SUSHI/USDT", "IMX/USDT", "SAND/USDT", "AR/USDT", "APE/USDT", "XTZ/USDT", "JUP/USDT"}
 NEW_ASSETS = {"XRP/USDT", "BCH/USDT", "BNB/USDT", "AAVE/USDT", "ARB/USDT"}
-EXPECTED_COUNT = 19
+EXPECTED_COUNT = 28
 
 
 @pytest.fixture(scope="module")

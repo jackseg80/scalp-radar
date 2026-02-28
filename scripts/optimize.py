@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone as _timezone
 from pathlib import Path
 from typing import Callable
 
@@ -49,6 +49,13 @@ from backend.optimization.report import (
     validate_on_bitget,
 )
 from backend.optimization.walk_forward import WalkForwardOptimizer, _build_grid, _load_param_grids
+
+
+def _parse_ts(ts: object) -> datetime:
+    """Convertit un timestamp (ms int ou ISO string) en datetime UTC."""
+    if isinstance(ts, (int, float)):
+        return datetime.fromtimestamp(ts / 1000, tz=_timezone.utc)
+    return datetime.fromisoformat(str(ts))
 
 
 async def check_data(config_dir: str = "config") -> None:
@@ -69,32 +76,31 @@ async def check_data(config_dir: str = "config") -> None:
 
     for exchange in [main_exchange, val_exchange]:
         for symbol in symbols:
-            # Compter les candles 5m
-            candles = await db.get_candles(symbol, "5m", exchange=exchange, limit=1_000_000)
-            n_candles = len(candles)
-            if n_candles > 0:
-                first = candles[0].timestamp
-                last = candles[-1].timestamp
-                days = (last - first).days
-                mark = "OK"
-            else:
-                days = 0
-                mark = "X"
-
-            status = f"{symbol:<12s} {exchange:<8s} candles : {days:>4d} jours"
-            if n_candles > 0:
-                status += f" (5m: {n_candles // 1000}k)"
-            status += f"  {mark}"
-
-            if n_candles == 0:
-                cmd = f"uv run python -m scripts.fetch_history --exchange {exchange} --symbol {symbol}"
-                if exchange == main_exchange:
-                    cmd += " --days 720"
+            days_fetch = "720" if exchange == main_exchange else "90"
+            for tf in ("5m", "1h"):
+                candles = await db.get_candles(symbol, tf, exchange=exchange, limit=1_000_000)
+                n_candles = len(candles)
+                if n_candles > 0:
+                    days = (candles[-1].timestamp - candles[0].timestamp).days
+                    mark = "OK"
                 else:
-                    cmd += " --days 90"
-                status += f"  → {cmd}"
+                    days = 0
+                    mark = "X"
 
-            print(f"  {status}")
+                status = f"{symbol:<12s} {exchange:<8s} {tf:>3s} : {days:>4d} jours"
+                if n_candles > 0:
+                    status += f" ({n_candles // 1000}k)"
+                status += f"  {mark}"
+
+                if n_candles == 0:
+                    cmd = (
+                        f"uv run python -m scripts.fetch_history"
+                        f" --exchange {exchange} --symbol {symbol}"
+                        f" --timeframe {tf} --days {days_fetch}"
+                    )
+                    status += f"  → {cmd}"
+
+                print(f"  {status}")
 
     # Données funding/OI (Binance seulement)
     print(f"\n  Funding Rates & Open Interest ({main_exchange})")
@@ -104,9 +110,9 @@ async def check_data(config_dir: str = "config") -> None:
         funding = await db.get_funding_rates(symbol, exchange=main_exchange)
         n_funding = len(funding)
         if n_funding > 0:
-            f_days = (funding[-1]["timestamp"] - funding[0]["timestamp"]) / 1000 / 86400
+            f_days = (_parse_ts(funding[-1]["timestamp"]) - _parse_ts(funding[0]["timestamp"])).days
             f_mark = "OK" if f_days >= 360 else "!"
-            f_status = f"{symbol:<12s} funding  : {f_days:>4.0f} jours ({n_funding} rates) {f_mark}"
+            f_status = f"{symbol:<12s} funding  : {f_days:>4d} jours ({n_funding} rates) {f_mark}"
         else:
             f_status = f"{symbol:<12s} funding  :    0 jours  X  -> uv run python -m scripts.fetch_funding --symbol {symbol}"
         print(f"  {f_status}")
@@ -115,9 +121,9 @@ async def check_data(config_dir: str = "config") -> None:
         oi = await db.get_open_interest(symbol, timeframe="5m", exchange=main_exchange)
         n_oi = len(oi)
         if n_oi > 0:
-            o_days = (oi[-1]["timestamp"] - oi[0]["timestamp"]) / 1000 / 86400
+            o_days = (_parse_ts(oi[-1]["timestamp"]) - _parse_ts(oi[0]["timestamp"])).days
             o_mark = "OK" if o_days >= 360 else "!"
-            o_status = f"{symbol:<12s} OI 5m    : {o_days:>4.0f} jours ({n_oi // 1000}k records) {o_mark}"
+            o_status = f"{symbol:<12s} OI 5m    : {o_days:>4d} jours ({n_oi // 1000}k records) {o_mark}"
         else:
             o_status = f"{symbol:<12s} OI 5m    :    0 jours  X  -> uv run python -m scripts.fetch_oi --symbol {symbol}"
         print(f"  {o_status}")
