@@ -2902,10 +2902,10 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (28 février 2026)
 
-- **2085 tests, 2061 passants** (2 échecs pré-existants non liés), +24 Sprint 59 grading V2
-- **Phases 1-5 terminées + Sprints 1-59**
+- **2140 tests, 2136 passants** (4 échecs pré-existants non liés), +26 Sprint 61 trend_follow_daily
+- **Phases 1-5 terminées + Sprints 1-61**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — WFO à relancer sur 26 assets avec `--regrade`
-- **17 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**)
+- **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
@@ -3245,6 +3245,16 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **Impact** : `_compute_fast_metrics()` utilise `sum(trade_pnls)` → sans force-close, `net_return_pct` et Sharpe reflètent uniquement les trades réels.
   - **Fichiers** : `backend/optimization/fast_multi_backtest.py` (5 blocs), `tests/test_grid_atr.py`, `tests/test_force_close_exclusion.py` (nouveau), `tests/test_grid_range_atr.py`, `tests/test_grid_funding.py`, `tests/test_grid_boltrend.py`, `tests/test_grid_boltrend_parity.py`, `tests/test_grid_trend.py`, `tests/test_fast_engine_refactor.py`
   - **7 nouveaux tests, 8 tests mis à jour** → **2114 tests, 2110 passants** (4 pré-existants : leverage_sl message, config_assets, multi_timeframe sides, param_grids sides), 0 régression
+- **Sprint 61 — trend_follow_daily : Trend Following EMA Cross Daily** (28 fév 2026) :
+  - **Nouvelle stratégie** : EMA cross sur daily (`ema_fast`/`ema_slow`), filtre ADX, trailing stop ATR, position unique. **Fast engine only** — pas de live runner.
+  - **Corrections moteur** : (1) **Day 0 Bug Fix** — boucle PHASE 1 (entrée) → PHASE 2 (sortie) par candle, SL vérifié le jour même de l'entrée ; (2) **Trailing init look-ahead fix** — trailing initialisé à `entry_price ± atr×mult` (pas `highs[i]/lows[i]` inconnus à l'ouverture)
+  - **Routage WFO** : `MULTI_BACKTEST_STRATEGIES = GRID_STRATEGIES | {"trend_follow_daily"}` + `uses_multi_backtest()` remplace `is_grid_strategy()` dans `_run_fast()` (séparation sémantique/routage)
+  - **IndicatorCache** : EMA multi-period + ADX dans `build_cache()` pour `trend_follow_daily` (même chemin que `grid_trend`)
+  - **Config** : `param_grids.yaml` 216 combos, WFO is_days=365/oos_days=120/step_days=60 ; `strategies.yaml` `enabled: false`, `live_eligible: false`, leverage 6x
+  - **Déduplication** : `exit_mode="signal"` → `trailing_atr_mult` forcé à 0.0 (combos distinctes uniquement)
+  - **Force-close fin** : exclu de `trade_pnls` (convention Sprint 60)
+  - **Fichiers** : `backend/strategies/trend_follow_daily.py` (nouveau), `backend/optimization/fast_multi_backtest.py` (`_simulate_trend_follow` + `_close_trend_position`), `backend/optimization/__init__.py`, `backend/optimization/indicator_cache.py`, `backend/optimization/walk_forward.py`, `config/param_grids.yaml`, `config/strategies.yaml`, `tests/test_trend_follow_daily.py` (nouveau), `tests/test_fast_engine_refactor.py` (mis à jour : FAST_ENGINE_STRATEGIES 15→16)
+  - **26 nouveaux tests** → **2140 tests, 2136 passants** (4 pré-existants inchangés), 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

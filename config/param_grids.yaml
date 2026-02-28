@@ -258,3 +258,23 @@ grid_trend:
     num_levels: [2, 3]
     trail_mult: [1.5, 2.0, 2.5, 3.0]
     sl_percent: [10, 15, 20]
+
+# ─── Trend Follow Daily ──────────────────────────────────────────────────
+trend_follow_daily:
+  wfo:
+    is_days: 365
+    oos_days: 120
+    step_days: 60
+    embargo_days: 1
+  default:
+    timeframe: ["1d"]
+    ema_fast: [5, 9, 12]
+    ema_slow: [20, 50]
+    adx_period: [14]
+    adx_threshold: [0, 15, 20]
+    atr_period: [14]
+    trailing_atr_mult: [3.0, 4.0, 5.0]
+    exit_mode: ["trailing", "signal"]
+    sl_percent: [10.0]
+    cooldown_candles: [3]
+    sides: [["long"], ["long", "short"]]

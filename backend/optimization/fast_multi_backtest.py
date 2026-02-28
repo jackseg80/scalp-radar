@@ -1584,6 +1584,299 @@ def _simulate_grid_momentum(
     return trade_pnls, trade_returns, capital
 
 
+# ─── Trend Follow Daily ────────────────────────────────────────────────────
+
+
+def _close_trend_position(
+    direction: int,
+    entry_price: float,
+    exit_price: float,
+    quantity: float,
+    entry_fee: float,
+    taker_fee: float,
+) -> float:
+    """Calcule le PnL net d'une position trend follow."""
+    if direction == 1:
+        gross_pnl = (exit_price - entry_price) * quantity
+    else:
+        gross_pnl = (entry_price - exit_price) * quantity
+    exit_fee = quantity * exit_price * taker_fee
+    return gross_pnl - entry_fee - exit_fee
+
+
+def _simulate_trend_follow(
+    cache: IndicatorCache,
+    params: dict[str, Any],
+    bt_config: BacktestConfig,
+) -> tuple[list[float], list[float], float]:
+    """Simulation Trend Following EMA Cross sur Daily.
+
+    Moteur indépendant (pas de _simulate_grid_common).
+    Position unique, trailing stop ATR, SL fixe.
+
+    Structure boucle : PHASE 1 (entrée) puis PHASE 2 (sortie) par candle.
+    Le SL est vérifié le jour même de l'entrée (Day 0 fix).
+    Signal sur candle [i-1], entrée sur open[i] (pas de look-ahead).
+    """
+    # Params
+    ema_fast_period = params["ema_fast"]
+    ema_slow_period = params["ema_slow"]
+    adx_period = params.get("adx_period", 14)
+    adx_threshold = params.get("adx_threshold", 20.0)
+    atr_period = params.get("atr_period", 14)
+    trailing_atr_mult = params.get("trailing_atr_mult", 4.0)
+    exit_mode = params.get("exit_mode", "trailing")
+    sl_pct = params["sl_percent"] / 100.0
+    cooldown = params.get("cooldown_candles", 3)
+    sides = params.get("sides", ["long"])
+    allow_long = "long" in sides
+    allow_short = "short" in sides
+
+    # Déduplication : si exit_mode == "signal", trailing_atr_mult n'a aucun effet
+    if exit_mode == "signal":
+        trailing_atr_mult = 0.0
+
+    # Arrays
+    n = cache.n_candles
+    opens = cache.opens
+    highs = cache.highs
+    lows = cache.lows
+    closes = cache.closes
+    ema_fast = cache.ema_by_period[ema_fast_period]
+    ema_slow = cache.ema_by_period[ema_slow_period]
+    adx_arr = cache.adx_by_period.get(adx_period)
+    atr_arr = cache.atr_by_period[atr_period]
+
+    # Config
+    capital = bt_config.initial_capital
+    leverage = bt_config.leverage
+    taker_fee = bt_config.taker_fee
+    slippage_pct = bt_config.slippage_pct
+    max_dd_pct = bt_config.max_wfo_drawdown_pct / 100.0
+
+    trade_pnls: list[float] = []
+    trade_returns: list[float] = []
+
+    # State
+    in_position = False
+    direction = 0  # +1 LONG, -1 SHORT
+    entry_price = 0.0
+    quantity = 0.0
+    entry_fee = 0.0
+    margin_locked = 0.0
+    trailing_level = 0.0
+    entry_candle = -1  # Candle d'entrée (pour skip trailing update Day 0)
+    cooldown_remaining = 0
+    peak_capital = capital
+
+    # Warmup : EMA slow + marge pour le cross (i-1, i-2)
+    warmup = max(ema_slow_period, adx_period * 2 if adx_arr is not None else 0) + 2
+
+    for i in range(warmup, n):
+        # DD guard — equity = capital + margin en position (pas juste capital libre)
+        equity = capital + (margin_locked if in_position else 0.0)
+        if equity < peak_capital * (1 - max_dd_pct):
+            break
+
+        prev = i - 1
+
+        # Lire signaux sur candle PRÉCÉDENTE (pas de look-ahead)
+        ef_prev = ema_fast[prev]
+        es_prev = ema_slow[prev]
+        ef_prev2 = ema_fast[prev - 1]
+        es_prev2 = ema_slow[prev - 1]
+
+        # Vérifier NaN
+        if (
+            math.isnan(ef_prev)
+            or math.isnan(es_prev)
+            or math.isnan(ef_prev2)
+            or math.isnan(es_prev2)
+        ):
+            continue
+
+        adx_ok = True
+        if adx_arr is not None and adx_threshold > 0:
+            adx_val = adx_arr[prev]
+            if math.isnan(adx_val) or adx_val < adx_threshold:
+                adx_ok = False
+
+        atr_val = atr_arr[prev] if not math.isnan(atr_arr[prev]) else 0.0
+
+        # ==========================================================
+        # PHASE 1 : ENTRÉE (si pas en position et pas en cooldown)
+        # ==========================================================
+        if not in_position:
+            if cooldown_remaining > 0:
+                cooldown_remaining -= 1
+                continue  # Pas d'entrée, pas de sortie → next candle
+
+            # Cross détecté sur candle précédente
+            bull_cross = ef_prev > es_prev and ef_prev2 <= es_prev2
+            bear_cross = ef_prev < es_prev and ef_prev2 >= es_prev2
+
+            if bull_cross and allow_long and adx_ok:
+                direction = 1
+                entry_price = opens[i] * (1 + slippage_pct)
+                notional = capital * leverage
+                quantity = notional / entry_price
+                margin_locked = notional / leverage  # = capital
+                entry_fee = quantity * entry_price * taker_fee
+                capital -= margin_locked
+
+                # Trailing init à partir du PRIX D'ENTRÉE (pas highs[i])
+                if exit_mode == "trailing" and atr_val > 0:
+                    trailing_level = entry_price - atr_val * trailing_atr_mult
+                else:
+                    trailing_level = 0.0
+
+                in_position = True
+                entry_candle = i
+                # PAS de continue — PHASE 2 vérifie SL le jour même
+
+            elif bear_cross and allow_short and adx_ok:
+                direction = -1
+                entry_price = opens[i] * (1 - slippage_pct)
+                notional = capital * leverage
+                quantity = notional / entry_price
+                margin_locked = notional / leverage
+                entry_fee = quantity * entry_price * taker_fee
+                capital -= margin_locked
+
+                # Trailing init à partir du PRIX D'ENTRÉE (pas lows[i])
+                if exit_mode == "trailing" and atr_val > 0:
+                    trailing_level = entry_price + atr_val * trailing_atr_mult
+                else:
+                    trailing_level = float("inf")
+
+                in_position = True
+                entry_candle = i
+                # PAS de continue — PHASE 2 vérifie SL le jour même
+
+            else:
+                continue  # Pas de signal → next candle
+
+        # ==========================================================
+        # PHASE 2 : GESTION POSITION (SL, trailing, signal inverse)
+        # Exécuté AUSSI le jour de l'entrée (Day 0 fix).
+        # Ordre : 1. SL fixe  2. Trailing  3. Signal inverse
+        # ==========================================================
+        if not in_position:
+            continue  # Sécurité
+
+        # 1. SL fixe (catastrophe) — TOUJOURS vérifié
+        if direction == 1:
+            sl_price = entry_price * (1 - sl_pct)
+            if lows[i] <= sl_price:
+                exit_price = sl_price * (1 - slippage_pct)
+                pnl = _close_trend_position(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, taker_fee,
+                )
+                capital += margin_locked + pnl
+                if capital > 0:
+                    trade_pnls.append(pnl)
+                    trade_returns.append(pnl / capital)
+                peak_capital = max(peak_capital, capital)
+                in_position = False
+                cooldown_remaining = cooldown
+                continue
+        else:
+            sl_price = entry_price * (1 + sl_pct)
+            if highs[i] >= sl_price:
+                exit_price = sl_price * (1 + slippage_pct)
+                pnl = _close_trend_position(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, taker_fee,
+                )
+                capital += margin_locked + pnl
+                if capital > 0:
+                    trade_pnls.append(pnl)
+                    trade_returns.append(pnl / capital)
+                peak_capital = max(peak_capital, capital)
+                in_position = False
+                cooldown_remaining = cooldown
+                continue
+
+        # 2. Trailing stop (si exit_mode == "trailing")
+        # Day 0 : pas de mise à jour trailing (highs/lows inconnus à l'open)
+        if exit_mode == "trailing" and atr_val > 0 and i > entry_candle:
+            if direction == 1:
+                trailing_level = max(trailing_level, highs[i] - atr_val * trailing_atr_mult)
+                if lows[i] <= trailing_level:
+                    exit_price = trailing_level * (1 - slippage_pct)
+                    pnl = _close_trend_position(
+                        direction, entry_price, exit_price, quantity,
+                        entry_fee, taker_fee,
+                    )
+                    capital += margin_locked + pnl
+                    if capital > 0:
+                        trade_pnls.append(pnl)
+                        trade_returns.append(pnl / capital)
+                    peak_capital = max(peak_capital, capital)
+                    in_position = False
+                    cooldown_remaining = cooldown
+                    continue
+            else:
+                trailing_level = min(trailing_level, lows[i] + atr_val * trailing_atr_mult)
+                if highs[i] >= trailing_level:
+                    exit_price = trailing_level * (1 + slippage_pct)
+                    pnl = _close_trend_position(
+                        direction, entry_price, exit_price, quantity,
+                        entry_fee, taker_fee,
+                    )
+                    capital += margin_locked + pnl
+                    if capital > 0:
+                        trade_pnls.append(pnl)
+                        trade_returns.append(pnl / capital)
+                    peak_capital = max(peak_capital, capital)
+                    in_position = False
+                    cooldown_remaining = cooldown
+                    continue
+
+        # 3. Signal inverse (si exit_mode == "signal")
+        if exit_mode == "signal":
+            if direction == 1 and ef_prev < es_prev and ef_prev2 >= es_prev2:
+                exit_price = opens[i] * (1 - slippage_pct)
+                pnl = _close_trend_position(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, taker_fee,
+                )
+                capital += margin_locked + pnl
+                if capital > 0:
+                    trade_pnls.append(pnl)
+                    trade_returns.append(pnl / capital)
+                peak_capital = max(peak_capital, capital)
+                in_position = False
+                cooldown_remaining = cooldown
+                continue
+            elif direction == -1 and ef_prev > es_prev and ef_prev2 <= es_prev2:
+                exit_price = opens[i] * (1 + slippage_pct)
+                pnl = _close_trend_position(
+                    direction, entry_price, exit_price, quantity,
+                    entry_fee, taker_fee,
+                )
+                capital += margin_locked + pnl
+                if capital > 0:
+                    trade_pnls.append(pnl)
+                    trade_returns.append(pnl / capital)
+                peak_capital = max(peak_capital, capital)
+                in_position = False
+                cooldown_remaining = cooldown
+                continue
+
+    # Force-close fin de données — N'AJOUTE PAS à trade_pnls (Sprint 60 convention)
+    if in_position:
+        exit_price = closes[n - 1]
+        pnl = _close_trend_position(
+            direction, entry_price, exit_price, quantity,
+            entry_fee, taker_fee,
+        )
+        capital += margin_locked + pnl
+
+    return trade_pnls, trade_returns, capital
+
+
 # ─── Entry point ───────────────────────────────────────────────────────────
 
 
@@ -1633,8 +1926,12 @@ def run_multi_backtest_from_cache(
         trade_pnls, trade_returns, final_capital = _simulate_grid_momentum(
             cache, params, bt_config,
         )
+    elif strategy_name == "trend_follow_daily":
+        trade_pnls, trade_returns, final_capital = _simulate_trend_follow(
+            cache, params, bt_config,
+        )
     else:
-        raise ValueError(f"Stratégie grid inconnue pour fast engine: {strategy_name}")
+        raise ValueError(f"Stratégie inconnue pour fast engine: {strategy_name}")
 
     return _compute_fast_metrics(
         params, trade_pnls, trade_returns, final_capital,

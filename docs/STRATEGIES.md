@@ -1,6 +1,6 @@
 # Trading Strategies — Scalp Radar
 
-Guide complet des 17 stratégies de trading implémentées dans Scalp Radar.
+Guide complet des 18 stratégies de trading implémentées dans Scalp Radar.
 Tout ce qui est documenté ici est extrait du code source réel (`backend/strategies/`).
 
 ---
@@ -26,6 +26,7 @@ Tout ce qui est documenté ici est extrait du code source réel (`backend/strate
 | 15 | `funding` | 15m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 | 16 | `liquidation` | 5m | Scalp | Long + Short | false | Paper only (pas de backtest) |
 | 17 | `grid_momentum` | 1h | Grid/DCA | Long + Short | false | **ABANDONNÉ** (1/21 Grade B) |
+| 18 | `trend_follow_daily` | 1d | Trend/Single-pos | Long (+ Short opt.) | false | Fast engine only, WFO à lancer |
 
 **Live trading actif** :
 - `grid_atr` sur 14 assets — leverage 7x
@@ -868,6 +869,55 @@ Workflow A/B test — on isole l'impact d'une seule variable :
 | `supertrend` | 9 | Grade F | Pas d'edge sans DCA |
 | `funding` (mono) | 9 | 0 trades | Données live requises |
 | `liquidation` (mono) | 9 | 0 trades | Données live requises |
+
+---
+
+## Stratégie Trend Following Daily
+
+### 18. trend_follow_daily — EMA Cross Trend Following Daily
+
+**Concept** : Trend following mono-position sur timeframe daily. Entrée sur croisement EMA (fast/slow) avec filtre ADX pour exiger une tendance confirmée. Sortie par trailing stop ATR ou signal inverse.
+
+**Fichier** : `backend/strategies/trend_follow_daily.py` (config `@dataclass`)
+
+**Particularité architecturale** : Fast engine uniquement (`_simulate_trend_follow` dans `fast_multi_backtest.py`). Pas de live runner (`strategy_cls = None` dans `STRATEGY_REGISTRY`). Routé via `MULTI_BACKTEST_STRATEGIES` sans être dans `GRID_STRATEGIES`.
+
+**Conditions d'entrée** :
+- **LONG** : `ema_fast[i-1]` croise au-dessus de `ema_slow[i-1]` + ADX > `adx_threshold` → entrée à `opens[i]`
+- **SHORT** : `ema_fast[i-1]` croise en-dessous de `ema_slow[i-1]` + ADX > `adx_threshold` → entrée à `opens[i]`
+- Filtre `sides` : si `sides = ["long"]`, les signaux SHORT sont ignorés
+- Cooldown : `cooldown_candles` bougies d'attente après chaque clôture
+
+**Sorties** :
+- **Trailing stop** (exit_mode="trailing") : trailing initialisé à `entry_price ± atr×trailing_atr_mult` (pas `high[i]/low[i]` — look-ahead fix). HWM mis à jour chaque bougie avec `high`/`low`.
+- **Signal inverse** (exit_mode="signal") : sortie sur le signal EMA cross opposé, à `opens[i]`
+- **SL fixe** : `entry_price × (1 ± sl_percent/100)`, TOUJOURS vérifié (même avec trailing)
+- **Ordre priorité exits** : SL fixe → trailing → signal inverse
+- **Day 0 Bug Fix** : boucle PHASE 1 (entrée) → PHASE 2 (sortie) par candle — le SL est vérifié le jour même de l'entrée
+
+**Paramètres** :
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `ema_fast` | 9 | Période EMA rapide |
+| `ema_slow` | 50 | Période EMA lente |
+| `adx_period` | 14 | Période ADX |
+| `adx_threshold` | 20.0 | Seuil ADX (0 = désactivé) |
+| `atr_period` | 14 | Période ATR |
+| `trailing_atr_mult` | 4.0 | Multiplicateur ATR pour trailing stop |
+| `exit_mode` | "trailing" | "trailing" ou "signal" |
+| `sl_percent` | 10.0 | Stop-loss fixe (%) |
+| `cooldown_candles` | 3 | Bougies d'attente entre trades |
+| `sides` | ["long"] | Côtés actifs |
+| `leverage` | 6 | Levier |
+
+**WFO** : 216 combos (3 ema_fast × 2 ema_slow × 1 adx_period × 3 adx_threshold × 1 atr_period × 3 trailing × 2 exit_mode × 2 sides), fenêtres 365j IS / 120j OOS / step 60j.
+
+**Déduplication** : `exit_mode="signal"` force `trailing_atr_mult = 0.0` pour éviter les combos (signal+3.0) == (signal+5.0).
+
+**Sizing** : position unique. `notional = capital × leverage`, `margin_locked = capital`. Force-close fin de données exclue de `trade_pnls` (convention Sprint 60).
+
+**Statut** : `enabled: false`, `live_eligible: false`. **Fast engine only** — WFO à lancer sur données daily Binance.
 
 ---
 

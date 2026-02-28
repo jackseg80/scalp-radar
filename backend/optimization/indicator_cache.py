@@ -427,7 +427,7 @@ def build_cache(
 
     # --- ATR multi-period (pour donchian/supertrend/grid_atr/grid_multi_tf) ---
     atr_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr", "grid_boltrend", "grid_momentum"):
+    if strategy_name in ("donchian_breakout", "supertrend", "grid_atr", "grid_multi_tf", "grid_trend", "grid_range_atr", "grid_boltrend", "grid_momentum", "trend_follow_daily"):
         atr_periods: set[int] = set()
         if "atr_period" in param_grid_values:
             atr_periods.update(param_grid_values["atr_period"])
@@ -509,7 +509,7 @@ def build_cache(
     # --- Grid Trend : EMA + ADX multi-period ---
     ema_by_period_dict: dict[int, np.ndarray] = {}
     adx_by_period_dict: dict[int, np.ndarray] = {}
-    if strategy_name == "grid_trend":
+    if strategy_name in ("grid_trend", "trend_follow_daily"):
         from backend.core.indicators import ema as compute_ema
         for p in set(
             param_grid_values.get("ema_fast", []) + param_grid_values.get("ema_slow", [])

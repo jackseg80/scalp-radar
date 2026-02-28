@@ -756,6 +756,12 @@ grid_momentum:
   cooldown_candles: 3
   weight: 0.15
   per_asset: {}
+# ─── Trend Follow Daily ──────────────────────────────────────────────────
+trend_follow_daily:
+  enabled: false
+  live_eligible: false
+  leverage: 6
+
 custom_strategies:
   swing_baseline:
     enabled: false

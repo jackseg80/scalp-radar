@@ -260,7 +260,7 @@ class TestFastEngineStrategies:
     """Tests pour la constante FAST_ENGINE_STRATEGIES."""
 
     def test_content(self):
-        """Contient les 15 stratégies attendues."""
+        """Contient les 16 stratégies attendues."""
         from backend.optimization import FAST_ENGINE_STRATEGIES
 
         expected = {
@@ -268,6 +268,7 @@ class TestFastEngineStrategies:
             "supertrend", "boltrend", "envelope_dca", "envelope_dca_short",
             "grid_atr", "grid_range_atr", "grid_multi_tf", "grid_funding",
             "grid_trend", "grid_boltrend", "grid_momentum",
+            "trend_follow_daily",
         }
         assert FAST_ENGINE_STRATEGIES == expected
 

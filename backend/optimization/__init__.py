@@ -25,6 +25,7 @@ from backend.strategies.grid_trend import GridTrendStrategy
 from backend.strategies.liquidation import LiquidationStrategy
 from backend.strategies.momentum import MomentumStrategy
 from backend.strategies.supertrend import SuperTrendStrategy
+from backend.strategies.trend_follow_daily import TrendFollowDailyConfig
 from backend.strategies.vwap_rsi import VwapRsiStrategy
 
 from backend.core.config import (
@@ -48,7 +49,8 @@ from backend.core.config import (
 )
 
 # Registre central — pas de switch/case, extensible par ajout de ligne
-STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
+# None = fast engine only (pas de live runner)
+STRATEGY_REGISTRY: dict[str, tuple[type, type | None]] = {
     "vwap_rsi": (VwapRsiConfig, VwapRsiStrategy),
     "momentum": (MomentumConfig, MomentumStrategy),
     "funding": (FundingConfig, FundingStrategy),
@@ -66,6 +68,7 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type]] = {
     "grid_trend": (GridTrendConfig, GridTrendStrategy),
     "grid_boltrend": (GridBolTrendConfig, GridBolTrendStrategy),
     "grid_momentum": (GridMomentumConfig, GridMomentumStrategy),
+    "trend_follow_daily": (TrendFollowDailyConfig, None),  # Fast engine only, pas de live runner
 }
 
 # Stratégies qui nécessitent extra_data (funding rates, OI) pour le backtest
@@ -85,9 +88,19 @@ _NO_FAST_ENGINE: set[str] = {"funding", "liquidation"}
 FAST_ENGINE_STRATEGIES: set[str] = set(STRATEGY_REGISTRY.keys()) - _NO_FAST_ENGINE
 
 
+# Stratégies routées vers run_multi_backtest_from_cache (grid + moteurs autonomes)
+# Distinct de GRID_STRATEGIES : inclut les moteurs non-grid avec simulation autonome
+MULTI_BACKTEST_STRATEGIES: set[str] = GRID_STRATEGIES | {"trend_follow_daily"}
+
+
 def is_grid_strategy(name: str) -> bool:
     """Retourne True si la stratégie utilise le moteur multi-position."""
     return name in GRID_STRATEGIES
+
+
+def uses_multi_backtest(name: str) -> bool:
+    """Retourne True si la stratégie utilise run_multi_backtest_from_cache."""
+    return name in MULTI_BACKTEST_STRATEGIES
 
 
 def create_strategy_with_params(
@@ -104,6 +117,13 @@ def create_strategy_with_params(
             f"Disponibles : {list(STRATEGY_REGISTRY.keys())}"
         )
     config_cls, strategy_cls = STRATEGY_REGISTRY[strategy_name]
+
+    # Guard : stratégies fast-engine-only sans runner live
+    if strategy_cls is None:
+        raise ValueError(
+            f"Stratégie '{strategy_name}' n'a pas de runner live "
+            f"(fast engine uniquement)."
+        )
 
     # Mirroring : extreme_negative_threshold = -extreme_positive_threshold
     if strategy_name == "funding" and "extreme_positive_threshold" in params:

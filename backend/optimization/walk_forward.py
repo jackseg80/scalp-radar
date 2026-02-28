@@ -423,6 +423,7 @@ _INDICATOR_PARAMS: dict[str, list[str]] = {
     "grid_range_atr": ["ma_period", "atr_period"],
     "grid_boltrend": ["bol_window", "bol_std", "long_ma_window", "atr_period"],
     "grid_momentum": ["donchian_period", "atr_period"],
+    "trend_follow_daily": ["ema_fast", "ema_slow", "adx_period", "atr_period"],
 }
 
 
@@ -1155,10 +1156,10 @@ class WalkForwardOptimizer:
         from backend.optimization.fast_backtest import run_backtest_from_cache
         from backend.optimization.fast_multi_backtest import run_multi_backtest_from_cache
         from backend.optimization.indicator_cache import build_cache, resample_candles
-        from backend.optimization import is_grid_strategy
+        from backend.optimization import uses_multi_backtest
 
         bt_config = BacktestConfig(**bt_config_dict)
-        is_grid = is_grid_strategy(strategy_name)
+        use_multi = uses_multi_backtest(strategy_name)
 
         # Grouper les combos par timeframe
         from collections import defaultdict
@@ -1211,7 +1212,7 @@ class WalkForwardOptimizer:
 
             # Exécuter les combos de ce groupe
             for params in tf_combos:
-                if is_grid:
+                if use_multi:
                     results.append(run_multi_backtest_from_cache(strategy_name, params, cache, bt_config))
                 else:
                     results.append(run_backtest_from_cache(strategy_name, params, cache, bt_config))
