@@ -40,6 +40,11 @@ def _run_backtest_for_strategy(
             strategy_name, params, candles_by_tf, bt_config, main_tf,
             extra_data_by_timestamp=extra_data_by_timestamp,
         )
+    elif strategy_name == "trend_follow_daily":
+        from backend.optimization.fast_multi_backtest import run_trend_follow_backtest_single
+        return run_trend_follow_backtest_single(
+            strategy_name, params, candles_by_tf, bt_config, main_tf,
+        )
     return run_backtest_single(
         strategy_name, params, candles_by_tf, bt_config, main_tf,
         extra_data_by_timestamp=extra_data_by_timestamp,

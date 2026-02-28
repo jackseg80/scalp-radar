@@ -311,6 +311,14 @@ async def validate_on_bitget(
                 strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,
                 extra_data_by_timestamp=extra_data_map,
             )
+        elif strategy_name == "trend_follow_daily":
+            # Fast engine only — pas de runner event-driven
+            from backend.optimization.fast_multi_backtest import (
+                run_trend_follow_backtest_single,
+            )
+            result = run_trend_follow_backtest_single(
+                strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,
+            )
         else:
             result = run_backtest_single(
                 strategy_name, recommended_params, candles_by_tf, bt_config, main_tf,

@@ -350,6 +350,11 @@ def _run_single_backtest_worker(params: dict[str, Any]) -> _ISResult:
             _worker_strategy, params, _worker_candles, _worker_bt_config, effective_tf,
             extra_data_by_timestamp=_worker_extra_data,
         )
+    elif _worker_strategy == "trend_follow_daily":
+        from backend.optimization.fast_multi_backtest import run_trend_follow_backtest_single
+        result = run_trend_follow_backtest_single(
+            _worker_strategy, params, _worker_candles, _worker_bt_config, effective_tf,
+        )
     else:
         result = run_backtest_single(
             _worker_strategy, params, _worker_candles, _worker_bt_config, effective_tf,
@@ -387,6 +392,11 @@ def _run_single_backtest_sequential(
             strategy_name, params, candles_by_tf, bt_config, effective_tf,
             precomputed_indicators=precomputed_indicators,
             extra_data_by_timestamp=extra_data_by_timestamp,
+        )
+    elif strategy_name == "trend_follow_daily":
+        from backend.optimization.fast_multi_backtest import run_trend_follow_backtest_single
+        result = run_trend_follow_backtest_single(
+            strategy_name, params, candles_by_tf, bt_config, effective_tf,
         )
     else:
         result = run_backtest_single(
