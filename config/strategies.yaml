@@ -479,8 +479,8 @@ grid_range_atr:
       timeframe: 1h
       tp_mode: fixed_center
 grid_multi_tf:
-  enabled: false
-  live_eligible: true
+  enabled: true
+  live_eligible: false
   timeframe: 1h
   st_atr_period: 10
   st_atr_multiplier: 3.0
