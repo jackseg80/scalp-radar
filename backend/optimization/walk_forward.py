@@ -822,6 +822,14 @@ class WalkForwardOptimizer:
                         strategy_name, best_params, oos_candles_for_eval, bt_config, oos_eval_tf,
                         extra_data_by_timestamp=oos_extra_for_eval,
                     )
+                elif strategy_name == "trend_follow_daily":
+                    # Fast engine only — pas de runner event-driven
+                    from backend.optimization.fast_multi_backtest import (
+                        run_trend_follow_backtest_single,
+                    )
+                    oos_result = run_trend_follow_backtest_single(
+                        strategy_name, best_params, oos_candles_for_eval, bt_config, oos_eval_tf,
+                    )
                 else:
                     oos_result = run_backtest_single(
                         strategy_name, best_params, oos_candles_for_eval, bt_config, oos_eval_tf,

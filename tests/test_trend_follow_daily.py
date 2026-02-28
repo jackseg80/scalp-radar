@@ -746,3 +746,75 @@ class TestCloseTrendPosition:
         # exit_fee = 10*90*0.0006 = 0.54
         # net = 100 - 0.6 - 0.54 = 98.86
         assert pnl == pytest.approx(98.86)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Test — run_trend_follow_backtest_single (OOS single eval WFO)
+# ═════════════════════════════════════════════════════════════════════════
+
+
+def _make_daily_candles(n: int = 150, base_price: float = 100.0, trend: float = 0.3) -> list:
+    """Crée n bougies daily synthétiques avec une légère tendance haussière."""
+    from backend.core.models import Candle
+
+    candles = []
+    price = base_price
+    for i in range(n):
+        price = price * (1 + trend / 100)
+        atr = price * 0.02
+        c = Candle(
+            timestamp=datetime(2022, 1, 1, tzinfo=timezone.utc) + __import__("datetime").timedelta(days=i),
+            open=price,
+            high=price + atr,
+            low=price - atr,
+            close=price,
+            volume=1000.0,
+            symbol="BTC/USDT",
+            timeframe="1d",
+        )
+        candles.append(c)
+    return candles
+
+
+class TestRunTrendFollowBacktestSingle:
+    """Vérifie que run_trend_follow_backtest_single retourne un BacktestResult valide."""
+
+    def test_returns_backtest_result(self):
+        from backend.backtesting.engine import BacktestResult
+        from backend.optimization.fast_multi_backtest import run_trend_follow_backtest_single
+
+        candles = _make_daily_candles(n=150)
+        params = {
+            "timeframe": "1d", "ema_fast": 5, "ema_slow": 20,
+            "adx_period": 14, "adx_threshold": 0.0, "atr_period": 14,
+            "trailing_atr_mult": 3.0, "exit_mode": "trailing",
+            "sl_percent": 10.0, "cooldown_candles": 3,
+            "sides": ["long"], "leverage": 6,
+        }
+        bt_config = _make_bt_config()
+
+        result = run_trend_follow_backtest_single("trend_follow_daily", params, {"1d": candles}, bt_config, "1d")
+
+        assert isinstance(result, BacktestResult)
+        assert result.strategy_name == "trend_follow_daily"
+        assert result.final_capital > 0
+        assert isinstance(result.trades, list)
+        assert len(result.equity_curve) >= 1
+
+    def test_equity_curve_consistent(self):
+        """equity_curve[0] = initial_capital, dernier point ≈ final_capital."""
+        from backend.optimization.fast_multi_backtest import run_trend_follow_backtest_single
+
+        candles = _make_daily_candles(n=150)
+        params = {
+            "timeframe": "1d", "ema_fast": 5, "ema_slow": 20,
+            "adx_period": 14, "adx_threshold": 0.0, "atr_period": 14,
+            "trailing_atr_mult": 3.0, "exit_mode": "trailing",
+            "sl_percent": 10.0, "cooldown_candles": 3,
+            "sides": ["long"], "leverage": 6,
+        }
+        bt_config = _make_bt_config()
+        result = run_trend_follow_backtest_single("trend_follow_daily", params, {"1d": candles}, bt_config, "1d")
+
+        assert result.equity_curve[0] == pytest.approx(bt_config.initial_capital)
+        assert result.equity_curve[-1] == pytest.approx(result.final_capital, rel=1e-6)

@@ -2076,3 +2076,77 @@ def _compute_fast_metrics(
             sharpe = min(100.0, sharpe)
 
     return (params, sharpe, net_return_pct, profit_factor, n_trades)
+
+
+def run_trend_follow_backtest_single(
+    strategy_name: str,
+    params: dict[str, Any],
+    candles_by_tf: dict[str, list],
+    bt_config: BacktestConfig,
+    main_tf: str = "1d",
+) -> Any:
+    """Backtest single trend_follow_daily via fast engine → BacktestResult.
+
+    Crée des pseudo-TradeResult (net_pnl exact, autres champs synthétiques)
+    suffisants pour calculate_metrics() et Monte Carlo dans walk_forward.py.
+    Utilisé pour l'évaluation OOS du best combo (stratégies fast engine only).
+    """
+    from datetime import datetime
+
+    from backend.backtesting.engine import BacktestResult
+    from backend.core.models import Direction, MarketRegime
+    from backend.core.position_manager import TradeResult
+    from backend.optimization.indicator_cache import build_cache
+
+    grid_values: dict[str, list] = {k: [v] for k, v in params.items() if k != "timeframe"}
+    cache = build_cache(candles_by_tf, grid_values, strategy_name, main_tf)
+
+    initial_capital = bt_config.initial_capital
+    if cache.n_candles == 0:
+        return BacktestResult(
+            config=bt_config,
+            strategy_name=strategy_name,
+            strategy_params=params,
+            trades=[],
+            equity_curve=[initial_capital],
+            equity_timestamps=[],
+            final_capital=initial_capital,
+        )
+
+    trade_pnls, _trade_returns, final_capital = _simulate_trend_follow(cache, params, bt_config)
+
+    # Pseudo-trades : net_pnl exact, champs non-critiques synthétiques
+    _epoch = datetime(2000, 1, 1)
+    trades = [
+        TradeResult(
+            direction=Direction.LONG,
+            entry_price=1.0,
+            exit_price=1.0,
+            quantity=0.0,
+            entry_time=_epoch,
+            exit_time=_epoch,
+            gross_pnl=pnl,
+            fee_cost=0.0,
+            slippage_cost=0.0,
+            net_pnl=pnl,
+            exit_reason="signal_exit",
+            market_regime=MarketRegime.RANGING,
+        )
+        for pnl in trade_pnls
+    ]
+
+    equity_curve: list[float] = [initial_capital]
+    capital = initial_capital
+    for pnl in trade_pnls:
+        capital += pnl
+        equity_curve.append(capital)
+
+    return BacktestResult(
+        config=bt_config,
+        strategy_name=strategy_name,
+        strategy_params=params,
+        trades=trades,
+        equity_curve=equity_curve,
+        equity_timestamps=[],
+        final_capital=final_capital,
+    )
