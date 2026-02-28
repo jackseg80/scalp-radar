@@ -301,16 +301,6 @@ grid_atr:
       num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
-    OP/USDT:
-      atr_multiplier_start: 3.0
-      atr_multiplier_step: 0.5
-      atr_period: 20
-      ma_period: 7
-      min_grid_spacing_pct: 1.2
-      min_profit_pct: 0.0
-      num_levels: 4
-      sl_percent: 20.0
-      timeframe: 1h
     SOL/USDT:
       atr_multiplier_start: 3.0
       atr_multiplier_step: 1.5
@@ -320,16 +310,6 @@ grid_atr:
       min_profit_pct: 0.0
       num_levels: 3
       sl_percent: 20.0
-      timeframe: 1h
-    SUI/USDT:
-      atr_multiplier_start: 2.0
-      atr_multiplier_step: 1.5
-      atr_period: 10
-      ma_period: 7
-      min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.0
-      num_levels: 3
-      sl_percent: 15.0
       timeframe: 1h
     XRP/USDT:
       atr_multiplier_start: 2.5
@@ -356,7 +336,148 @@ grid_range_atr:
   - short
   leverage: 6
   weight: 0.2
-  per_asset: {}
+  per_asset:
+    AAVE/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.5
+      ma_period: 20
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    AVAX/USDT:
+      atr_period: 10
+      atr_spacing_mult: 0.7
+      ma_period: 20
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    BCH/USDT:
+      atr_period: 10
+      atr_spacing_mult: 0.7
+      ma_period: 50
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    BNB/USDT:
+      atr_period: 20
+      atr_spacing_mult: 0.7
+      ma_period: 20
+      num_levels: 3
+      sides:
+      - long
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    BTC/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.7
+      ma_period: 20
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    CRV/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.5
+      ma_period: 20
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    DOGE/USDT:
+      atr_period: 20
+      atr_spacing_mult: 0.5
+      ma_period: 14
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    FET/USDT:
+      atr_period: 20
+      atr_spacing_mult: 0.3
+      ma_period: 14
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    LINK/USDT:
+      atr_period: 20
+      atr_spacing_mult: 0.5
+      ma_period: 14
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    NEAR/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.5
+      ma_period: 20
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    SOL/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.5
+      ma_period: 14
+      num_levels: 3
+      sides:
+      - long
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    UNI/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.5
+      ma_period: 20
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
+    XRP/USDT:
+      atr_period: 14
+      atr_spacing_mult: 0.7
+      ma_period: 20
+      num_levels: 2
+      sides:
+      - long
+      - short
+      sl_percent: 18.0
+      timeframe: 1h
+      tp_mode: fixed_center
 grid_multi_tf:
   enabled: false
   live_eligible: true
