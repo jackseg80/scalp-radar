@@ -278,3 +278,4 @@ trend_follow_daily:
     sl_percent: [10.0]
     cooldown_candles: [3]
     sides: [["long"], ["long", "short"]]
+    position_fraction: [0.2, 0.3, 0.5]

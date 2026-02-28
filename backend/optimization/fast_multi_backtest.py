@@ -1629,6 +1629,7 @@ def _simulate_trend_follow(
     sl_pct = params["sl_percent"] / 100.0
     cooldown = params.get("cooldown_candles", 3)
     sides = params.get("sides", ["long"])
+    position_fraction = params.get("position_fraction", 0.3)
     allow_long = "long" in sides
     allow_short = "short" in sides
 
@@ -1718,9 +1719,10 @@ def _simulate_trend_follow(
             if bull_cross and allow_long and adx_ok:
                 direction = 1
                 entry_price = opens[i] * (1 + slippage_pct)
-                notional = capital * leverage
+                available = capital * position_fraction
+                notional = available * leverage
                 quantity = notional / entry_price
-                margin_locked = notional / leverage  # = capital
+                margin_locked = available
                 entry_fee = quantity * entry_price * taker_fee
                 capital -= margin_locked
 
@@ -1737,9 +1739,10 @@ def _simulate_trend_follow(
             elif bear_cross and allow_short and adx_ok:
                 direction = -1
                 entry_price = opens[i] * (1 - slippage_pct)
-                notional = capital * leverage
+                available = capital * position_fraction
+                notional = available * leverage
                 quantity = notional / entry_price
-                margin_locked = notional / leverage
+                margin_locked = available
                 entry_fee = quantity * entry_price * taker_fee
                 capital -= margin_locked
 

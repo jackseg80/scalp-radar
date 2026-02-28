@@ -34,3 +34,4 @@ class TrendFollowDailyConfig:
     cooldown_candles: int = 3
     sides: list[str] = field(default_factory=lambda: ["long"])
     leverage: int = 6
+    position_fraction: float = 0.3  # fraction du capital engagée par position

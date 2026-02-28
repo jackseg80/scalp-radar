@@ -488,6 +488,11 @@ class WalkForwardOptimizer:
             oos_window_days = strategy_grids_wfo.get("oos_days", oos_window_days)
             step_days = strategy_grids_wfo.get("step_days", step_days)
             embargo_days = strategy_grids_wfo.get("embargo_days", 0)
+        logger.warning(
+            "DEBUG WFO: strategy={} IS={} OOS={} step={} embargo={} sg_wfo={}",
+            strategy_name, is_window_days, oos_window_days, step_days, embargo_days,
+            strategy_grids_wfo,
+        )
         max_workers_cfg = opt_config.get("max_workers")
         if max_workers is None:
             max_workers = max_workers_cfg

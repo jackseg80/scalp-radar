@@ -818,3 +818,52 @@ class TestRunTrendFollowBacktestSingle:
 
         assert result.equity_curve[0] == pytest.approx(bt_config.initial_capital)
         assert result.equity_curve[-1] == pytest.approx(result.final_capital, rel=1e-6)
+
+
+class TestPositionFraction:
+    """Vérifie que position_fraction réduit le capital engagé par position."""
+
+    def test_position_fraction_reduces_pnl(self, make_indicator_cache):
+        """position_fraction=0.5 → PnL moitié moindre qu'à 1.0.
+
+        Warmup = max(ema_slow_period=50, adx_period*2=28) + 2 = 52.
+        Bull cross doit survenir APRÈS le warmup.
+        """
+        n = 100  # assez de données pour warmup(52) + entrée + sortie
+        # Cross haussier : ema_fast passe au-dessus de ema_slow à l'indice 54
+        # → bull_cross détecté sur candle 54 → entrée sur open[55]
+        ema_fast_arr = np.full(n, 98.0)
+        ema_fast_arr[54:] = 102.0
+        ema_slow_arr = np.full(n, 100.0)
+
+        lows = np.full(n, 95.0)
+        lows[55] = 85.0  # SL touché le jour de l'entrée (Day 0 fix)
+
+        cache = _make_cache_for_trend(
+            make_indicator_cache, n=n,
+            ema_fast_vals=ema_fast_arr,
+            ema_slow_vals=ema_slow_arr,
+            lows=lows,
+        )
+
+        bt_config = _make_bt_config(initial_capital=1000.0, leverage=6)
+
+        params_full = {**_DEFAULT_PARAMS, "sl_percent": 10.0, "adx_threshold": 0.0,
+                       "position_fraction": 1.0}
+        params_half = {**params_full, "position_fraction": 0.5}
+
+        pnls_full, _, _ = _simulate_trend_follow(cache, params_full, bt_config)
+        pnls_half, _, _ = _simulate_trend_follow(cache, params_half, bt_config)
+
+        assert pnls_full, "position_fraction=1.0 doit produire au moins 1 trade"
+        assert pnls_half, "position_fraction=0.5 doit produire au moins 1 trade"
+
+        ratio = abs(pnls_half[0]) / abs(pnls_full[0])
+        assert ratio == pytest.approx(0.5, abs=0.05), (
+            f"position_fraction 0.5 devrait donner ~50% du PnL, ratio={ratio:.3f}"
+        )
+
+    def test_position_fraction_default_is_0_3(self):
+        """position_fraction par défaut = 0.3 dans TrendFollowDailyConfig."""
+        cfg = TrendFollowDailyConfig()
+        assert cfg.position_fraction == 0.3
