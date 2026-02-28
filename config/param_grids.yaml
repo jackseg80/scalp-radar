@@ -112,7 +112,7 @@ grid_boltrend:
     is_days: 180
     oos_days: 60
     step_days: 60
-    embargo_days: 7  # Tampon IS→OOS pour éviter contamination des positions en cours
+    embargo_days: 7
   default:
     bol_window: [50, 100]
     bol_std: [1.5, 2.0, 2.5]
@@ -122,7 +122,7 @@ grid_boltrend:
     num_levels: [2, 3, 4]
     sl_percent: [10.0, 15.0, 20.0]
     atr_spacing_mult: [0.5, 1.0, 1.5]
-    timeframe: ["1h", "4h"]
+    timeframe: ["1h"]
 
 # Envelope DCA : 972 combos (3×4×3×5×3×4), coarse LHS 200
 envelope_dca:
@@ -152,7 +152,7 @@ envelope_dca_short:
     envelope_step: [0.02, 0.03, 0.05]
     sl_percent: [15.0, 20.0, 25.0, 30.0]
 
-# Grid ATR v2 : 12960 combos/tf (4×3×5×3×2×3×4×3), ~15 min/asset
+# Grid ATR v2 : 1728 combos/tf (3×2×3×3×2×2×2×2 ×2 sides), ~30 min/asset
 grid_atr:
   wfo:
     is_days: 180
@@ -169,6 +169,9 @@ grid_atr:
     sl_percent: [15.0, 20.0]
     min_grid_spacing_pct: [1.2, 1.8]
     min_profit_pct: [0.0, 0.4]
+    sides:
+      - ["long"]
+      - ["short"]
 
 # Grid Range ATR : 2160 combos (4×3×5×2×3×3×2)
 grid_range_atr:
