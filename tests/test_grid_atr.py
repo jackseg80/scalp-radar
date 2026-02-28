@@ -515,41 +515,45 @@ class TestGridATRFastEngine:
         assert result[4] == 0  # 0 trades
 
     def test_force_close_end_of_data(self, make_indicator_cache):
-        """Positions ouvertes fermées en fin de données."""
+        """Force-close fin de données exclu des métriques WFO.
+
+        14 warmup à 100, puis 10 candles à 80. La SMA(14) reste > 81 (high max)
+        pendant toute la période basse → aucun TP ne se déclenche.
+        SL à 50% → jamais touché (entrée ~95, SL à 47.5, prix à 80).
+        Résultat attendu : 0 vrais trades, capital modifié par le force-close.
+        """
         from backend.optimization.fast_multi_backtest import (
             run_multi_backtest_from_cache,
         )
 
-        n = 100
-        # Prix qui descend pour ouvrir des positions puis reste bas (pas de TP)
+        n = 24  # 14 warmup + 10 à 80 : SMA finale (4*100+10*80)/14 ≈ 85.7 > 81 → pas de TP
         prices = np.concatenate([
-            np.linspace(100, 80, 50),  # Descente : touche les niveaux
-            np.full(50, 80.0),          # Reste bas : pas de TP (SMA ~80)
+            np.full(14, 100.0),
+            np.full(10, 80.0),
         ])
         sma_arr = np.full(n, np.nan)
         atr_arr = np.full(n, np.nan)
         for i in range(14, n):
             sma_arr[i] = np.mean(prices[max(0, i - 13) : i + 1])
-            atr_arr[i] = 3.0  # ATR fixe
+            atr_arr[i] = 3.0
 
         cache = make_indicator_cache(
             n=n,
             closes=prices,
-            opens=prices,
-            highs=prices + 2.0,
-            lows=prices - 2.0,
             bb_sma={14: sma_arr},
             atr_by_period={14: atr_arr},
         )
         params = {
             "ma_period": 14, "atr_period": 14,
             "atr_multiplier_start": 1.0, "atr_multiplier_step": 0.5,
-            "num_levels": 2, "sl_percent": 50.0,  # SL large pour ne pas déclencher
+            "num_levels": 2, "sl_percent": 50.0,
         }
         bt_config = _make_bt_config()
         result = run_multi_backtest_from_cache("grid_atr", params, cache, bt_config)
-        # Des trades doivent exister (au moins le force close)
-        assert result[4] >= 1
+        # Force-close exclu des métriques : 0 vrais trades (TP/SL), capital mis à jour
+        assert result[4] == 0  # n_trades
+        assert result[1] == 0.0  # sharpe
+        assert result[2] == 0.0  # net_return_pct
 
     def test_tp_at_sma(self, make_indicator_cache):
         """TP quand close >= SMA (LONG)."""

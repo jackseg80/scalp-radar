@@ -349,12 +349,12 @@ class TestGridRangeATRFastEngine:
         opens = np.full(n, 95.0)
         highs = np.full(n, 96.0)
         lows = np.full(n, 94.0)
-        # Candle 0 : LONG entry à 97 (low=96 touche SMA - 1*10*0.3 = 97... mais low=96 < 97 ok)
-        lows[0] = 96.0
-        # Candle 1 : SL à entry*(1-0.1)= 87.3 → low doit aller là
-        lows[1] = 85.0
-        closes[1] = 86.0
-        highs[1] = 87.0
+        # Sprint 56 look-ahead: i=0 skippé, entry à i=1 (utilise prev_sma[0]=100, entry=97)
+        lows[1] = 85.0  # lows[1]=85 < 97 → entry LONG à i=1
+        # SL à entry*(1-0.1)= 87.3 → doit déclencher à i=2 (SL check commence après l'entry)
+        lows[2] = 85.0
+        closes[2] = 86.0
+        highs[2] = 87.0
 
         cache = make_indicator_cache(
             n=n, closes=closes, opens=opens, highs=highs, lows=lows,
@@ -495,8 +495,10 @@ class TestGridRangeATRFastEngine:
         opens_sl = np.full(n, 90.0)
         highs_sl = np.full(n, 91.0)
         lows_sl = np.full(n, 89.0)
-        lows_sl[0] = 96.0  # entry à 97
-        lows_sl[1] = 85.0  # SL (97 * 0.9 = 87.3)
+        # Sprint 56 look-ahead: i=0 skippé, entry à i=1 (lows[1]=85 < 97)
+        lows_sl[1] = 85.0  # entry LONG à i=1
+        # SL à entry*(1-0.1)=87.3 → déclenche à i=2
+        lows_sl[2] = 85.0  # SL (97 * 0.9 = 87.3)
 
         cache_sl = make_indicator_cache(
             n=n, closes=closes_sl, opens=opens_sl, highs=highs_sl, lows=lows_sl,

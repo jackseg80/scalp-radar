@@ -715,6 +715,8 @@ class TestMultiLevelFilling:
         # Breakout candle (index 201)
         bi = long_ma_window + 1  # = 201
         closes[bi] = breakout_close
+        # Dip candle avant breakout : prev_close (93) < prev_upper (~95.5) → LONG breakout fire
+        closes[bi - 1] = 93.0
 
         # Post-breakout candles
         n_post = len(post_breakout_closes)

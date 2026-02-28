@@ -570,7 +570,8 @@ class TestFastEngine:
         n = 400
         prices = np.full(n, 100.0)
         prices[250:260] = np.linspace(100, 84, 10)  # crash sous lower
-        prices[260:] = 84.0
+        prices[260:380] = 84.0
+        prices[380:] = 101.0  # rebond au-dessus SMA=100 → TP SHORT se déclenche
 
         opens = prices.copy()
         highs = prices + 0.2

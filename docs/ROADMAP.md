@@ -3238,6 +3238,13 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **`--regrade`** : calcule `win_rate_oos`/`tail_ratio` depuis `wfo_windows` JSON existant, met à jour grade + score + nouvelles colonnes.
   - **Fichiers** : `backend/optimization/report.py` (compute_grade V2 + 2 helpers), `backend/core/database.py` (migration), `backend/optimization/optimization_db.py` (INSERT étendu), `scripts/optimize.py` (_regrade_from_db adapté), `scripts/migrate_optimization.py` (legacy)
   - **24 nouveaux tests** (`test_grading_v2.py`) + 13 tests existants mis à jour → **2085 tests, 2061 passants** (2 échecs pré-existants non liés : leverage_sl message + strategies.yaml modifié), 0 régression
+- **Sprint 60 — Exclusion force-close des métriques WFO OOS** (28 fév 2026) :
+  - **Problème** : La force-close fin de données (fermeture artificielle des positions ouvertes en fin de fenêtre OOS) était comptabilisée dans `trade_pnls`/`trade_returns` → polluait Sharpe, n_trades, profit_factor. `grid_range_atr` obtenait des Sharpe 13-21 depuis un unique trade force-close.
+  - **Fix** : Dans les 5 moteurs dédiés (`_simulate_grid_common`, `_simulate_grid_range`, `_simulate_grid_funding`, `_simulate_grid_boltrend`, `_simulate_grid_momentum`), la force-close fin de données met à jour le capital mais N'AJOUTE PLUS `pnl` à `trade_pnls`/`trade_returns`. Elle reste comptabilisée dans le capital final pour le suivi réaliste du capital.
+  - **Force-close direction flip** (`_simulate_grid_common`, ~ligne 229) : non touché — exit basé sur signal réel.
+  - **Impact** : `_compute_fast_metrics()` utilise `sum(trade_pnls)` → sans force-close, `net_return_pct` et Sharpe reflètent uniquement les trades réels.
+  - **Fichiers** : `backend/optimization/fast_multi_backtest.py` (5 blocs), `tests/test_grid_atr.py`, `tests/test_force_close_exclusion.py` (nouveau), `tests/test_grid_range_atr.py`, `tests/test_grid_funding.py`, `tests/test_grid_boltrend.py`, `tests/test_grid_boltrend_parity.py`, `tests/test_grid_trend.py`, `tests/test_fast_engine_refactor.py`
+  - **7 nouveaux tests, 8 tests mis à jour** → **2114 tests, 2110 passants** (4 pré-existants : leverage_sl message, config_assets, multi_timeframe sides, param_grids sides), 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

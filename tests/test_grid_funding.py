@@ -546,8 +546,9 @@ class TestFastEngineSimulation:
 
         trade_pnls, _, final_capital = _simulate_grid_funding(cache, params, bt_config)
 
-        # Au minimum un trade (force close en fin)
-        assert len(trade_pnls) >= 1
+        # Force close exclu des métriques WFO — mais capital affecté (positions ouvertes)
+        assert len(trade_pnls) == 0
+        assert final_capital != 10000.0
 
     def test_no_entry_if_funding_positive(self, make_indicator_cache):
         """Aucune position si le funding est toujours positif."""

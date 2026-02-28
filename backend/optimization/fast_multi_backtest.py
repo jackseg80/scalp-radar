@@ -469,18 +469,14 @@ def _simulate_grid_common(
                         else:
                             hwm = cache.lows[i]
 
-    # Force close fin de données
+    # Force close fin de données — capital mis à jour, mais exclu des métriques
     if positions:
         exit_price = float(cache.closes[n - 1])
-        # Restaurer la marge verrouillée
         margin_to_return = sum(
             ep * qty / leverage for _l, ep, qty, _f in positions
         )
         capital += margin_to_return
         pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
-        trade_pnls.append(pnl)
-        if capital > 0:
-            trade_returns.append(pnl / capital)
         capital += pnl
 
     return trade_pnls, trade_returns, capital
@@ -769,11 +765,10 @@ def _simulate_grid_range(
                             positions.append((short_slot, -1, actual_ep, qty, entry_fee, prev_sma))
                             filled_slots.add(short_slot)
 
-    # Force close fin de données
+    # Force close fin de données — capital mis à jour, mais exclu des métriques
     if positions:
         exit_price = float(cache.closes[n - 1])
         for _slot, direction, ep, qty, efee, _esma in positions:
-            # Gross PnL sur prix brut
             if direction == 1:
                 gross = (exit_price - ep) * qty
             else:
@@ -783,12 +778,8 @@ def _simulate_grid_range(
             exit_fee = qty * exit_price * taker_fee
             net = gross - efee - exit_fee - slippage_cost
 
-            # Restaurer la marge de cette position
             margin_to_return = ep * qty / leverage
             capital += margin_to_return
-            trade_pnls.append(net)
-            if capital > 0:
-                trade_returns.append(net / capital)
             capital += net
 
     return trade_pnls, trade_returns, capital
@@ -976,9 +967,8 @@ def _simulate_grid_funding(
                     positions.append((close, qty, i, lvl))
                     filled_levels.add(lvl)
 
-        # === FORCE CLOSE DERNIÈRE BOUGIE ===
+        # === FORCE CLOSE DERNIÈRE BOUGIE — capital mis à jour, exclu des métriques ===
         if i == n - 1 and positions:
-            # Restaurer la marge verrouillée
             margin_to_return = sum(
                 ep * qty / leverage for ep, qty, _, _ in positions
             )
@@ -988,9 +978,6 @@ def _simulate_grid_funding(
                 close, i, funding, candle_ts,
                 taker_fee, slippage_pct,
             )
-            trade_pnls.append(pnl)
-            if capital > 0:
-                trade_returns.append(pnl / capital)
             capital += pnl
 
     return trade_pnls, trade_returns, capital
@@ -1297,18 +1284,14 @@ def _simulate_grid_boltrend(
                             positions.append((0, actual_ep0, qty, entry_fee))
                             breakout_candle_idx = i
 
-    # Force close fin de données
+    # Force close fin de données — capital mis à jour, mais exclu des métriques
     if positions:
         exit_price = float(closes[n - 1])
-        # Restaurer la marge verrouillée
         margin_to_return = sum(
             ep * qty / leverage for _l, ep, qty, _f in positions
         )
         capital += margin_to_return
         pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
-        trade_pnls.append(pnl)
-        if capital > 0:
-            trade_returns.append(pnl / capital)
         capital += pnl
 
     return trade_pnls, trade_returns, capital
@@ -1588,7 +1571,7 @@ def _simulate_grid_momentum(
                             else:
                                 hwm = lows[i]
 
-    # Force close fin de données
+    # Force close fin de données — capital mis à jour, mais exclu des métriques
     if positions:
         exit_price = float(closes[n - 1])
         margin_to_return = sum(
@@ -1596,9 +1579,6 @@ def _simulate_grid_momentum(
         )
         capital += margin_to_return
         pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
-        trade_pnls.append(pnl)
-        if capital > 0:
-            trade_returns.append(pnl / capital)
         capital += pnl
 
     return trade_pnls, trade_returns, capital
