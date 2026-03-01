@@ -4,7 +4,7 @@
  */
 import { useState, useMemo } from 'react'
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid,
+  AreaChart, Area, Line, XAxis, YAxis, CartesianGrid,
   ReferenceLine, ReferenceArea, ResponsiveContainer, Tooltip,
 } from 'recharts'
 import { useApi } from '../hooks/useApi'
@@ -45,9 +45,15 @@ function CustomTooltip({ active, payload }) {
     <div className="enhanced-equity-tooltip">
       <div className="tooltip-date">{formatDateFull(p.timestamp)}</div>
       <div className="tooltip-row">
-        <span className="tooltip-label">Equity</span>
+        <span className="tooltip-label">Equity totale</span>
         <span className="tooltip-value">{p.equity?.toFixed(2)}$</span>
       </div>
+      {p.balance != null && (
+        <div className="tooltip-row">
+          <span className="tooltip-label">Capital realise</span>
+          <span className="tooltip-value" style={{ color: '#8b8bf5' }}>{p.balance.toFixed(2)}$</span>
+        </div>
+      )}
       {p.dailyPnl != null && (
         <div className="tooltip-row">
           <span className="tooltip-label">P&L jour</span>
@@ -56,10 +62,12 @@ function CustomTooltip({ active, payload }) {
           </span>
         </div>
       )}
-      {p.margin_ratio != null && (
+      {p.unrealized_pnl != null && p.unrealized_pnl !== 0 && (
         <div className="tooltip-row">
-          <span className="tooltip-label">Marge</span>
-          <span className="tooltip-value">{(p.margin_ratio * 100).toFixed(1)}%</span>
+          <span className="tooltip-label">Unrealized</span>
+          <span className={`tooltip-value ${p.unrealized_pnl >= 0 ? 'positive' : 'negative'}`}>
+            {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)}$
+          </span>
         </div>
       )}
     </div>
@@ -105,6 +113,7 @@ export default function EnhancedEquityCurve({
   showReference = true,
 }) {
   const [days, setDays] = useState(defaultDays)
+  const [showRealized, setShowRealized] = useState(true)
 
   const daysParam = days || 365
   const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
@@ -126,6 +135,7 @@ export default function EnhancedEquityCurve({
   }, [points])
 
   const initialCapital = chartData.length > 0 ? chartData[0].equity : null
+  const hasBalance = chartData.length > 0 && chartData[0].balance != null
 
   const isPositive = chartData.length >= 2
     ? chartData[chartData.length - 1].equity >= chartData[0].equity
@@ -152,16 +162,27 @@ export default function EnhancedEquityCurve({
 
   return (
     <div className="enhanced-equity-container">
-      <div className="enhanced-equity-periods">
-        {PERIODS.map(p => (
+      <div className="enhanced-equity-header">
+        <div className="enhanced-equity-periods">
+          {PERIODS.map(p => (
+            <button
+              key={p.id ?? 'all'}
+              className={`period-btn ${days === p.id ? 'active' : ''}`}
+              onClick={() => setDays(p.id)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {hasBalance && (
           <button
-            key={p.id ?? 'all'}
-            className={`period-btn ${days === p.id ? 'active' : ''}`}
-            onClick={() => setDays(p.id)}
+            className={`period-btn ${showRealized ? 'active' : ''}`}
+            onClick={() => setShowRealized(!showRealized)}
+            title="Afficher/masquer la ligne de capital realise (sans unrealized P&L)"
           >
-            {p.label}
+            Realise
           </button>
-        ))}
+        )}
       </div>
 
       <ResponsiveContainer width="100%" height={height}>
@@ -229,8 +250,35 @@ export default function EnhancedEquityCurve({
             dot={false}
             activeDot={{ r: 3, strokeWidth: 0 }}
           />
+
+          {/* Ligne capital realise (sans unrealized P&L) */}
+          {hasBalance && showRealized && (
+            <Line
+              type="monotone"
+              dataKey="balance"
+              stroke="#8b8bf5"
+              strokeWidth={1.2}
+              strokeDasharray="4 3"
+              dot={false}
+              activeDot={false}
+            />
+          )}
         </AreaChart>
       </ResponsiveContainer>
+
+      {/* Legende */}
+      {hasBalance && showRealized && (
+        <div className="enhanced-equity-legend">
+          <span className="legend-item">
+            <span className="legend-line" style={{ background: isPositive ? 'var(--accent)' : 'var(--red)' }} />
+            Equity totale
+          </span>
+          <span className="legend-item">
+            <span className="legend-line dashed" style={{ background: '#8b8bf5' }} />
+            Capital realise
+          </span>
+        </div>
+      )}
     </div>
   )
 }
