@@ -301,16 +301,6 @@ grid_atr:
       num_levels: 4
       sl_percent: 20.0
       timeframe: 1h
-    LINK/USDT:
-      atr_multiplier_start: 3.0
-      atr_multiplier_step: 1.5
-      atr_period: 14
-      ma_period: 14
-      min_grid_spacing_pct: 1.8
-      min_profit_pct: 0.0
-      num_levels: 3
-      sl_percent: 15.0
-      timeframe: 1h
     LTC/USDT:
       atr_multiplier_start: 2.5
       atr_multiplier_step: 1.0
