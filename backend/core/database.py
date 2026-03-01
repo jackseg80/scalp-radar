@@ -183,6 +183,7 @@ class Database:
         await self._create_journal_tables()
         await self._create_live_trades_table()
         await self._create_balance_snapshots_table()
+        await self._create_telegram_alerts_table()
         await self._conn.commit()
 
     async def _create_sprint7b_tables(self) -> None:
@@ -1869,6 +1870,75 @@ class Database:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+    # ─── Sprint 63b : Telegram alerts persistence ─────────────────────
+
+    async def _create_telegram_alerts_table(self) -> None:
+        """Table Sprint 63b : historique des alertes Telegram."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS telegram_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                strategy TEXT,
+                success INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_telegram_alerts_ts
+                ON telegram_alerts(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_telegram_alerts_type
+                ON telegram_alerts(alert_type);
+        """)
+
+    async def insert_telegram_alert(
+        self,
+        timestamp: str,
+        alert_type: str,
+        message: str,
+        strategy: str | None = None,
+        success: bool = True,
+    ) -> None:
+        """Persiste une alerte Telegram envoyée (Sprint 63b)."""
+        await self._execute_with_retry(
+            """INSERT INTO telegram_alerts
+               (timestamp, alert_type, message, strategy, success)
+               VALUES (?, ?, ?, ?, ?)""",
+            (timestamp, alert_type, message[:2000], strategy, int(success)),
+        )
+
+    async def get_telegram_alerts(
+        self,
+        alert_type: str | None = None,
+        strategy: str | None = None,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Récupère l'historique des alertes Telegram (Sprint 63b)."""
+        assert self._conn is not None
+        conditions: list[str] = []
+        params: list[str | int] = []
+
+        if alert_type:
+            conditions.append("alert_type = ?")
+            params.append(alert_type)
+        if strategy:
+            conditions.append("strategy = ?")
+            params.append(strategy)
+        if since:
+            conditions.append("timestamp >= ?")
+            params.append(since)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        cursor = await self._conn.execute(
+            f"SELECT * FROM telegram_alerts {where} ORDER BY timestamp DESC LIMIT ?",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
 
     async def get_daily_pnl_summary(self, strategy: str | None = None) -> dict:
         """P&L du jour + P&L total + date premier trade (Sprint 46)."""

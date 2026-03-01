@@ -43,7 +43,7 @@ class Heartbeat:
                 await asyncio.sleep(self._interval)
                 if self._running:
                     message = self._build_message()
-                    await self._telegram.send_message(message)
+                    await self._telegram.send_message(message, alert_type="heartbeat")
             except asyncio.CancelledError:
                 break
             except Exception as e:

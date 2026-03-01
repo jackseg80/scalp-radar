@@ -399,7 +399,7 @@ class WeeklyReporter:
                 if not self._running:
                     break
                 report = await generate_report(self._db, self._config)
-                await self._telegram.send_message(report)
+                await self._telegram.send_message(report, alert_type="report")
                 logger.info("WeeklyReporter: rapport envoyé")
                 # Petit sleep pour éviter double envoi si redémarrage rapide
                 await asyncio.sleep(60)

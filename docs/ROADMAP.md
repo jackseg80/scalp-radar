@@ -2902,8 +2902,8 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ## ÉTAT ACTUEL (1 mars 2026)
 
-- **2172 tests, 2166 passants** (6 échecs pré-existants non liés), +10 Sprints 62a/62b (guard TF apply + min_atr_pct grid_atr)
-- **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a**
+- **2196 tests, 2181 passants** (15 ajoutés Sprint 63b, 6 pré-existants non liés)
+- **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — WFO à relancer sur 26 assets avec `--regrade`
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
@@ -2912,7 +2912,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 - **grid_momentum** : **ABANDONNÉ** — WFO terminé (1 Grade B / 21 assets, faux breakouts crypto)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
 - **Balance refresh** : solde exchange mis à jour toutes les 5 min, refresh manuel POST /api/executor/refresh-balance, alerte si variation >10%
-- **Frontend complet** : 7 pages (Scanner, **Stratégies**, Recherche, Explorer, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve) + **3 tutoriels interactifs** (Grid ATR avec sliders, Grid BolTrend 8 étapes + sliders, Comparateur Envelope DCA vs Grid ATR) + **Overview Dashboard enrichi** (Sprint 63a : KPI cards, EnhancedEquityCurve Recharts, DrawdownChart, Top/Bottom assets, Regime, Activité)
+- **Frontend complet** : 7 pages (Scanner, **Stratégies**, Recherche, Explorer, Portfolio, Journal, Logs) + barre navigation stratégie (Overview/grid_atr/grid_boltrend) avec persistance localStorage + sidebar isolée par stratégie (Executor, EquityCurve) + **3 tutoriels interactifs** (Grid ATR avec sliders, Grid BolTrend 8 étapes + sliders, Comparateur Envelope DCA vs Grid ATR) + **Overview Dashboard enrichi** (Sprint 63a : KPI cards, EnhancedEquityCurve Recharts, DrawdownChart, Top/Bottom assets, Regime, Activité) + **Sprint 63b** : overlay Paper vs Live (normalisé % return, Recharts) + historique alertes Telegram (table `telegram_alerts`, filtre type/stratégie, UI JournalPage)
 - **Log Viewer** : mini-feed sidebar WARNING/ERROR temps réel (WS) + onglet terminal Linux complet (polling HTTP, filtres, auto-scroll)
 - **Benchmark WFO** : 200 combos × 5000 candles = 0.18s (0.17-0.21ms/combo), numba cache chaud
 - **Sprint 35** : `scripts/stress_test_leverage.py` — 20 backtests (2 stratégies × 4 leverages × 2-3 fenêtres), KS désactivé (99%), analyse KS a posteriori à 30%/45%/60%, Calmar ratio, recommandation automatique, CSV `data/stress_test_results.csv`. Pas de tests unitaires (script de benchmark).

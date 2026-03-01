@@ -247,7 +247,7 @@ class RegimeMonitor:
                     self._history = self._history[-30:]
                 if self._telegram:
                     msg = self._format_telegram(snapshot)
-                    await self._telegram.send_message(msg)
+                    await self._telegram.send_message(msg, alert_type="regime")
                 logger.info("RegimeMonitor: snapshot envoyé ({})", snapshot.regime)
                 await asyncio.sleep(60)
             except asyncio.CancelledError:

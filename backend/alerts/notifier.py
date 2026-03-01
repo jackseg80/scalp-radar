@@ -112,7 +112,7 @@ class Notifier:
 
             if now - last_sent >= cooldown:
                 text = f"<b>Anomalie</b>\n{message}"
-                await self._telegram.send_message(text)
+                await self._telegram.send_message(text, alert_type="anomaly")
                 self._last_anomaly_sent[anomaly_type] = now
 
     async def notify_startup(self, strategies: list[str]) -> None:
@@ -230,7 +230,8 @@ class Notifier:
         logger.info("Notifier: réconciliation: {}", result)
         if self._telegram:
             await self._telegram.send_message(
-                f"<b>Réconciliation</b>\n{result}"
+                f"<b>Réconciliation</b>\n{result}",
+                alert_type="reconciliation",
             )
 
     async def notify_leverage_divergence(self, strategy: str, details: str) -> None:
@@ -243,5 +244,7 @@ class Notifier:
         )
         if self._telegram:
             await self._telegram.send_message(
-                f"<b>Divergence leverage</b> [{strategy}]\n{details}"
+                f"<b>Divergence leverage</b> [{strategy}]\n{details}",
+                alert_type="reconciliation",
+                strategy=strategy,
             )

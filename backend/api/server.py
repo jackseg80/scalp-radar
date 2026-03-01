@@ -28,6 +28,7 @@ from backend.api.optimization_routes import router as optimization_router
 from backend.api.portfolio_routes import router as portfolio_router
 from backend.api.signals_routes import router as signals_router
 from backend.api.simulator_routes import router as simulator_router
+from backend.api.alerts_routes import router as alerts_router
 from backend.api.regime_routes import router as regime_router
 from backend.api.websocket_routes import router as ws_router
 from backend.backtesting.arena import StrategyArena
@@ -87,6 +88,7 @@ async def lifespan(app: FastAPI):
             config.secrets.telegram_bot_token,
             config.secrets.telegram_chat_id,
         )
+        telegram.set_db(db)  # Sprint 63b : persistence alertes
     notifier = Notifier(telegram)
     app.state.notifier = notifier
 
@@ -350,3 +352,4 @@ app.include_router(journal_router)
 app.include_router(log_router)
 app.include_router(data_router)
 app.include_router(regime_router)
+app.include_router(alerts_router)

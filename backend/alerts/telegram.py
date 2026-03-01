@@ -2,12 +2,19 @@
 
 Envoie des messages via l'API Telegram Bot.
 Pas de dépendance supplémentaire — httpx est déjà en pyproject.toml.
+Sprint 63b : persistence optionnelle des alertes en DB.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
 import httpx
 from loguru import logger
+
+if TYPE_CHECKING:
+    from backend.core.database import Database
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
@@ -36,9 +43,22 @@ class TelegramClient:
         self._bot_token = bot_token
         self._chat_id = chat_id
         self._url = TELEGRAM_API_URL.format(token=bot_token)
+        self._db: Database | None = None  # Sprint 63b
 
-    async def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
+    def set_db(self, db: Database) -> None:
+        """Attache une Database pour persister les alertes (Sprint 63b)."""
+        self._db = db
+
+    async def send_message(
+        self,
+        text: str,
+        parse_mode: str = "HTML",
+        *,
+        alert_type: str = "unknown",
+        strategy: str | None = None,
+    ) -> bool:
         """Envoie un message Telegram. Retry 1x si timeout."""
+        success = False
         for attempt in range(2):
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -51,7 +71,8 @@ class TelegramClient:
                         },
                     )
                     if response.status_code == 200:
-                        return True
+                        success = True
+                        break
                     logger.warning(
                         "Telegram: erreur HTTP {} (tentative {})",
                         response.status_code,
@@ -67,8 +88,23 @@ class TelegramClient:
                 )
                 break  # Pas de retry sur erreur réseau non-timeout
 
-        logger.error("Telegram: échec envoi message après 2 tentatives")
-        return False
+        if not success:
+            logger.error("Telegram: échec envoi message après 2 tentatives")
+
+        # Sprint 63b : persistence best-effort
+        if self._db is not None:
+            try:
+                await self._db.insert_telegram_alert(
+                    timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                    alert_type=alert_type,
+                    message=text[:2000],
+                    strategy=strategy,
+                    success=success,
+                )
+            except Exception as e:
+                logger.debug("Telegram: erreur persistence alerte: {}", e)
+
+        return success
 
     async def send_trade_alert(self, trade: dict, strategy: str) -> bool:
         """Envoie une alerte de trade clôturé."""
@@ -81,7 +117,7 @@ class TelegramClient:
             f"Net: <b>{emoji}{pnl:.2f}$</b>\n"
             f"Raison: {trade.get('exit_reason', '?')}"
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="trade", strategy=strategy)
 
     async def send_kill_switch_alert(self, strategy: str, loss_pct: float) -> bool:
         """Envoie une alerte kill switch."""
@@ -91,7 +127,7 @@ class TelegramClient:
             f"Perte session: {loss_pct:.1f}%\n"
             f"Stratégie arrêtée automatiquement."
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="kill_switch", strategy=strategy)
 
     async def send_startup_message(self, strategies: list[str]) -> bool:
         """Envoie un message au démarrage."""
@@ -100,11 +136,11 @@ class TelegramClient:
             f"<b>Scalp Radar démarré</b>\n"
             f"Stratégies actives: {strats}"
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="system")
 
     async def send_shutdown_message(self) -> bool:
         """Envoie un message à l'arrêt."""
-        return await self.send_message("<b>Scalp Radar arrêté</b>")
+        return await self.send_message("<b>Scalp Radar arrêté</b>", alert_type="system")
 
     # ─── Sprint 5a : alertes ordres live ───────────────────────────────
 
@@ -130,7 +166,7 @@ class TelegramClient:
             f"SL: {sl_price:.2f} | TP: {tp_price:.2f}\n"
             f"Order ID: <code>{order_id}</code>"
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="trade", strategy=strategy)
 
     async def send_live_order_closed(
         self,
@@ -153,7 +189,7 @@ class TelegramClient:
             f"Raison: {exit_reason}\n"
             f"Stratégie: {strategy}"
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="trade", strategy=strategy)
 
     async def send_grid_level_opened(
         self,
@@ -176,7 +212,7 @@ class TelegramClient:
             f"Prix moyen: {avg_price:.2f}\n"
             f"SL global: {sl_price:.2f}"
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="trade", strategy=strategy)
 
     async def send_grid_cycle_closed(
         self,
@@ -202,7 +238,7 @@ class TelegramClient:
             f"Raison: {exit_reason}\n"
             f"Strategie: {strategy}"
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="trade", strategy=strategy)
 
     async def send_live_sl_failed(
         self,
@@ -216,4 +252,4 @@ class TelegramClient:
             f"Le placement du SL a échoué après retries.\n"
             f"Position fermée en market immédiatement."
         )
-        return await self.send_message(text)
+        return await self.send_message(text, alert_type="anomaly", strategy=strategy)

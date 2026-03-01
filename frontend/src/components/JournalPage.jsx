@@ -9,6 +9,7 @@ import { formatPrice } from '../utils/format'
 import CollapsibleCard from './CollapsibleCard'
 import EnhancedEquityCurve from './EnhancedEquityCurve'
 import DrawdownChart from './DrawdownChart'
+import PaperLiveOverlay from './PaperLiveOverlay'
 import './JournalPage.css'
 
 const PERIODS = [
@@ -166,6 +167,10 @@ function LiveJournal({ period, wsData }) {
         </div>
       </CollapsibleCard>
 
+      <CollapsibleCard title="Paper vs Live" defaultOpen={false} storageKey="journal-paper-live">
+        <PaperLiveOverlay strategy={stratParam} />
+      </CollapsibleCard>
+
       <CollapsibleCard title="Ordres Bitget" defaultOpen={true} storageKey="journal-orders">
         <BitgetOrders />
       </CollapsibleCard>
@@ -173,7 +178,106 @@ function LiveJournal({ period, wsData }) {
       <CollapsibleCard title="Performance par Asset" defaultOpen={false} storageKey="journal-live-per-asset">
         <LivePerAssetSummary period={period} strategy={stratParam} />
       </CollapsibleCard>
+
+      <CollapsibleCard title="Alertes Telegram" defaultOpen={false} storageKey="journal-telegram-alerts">
+        <TelegramAlerts strategy={stratParam} />
+      </CollapsibleCard>
     </>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Sprint 63b — Alertes Telegram (historique)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+const ALERT_TYPES = [
+  { value: '', label: 'Tous' },
+  { value: 'trade', label: 'Trades' },
+  { value: 'kill_switch', label: 'Kill Switch' },
+  { value: 'anomaly', label: 'Anomalies' },
+  { value: 'system', label: 'Système' },
+  { value: 'heartbeat', label: 'Heartbeat' },
+  { value: 'report', label: 'Rapport' },
+  { value: 'regime', label: 'Régime' },
+  { value: 'reconciliation', label: 'Réconciliation' },
+]
+
+const ALERT_BADGE = {
+  trade: { bg: '#00d4aa22', color: '#00d4aa' },
+  kill_switch: { bg: '#ff444422', color: '#ff4444' },
+  anomaly: { bg: '#ff884422', color: '#ff8844' },
+  system: { bg: '#4488ff22', color: '#4488ff' },
+  heartbeat: { bg: '#88888822', color: '#888888' },
+  report: { bg: '#aa88ff22', color: '#aa88ff' },
+  regime: { bg: '#f0ad4e22', color: '#f0ad4e' },
+  reconciliation: { bg: '#44aaff22', color: '#44aaff' },
+}
+
+function TelegramAlerts({ strategy }) {
+  const [alertType, setAlertType] = useState('')
+  const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
+  const typeQ = alertType ? `&alert_type=${alertType}` : ''
+  const { data, loading } = useApi(`/api/alerts/telegram?limit=100${stratQ}${typeQ}`, 30000)
+  const alerts = data?.alerts || []
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <select
+          value={alertType}
+          onChange={e => setAlertType(e.target.value)}
+          style={{ fontSize: 12, padding: '2px 6px' }}
+        >
+          {ALERT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+        </select>
+        <span className="text-xs muted">{data?.count ?? 0} alerte(s)</span>
+      </div>
+
+      {loading && !alerts.length ? (
+        <p className="text-xs muted">Chargement...</p>
+      ) : !alerts.length ? (
+        <p className="text-xs muted">Aucune alerte</p>
+      ) : (
+        <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+          <table className="journal-table" style={{ fontSize: 11 }}>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Stratégie</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {alerts.map(a => {
+                const badge = ALERT_BADGE[a.alert_type] || ALERT_BADGE.system
+                const ts = new Date(a.timestamp)
+                return (
+                  <tr key={a.id} style={{ opacity: a.success === 0 ? 0.5 : 1 }}>
+                    <td className="mono" style={{ whiteSpace: 'nowrap' }}>
+                      {ts.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}{' '}
+                      {ts.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td>
+                      <span style={{
+                        background: badge.bg, color: badge.color,
+                        padding: '1px 6px', borderRadius: 4, fontSize: 10,
+                      }}>
+                        {a.alert_type}
+                      </span>
+                    </td>
+                    <td className="mono">{a.strategy || '—'}</td>
+                    <td style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {a.message?.replace(/<[^>]+>/g, '').slice(0, 120)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 
