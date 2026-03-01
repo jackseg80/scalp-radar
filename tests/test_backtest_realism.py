@@ -445,8 +445,8 @@ class TestLeverageValidation:
         """SL × leverage > 80% → warning 'risque'."""
         from backend.optimization.report import _validate_leverage_sl
 
-        # 12% × 7x = 84% > 80% mais < 100% → warning risque
-        warnings = _validate_leverage_sl("grid_atr", {"sl_percent": 12.0})
+        # 14% × 6x = 84% > 80% mais < 100% → warning risque
+        warnings = _validate_leverage_sl("grid_atr", {"sl_percent": 14.0})
         assert len(warnings) == 1
         assert "risque" in warnings[0].lower() or "84%" in warnings[0]
 
@@ -454,7 +454,7 @@ class TestLeverageValidation:
         """SL × leverage < 80% → pas de warning."""
         from backend.optimization.report import _validate_leverage_sl
 
-        # 10% × 7x = 70% < 80% → OK
+        # 10% × 6x = 60% < 80% → OK
         warnings = _validate_leverage_sl("grid_atr", {"sl_percent": 10.0})
         assert len(warnings) == 0
 
