@@ -132,7 +132,13 @@ def test_majority_tf_tie():
 
 
 def test_apply_blocked_on_conflict(tmp_path):
-    """apply_from_db() retourne blocked=True si conflit timeframe."""
+    """Sprint 62a : sans timeframe dans yaml, le mode (1h:2 > 4h:1) est utilisé.
+
+    Comportement Sprint 37 (blocage) → remplacé par Sprint 62a (filtre + warning).
+    BCH/USDT (4h) est ignoré silencieusement, BTC+ETH (1h) sont appliqués.
+    Pour déclencher un vrai blocage il faudrait que le conflit survive au filtre,
+    ce qui est impossible car le mode résout toujours l'ambiguïté.
+    """
     from scripts.optimize import apply_from_db
 
     db_path = _make_db([
@@ -145,21 +151,23 @@ def test_apply_blocked_on_conflict(tmp_path):
     ])
 
     config_dir = str(tmp_path)
-    # Créer un strategies.yaml minimal
     (tmp_path / "strategies.yaml").write_text(
         "grid_atr:\n  enabled: true\n  per_asset: {}\n"
     )
-    # Créer secrets minimal pour db_path
     result = apply_from_db(["grid_atr"], config_dir=config_dir, db_path=db_path)
 
-    assert result.get("blocked") is True
-    assert result.get("reason") == "tf_conflict"
-    assert result.get("majority_tf") == "1h"
-    assert "BCH/USDT" in result.get("tf_outliers", [])
+    # Sprint 62a : mode = 1h (2 vs 1) → BCH filtré, BTC+ETH appliqués, pas de blocage
+    assert result.get("blocked") is not True
+    assert "BCH/USDT" not in result.get("applied", [])
+    assert "BTC/USDT" in result.get("applied", [])
+    assert "ETH/USDT" in result.get("applied", [])
 
 
 def test_apply_blocked_exit_code(tmp_path):
-    """main() exit code 1 quand conflit détecté via --apply."""
+    """Sprint 62a : tie 1h:1 vs 4h:1 → tiebreak = 1h (TF le plus petit).
+
+    BCH/USDT (4h) filtré par le guard, BTC/USDT (1h) appliqué.
+    """
     from scripts.optimize import apply_from_db
 
     db_path = _make_db([
@@ -175,10 +183,11 @@ def test_apply_blocked_exit_code(tmp_path):
     )
 
     result = apply_from_db(["grid_atr"], config_dir=config_dir, db_path=db_path)
-    assert result.get("blocked") is True
-    # Vérifie que le code qui suit result.get("blocked") ferait sys.exit(1)
-    # (le test direct de sys.exit via main() nécessiterait subprocess)
-    assert result.get("changed") is False
+    # Tie → tiebreak 1h → BTC appliqué, BCH ignoré
+    assert result.get("blocked") is not True
+    assert "BTC/USDT" in result.get("applied", [])
+    assert "BCH/USDT" not in result.get("applied", [])
+    assert result.get("changed") is True
 
 
 def test_apply_with_ignore_flag(tmp_path):
@@ -525,3 +534,146 @@ def test_apply_syncs_timeframe_column_over_best_params(tmp_path):
     assert bch_params.get("timeframe") == "1h", (
         f"Hotfix 37d : best_params timeframe doit être 1h (colonne), got {bch_params.get('timeframe')}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests Sprint 62a — Guard timeframe depuis strategies.yaml
+# ---------------------------------------------------------------------------
+
+
+def test_apply_ignores_wrong_timeframe(tmp_path):
+    """Résultat tf=1d ignoré quand la stratégie a timeframe=1h dans strategies.yaml.
+
+    BUG: Un WFO avec timeframe:[1h,4h,1d] sélectionne 1d comme best combo IS →
+    is_latest=1 écrase les bons résultats 1h. Le guard doit filtrer ces résultats.
+    """
+    import yaml
+    from scripts.optimize import apply_from_db
+
+    # strategies.yaml avec timeframe de référence = 1h
+    initial_yaml = {
+        "grid_atr": {
+            "enabled": True,
+            "timeframe": "1h",
+            "per_asset": {
+                # SOL avait Grade A 1h — doit être préservé si le résultat 1d est ignoré
+                "SOL/USDT": {"timeframe": "1h", "ma_period": 7, "sl_percent": 20.0},
+            },
+        }
+    }
+    config_dir = str(tmp_path)
+    yaml_path = tmp_path / "strategies.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(initial_yaml, f)
+
+    # DB : SOL a is_latest=1 avec tf=1d Grade F (WFO pollué), BTC et ETH sont bons
+    db_path = _make_db([
+        {"strategy_name": "grid_atr", "asset": "BTC/USDT", "timeframe": "1h",
+         "grade": "B", "best_params": {"ma_period": 20}},
+        {"strategy_name": "grid_atr", "asset": "ETH/USDT", "timeframe": "1h",
+         "grade": "A", "best_params": {"ma_period": 14}},
+        {"strategy_name": "grid_atr", "asset": "SOL/USDT", "timeframe": "1d",
+         "grade": "F", "best_params": {"ma_period": 5}},
+    ])
+
+    result = apply_from_db(["grid_atr"], config_dir=config_dir, db_path=db_path)
+
+    # SOL 1d ignoré → pas dans applied ni removed
+    assert "SOL/USDT" not in result.get("applied", []), \
+        "SOL/USDT tf=1d doit être ignoré (≠ ref 1h)"
+    assert "SOL/USDT" not in result.get("removed", []), \
+        "SOL/USDT 1d ignoré → entrée 1h dans per_asset préservée"
+    # BTC et ETH (1h) appliqués normalement
+    assert "BTC/USDT" in result.get("applied", [])
+    assert "ETH/USDT" in result.get("applied", [])
+    # SOL reste dans le YAML (son ancienne entrée 1h préservée)
+    with open(yaml_path) as f:
+        updated = yaml.safe_load(f)
+    assert "SOL/USDT" in updated["grid_atr"]["per_asset"], \
+        "L'entrée SOL 1h dans per_asset doit être préservée"
+
+
+def test_apply_warns_on_tf_mismatch(tmp_path):
+    """Warning loggé pour chaque résultat dont le tf ≠ référence."""
+    import yaml
+    from unittest.mock import patch
+    from scripts.optimize import apply_from_db
+
+    initial_yaml = {
+        "grid_atr": {
+            "enabled": True,
+            "timeframe": "1h",
+            "per_asset": {},
+        }
+    }
+    config_dir = str(tmp_path)
+    yaml_path = tmp_path / "strategies.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(initial_yaml, f)
+
+    db_path = _make_db([
+        {"strategy_name": "grid_atr", "asset": "BTC/USDT", "timeframe": "1h",
+         "grade": "A", "best_params": {"ma_period": 20}},
+        {"strategy_name": "grid_atr", "asset": "SOL/USDT", "timeframe": "1d",
+         "grade": "D", "best_params": {"ma_period": 5}},
+        {"strategy_name": "grid_atr", "asset": "ETH/USDT", "timeframe": "4h",
+         "grade": "B", "best_params": {"ma_period": 14}},
+    ])
+
+    warning_calls: list[str] = []
+
+    import scripts.optimize as _opt_module
+    original_warning = _opt_module.logger.warning
+
+    def capture_warning(msg, *args, **kwargs):
+        # Formater le message comme loguru le ferait
+        try:
+            formatted = msg.format(*args) if args else msg
+        except Exception:
+            formatted = str(msg)
+        warning_calls.append(formatted)
+
+    with patch.object(_opt_module.logger, "warning", side_effect=capture_warning):
+        apply_from_db(["grid_atr"], config_dir=config_dir, db_path=db_path)
+
+    # Un warning pour SOL/USDT (1d) et un pour ETH/USDT (4h)
+    sol_warned = any("SOL/USDT" in w and "1d" in w for w in warning_calls)
+    eth_warned = any("ETH/USDT" in w and "4h" in w for w in warning_calls)
+    assert sol_warned, f"Warning attendu pour SOL/USDT tf=1d. Warnings reçus: {warning_calls}"
+    assert eth_warned, f"Warning attendu pour ETH/USDT tf=4h. Warnings reçus: {warning_calls}"
+
+
+def test_apply_uses_mode_tf_if_no_ref(tmp_path):
+    """Sans timeframe de référence dans strategies.yaml, utilise le tf le plus fréquent (A/B)."""
+    import yaml
+    from scripts.optimize import apply_from_db
+
+    # Pas de champ timeframe dans le YAML
+    initial_yaml = {
+        "grid_atr": {
+            "enabled": True,
+            "per_asset": {},
+        }
+    }
+    config_dir = str(tmp_path)
+    yaml_path = tmp_path / "strategies.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(initial_yaml, f)
+
+    # DB : BTC + ETH en 1h Grade A, SOL en 1d Grade A → mode = 1h
+    db_path = _make_db([
+        {"strategy_name": "grid_atr", "asset": "BTC/USDT", "timeframe": "1h",
+         "grade": "A", "best_params": {"ma_period": 20}},
+        {"strategy_name": "grid_atr", "asset": "ETH/USDT", "timeframe": "1h",
+         "grade": "A", "best_params": {"ma_period": 14}},
+        {"strategy_name": "grid_atr", "asset": "SOL/USDT", "timeframe": "1d",
+         "grade": "A", "best_params": {"ma_period": 5}},
+    ])
+
+    result = apply_from_db(["grid_atr"], config_dir=config_dir, db_path=db_path)
+
+    # Mode = 1h (2 vs 1) → SOL (1d) ignoré
+    assert "BTC/USDT" in result.get("applied", []), "BTC (1h) doit être appliqué"
+    assert "ETH/USDT" in result.get("applied", []), "ETH (1h) doit être appliqué"
+    assert "SOL/USDT" not in result.get("applied", []), \
+        "SOL (1d) doit être ignoré car tf ≠ mode 1h"

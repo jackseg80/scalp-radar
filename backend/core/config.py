@@ -251,6 +251,7 @@ class GridATRConfig(BaseModel):
     cooldown_candles: int = Field(default=3, ge=0)
     min_grid_spacing_pct: float = Field(default=0.0, ge=0, le=10.0)
     min_profit_pct: float = Field(default=0.0, ge=0, le=10.0)
+    min_atr_pct: float = Field(default=0.0, ge=0, le=10.0)
     per_asset: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def get_params_for_symbol(self, symbol: str) -> dict[str, Any]:

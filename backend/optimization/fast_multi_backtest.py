@@ -161,6 +161,8 @@ def _simulate_grid_common(
     max_hold_candles: int = 0,
     min_profit_pct: float = 0.0,
     cooldown_candles: int = 0,
+    min_atr_pct: float = 0.0,
+    atr_arr_for_filter: np.ndarray | None = None,
 ) -> tuple[list[float], list[float], float]:
     """Boucle chaude unifiée pour toutes les stratégies grid/DCA.
 
@@ -412,6 +414,14 @@ def _simulate_grid_common(
         # 4. Zone neutre : pas de nouvelles ouvertures
         if neutral_zone:
             continue
+
+        # 4b. Filtre ATR minimum (Sprint 62b) — volatilité trop basse → skip ouverture
+        #     Les exits (SL/TP) restent actifs (section 1 déjà traitée au-dessus)
+        if min_atr_pct > 0.0 and atr_arr_for_filter is not None:
+            close_i = cache.closes[i]
+            atr_i = atr_arr_for_filter[i]
+            if close_i > 0 and not math.isnan(atr_i) and atr_i / close_i * 100 < min_atr_pct:
+                continue
 
         # 5. Ouvrir de nouvelles positions si niveaux touchés
         # Cooldown flag — bloque uniquement l'ouverture, pas les exits/trailing
@@ -2084,11 +2094,15 @@ def _simulate_grid_atr(
     sl_pct = params["sl_percent"] / 100
     sma_arr = cache.bb_sma[params["ma_period"]]
     entry_prices = _build_entry_prices("grid_atr", cache, params, num_levels, direction)
+    min_atr_pct = params.get("min_atr_pct", 0.0)
+    atr_arr = cache.atr_by_period.get(params["atr_period"]) if min_atr_pct > 0.0 else None
     return _simulate_grid_common(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct, direction,
         max_hold_candles=params.get("max_hold_candles", 0),
         min_profit_pct=params.get("min_profit_pct", 0.0),
         cooldown_candles=params.get("cooldown_candles", 0),
+        min_atr_pct=min_atr_pct,
+        atr_arr_for_filter=atr_arr,
     )
 
 

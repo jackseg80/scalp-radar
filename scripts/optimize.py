@@ -618,6 +618,36 @@ def apply_from_db(
         new_per_asset: dict = {}
         results = by_strategy.get(strat_name, [])
 
+        # 0. Guard timeframe — filtrer les résultats dont le TF ≠ référence
+        #    Évite qu'un WFO lancé avec timeframe:[1h,4h,1d] écrase les bons
+        #    résultats 1h avec un best-combo 1d (Grade D/F).
+        ref_tf: str | None = strat_data.get("timeframe")
+        if not ref_tf and results:
+            # Fallback : mode (TF le plus fréquent parmi les résultats A/B)
+            ab_for_mode = [r for r in results if r["grade"] in ("A", "B")]
+            if ab_for_mode:
+                mode_counter = Counter(r["timeframe"] for r in ab_for_mode)
+                # Tiebreak : TF le plus petit si égalité (comme majority_tf)
+                top_count = mode_counter.most_common(1)[0][1]
+                tied_tfs = [tf for tf, cnt in mode_counter.items() if cnt == top_count]
+                ref_tf = min(tied_tfs, key=lambda tf: TF_ORDER.get(tf, 99))
+                logger.info(
+                    "{} : pas de timeframe de référence dans strategies.yaml — "
+                    "mode tf={} utilisé ({} résultats A/B)",
+                    strat_name, ref_tf, len(ab_for_mode),
+                )
+        if ref_tf and results:
+            filtered: list[dict] = []
+            for r in results:
+                if r["timeframe"] != ref_tf:
+                    logger.warning(
+                        "Résultat ignoré: {} tf={} ≠ référence {} (stratégie {})",
+                        r["asset"], r["timeframe"], ref_tf, strat_name,
+                    )
+                else:
+                    filtered.append(r)
+            results = filtered
+
         # 1. Déterminer les éligibles (Grade A/B, minus exclusions manuelles)
         if exclude_symbols:
             eligible = [r for r in results if r["grade"] in ("A", "B") and r["asset"] not in exclude_symbols]

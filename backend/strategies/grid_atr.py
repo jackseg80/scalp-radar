@@ -86,6 +86,11 @@ class GridATRStrategy(BaseGridStrategy):
 
         # Plancher ATR adaptatif (basse vol)
         close_val = indicators.get("close", float("nan"))
+
+        # Filtre volatilité minimum (Sprint 62b) — skip ouverture si ATR/close < seuil
+        if self._config.min_atr_pct > 0 and close_val > 0:
+            if atr_val / close_val * 100 < self._config.min_atr_pct:
+                return []
         min_spacing = self._config.min_grid_spacing_pct
         if min_spacing > 0 and close_val > 0:
             floor_atr = close_val * min_spacing / 100
@@ -227,4 +232,5 @@ class GridATRStrategy(BaseGridStrategy):
             "max_hold_candles": self._config.max_hold_candles,
             "min_grid_spacing_pct": self._config.min_grid_spacing_pct,
             "min_profit_pct": self._config.min_profit_pct,
+            "min_atr_pct": self._config.min_atr_pct,
         }

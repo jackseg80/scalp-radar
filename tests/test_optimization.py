@@ -807,8 +807,8 @@ class TestApplyFromDb:
         assert data["envelope_dca"]["leverage"] == 6
         assert data["envelope_dca"]["sides"] == ["long"]
 
-        # Vérifier qu'un backup a été créé
-        backups = list(tmp_path.glob("strategies.yaml.bak.*"))
+        # Vérifier qu'un backup a été créé (dans old/)
+        backups = list((tmp_path / "old").glob("strategies.yaml.bak.*"))
         assert len(backups) == 1
 
     def test_apply_no_change_returns_dict(self, tmp_path):
