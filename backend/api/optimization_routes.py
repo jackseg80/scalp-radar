@@ -140,7 +140,7 @@ class SubmitJobRequest(BaseModel):
     params_override: dict | None = None
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(verify_executor_key)])
 async def submit_optimization_job(
     request: Request,
     body: SubmitJobRequest,
@@ -243,7 +243,7 @@ async def get_optimization_job(request: Request, job_id: str) -> dict:
     }
 
 
-@router.delete("/jobs/{job_id}")
+@router.delete("/jobs/{job_id}", dependencies=[Depends(verify_executor_key)])
 async def cancel_optimization_job(request: Request, job_id: str) -> dict:
     """Annule un job pending ou running.
 

@@ -23,6 +23,9 @@ from backend.optimization.indicator_cache import IndicatorCache
 _ISResult = tuple[dict[str, Any], float, float, float, int]
 
 # Sprint 53 : kill switch WFO — cohérent avec risk.yaml grid_max_session_loss_percent
+# Formule alignée sur simulator.GridStrategyRunner._check_kill_switch :
+#   perte = abs(min(0, realized_pnl)) / initial_capital
+# (et non drawdown depuis peak_capital, qui est plus conservateur)
 KILL_SWITCH_DD_PCT = 0.25
 
 
@@ -383,17 +386,17 @@ def _simulate_grid_common(
                 hwm = 0.0
                 first_entry_idx = -1
                 last_exit_candle_idx = i
-                # Guard max drawdown WFO
+                # Guard max drawdown WFO (hard break 80% = safety net)
                 if capital > peak_capital:
                     peak_capital = capital
                 elif peak_capital > 0:
                     dd_pct = (peak_capital - capital) / peak_capital
-                    # Hard break 80% (safety net)
                     if dd_pct > max_dd_threshold:
                         break
-                    # Sprint 53 : soft kill switch 25% — stop new entries
-                    if dd_pct > KILL_SWITCH_DD_PCT:
-                        kill_switch_triggered = True
+                # Sprint 53 : soft kill switch 25% — perte depuis capital initial
+                # (aligné avec simulator.GridStrategyRunner._check_kill_switch)
+                if initial_capital > 0 and capital < initial_capital * (1 - KILL_SWITCH_DD_PCT):
+                    kill_switch_triggered = True
                 # Kill switch actif + toutes positions fermées → arrêt
                 if kill_switch_triggered:
                     break
@@ -560,6 +563,7 @@ def _simulate_grid_range(
     spacing_mult = params["atr_spacing_mult"]
 
     capital = bt_config.initial_capital
+    initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
     maker_fee = bt_config.maker_fee
@@ -686,11 +690,14 @@ def _simulate_grid_range(
                 positions.pop(idx)
             if closed_indices and not positions:
                 last_exit_candle_idx = i
-            # Sprint 53 : kill switch DD check after any close
+            # Sprint 53 : kill switch — perte depuis capital initial
+            # (aligné avec simulator.GridStrategyRunner._check_kill_switch)
+            # equity = capital + used_margin (positions encore ouvertes)
             if closed_indices:
                 if capital > peak_capital:
                     peak_capital = capital
-                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                equity = capital + used_margin
+                if initial_capital > 0 and equity < initial_capital * (1 - KILL_SWITCH_DD_PCT):
                     kill_switch_triggered = True
                     if not positions:
                         break
@@ -895,6 +902,7 @@ def _simulate_grid_funding(
     entry_signals = _build_entry_signals(cache, params, num_levels)
 
     capital = bt_config.initial_capital
+    initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
     slippage_pct = bt_config.slippage_pct
@@ -953,10 +961,10 @@ def _simulate_grid_funding(
                 capital += pnl
                 positions = []
                 filled_levels = set()
-                # Sprint 53 : kill switch DD check
+                # Sprint 53 : kill switch — perte depuis capital initial
                 if capital > peak_capital:
                     peak_capital = capital
-                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                if initial_capital > 0 and capital < initial_capital * (1 - KILL_SWITCH_DD_PCT):
                     kill_switch_triggered = True
                     break
                 continue
@@ -1037,6 +1045,7 @@ def _simulate_grid_boltrend(
     lows = cache.lows
 
     capital = bt_config.initial_capital
+    initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
     maker_fee = bt_config.maker_fee
@@ -1158,10 +1167,10 @@ def _simulate_grid_boltrend(
                 direction = 0
                 breakout_candle_idx = -1
                 last_exit_candle_idx = i
-                # Sprint 53 : kill switch DD check
+                # Sprint 53 : kill switch — perte depuis capital initial
                 if capital > peak_capital:
                     peak_capital = capital
-                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                if initial_capital > 0 and capital < initial_capital * (1 - KILL_SWITCH_DD_PCT):
                     kill_switch_triggered = True
                     break  # positions already cleared
                 continue
@@ -1349,6 +1358,7 @@ def _simulate_grid_momentum(
     volumes = cache.volumes
 
     capital = bt_config.initial_capital
+    initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
     slippage_pct = bt_config.slippage_pct
@@ -1462,10 +1472,10 @@ def _simulate_grid_momentum(
                 direction = 0
                 hwm = 0.0
                 last_exit_candle_idx = i
-                # Sprint 53 : kill switch DD check
+                # Sprint 53 : kill switch — perte depuis capital initial
                 if capital > peak_capital:
                     peak_capital = capital
-                elif peak_capital > 0 and (peak_capital - capital) / peak_capital > KILL_SWITCH_DD_PCT:
+                if initial_capital > 0 and capital < initial_capital * (1 - KILL_SWITCH_DD_PCT):
                     kill_switch_triggered = True
                     break  # positions already cleared
                 continue

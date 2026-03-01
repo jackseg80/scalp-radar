@@ -7,11 +7,12 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from loguru import logger
 from pydantic import BaseModel
 
+from backend.api.executor_routes import verify_executor_key
 from backend.api.websocket_routes import manager as ws_manager
 from backend.backtesting.portfolio_db import (
     delete_backtest_async,
@@ -139,7 +140,7 @@ async def get_backtest_robustness(request: Request, backtest_id: int):
     return {"robustness": result}
 
 
-@router.delete("/backtests/{backtest_id}")
+@router.delete("/backtests/{backtest_id}", dependencies=[Depends(verify_executor_key)])
 async def delete_backtest(request: Request, backtest_id: int):
     """Supprime un backtest."""
     db_path = _get_db_path(request)
@@ -162,7 +163,7 @@ async def get_status():
     }
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(verify_executor_key)])
 async def run_portfolio_backtest(request: Request, body: RunPortfolioRequest):
     """Lance un backtest portfolio en background."""
     global _current_job

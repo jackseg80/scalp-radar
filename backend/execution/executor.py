@@ -2176,9 +2176,10 @@ class Executor:
                     _, exit_fee = await self._fetch_fill_price(
                         order_id, symbol, exit_price,
                     )
-            except Exception:
+            except Exception as e:
                 logger.warning(
-                    "Executor: fee extraction failed for {}, using estimate", symbol,
+                    "Executor: fee extraction failed for {} ({}), using estimate",
+                    symbol, e,
                 )
                 exit_fee = None
 
@@ -2206,10 +2207,10 @@ class Executor:
                     _, exit_fee = await self._fetch_fill_price(
                         state.sl_order_id, symbol, exit_price,
                     )
-            except Exception:
+            except Exception as e:
                 logger.warning(
-                    "Executor: fee extraction failed for grid {}, using estimate",
-                    symbol,
+                    "Executor: fee extraction failed for grid {} ({}), using estimate",
+                    symbol, e,
                 )
                 exit_fee = None
 
@@ -2430,16 +2431,22 @@ class Executor:
                             futures_sym, state, exit_price,
                         )
                         return
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(
+                        "Executor: erreur détection SL pendant downtime {}: {}",
+                        futures_sym, e,
+                    )
 
             # Rétablir le leverage
             try:
                 await self._exchange.set_leverage(
                     state.leverage, futures_sym,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "Executor: échec restauration leverage {} pour {}: {}",
+                    state.leverage, futures_sym, e,
+                )
 
             logger.info(
                 "Executor: cycle grid restauré {} ({} niveaux, SL={})",
@@ -2627,8 +2634,11 @@ class Executor:
                     )
                     if order.get("status") in ("closed", "filled"):
                         return reason
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        "Executor: échec fetch_order {} pour exit_reason: {}",
+                        order_id, e,
+                    )
 
         return "unknown"
 

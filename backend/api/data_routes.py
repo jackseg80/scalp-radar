@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+
+from backend.api.executor_routes import verify_executor_key
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
@@ -63,7 +65,7 @@ async def candle_status(request: Request) -> dict:
     return await updater.get_status()
 
 
-@router.post("/backfill")
+@router.post("/backfill", dependencies=[Depends(verify_executor_key)])
 async def trigger_backfill(request: Request) -> JSONResponse:
     """Déclenche un backfill en background.
 

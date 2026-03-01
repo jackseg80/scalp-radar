@@ -20,6 +20,18 @@ from fastapi.testclient import TestClient
 from backend.api.server import app
 
 
+_API_HEADERS = {"X-API-Key": "test-key-portfolio"}
+
+
+@pytest.fixture(autouse=True)
+def _mock_api_key(monkeypatch):
+    """Configure une API key de test pour verify_executor_key."""
+    from backend.core.config import AppConfig
+    cfg = AppConfig()
+    cfg.secrets.sync_api_key = "test-key-portfolio"
+    monkeypatch.setattr("backend.api.executor_routes.get_config", lambda: cfg)
+
+
 @pytest.fixture
 def client():
     return TestClient(app, raise_server_exceptions=False)
@@ -105,7 +117,7 @@ def test_get_backtest_not_found(mock_get, client):
 def test_delete_backtest_ok(mock_del, client):
     """DELETE /api/portfolio/backtests/{id} supprime le run."""
     mock_del.return_value = True
-    resp = client.delete("/api/portfolio/backtests/1")
+    resp = client.delete("/api/portfolio/backtests/1", headers=_API_HEADERS)
     assert resp.status_code == 200
     assert resp.json()["status"] == "deleted"
 
@@ -114,7 +126,7 @@ def test_delete_backtest_ok(mock_del, client):
 def test_delete_backtest_not_found(mock_del, client):
     """DELETE /api/portfolio/backtests/{id} retourne 404."""
     mock_del.return_value = False
-    resp = client.delete("/api/portfolio/backtests/999")
+    resp = client.delete("/api/portfolio/backtests/999", headers=_API_HEADERS)
     assert resp.status_code == 404
 
 

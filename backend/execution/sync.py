@@ -86,15 +86,34 @@ async def _populate_grid_states_from_exchange(
 
     Appelé quand executor._grid_states est vide au boot (state file absent ou corrompu).
     Sans cette étape, l'exit monitor autonome n'a rien à checker.
+    Retry avec backoff exponentiel si l'API échoue (positions orphelines sinon).
     """
+    import asyncio as _aio
+
     from backend.backtesting.simulator import GridStrategyRunner
     from backend.execution.executor import GridLivePosition, GridLiveState
 
-    try:
-        all_positions = await executor._exchange.fetch_positions()
-    except Exception as e:
-        logger.error("Sync: erreur fetch_positions pour peupler grid_states: {}", e)
-        return
+    max_retries = 3
+    all_positions = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            all_positions = await executor._exchange.fetch_positions()
+            break
+        except Exception as e:
+            if attempt < max_retries:
+                delay = 2 ** attempt  # 2s, 4s
+                logger.warning(
+                    "Sync: erreur fetch_positions (tentative {}/{}), retry dans {}s: {}",
+                    attempt, max_retries, delay, e,
+                )
+                await _aio.sleep(delay)
+            else:
+                logger.critical(
+                    "Sync: ÉCHEC fetch_positions après {} tentatives — "
+                    "grid_states vide, positions potentiellement orphelines sur l'exchange: {}",
+                    max_retries, e,
+                )
+                return
 
     # Mapper symbol spot → stratégie via les runners paper
     symbol_to_strategy: dict[str, str] = {}

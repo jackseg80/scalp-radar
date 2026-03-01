@@ -295,10 +295,10 @@ class TestFastEngineStrategies:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-# Valeurs capturées post-Sprint 56 (look-ahead fix, slippage, margin guard, seed=42, n=500, vol=2.0)
+# Valeurs capturées post-audit kill switch (formule alignée sur simulator : perte depuis initial, pas DD depuis peak)
 _EXPECTED_ENVELOPE_DCA = (55.25512965761102, 25667.36397824845, 35.060915572448664, 47)
 _EXPECTED_ENVELOPE_DCA_SHORT = (45.571870934729766, 4266.514200648141, 10.619894422789638, 38)
-_EXPECTED_GRID_ATR = (33.29853014825827, 5633.459636806401, 3.2603291267265373, 54)
+_EXPECTED_GRID_ATR = (54.564215385253796, 937563.0851389511, 18.900402785039812, 107)
 
 
 class TestParityBitwise:

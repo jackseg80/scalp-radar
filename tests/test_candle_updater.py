@@ -159,9 +159,15 @@ async def test_daily_loop_calculates_next_run(mock_config):
 
 
 @pytest.fixture
-def mock_app_with_updater(mock_config):
+def mock_app_with_updater(mock_config, monkeypatch):
     """Configure l'app avec un CandleUpdater mock."""
     from backend.api.server import app
+    from backend.core.config import AppConfig
+
+    # Configure une API key de test pour verify_executor_key
+    cfg = AppConfig()
+    cfg.secrets.sync_api_key = "test-key-candle"
+    monkeypatch.setattr("backend.api.executor_routes.get_config", lambda: cfg)
 
     updater = MagicMock(spec=CandleUpdater)
     updater.is_running = False
@@ -220,7 +226,7 @@ async def test_backfill_endpoint(mock_app_with_updater):
     app, updater = mock_app_with_updater
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/data/backfill")
+        resp = await client.post("/api/data/backfill", headers={"X-API-Key": "test-key-candle"})
     assert resp.status_code == 202
     data = resp.json()
     assert data["status"] == "started"
@@ -233,7 +239,7 @@ async def test_backfill_endpoint_already_running(mock_app_with_updater):
     updater.is_running = True
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/data/backfill")
+        resp = await client.post("/api/data/backfill", headers={"X-API-Key": "test-key-candle"})
     assert resp.status_code == 409
     data = resp.json()
     assert data["status"] == "already_running"

@@ -2900,11 +2900,31 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
+### Audit Hardening Backend — 2026-03-01 ✅
+
+6 audits de qualité et sécurité. Rapports : `docs/audit/audit-parite-resilience-20260301.md` + `docs/audit/audit-hardening-20260301.md`
+
+**BUG P1 — Kill switch formula (Audit 1)** : Fast engine WFO utilisait drawdown depuis le peak (`(peak-capital)/peak`) alors que simulator et RiskManager live utilisent perte depuis capital initial (`abs(min(0, pnl)) / initial_capital`). Corrigé dans 6 fonctions de `fast_multi_backtest.py`. Impact mesurable : grid_atr Sharpe 33.3 → 54.6, trades 54 → 107. **WFO à relancer.**
+
+**BUG P1 — Sync boot silencieux (Audit 2)** : `sync.py:_populate_grid_states_from_exchange()` retournait silencieusement si `fetch_positions()` échouait au boot. Corrigé : retry 3× backoff exponentiel (2s/4s) + `logger.critical` si échec total.
+
+**Audit 3 — Concurrence async** : Vérifié OK — `_tasks`, `_positions`, `_session_pnl` toujours modifiés sans `await` intercalé → pas de race condition.
+
+**Audit 4 — Exception handling** : 5 `except Exception: pass` silencieux corrigés dans `executor.py` (SL detection, leverage restoration, exit reason, fee extraction × 2).
+
+**Audit 5 — Sécurité API** : 5 endpoints state-modifying sans auth protégés par `verify_executor_key` : `POST /api/optimization/run`, `DELETE /api/optimization/jobs/{id}`, `DELETE /api/portfolio/backtests/{id}`, `POST /api/portfolio/run`, `POST /api/data/backfill`. Tests mis à jour (monkeypatch + headers).
+
+**Audit 6 — Monitoring gaps** : 6 lacunes documentées (zombies >24h, funding extrême >0.1%, leverage drift runtime, margin proximity, regime snapshot DB, alerte Telegram sync failure) — recommandations P2/P3, non implémentées.
+
+**Tests** : 2182 passants, 0 régression, 5 pré-existants inchangés.
+
+---
+
 ## ÉTAT ACTUEL (1 mars 2026)
 
-- **2196 tests, 2181 passants** (15 ajoutés Sprint 63b, 6 pré-existants non liés)
-- **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b**
-- **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — WFO à relancer sur 26 assets avec `--regrade`
+- **2196 tests, 2182 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
+- **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-01**
+- **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)

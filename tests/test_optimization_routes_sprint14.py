@@ -107,6 +107,11 @@ async def client(temp_db, monkeypatch):
 
     # App test minimaliste (pas de lifespan complet)
     test_app = FastAPI()
+
+    # Désactiver l'auth pour les tests
+    from backend.api.executor_routes import verify_executor_key
+    test_app.dependency_overrides[verify_executor_key] = lambda: None
+
     test_app.include_router(router)
 
     # Créer et démarrer un JobManager
