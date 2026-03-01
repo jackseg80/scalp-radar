@@ -2448,6 +2448,14 @@ class Executor:
                     state.leverage, futures_sym, e,
                 )
 
+            # Replacer le SL si absent (positions restaurées depuis sync.py au boot)
+            if not state.sl_order_id and state.total_quantity > 0:
+                logger.info(
+                    "Executor: SL manquant pour {} (restauré via sync) — replacement en cours",
+                    futures_sym,
+                )
+                await self._update_grid_sl(futures_sym, state)
+
             logger.info(
                 "Executor: cycle grid restauré {} ({} niveaux, SL={})",
                 futures_sym, len(state.positions), state.sl_order_id,

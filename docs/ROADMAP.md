@@ -2920,6 +2920,20 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
+### Audit Sizing, SL & Data Quality — 2026-03-01 ✅
+
+3 audits complémentaires. Rapport : `docs/audit/audit-sizing-sl-data-20260301.md`
+
+**BUG P1 — SL manquant au boot (Audit 8)** : `_reconcile_grid_symbol()` ne plaçait pas de SL exchange pour les positions restaurées via `sync.py` (sl_order_id=None). Corrigé : si position active sans sl_order_id après boot, `_update_grid_sl()` est appelé automatiquement (retry 3×, emergency close si échec).
+
+**Audit 7 — Parité sizing** : Divergence documentée P2 — fast engine utilise des tailles décroissantes (capital résiduel × 1/N), simulator et executor utilisent des tailles constantes. Impact faible (~6%). Margin guard vérifié correct dans les 3 moteurs. Pas de fix.
+
+**Audit 9 — Gaps candles** : Lacune documentée P2 — DataEngine log les gaps mais ajoute quand même les candles (indicateurs potentiellement corrompus). Atténuation : indicateurs retournent NaN prédictibles, stratégies vérifient isnan(). Recommandation : marquer symbol stale après gap.
+
+**Tests** : 2182 passants, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (1 mars 2026)
 
 - **2196 tests, 2182 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
