@@ -127,23 +127,39 @@ function LiveJournal({ period, wsData }) {
   // Le contexte global prime sur le dropdown local
   const effectiveStrategy = strategyFilter || strategy || null
 
-  // Détecter les stratégies live disponibles
+  // Stratégies autorisées par le selector (= réellement LIVE, exclut paper)
+  const allowedStrategies = wsData?.executor?.selector?.allowed_strategies || []
+
+  // Détecter les stratégies live disponibles depuis les trades
   const { data: tradesData } = useApi(`/api/journal/live-trades?period=all&limit=500`, 60000)
   const liveStrategies = useMemo(() => {
     const trades = tradesData?.trades || []
     return [...new Set(trades.map(t => t.strategy_name).filter(Boolean))].sort()
   }, [tradesData])
 
-  const stratParam = effectiveStrategy
+  // Hotfix 63d : filtrer le dropdown aux seules stratégies LIVE (intersection)
+  const filteredLiveStrategies = useMemo(() => {
+    if (!allowedStrategies.length) return liveStrategies
+    return liveStrategies.filter(s => allowedStrategies.includes(s))
+  }, [liveStrategies, allowedStrategies])
+
+  // Si 1 seule stratégie LIVE et aucun filtre explicite → la forcer implicitement
+  // Évite que "Toutes" agrège les trades paper avec les trades live
+  const defaultLiveStrategy = !effectiveStrategy && filteredLiveStrategies.length === 1
+    ? filteredLiveStrategies[0]
+    : null
+
+  const stratParam = effectiveStrategy || defaultLiveStrategy
 
   return (
     <>
       {/* Filtre stratégie local — masqué si une stratégie globale est sélectionnée */}
-      {liveStrategies.length > 1 && !strategyFilter && (
+      {/* Affiche uniquement les stratégies LIVE (filteredLiveStrategies) */}
+      {filteredLiveStrategies.length > 1 && !strategyFilter && (
         <div className="journal-strategy-filter">
           <select value={strategy} onChange={e => setStrategy(e.target.value)}>
-            <option value="">Toutes les strategies</option>
-            {liveStrategies.map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="">Toutes les strategies LIVE</option>
+            {filteredLiveStrategies.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
       )}
