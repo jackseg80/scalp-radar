@@ -1,0 +1,72 @@
+.enhanced-equity-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.enhanced-equity-periods {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.enhanced-equity-periods .period-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.enhanced-equity-periods .period-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.enhanced-equity-periods .period-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.enhanced-equity-tooltip {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.enhanced-equity-tooltip .tooltip-date {
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.enhanced-equity-tooltip .tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--font-mono);
+}
+
+.enhanced-equity-tooltip .tooltip-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.enhanced-equity-tooltip .tooltip-value {
+  font-weight: 600;
+}
+
+.enhanced-equity-tooltip .tooltip-value.positive {
+  color: var(--accent);
+}
+
+.enhanced-equity-tooltip .tooltip-value.negative {
+  color: var(--red);
+}

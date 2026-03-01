@@ -1,10 +1,24 @@
-import { useRef, useEffect, useState, useMemo, useCallback } from 'react'
+/**
+ * DrawdownChart — Recharts AreaChart affichant le drawdown (%).
+ * Sprint 63a — reecrit de SVG vers Recharts.
+ *
+ * Deux modes :
+ * - Autonome : strategy + days fournis -> fetch ses propres donnees
+ * - Legacy : curves fourni (PortfolioPage) -> pas de fetch
+ */
+import { useMemo } from 'react'
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid,
+  ReferenceLine, ResponsiveContainer, Tooltip,
+} from 'recharts'
+import { useApi } from '../hooks/useApi'
+import './DrawdownChart.css'
 
-const COLORS = ['#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#06b6d4', '#10b981']
-const PAD = { top: 8, right: 60, bottom: 24, left: 70 }
+const COLORS = ['#ff4466', '#f59e0b', '#3b82f6', '#8b5cf6', '#06b6d4', '#10b981']
 
-function formatDate(iso) {
-  const d = new Date(iso)
+function formatDateShort(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
   return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`
 }
 
@@ -13,102 +27,151 @@ function computeDrawdown(points) {
   return points.map(p => {
     if (p.equity > peak) peak = p.equity
     const dd = peak > 0 ? ((p.equity / peak) - 1) * 100 : 0
-    return { ...p, dd }
+    return { timestamp: p.timestamp, dd }
   })
 }
 
-export default function DrawdownChart({ curves = [], height = 120, killSwitchPct = 30 }) {
-  const containerRef = useRef(null)
-  const [width, setWidth] = useState(600)
+function DDTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null
+  const p = payload[0].payload
+  const date = p.timestamp
+    ? new Date(p.timestamp).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : ''
+  // Afficher toutes les courbes si multi
+  const values = payload.filter(e => e.value != null)
+  return (
+    <div className="dd-tooltip">
+      <div className="dd-tooltip-date">{date}</div>
+      {values.map((v, i) => (
+        <div key={i} className="dd-tooltip-value" style={values.length > 1 ? { color: v.stroke } : undefined}>
+          {v.value.toFixed(2)}%
+        </div>
+      ))}
+    </div>
+  )
+}
 
-  useEffect(() => {
-    if (!containerRef.current) return
-    const ro = new ResizeObserver((entries) => {
-      for (const e of entries) setWidth(Math.max(400, e.contentRect.width))
-    })
-    ro.observe(containerRef.current)
-    return () => ro.disconnect()
-  }, [])
+export default function DrawdownChart({
+  strategy = null,
+  days = 30,
+  curves = null,
+  height = 120,
+  killSwitchPct = 45,
+}) {
+  // Mode autonome : fetch equity si pas de curves
+  const isAutonomous = !curves
+  const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
+  const { data: eqData } = useApi(
+    isAutonomous ? `/api/journal/live-equity?days=${days}${stratQ}` : null, 60000,
+  )
 
+  // Normaliser en format unifie [{name, data: [{timestamp, dd}], color}]
   const ddCurves = useMemo(() => {
-    return curves.map((c, ci) => ({
-      ...c,
-      data: computeDrawdown(c.points || []),
-      color: c.color || COLORS[ci % COLORS.length],
-    })).filter(c => c.data.length > 0)
-  }, [curves])
+    let normalized
+    if (curves) {
+      // Mode legacy (PortfolioPage) : curves = [{name, points: [{equity, timestamp}], color}]
+      normalized = curves.map((c, i) => ({
+        name: c.name || `Curve ${i}`,
+        data: computeDrawdown(c.points || []),
+        color: c.color || COLORS[i % COLORS.length],
+      }))
+    } else {
+      // Mode autonome
+      const points = eqData?.equity_curve || []
+      if (points.length < 2) return []
+      normalized = [{
+        name: 'Live',
+        data: computeDrawdown(points),
+        color: COLORS[0],
+      }]
+    }
+    return normalized.filter(c => c.data.length > 0)
+  }, [curves, eqData])
 
-  const { yMin } = useMemo(() => {
+  // Fusionner toutes les courbes en un seul tableau pour Recharts
+  const { chartData, curveKeys, yMin } = useMemo(() => {
+    if (!ddCurves.length) return { chartData: [], curveKeys: [], yMin: 0 }
+
+    // Si une seule courbe, structure simple
+    if (ddCurves.length === 1) {
+      const data = ddCurves[0].data.map(p => ({ timestamp: p.timestamp, dd_0: p.dd }))
+      const mn = Math.min(...ddCurves[0].data.map(p => p.dd), -killSwitchPct)
+      return { chartData: data, curveKeys: ['dd_0'], yMin: mn * 1.1 }
+    }
+
+    // Multi-courbes : merger par index (meme logique que l'ancien SVG)
+    const maxLen = Math.max(...ddCurves.map(c => c.data.length))
+    const data = []
+    for (let i = 0; i < maxLen; i++) {
+      const row = { timestamp: null }
+      for (let ci = 0; ci < ddCurves.length; ci++) {
+        const p = ddCurves[ci].data[i]
+        if (p) {
+          if (!row.timestamp) row.timestamp = p.timestamp
+          row[`dd_${ci}`] = p.dd
+        }
+      }
+      data.push(row)
+    }
     let mn = 0
-    for (const c of ddCurves)
-      for (const p of c.data)
-        if (p.dd < mn) mn = p.dd
-    const absMin = Math.min(mn, -killSwitchPct)
-    return { yMin: absMin * 1.1 }
+    for (const c of ddCurves) for (const p of c.data) if (p.dd < mn) mn = p.dd
+    mn = Math.min(mn, -killSwitchPct)
+
+    return {
+      chartData: data,
+      curveKeys: ddCurves.map((_, i) => `dd_${i}`),
+      yMin: mn * 1.1,
+    }
   }, [ddCurves, killSwitchPct])
 
-  const chartW = width - PAD.left - PAD.right
-  const chartH = height - PAD.top - PAD.bottom
-
-  const toX = useCallback((i, len) => PAD.left + (i / Math.max(len - 1, 1)) * chartW, [chartW])
-  const toY = useCallback((v) => PAD.top + (-v / -yMin) * chartH, [chartH, yMin])
-
-  if (!ddCurves.length) return null
+  if (!chartData.length) return null
 
   return (
-    <div ref={containerRef} style={{ width: '100%' }}>
-      <svg width={width} height={height} style={{ display: 'block' }}>
-        {/* Zero line */}
-        <line x1={PAD.left} x2={width - PAD.right} y1={toY(0)} y2={toY(0)} stroke="#333" strokeWidth={1} />
-
-        {/* Kill switch threshold */}
-        <line
-          x1={PAD.left} x2={width - PAD.right}
-          y1={toY(-killSwitchPct)} y2={toY(-killSwitchPct)}
-          stroke="#ef4444" strokeWidth={1} strokeDasharray="4,4" strokeOpacity={0.5}
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={chartData} margin={{ top: 2, right: 10, bottom: 0, left: 10 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+        <XAxis
+          dataKey="timestamp"
+          tickFormatter={formatDateShort}
+          tick={{ fill: '#888', fontSize: 10 }}
+          axisLine={{ stroke: 'rgba(255,255,255,0.05)' }}
+          tickLine={false}
+          minTickGap={40}
         />
-        <text x={width - PAD.right + 4} y={toY(-killSwitchPct) + 4} fill="#ef4444" fontSize={10} fillOpacity={0.7}>
-          -{killSwitchPct}%
-        </text>
+        <YAxis
+          tick={{ fill: '#888', fontSize: 10 }}
+          tickFormatter={v => `${v.toFixed(0)}%`}
+          domain={[yMin, 0]}
+          axisLine={false}
+          tickLine={false}
+          width={45}
+        />
+        <Tooltip content={<DDTooltip />} />
 
-        {/* Drawdown areas */}
-        {ddCurves.map((c, ci) => {
-          const points = c.data.map((p, i) => `${toX(i, c.data.length).toFixed(1)},${toY(p.dd).toFixed(1)}`).join(' ')
-          const first = `${toX(0, c.data.length).toFixed(1)},${toY(0).toFixed(1)}`
-          const last = `${toX(c.data.length - 1, c.data.length).toFixed(1)},${toY(0).toFixed(1)}`
-          return (
-            <g key={ci}>
-              <polygon points={`${first} ${points} ${last}`} fill={c.color} fillOpacity={0.15} />
-              <polyline points={points} fill="none" stroke={c.color} strokeWidth={1.2} />
-            </g>
-          )
-        })}
+        {/* Kill switch */}
+        <ReferenceLine
+          y={-killSwitchPct}
+          stroke="var(--red)"
+          strokeDasharray="4 4"
+          strokeOpacity={0.6}
+        />
 
-        {/* Y axis labels */}
-        <text x={PAD.left - 8} y={toY(0) + 4} textAnchor="end" fill="#888" fontSize={10}>0%</text>
-        <text x={PAD.left - 8} y={toY(yMin / 2) + 4} textAnchor="end" fill="#888" fontSize={10}>
-          {(yMin / 2).toFixed(0)}%
-        </text>
-        <text x={PAD.left - 8} y={toY(yMin) + 4} textAnchor="end" fill="#888" fontSize={10}>
-          {yMin.toFixed(0)}%
-        </text>
+        {/* Zero line */}
+        <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" strokeWidth={1} />
 
-        {/* X axis labels */}
-        {ddCurves[0] && (() => {
-          const d = ddCurves[0].data
-          const n = Math.min(6, d.length)
-          const step = Math.max(1, Math.floor((d.length - 1) / (n - 1)))
-          const labels = []
-          for (let i = 0; i < d.length; i += step) {
-            labels.push(
-              <text key={i} x={toX(i, d.length)} y={height - 4} textAnchor="middle" fill="#888" fontSize={10}>
-                {formatDate(d[i].timestamp)}
-              </text>
-            )
-          }
-          return labels
-        })()}
-      </svg>
-    </div>
+        {curveKeys.map((key, i) => (
+          <Area
+            key={key}
+            type="monotone"
+            dataKey={key}
+            stroke={ddCurves[i]?.color || COLORS[i % COLORS.length]}
+            fill={ddCurves[i]?.color || COLORS[i % COLORS.length]}
+            fillOpacity={0.12}
+            strokeWidth={1.2}
+            dot={false}
+          />
+        ))}
+      </AreaChart>
+    </ResponsiveContainer>
   )
 }

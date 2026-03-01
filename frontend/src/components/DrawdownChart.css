@@ -1,0 +1,20 @@
+.dd-tooltip {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.dd-tooltip .dd-tooltip-date {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
+.dd-tooltip .dd-tooltip-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--red);
+}

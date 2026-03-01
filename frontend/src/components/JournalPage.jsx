@@ -7,6 +7,8 @@ import { useApi } from '../hooks/useApi'
 import { useStrategyContext } from '../contexts/StrategyContext'
 import { formatPrice } from '../utils/format'
 import CollapsibleCard from './CollapsibleCard'
+import EnhancedEquityCurve from './EnhancedEquityCurve'
+import DrawdownChart from './DrawdownChart'
 import './JournalPage.css'
 
 const PERIODS = [
@@ -158,7 +160,10 @@ function LiveJournal({ period, wsData }) {
       </CollapsibleCard>
 
       <CollapsibleCard title="Equity Curve Live" defaultOpen={true} storageKey="journal-live-equity">
-        <LiveEquityCurve strategy={stratParam} />
+        <EnhancedEquityCurve strategy={stratParam} defaultDays={30} height={250} />
+        <div style={{ marginTop: 8 }}>
+          <DrawdownChart strategy={stratParam} days={30} killSwitchPct={45} height={120} />
+        </div>
       </CollapsibleCard>
 
       <CollapsibleCard title="Ordres Bitget" defaultOpen={true} storageKey="journal-orders">
@@ -408,58 +413,6 @@ function LiveDailyPnl({ strategy }) {
           </div>
         )
       })}
-    </div>
-  )
-}
-
-function LiveEquityCurve({ strategy }) {
-  const stratQ = strategy ? `&strategy=${encodeURIComponent(strategy)}` : ''
-  const { data, loading } = useApi(`/api/journal/live-equity?days=30${stratQ}`, 60000)
-  const points = data?.equity_curve || []
-
-  if (loading && !data) return <div className="empty-state">Chargement...</div>
-  if (points.length < 2) return <div className="empty-state">Pas assez de snapshots (min 2h de donnees)</div>
-
-  const equities = points.map(p => p.equity)
-  const minEq = Math.min(...equities)
-  const maxEq = Math.max(...equities)
-  const range = maxEq - minEq || 1
-
-  const width = 600
-  const height = 180
-  const padX = 0
-  const padY = 10
-
-  const pathPoints = points.map((p, i) => {
-    const x = padX + (i / (points.length - 1)) * (width - 2 * padX)
-    const y = padY + (1 - (p.equity - minEq) / range) * (height - 2 * padY)
-    return `${x},${y}`
-  })
-  const linePath = `M${pathPoints.join(' L')}`
-
-  // Colorer selon tendance
-  const first = equities[0]
-  const last = equities[equities.length - 1]
-  const color = last >= first ? 'var(--accent)' : 'var(--red)'
-
-  // Dates pour axes
-  const firstDate = points[0].timestamp ? new Date(points[0].timestamp).toLocaleDateString('fr-FR') : ''
-  const lastDate = points[points.length - 1].timestamp ? new Date(points[points.length - 1].timestamp).toLocaleDateString('fr-FR') : ''
-
-  return (
-    <div>
-      <div className="equity-svg-container">
-        <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: 180 }}>
-          <path d={linePath} fill="none" stroke={color} strokeWidth="2" />
-        </svg>
-      </div>
-      <div className="equity-labels">
-        <span className="text-xs muted">{firstDate}</span>
-        <span className="text-xs muted">
-          {last.toFixed(2)} USDT ({last >= first ? '+' : ''}{(last - first).toFixed(2)}$)
-        </span>
-        <span className="text-xs muted">{lastDate}</span>
-      </div>
     </div>
   )
 }
