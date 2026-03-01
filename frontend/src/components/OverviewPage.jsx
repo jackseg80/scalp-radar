@@ -72,10 +72,19 @@ function KpiCard({ label, value, format, colorize, invert }) {
 export default function OverviewPage({ wsData }) {
   const { setActiveStrategy } = useStrategyContext()
 
-  // Data fetching
-  const { data: pnlData } = useApi('/api/journal/daily-pnl-summary', 60000)
-  const { data: statsData } = useApi('/api/journal/live-stats?period=all', 30000)
-  const { data: perAssetData } = useApi('/api/journal/live-per-asset?period=all', 30000)
+  // Hotfix 63d : filtrer les endpoints live aux seules stratégies LIVE
+  const allowedLive = wsData?.executor?.selector?.allowed_strategies || []
+  const liveStratQ = allowedLive.length === 1
+    ? `?strategy=${encodeURIComponent(allowedLive[0])}`
+    : ''
+  const liveStratAmp = allowedLive.length === 1
+    ? `&strategy=${encodeURIComponent(allowedLive[0])}`
+    : ''
+
+  // Data fetching — filtrés par stratégie LIVE
+  const { data: pnlData } = useApi(`/api/journal/daily-pnl-summary${liveStratQ}`, 60000)
+  const { data: statsData } = useApi(`/api/journal/live-stats?period=all${liveStratAmp}`, 30000)
+  const { data: perAssetData } = useApi(`/api/journal/live-per-asset?period=all${liveStratAmp}`, 30000)
   const { data: regimeData } = useApi('/api/regime/snapshot', 60000)
   const { data: eventsData } = useApi('/api/journal/events?limit=3', 30000)
 
@@ -83,6 +92,9 @@ export default function OverviewPage({ wsData }) {
   const exchangeBalance = wsData?.executor?.exchange_balance
   const snap = regimeData?.snapshot
   const events = eventsData?.events || []
+
+  // Stratégie LIVE pour les composants enfants (equity, drawdown)
+  const liveStrategy = allowedLive.length === 1 ? allowedLive[0] : null
 
   // Top 3 / Bottom 3
   const { top3, bottom3 } = useMemo(() => {
@@ -95,8 +107,7 @@ export default function OverviewPage({ wsData }) {
     }
   }, [perAssetData])
 
-  // Strategies table
-  const allowedLive = wsData?.executor?.selector?.allowed_strategies || []
+  // Strategies table (allowedLive déjà défini plus haut)
   const rows = useMemo(() => {
     const strategies = wsData?.strategies || {}
     const gridPositions = wsData?.grid_state?.grid_positions || {}
@@ -126,9 +137,9 @@ export default function OverviewPage({ wsData }) {
 
       {/* Equity Curve */}
       <CollapsibleCard title="Equity Curve" defaultOpen={true} storageKey="overview-equity">
-        <EnhancedEquityCurve defaultDays={30} height={250} />
+        <EnhancedEquityCurve strategy={liveStrategy} defaultDays={30} height={250} />
         <div style={{ marginTop: 8 }}>
-          <DrawdownChart days={30} killSwitchPct={45} height={120} />
+          <DrawdownChart strategy={liveStrategy} days={30} killSwitchPct={45} height={120} />
         </div>
       </CollapsibleCard>
 
