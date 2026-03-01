@@ -1,0 +1,95 @@
+.regime-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.regime-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.regime-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.regime-label {
+  font-weight: 700;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.regime-days {
+  margin-left: auto;
+}
+
+.regime-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.regime-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.regime-metric-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.regime-metric-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.regime-metric-value.positive { color: var(--accent); }
+.regime-metric-value.negative { color: var(--red); }
+
+.regime-atr-bar { margin-top: 2px; }
+
+.regime-atr-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.regime-atr-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--yellow) 50%, var(--red) 100%);
+}
+
+.regime-atr-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.regime-sparkline {
+  margin-top: 4px;
+}
+
+.regime-sparkline-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}

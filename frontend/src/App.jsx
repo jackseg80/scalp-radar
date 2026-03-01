@@ -14,6 +14,7 @@ import ActivityFeed from './components/ActivityFeed'
 import LogMini from './components/LogMini'
 import TradeHistory from './components/TradeHistory'
 import ArenaRankingMini from './components/ArenaRankingMini'
+import RegimeWidget from './components/RegimeWidget'
 import OverviewPage from './components/OverviewPage'
 import StrategyEvalBar from './components/StrategyEvalBar'
 import StrategiesPage from './components/StrategiesPage'
@@ -206,6 +207,14 @@ function AppContent() {
             storageKey="executor"
           >
             <ExecutorPanel wsData={filteredWsData} />
+          </CollapsibleCard>
+
+          <CollapsibleCard
+            title="Regime BTC"
+            defaultOpen={true}
+            storageKey="regime"
+          >
+            <RegimeWidget />
           </CollapsibleCard>
 
           <CollapsibleCard

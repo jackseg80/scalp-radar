@@ -2900,10 +2900,10 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
-## ÉTAT ACTUEL (28 février 2026)
+## ÉTAT ACTUEL (1 mars 2026)
 
-- **2151 tests, 2144 passants** (7 échecs pré-existants non liés), +7 Sprint 62 Donchian breakout
-- **Phases 1-5 terminées + Sprints 1-62**
+- **2162 tests, 2155 passants** (7 échecs pré-existants non liés), +11 Sprint 63 Regime Monitor
+- **Phases 1-5 terminées + Sprints 1-63**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — WFO à relancer sur 26 assets avec `--regrade`
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
@@ -3266,6 +3266,7 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
   - **WFO** : `_INDICATOR_GROUP_KEYS` mis à jour ; grille 432 combos (3×2×2×3×2×3×1×2) — EMA params retirés
   - **Fichiers** : `backend/strategies/trend_follow_daily.py` (+3 champs config), `backend/optimization/fast_multi_backtest.py` (_simulate_trend_follow refactoré), `backend/optimization/indicator_cache.py` (+2 conditions), `backend/optimization/walk_forward.py` (+2 clés), `config/param_grids.yaml` (432 combos Donchian), `tests/test_trend_follow_daily.py` (+7 tests, helpers Donchian)
   - **7 nouveaux tests** → **2151 tests, 2144 passants** (7 pré-existants), 0 régression
+- **Sprint 63 — Regime Monitor** (1 mars 2026) : outil d'aide à la décision leverage (pas d'automatisation). `RegimeSnapshot` (regime, regime_days, ATR 14j en %, BTC 30j, volatility_level, suggested_leverage), alerte Telegram quotidienne 00:05 UTC, widget sidebar frontend (badge régime, barre ATR colorée, sparkline 30j). Réutilise `_classify_regime()` de metrics.py et `atr()` de indicators.py. Compteur `regime_days` incrémental (init par fenêtres glissantes, +1 ou reset ensuite). Exchange `binance` par défaut. API `GET /api/regime/snapshot` + `GET /api/regime/history?days=30`. Pattern scheduler identique à `WeeklyReporter`. **Fichiers** : `backend/regime/regime_monitor.py`, `backend/api/regime_routes.py`, `frontend/src/components/RegimeWidget.jsx`, `frontend/src/components/RegimeWidget.css` (nouveaux) + `backend/api/server.py`, `frontend/src/App.jsx` (modifiés). **11 tests** → **2162 tests, 2155 passants**, 0 régression
 - **Scripts d'audit disponibles** : `audit_fees.py` (Audit #4, fees réelles vs modèle), `audit_grid_states.py` (Audit #5, cohérence grid_states vs Bitget), `audit_combo_score.py` (analyse scoring WFO)
 
 ### Résultats Portfolio Backtest — Validation Finale

@@ -28,6 +28,7 @@ from backend.api.optimization_routes import router as optimization_router
 from backend.api.portfolio_routes import router as portfolio_router
 from backend.api.signals_routes import router as signals_router
 from backend.api.simulator_routes import router as simulator_router
+from backend.api.regime_routes import router as regime_router
 from backend.api.websocket_routes import router as ws_router
 from backend.backtesting.arena import StrategyArena
 from backend.backtesting.simulator import Simulator
@@ -257,6 +258,15 @@ async def lifespan(app: FastAPI):
 
     app.state.watchdog = watchdog
 
+    # 6. Regime Monitor (Sprint 61 — quotidien 00:05 UTC)
+    from backend.regime.regime_monitor import RegimeMonitor
+
+    regime_monitor: RegimeMonitor | None = None
+    if db:
+        regime_monitor = RegimeMonitor(telegram, db)
+        await regime_monitor.start()
+    app.state.regime_monitor = regime_monitor
+
     # Notification startup
     if simulator:
         strategies = [r.name for r in simulator.runners]
@@ -267,6 +277,8 @@ async def lifespan(app: FastAPI):
     # Shutdown (ordre inverse)
     if simulator:
         await notifier.notify_shutdown()
+    if regime_monitor:
+        await regime_monitor.stop()
     if weekly_reporter:
         await weekly_reporter.stop()
     if heartbeat:
@@ -337,3 +349,4 @@ app.include_router(portfolio_router)
 app.include_router(journal_router)
 app.include_router(log_router)
 app.include_router(data_router)
+app.include_router(regime_router)
