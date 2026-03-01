@@ -1,4 +1,4 @@
-initial_capital: 1000.0
+initial_capital: 1646.0
 max_margin_ratio: 0.70  # Max 70% du capital en marge simultanée
 max_wfo_drawdown_pct: 80  # Guard WFO : arrêt simulation si DD peak→courant > 80%
 
