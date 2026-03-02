@@ -864,17 +864,25 @@ class Executor:
                 if quantity <= 0:
                     continue
 
-                # Sprint 56: margin guard 70% — bloquer si marge totale dépasse le seuil
+                # Sprint 56 + P2-15 Audit 9 : margin guard — bloquer si marge
+                # totale (grids existantes + pending + nouveau level) dépasse le seuil.
                 level_margin = level.size_fraction * allocated_balance
                 max_margin_ratio = getattr(self._config.risk, "max_margin_ratio", 0.70)
                 if not isinstance(max_margin_ratio, (int, float)):
                     max_margin_ratio = 0.70
                 if available_balance > 0:
-                    total_margin_used = self._pending_notional
+                    # Marge des grids déjà ouvertes (pas juste le batch courant)
+                    existing_margin = sum(
+                        gs.avg_entry_price * gs.total_quantity / max(gs.leverage, 1)
+                        for gs in self._grid_states.values()
+                    )
+                    total_margin_used = existing_margin + self._pending_notional
                     if (total_margin_used + level_margin) / available_balance > max_margin_ratio:
                         logger.warning(
-                            "Executor: margin guard {:.0f}% — skip {} level {}",
-                            max_margin_ratio * 100, futures_sym, level.index,
+                            "Executor: margin guard {:.0f}% ({:.0f}/{:.0f}) — skip {} level {}",
+                            max_margin_ratio * 100,
+                            total_margin_used + level_margin, available_balance,
+                            futures_sym, level.index,
                         )
                         continue
 
@@ -902,6 +910,13 @@ class Executor:
                     logger.error(
                         "Executor entry: erreur {} {} level {}: {}",
                         level.direction, futures_sym, level.index, e,
+                    )
+                    # P0-1 Audit 9 : rollback marge pending sur échec.
+                    # Sur succès, _pending_notional reste accumulé pour que
+                    # le margin guard des itérations suivantes soit correct
+                    # (exchange_balance n'est rafraîchi que toutes les 5 min).
+                    self._pending_notional = max(
+                        0.0, self._pending_notional - level_margin,
                     )
                 finally:
                     self._pending_levels.discard(pending_key)
@@ -1476,7 +1491,7 @@ class Executor:
             self._record_order("entry", futures_sym, side, quantity, entry_order, event.strategy_name, "grid", paper_price=event.entry_price)
         except Exception as e:
             logger.error("Executor: échec grid entry: {}", e)
-            return
+            raise  # P0-1 Audit 9 : propager pour rollback _pending_notional
 
         filled_qty = float(entry_order.get("filled") or quantity)
         order_id = entry_order.get("id", "")
@@ -1624,18 +1639,32 @@ class Executor:
     ) -> None:
         """Fermeture d'urgence si SL impossible. JAMAIS de position sans SL."""
         close_side = "sell" if state.direction == "LONG" else "buy"
+        closed_ok = False
         try:
             emg_order = await self._exchange.create_order(
                 futures_sym, "market", close_side, state.total_quantity,
                 params={"reduceOnly": True},
             )
             self._record_order("emergency_close", futures_sym, close_side, state.total_quantity, emg_order, state.strategy_name, "grid_sl_failed")
+            closed_ok = True
         except Exception as e:
             logger.critical("Executor: ÉCHEC close urgence grid: {}", e)
 
+        if not closed_ok:
+            # P0-2 Audit 9 : NE PAS supprimer le state si le close a échoué.
+            # La position est toujours ouverte sur l'exchange SANS SL.
+            # Le polling la détectera au prochain cycle et retentera.
+            logger.critical(
+                "Executor: position {} SANS SL — conservée pour retry par polling",
+                futures_sym,
+            )
+            state.sl_order_id = ""  # Marquer SL absent pour forcer le retry
+            await self._notifier.notify_live_sl_failed(futures_sym, state.strategy_name)
+            return
+
         self._risk_manager.unregister_position(futures_sym)
         self._record_grid_close(futures_sym)
-        del self._grid_states[futures_sym]
+        self._grid_states.pop(futures_sym, None)
         await self._notifier.notify_live_sl_failed(futures_sym, state.strategy_name)
 
     async def _cancel_all_open_orders(self, futures_sym: str) -> int:
@@ -1744,7 +1773,7 @@ class Executor:
                 logger.error("Executor: échec close grid {}: {}", futures_sym, e)
                 self._risk_manager.unregister_position(futures_sym)
                 self._record_grid_close(futures_sym)
-                del self._grid_states[futures_sym]
+                self._grid_states.pop(futures_sym, None)
                 return
         else:
             exit_price = event.exit_price or state.sl_price
@@ -1808,7 +1837,7 @@ class Executor:
 
         # 6. Cleanup
         self._record_grid_close(futures_sym)
-        del self._grid_states[futures_sym]
+        self._grid_states.pop(futures_sym, None)
 
         # 7. Filet de sécurité : vérifier qu'il n'y a plus de position sur Bitget
         await self._verify_no_residual_position(
@@ -1835,6 +1864,14 @@ class Executor:
         exit_fee: float | None = None,
     ) -> None:
         """Traite l'exécution du SL grid par Bitget (watchOrders ou polling)."""
+        # P0-3 Audit 9 : guard contre double traitement (watchOrders + polling
+        # peuvent détecter le même SL exécuté via des await interleaved).
+        if futures_sym not in self._grid_states:
+            logger.debug(
+                "Executor: grid {} déjà traitée, skip duplicate", futures_sym,
+            )
+            return
+
         # Hotfix 34 : fees réelles si disponibles
         if exit_fee is not None:
             net_pnl = self._calculate_real_pnl(
@@ -1893,7 +1930,7 @@ class Executor:
         await self._cancel_all_open_orders(futures_sym)
 
         self._record_grid_close(futures_sym)
-        del self._grid_states[futures_sym]
+        self._grid_states.pop(futures_sym, None)
 
         # Filet de sécurité : vérifier qu'il n'y a plus de position sur Bitget
         close_side = "sell" if state.direction == "LONG" else "buy"
@@ -2488,7 +2525,7 @@ class Executor:
                 futures_sym, net_pnl,
             )
             self._record_grid_close(futures_sym)
-            del self._grid_states[futures_sym]
+            self._grid_states.pop(futures_sym, None)
 
     async def _cancel_orphan_orders(self) -> None:
         """Annule les ordres trigger orphelins qui n'ont plus de position associée.

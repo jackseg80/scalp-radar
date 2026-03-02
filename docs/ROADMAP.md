@@ -2934,9 +2934,32 @@ accumulés** sur le compte, dangereux car ils pourraient fermer des positions ou
 
 ---
 
-## ÉTAT ACTUEL (1 mars 2026)
+### Audit Executor P0 — 2026-03-02 ✅
 
-- **2196 tests, 2182 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
+Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, execution live, API/serveur, config/tests). 3 bugs P0 corrigés dans `executor.py` + 1 amélioration P2 margin guard. 9 tests unitaires créés.
+
+**BUG P0-1 — `_pending_notional` fantôme sur échec d'entrée** : `_pending_notional += level_margin` s'exécutait avant `_open_grid_position()`. Si `create_order()` lançait une exception (timeout Bitget), la marge n'était jamais restituée → `_ensure_balance()` retournait une valeur trop basse → entrées légitimes bloquées jusqu'au prochain balance refresh (5 min). Fix : `_open_grid_position()` propage maintenant l'exception de `create_order` ; le `except` de `_on_candle` rollback `_pending_notional -= level_margin` sur échec. Sur succès, la valeur reste accumulée (nécessaire pour le margin guard des itérations suivantes).
+
+**BUG P0-2 — Position orpheline si `_emergency_close_grid()` échoue** : Si le SL était impossible (3 retry épuisés), un market close d'urgence était tenté. Mais si ce close échouait lui aussi (réseau indisponible), le code supprimait quand même `_grid_states[symbol]` → position live sans SL **et** sans tracking (le polling ne pouvait plus la retrouver). Fix : si le market close échoue, le state est conservé (`sl_order_id` vidé pour signaler l'absence de SL), le polling retentera au cycle suivant. Tous les `del self._grid_states[x]` remplacés par `self._grid_states.pop(x, None)` (défensif).
+
+**BUG P0-3 — Double traitement watchOrders + polling** : `_watch_orders_loop` et `_poll_positions_loop` tournent en parallèle. Chacun peut détecter le même SL exécuté via ses propres `await` (interleaved). Les deux appelaient `_handle_grid_sl_executed()` → double enregistrement P&L dans `record_trade_result()` → kill switch pouvait se déclencher à tort. Fix : guard `if futures_sym not in self._grid_states: return` au début de `_handle_grid_sl_executed()`.
+
+**P2-15 — Margin guard incomplet (grids existantes non comptées)** : Le guard 70% (`_on_candle`) n'utilisait que `_pending_notional` (ordres du batch courant). Après un `refresh_balance()`, `_pending_notional` se reset à 0 — les 13 grids déjà ouvertes n'étaient plus comptées. Fix : calcul de `existing_margin` = somme de `avg_entry_price × total_quantity / leverage` pour toutes les grids actives, ajouté à `_pending_notional` avant le check.
+
+**Autres findings documentés (non fixés dans ce sprint)** :
+
+- Base de données : constructeurs WHERE avec f-strings (risque SQL injection théorique — réseau local uniquement)
+- API : CORS hardcodé localhost (frontend prod via même serveur nginx → pas de CORS en pratique), `/api/executor/orders` sans auth (réseau local)
+- Telegram : retry insuffisant (2 tentatives, pas de backoff exponentiel)
+- Reconciliation : ordres pending non vérifiés au boot
+
+**Tests** : 9 nouveaux (`test_executor_audit9.py` — 3 classes P0-1/P0-2/P0-3), **2199 passants** (9 nouveaux + 0 régression sur les 2190 existants).
+
+---
+
+## ÉTAT ACTUEL (2 mars 2026)
+
+- **2205 tests, 2199 passants** (6 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps/grid_atr_short)
 - **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-01**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
