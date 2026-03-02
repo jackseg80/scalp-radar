@@ -30,6 +30,8 @@ class AnomalyType(str, Enum):
     CIRCUIT_BREAKER = "circuit_breaker"
     DISK_FULL = "disk_full"
     PARTIAL_FILL = "partial_fill"
+    ZOMBIE_POSITION = "zombie_position"
+    DATA_GAP = "data_gap"
 
 
 # Messages formatés par type d'anomalie
@@ -45,6 +47,8 @@ _ANOMALY_MESSAGES = {
     AnomalyType.CIRCUIT_BREAKER: "Circuit breaker déclenché — runner désactivé",
     AnomalyType.DISK_FULL: "Disque presque plein (>85%)",
     AnomalyType.PARTIAL_FILL: "Partial fill détecté — position résiduelle traitée",
+    AnomalyType.ZOMBIE_POSITION: "Position zombie détectée (>24h sans activité)",
+    AnomalyType.DATA_GAP: "Gap de données détecté après reconnexion WebSocket",
 }
 
 
@@ -61,6 +65,8 @@ _ANOMALY_COOLDOWNS: dict[AnomalyType, int] = {
     AnomalyType.CIRCUIT_BREAKER: 3600,            # 1h — ne se résout que par restart
     AnomalyType.DISK_FULL: 3600,                  # 1h — état persistant
     AnomalyType.PARTIAL_FILL: 60,                  # 1 min — critique, chaque occurrence compte
+    AnomalyType.ZOMBIE_POSITION: 3600,              # 1h — état persistant
+    AnomalyType.DATA_GAP: 300,                       # 5 min — transitoire après reconnexion
 }
 _DEFAULT_COOLDOWN = 600  # 10 min pour tout type non listé
 

@@ -5,6 +5,7 @@ Définit StrategyContext, StrategySignal et BaseStrategy (ABC).
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -64,6 +65,13 @@ class StrategySignal:
     strength: SignalStrength
     market_regime: MarketRegime
     signals_detail: dict[str, float] = field(default_factory=dict)
+
+    def has_nan_prices(self) -> bool:
+        """Vérifie si entry/tp/sl contiennent un NaN invalide.
+
+        Note: tp_price=NaN est toléré pour les stratégies grid (TP inverse).
+        """
+        return math.isnan(self.entry_price) or math.isnan(self.sl_price)
 
 
 class BaseStrategy(ABC):

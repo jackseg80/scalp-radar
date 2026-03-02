@@ -1,6 +1,7 @@
 """Watchdog : surveillance du système avec alertes sur anomalies.
 
-Vérifie périodiquement : WS connecté, data freshness, stratégies actives.
+Vérifie périodiquement : WS connecté, data freshness, stratégies actives,
+positions zombie (>24h).
 Alertes via Notifier avec cooldown anti-spam (5 min par type).
 """
 
@@ -14,6 +15,8 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from backend.alerts.notifier import AnomalyType
+
+_ZOMBIE_THRESHOLD_HOURS = 24
 
 if TYPE_CHECKING:
     from backend.alerts.notifier import Notifier
@@ -169,6 +172,45 @@ class Watchdog:
             if ex.is_enabled and ex._risk_manager.is_kill_switch_triggered:
                 self._current_issues.append(f"Kill switch{tag} live déclenché")
                 await self._alert(AnomalyType.KILL_SWITCH_LIVE)
+
+        # 7. Positions zombie (ouvertes > 24h)
+        await self._check_zombie_positions(executors_to_check)
+
+    async def _check_zombie_positions(
+        self, executors: list[tuple[str, object]],
+    ) -> None:
+        """Détecte les positions ouvertes depuis > _ZOMBIE_THRESHOLD_HOURS."""
+        now = datetime.now(tz=timezone.utc)
+        threshold_s = _ZOMBIE_THRESHOLD_HOURS * 3600
+
+        for prefix, ex in executors:
+            if not ex.is_enabled:
+                continue
+            tag = f" [{prefix}]" if prefix else ""
+
+            # Positions mono
+            for sym, pos in getattr(ex, "_positions", {}).items():
+                age_s = (now - pos.entry_time).total_seconds()
+                if age_s > threshold_s:
+                    age_h = age_s / 3600
+                    detail = (
+                        f"{sym}{tag} ouverte depuis {age_h:.0f}h "
+                        f"({pos.direction}, entry={pos.entry_price:.2f})"
+                    )
+                    self._current_issues.append(f"Zombie{tag}: {sym} ({age_h:.0f}h)")
+                    await self._alert(AnomalyType.ZOMBIE_POSITION, detail)
+
+            # Cycles grid
+            for sym, state in getattr(ex, "_grid_states", {}).items():
+                age_s = (now - state.opened_at).total_seconds()
+                if age_s > threshold_s:
+                    age_h = age_s / 3600
+                    detail = (
+                        f"Grid {sym}{tag} ouverte depuis {age_h:.0f}h "
+                        f"({state.direction}, {len(state.positions)} niveaux)"
+                    )
+                    self._current_issues.append(f"Zombie grid{tag}: {sym} ({age_h:.0f}h)")
+                    await self._alert(AnomalyType.ZOMBIE_POSITION, detail)
 
     async def _alert(self, anomaly_type: AnomalyType, details: str = "") -> None:
         """Envoie une alerte avec cooldown anti-spam."""

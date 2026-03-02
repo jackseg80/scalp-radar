@@ -2957,9 +2957,67 @@ Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, exec
 
 ---
 
+### Sprint Audit A-C — Hardening Lifespan + CI/CD + Modularisation Executor ✅ (2 mars 2026)
+
+**But** : Corriger les 3 problèmes critiques identifiés lors de l'audit Phase 1+2 : lifespan sans error handling, zéro CI/CD, executor 3276 lignes non modulaire.
+
+**Sprint A — Lifespan hardening** :
+
+- 9 helpers d'init extraits (`_init_database`, `_init_notifier`, `_init_data_engine`, etc.) avec try-except individuel par composant
+- `_safe_stop()` : `asyncio.wait_for(timeout=30)` sur chaque arrêt — shutdown ne bloque plus
+- `app.state.startup_components` dict exposé sur `/health` — status `degraded` si erreur partielle
+- Si DB échoue : app zombie impossible — FastAPI démarre en mode dégradé avec log CRITICAL
+
+**Sprint B — CI/CD GitHub Actions** :
+
+- `.github/workflows/test.yml` : pytest + ruff sur push/PR vers main
+- Python 3.12 via uv, PYTHON_JIT=0, cache uv
+
+**Sprint C — Modularisation executor (3276 → 2791 lignes)** :
+
+- `backend/execution/boot_reconciler.py` extrait (280 lignes) : `reconcile_on_boot()`, `_reconcile_symbol()`, `_reconcile_grid_symbol()`, `cancel_orphan_orders()`
+- `backend/execution/order_monitor.py` extrait (271 lignes) : `watch_orders_loop()`, `process_watched_order()`, `poll_positions_loop()`, `check_position_still_open()`, `check_grid_still_open()`, `handle_exchange_close()`
+- Wrappers minces dans executor.py délèguent aux modules (duck-typing `Any` pour éviter imports circulaires)
+
+**Tests** : 8 nouveaux (`test_lifespan_hardening.py`) → **2207 passants**, 0 régression.
+
+---
+
+### Sprint Audit D — 4 Bugs P2 ✅ (2 mars 2026)
+
+**But** : Corriger les 4 problèmes P2 documentés dans les audits précédents et laissés ouverts.
+
+**D1 — Zombie position detection** :
+
+- `_check_zombie_positions()` ajouté dans `Watchdog._check()` (check #7)
+- Détecte `LivePosition.entry_time > 24h` et `GridLiveState.opened_at > 24h`
+- Alerte Telegram via `AnomalyType.ZOMBIE_POSITION` (cooldown 1h)
+
+**D2 — Guard gaps candles** :
+
+- `DataEngine.gap_count` : compteur incrémenté à chaque gap détecté (exposé pour /health)
+- Alerte Telegram via `AnomalyType.DATA_GAP` (cooldown 5 min) quand gap détecté post-reconnexion
+
+**D3 — NaN guard centralisé** :
+
+- `StrategySignal.has_nan_prices()` : vérifie `entry_price` et `sl_price` (tp_price=NaN toléré pour grids inversées)
+- Guard dans `Simulator._on_candle()` : `if signal is not None and not signal.has_nan_prices()`
+- Guard dans `PositionManager.open_position()` : `math.isnan(entry_price) or math.isnan(sl_price) → return None`
+
+**D4 — Sizing parité fast engine / executor** :
+
+- Fast engine : `capital` shrinkait entre levels sur la même candle (level 2 = capital réduit de margin level 1)
+- Executor : `allocated_balance` fixe sur toute la candle (tous les levels voient le même capital)
+- Fix : `candle_capital = capital` snapshot avant la boucle inner DCA, utilisé pour le notional — 5 fonctions grid dans `fast_multi_backtest.py`
+- Les levels sur **différentes candles** gardent un capital naturellement réduit (comportement correct pour les deux)
+
+**Tests** : 14 nouveaux (`test_sprint_d_audit.py`) → **2213 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (2 mars 2026)
 
-- **2205 tests, 2199 passants** (6 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps/grid_atr_short)
+- **2227 tests, 2213 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
 - **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-01**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
@@ -3538,7 +3596,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 1973 passants, 0 régression
+- **Tests** : 2213 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

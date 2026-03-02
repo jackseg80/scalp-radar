@@ -687,45 +687,27 @@ class TestMarginDeductionGridCommon:
             num_levels=2, sl_pct=0.5, direction=1,
         )
 
-        # Avec margin deduction :
+        # Avec candle_capital snapshot (parité executor — Sprint D4) :
+        # Les deux levels triggent sur la même candle → même candle_capital=10000
         # Level 0 : notional = 10000 * 0.5 * 6 = 30000, qty = 30000/99 ≈ 303.03
-        #           margin = 30000/6 = 5000, capital = 10000 - 5000 = 5000
-        # Level 1 : notional = 5000 * 0.5 * 6 = 15000, qty = 15000/98 ≈ 153.06
-        #           margin = 15000/6 = 2500, capital = 5000 - 2500 = 2500
-        #
-        # Sans margin deduction (ancien comportement) :
-        # Level 0 : notional = 10000 * 0.5 * 6 = 30000, qty = 30000/99 ≈ 303.03
+        #           margin = 5000, capital = 10000 - 5000 = 5000
         # Level 1 : notional = 10000 * 0.5 * 6 = 30000, qty = 30000/98 ≈ 306.12
-        #           → qty 2x plus gros au niveau 1 !
+        #           margin = 5000, capital = 5000 - 5000 = 0
         #
-        # Le PnL total avec margin deduction est plus faible car le niveau 1
-        # a un sizing réduit.
+        # Capital est bien réduit (margin deduction active), mais les levels
+        # sur la même candle voient le même capital (comme l'executor live).
 
         assert len(trade_pnls) >= 1, "Au moins 1 trade attendu"
 
-        # Calcul attendu avec margin :
-        # qty0 = (10000/2*6) / 99 = 30000/99 ≈ 303.03
-        # qty1 = (5000/2*6) / 98 = 15000/98 ≈ 153.06
-        # pnl0 = (106 - 99) * 303.03 ≈ 2121.21
-        # pnl1 = (106 - 98) * 153.06 ≈ 1224.49
-        # total ≈ 3345.7
-        #
-        # Sans margin :
-        # qty0 = 303.03
-        # qty1 = (10000/2*6) / 98 = 306.12
-        # pnl1 = (106 - 98) * 306.12 ≈ 2448.98
-        # total ≈ 4570.19
-
         # TP exit at SMA=105 (not close=106):
         # qty0 = (10000/2*6) / 99 = 303.03, pnl0 = (105-99)*303.03 = 1818.18
-        # qty1 = (5000/2*6) / 98 = 153.06, pnl1 = (105-98)*153.06 = 1071.43
-        # total ≈ 2889.61
-        # Sans margin : qty1 = 306.12, pnl1 = 2448.98, total ≈ 4267.16
-        assert trade_pnls[0] < 3500, (
-            f"PnL={trade_pnls[0]:.2f} trop élevé — margin deduction pas active ?"
+        # qty1 = (10000/2*6) / 98 = 306.12, pnl1 = (105-98)*306.12 = 2142.86
+        # total ≈ 3961.04
+        assert trade_pnls[0] < 4200, (
+            f"PnL={trade_pnls[0]:.2f} trop élevé — vérifier la logique"
         )
-        assert trade_pnls[0] > 2500, (
-            f"PnL={trade_pnls[0]:.2f} trop bas — vérifier la logique"
+        assert trade_pnls[0] > 3500, (
+            f"PnL={trade_pnls[0]:.2f} trop bas — candle_capital snapshot actif ?"
         )
 
     def test_margin_restored_at_close(self, make_indicator_cache):

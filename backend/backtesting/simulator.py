@@ -334,7 +334,7 @@ class LiveStrategyRunner:
         # 5. Si pas de position : évaluer l'entrée
         if self._position is None and not self._kill_switch_triggered:
             signal = self._strategy.evaluate(ctx)
-            if signal is not None:
+            if signal is not None and not signal.has_nan_prices():
                 self._position = self._pm.open_position(
                     signal, candle.timestamp, self._capital
                 )

@@ -148,6 +148,9 @@ class DataEngine:
         self._stale_restart_count: dict[str, int] = {}
         self._stale_abandoned: set[str] = set()
 
+        # Compteur de gaps détectés (exposé pour /health et tests)
+        self.gap_count: int = 0
+
     @property
     def is_connected(self) -> bool:
         return self._connected
@@ -804,13 +807,29 @@ class DataEngine:
 
         # Gap ?
         if buffer and self.validator.check_gap(buffer[-1], candle, tf):
+            self.gap_count += 1
+            gap_from = buffer[-1].timestamp
+            gap_to = candle.timestamp
+            gap_seconds = (gap_to - gap_from).total_seconds()
             logger.warning(
-                "DataEngine: gap détecté {}/{} entre {} et {}",
+                "DataEngine: gap détecté {}/{} entre {} et {} ({:.0f}s, #{} total)",
                 symbol,
                 timeframe_str,
-                buffer[-1].timestamp,
-                candle.timestamp,
+                gap_from,
+                gap_to,
+                gap_seconds,
+                self.gap_count,
             )
+            if self._notifier is not None:
+                try:
+                    from backend.alerts.notifier import AnomalyType
+                    await self._notifier.notify_anomaly(
+                        AnomalyType.DATA_GAP,
+                        f"{symbol}/{timeframe_str} gap {gap_seconds:.0f}s "
+                        f"({gap_from.strftime('%H:%M')}→{gap_to.strftime('%H:%M')})",
+                    )
+                except Exception:
+                    pass  # Ne pas bloquer le flux de données
 
         # Ajouter au buffer (borné)
         buffer.append(candle)

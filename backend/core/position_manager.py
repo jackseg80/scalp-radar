@@ -6,6 +6,7 @@ Extrait depuis BacktestEngine (Sprint 2) pour éviter la duplication.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -63,6 +64,8 @@ class PositionManager:
         entry_price = signal.entry_price
         sl_price = signal.sl_price
 
+        if math.isnan(entry_price) or math.isnan(sl_price):
+            return None
         if entry_price <= 0 or sl_price <= 0:
             return None
 

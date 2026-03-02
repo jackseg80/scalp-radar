@@ -435,6 +435,7 @@ def _simulate_grid_common(
         )
         if can_open_new and not kill_switch_triggered and len(positions) < num_levels:
             filled = {p[0] for p in positions}
+            candle_capital = capital  # Snapshot: même balance pour tous les levels de cette candle (aligne avec executor)
             for lvl in range(num_levels):
                 if lvl in filled:
                     continue
@@ -460,8 +461,8 @@ def _simulate_grid_common(
                         actual_ep = ep * (1 + slippage_pct)  # LONG: prix plus haut
                     else:
                         actual_ep = ep * (1 - slippage_pct)  # SHORT: prix plus bas
-                    # Allocation fixe par niveau
-                    notional = capital * (1.0 / num_levels) * leverage
+                    # Allocation fixe par niveau (candle_capital = snapshot pour parité executor)
+                    notional = candle_capital * (1.0 / num_levels) * leverage
                     qty = notional / actual_ep
                     if qty <= 0:
                         continue
@@ -736,6 +737,7 @@ def _simulate_grid_range(
             spacing = prev_atr * spacing_mult
 
             filled_slots = {p[0] for p in positions}
+            candle_capital = capital  # Snapshot pour parité executor
 
             for lvl in range(num_levels):
                 if len(positions) >= total_slots or capital <= 0:
@@ -751,7 +753,7 @@ def _simulate_grid_range(
                             break
                         # Sprint 56: slippage à l'entrée
                         actual_ep = ep * (1 + slippage_pct)
-                        notional = capital * (1.0 / total_slots) * leverage
+                        notional = candle_capital * (1.0 / total_slots) * leverage
                         qty = notional / actual_ep
                         margin = notional / leverage
                         if qty > 0 and capital >= margin:
@@ -772,7 +774,7 @@ def _simulate_grid_range(
                             break
                         # Sprint 56: slippage à l'entrée
                         actual_ep = ep * (1 - slippage_pct)
-                        notional = capital * (1.0 / total_slots) * leverage
+                        notional = candle_capital * (1.0 / total_slots) * leverage
                         qty = notional / actual_ep
                         margin = notional / leverage
                         if qty > 0 and capital >= margin:
@@ -971,9 +973,10 @@ def _simulate_grid_funding(
 
         # === CHECK ENTRY ===
         if capital > 0 and not kill_switch_triggered:
+            candle_capital = capital  # Snapshot pour parité executor
             for lvl in range(num_levels):
                 if lvl not in filled_levels and entry_signals[i, lvl]:
-                    margin_per_level = capital / num_levels
+                    margin_per_level = candle_capital / num_levels
                     notional = margin_per_level * leverage
                     qty = notional / close
                     # Margin deduction (cohérent avec GridStrategyRunner)
@@ -1190,6 +1193,7 @@ def _simulate_grid_boltrend(
         # === 4. DCA filling (si grid actif, pas kill switch) ===
         if direction != 0 and entry_levels and not kill_switch_triggered:
             filled = {p[0] for p in positions}
+            candle_capital = capital  # Snapshot pour parité executor
             for lvl in range(num_levels):
                 if lvl in filled or lvl >= len(entry_levels):
                     continue
@@ -1213,7 +1217,7 @@ def _simulate_grid_boltrend(
                         break  # Plus de marge disponible pour ce cycle
                     # Sprint 56: slippage à l'entrée (prix d'exécution défavorable)
                     actual_ep = ep * (1 + slippage_pct) if direction == 1 else ep * (1 - slippage_pct)
-                    notional = capital * (1.0 / num_levels) * leverage
+                    notional = candle_capital * (1.0 / num_levels) * leverage
                     qty = notional / actual_ep
                     if qty <= 0:
                         continue
@@ -1487,6 +1491,7 @@ def _simulate_grid_momentum(
         # === 3. DCA filling (si grid actif, pas kill switch) ===
         if direction != 0 and entry_levels and not kill_switch_triggered:
             filled = {p[0] for p in positions}
+            candle_capital = capital  # Snapshot pour parité executor
             for lvl in range(num_levels):
                 if lvl in filled or lvl >= len(entry_levels):
                     continue
@@ -1510,7 +1515,7 @@ def _simulate_grid_momentum(
                         break  # Plus de marge disponible pour ce cycle
                     # Sprint 56: slippage à l'entrée
                     actual_ep = ep * (1 + slippage_pct) if direction == 1 else ep * (1 - slippage_pct)
-                    notional = capital * (1.0 / num_levels) * leverage
+                    notional = candle_capital * (1.0 / num_levels) * leverage
                     qty = notional / actual_ep
                     if qty <= 0:
                         continue
