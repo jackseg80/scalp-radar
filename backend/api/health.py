@@ -40,8 +40,19 @@ async def health_check(request: Request) -> dict:
     db = request.app.state.db
     db_connected = db._conn is not None if db else False
 
+    # Statut composants (Sprint Audit-A)
+    startup_components: dict = getattr(
+        request.app.state, "startup_components", {},
+    )
+    failed_components = [
+        k for k, v in startup_components.items()
+        if isinstance(v, str) and v.startswith("error")
+    ]
+
     # Statut global
-    if engine and not engine.is_connected:
+    if failed_components:
+        status = "degraded"
+    elif engine and not engine.is_connected:
         status = "degraded"
     elif not db_connected:
         status = "error"
@@ -72,6 +83,7 @@ async def health_check(request: Request) -> dict:
         "status": status,
         "data_engine": engine_status,
         "database": {"connected": db_connected},
+        "components": startup_components,
         "watchdog": watchdog_status,
         "executor": executor_status,
         "disk": disk_info,
