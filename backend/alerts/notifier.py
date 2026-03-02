@@ -32,6 +32,8 @@ class AnomalyType(str, Enum):
     PARTIAL_FILL = "partial_fill"
     ZOMBIE_POSITION = "zombie_position"
     DATA_GAP = "data_gap"
+    MARGIN_PROXIMITY = "margin_proximity"
+    FUNDING_ALERT = "funding_alert"
 
 
 # Messages formatés par type d'anomalie
@@ -49,6 +51,8 @@ _ANOMALY_MESSAGES = {
     AnomalyType.PARTIAL_FILL: "Partial fill détecté — position résiduelle traitée",
     AnomalyType.ZOMBIE_POSITION: "Position zombie détectée (>24h sans activité)",
     AnomalyType.DATA_GAP: "Gap de données détecté après reconnexion WebSocket",
+    AnomalyType.MARGIN_PROXIMITY: "Marge proche du seuil (>90% utilisée)",
+    AnomalyType.FUNDING_ALERT: "Funding rate extrême détecté (>0.1%)",
 }
 
 
@@ -67,6 +71,8 @@ _ANOMALY_COOLDOWNS: dict[AnomalyType, int] = {
     AnomalyType.PARTIAL_FILL: 60,                  # 1 min — critique, chaque occurrence compte
     AnomalyType.ZOMBIE_POSITION: 3600,              # 1h — état persistant
     AnomalyType.DATA_GAP: 300,                       # 5 min — transitoire après reconnexion
+    AnomalyType.MARGIN_PROXIMITY: 1800,              # 30 min — état persistant
+    AnomalyType.FUNDING_ALERT: 900,                  # 15 min — transitoire
 }
 _DEFAULT_COOLDOWN = 600  # 10 min pour tout type non listé
 

@@ -3015,9 +3015,31 @@ Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, exec
 
 ---
 
+### Sprint Audit F — Alertes opérationnelles : margin proximity + funding extremes ✅ (2 mars 2026)
+
+**But** : Alertes Telegram pour deux situations silencieuses en prod : marge saturée (risque refus silencieux de positions) et funding rate extrême (coût carry invisible).
+
+**F1 — Margin proximity** :
+- `Executor._check_margin_proximity(balance)` — appelé dans `_balance_refresh_loop()` toutes les 5 min
+- Calcule `total_margin = grid_margin + mono_margin + _pending_notional`
+- Alerte `AnomalyType.MARGIN_PROXIMITY` si ratio > 90% (cooldown 30 min)
+
+**F2 — Funding rate extremes** :
+- `Executor._check_funding_rates()` — appelé dans `_balance_refresh_loop()` toutes les 5 min
+- Itère sur `config.assets`, lit `DataEngine.get_funding_rate(symbol)` (déjà polled toutes les 5 min)
+- Alerte `AnomalyType.FUNDING_ALERT` si |funding| > 0.1% (cooldown 15 min)
+
+**Constantes module-level** : `_MARGIN_ALERT_THRESHOLD = 0.90`, `_FUNDING_ALERT_THRESHOLD = 0.1`
+
+**Fichiers** : `backend/execution/executor.py`, `backend/alerts/notifier.py`
+
+**Tests** : 13 nouveaux (`test_sprint_f_alerts.py`) → **2226 passants**, 0 régression.
+
+---
+
 ## ÉTAT ACTUEL (2 mars 2026)
 
-- **2227 tests, 2213 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
+- **2239 tests, 2226 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
 - **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-01**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
@@ -3596,7 +3618,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 2213 passants, 0 régression
+- **Tests** : 2226 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

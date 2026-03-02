@@ -153,6 +153,9 @@ _ENTRY_TIMEOUT = 30  # Timeout pour le fill de l'ordre d'entrée
 
 # ─── EXECUTOR ──────────────────────────────────────────────────────────────
 
+_MARGIN_ALERT_THRESHOLD = 0.90  # 90% du solde utilisé → alerte
+_FUNDING_ALERT_THRESHOLD = 0.1  # |funding| > 0.1% → alerte
+
 
 class Executor:
     """Exécute les ordres réels sur Bitget.
@@ -536,6 +539,9 @@ class Executor:
                 if snapshot_counter >= snapshot_db_interval:
                     snapshot_counter = 0
                     await self._persist_balance_snapshot(new_balance)
+                # Sprint F : alertes margin proximity + funding extremes
+                await self._check_margin_proximity(new_balance)
+            await self._check_funding_rates()
 
     async def _persist_balance_snapshot(self, balance: float) -> None:
         """Persiste un snapshot de balance en DB (best-effort, Sprint 46)."""
@@ -552,6 +558,60 @@ class Executor:
             })
         except Exception as e:
             logger.warning("{}: échec snapshot balance DB: {}", self._log_prefix, e)
+
+    # ─── Alertes opérationnelles (Sprint F) ──────────────────────────────
+
+    async def _check_margin_proximity(self, balance: float) -> None:
+        """Alerte si la marge utilisée dépasse _MARGIN_ALERT_THRESHOLD du solde."""
+        if balance <= 0:
+            return
+        try:
+            leverage = self._config.risk.position.default_leverage
+            # Marge grids : avg_entry * qty / leverage par cycle
+            grid_margin = sum(
+                gs.avg_entry_price * gs.total_quantity / max(gs.leverage, 1)
+                for gs in self._grid_states.values()
+            )
+            # Marge positions mono
+            mono_margin = sum(
+                pos.entry_price * pos.quantity / max(leverage, 1)
+                for pos in self._positions.values()
+            )
+            total_margin = grid_margin + mono_margin + self._pending_notional
+            ratio = total_margin / balance
+            if ratio > _MARGIN_ALERT_THRESHOLD:
+                detail = (
+                    f"marge {total_margin:.0f}/{balance:.0f} USDT "
+                    f"({ratio * 100:.0f}%) [{self._strategy_name or 'executor'}]"
+                )
+                logger.warning(
+                    "{}: margin proximity {:.0f}%", self._log_prefix, ratio * 100,
+                )
+                await self._notifier.notify_anomaly(AnomalyType.MARGIN_PROXIMITY, detail)
+        except Exception as e:
+            logger.debug("{}: erreur check_margin_proximity: {}", self._log_prefix, e)
+
+    async def _check_funding_rates(self) -> None:
+        """Alerte si un funding rate dépasse _FUNDING_ALERT_THRESHOLD en valeur absolue."""
+        if self._data_engine is None:
+            return
+        try:
+            for asset in self._config.assets:
+                rate = self._data_engine.get_funding_rate(asset.symbol)
+                if rate is None:
+                    continue
+                if abs(rate) > _FUNDING_ALERT_THRESHOLD:
+                    detail = (
+                        f"{asset.symbol} funding={rate:+.3f}% "
+                        f"[{self._strategy_name or 'executor'}]"
+                    )
+                    logger.warning(
+                        "{}: funding extrême {} {:.3f}%",
+                        self._log_prefix, asset.symbol, rate,
+                    )
+                    await self._notifier.notify_anomaly(AnomalyType.FUNDING_ALERT, detail)
+        except Exception as e:
+            logger.debug("{}: erreur check_funding_rates: {}", self._log_prefix, e)
 
     # ─── Balance bootstrap ──────────────────────────────────────────────
 
