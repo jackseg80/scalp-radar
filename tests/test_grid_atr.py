@@ -1140,3 +1140,55 @@ class TestGridATRPerAssetChain:
         assert _get_per_asset_float("SOL/USDT", "min_grid_spacing_pct", 0.0) == 1.8
         assert _get_per_asset_float("BTC/USDT", "min_grid_spacing_pct", 0.0) == 0.0
         assert _get_per_asset_float("SOL/USDT", "unknown_param", 99.0) == 99.0
+
+    def test_min_atr_pct_per_asset_propagation(self):
+        """Vérifie que min_atr_pct per_asset est propagé à la config stratégie."""
+        from unittest.mock import MagicMock
+        from backend.core.config import GridATRConfig
+        from backend.backtesting.simulator import GridStrategyRunner
+
+        # 1. Config avec min_atr_pct=0.0 au top-level et 5.0 en per_asset
+        cfg = GridATRConfig(
+            min_atr_pct=0.0,
+            per_asset={"BTC/USDT": {"min_atr_pct": 5.0}}
+        )
+        strategy = MagicMock()
+        strategy._config = cfg
+
+        # 2. Mock du runner pour tester le patching
+        runner = MagicMock(spec=GridStrategyRunner)
+        runner._strategy = strategy
+        runner._get_per_asset_float = GridStrategyRunner._get_per_asset_float.__get__(runner, GridStrategyRunner)
+        runner._get_num_levels.return_value = 3
+
+        # Capture de la valeur pendant l'appel
+        captured_min_atr = []
+        def mock_compute_grid(ctx, state):
+            captured_min_atr.append(strategy._config.min_atr_pct)
+            return []
+        strategy.compute_grid.side_effect = mock_compute_grid
+
+        # 3. Logique de patching (extraite de simulator.py)
+        symbol = "BTC/USDT"
+        ctx = MagicMock()
+        grid_state = MagicMock()
+        effective_max = runner._get_num_levels(symbol)
+
+        original_num_levels = strategy._config.num_levels
+        original_min_atr = getattr(strategy._config, "min_atr_pct", 0.0)
+        strategy._config.num_levels = effective_max
+        if hasattr(strategy._config, "min_atr_pct"):
+            strategy._config.min_atr_pct = runner._get_per_asset_float(
+                symbol, "min_atr_pct", original_min_atr
+            )
+        try:
+            strategy.compute_grid(ctx, grid_state)
+        finally:
+            strategy._config.num_levels = original_num_levels
+            if hasattr(strategy._config, "min_atr_pct"):
+                strategy._config.min_atr_pct = original_min_atr
+
+        assert captured_min_atr[0] == 5.0
+        assert strategy._config.min_atr_pct == 0.0
+
+

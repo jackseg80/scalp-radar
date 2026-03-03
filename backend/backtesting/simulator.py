@@ -1111,10 +1111,15 @@ class GridStrategyRunner:
             # Patcher temporairement les params per_asset pour ce symbol
             original_num_levels = self._strategy._config.num_levels
             original_spacing = getattr(self._strategy._config, "min_grid_spacing_pct", 0.0)
+            original_min_atr = getattr(self._strategy._config, "min_atr_pct", 0.0)
             self._strategy._config.num_levels = effective_max
             if hasattr(self._strategy._config, "min_grid_spacing_pct"):
                 self._strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
                     symbol, "min_grid_spacing_pct", original_spacing
+                )
+            if hasattr(self._strategy._config, "min_atr_pct"):
+                self._strategy._config.min_atr_pct = self._get_per_asset_float(
+                    symbol, "min_atr_pct", original_min_atr
                 )
             try:
                 levels = self._strategy.compute_grid(ctx, grid_state)
@@ -1122,6 +1127,8 @@ class GridStrategyRunner:
                 self._strategy._config.num_levels = original_num_levels
                 if hasattr(self._strategy._config, "min_grid_spacing_pct"):
                     self._strategy._config.min_grid_spacing_pct = original_spacing
+                if hasattr(self._strategy._config, "min_atr_pct"):
+                    self._strategy._config.min_atr_pct = original_min_atr
 
             for level in levels:
                 if level.index in {p.level for p in positions}:

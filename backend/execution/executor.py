@@ -905,11 +905,16 @@ class Executor:
             # Construire GridState depuis les positions LIVE
             grid_state = self._live_state_to_grid_state(futures_sym)
 
-            # Évaluer la grille — patcher min_grid_spacing_pct per_asset
+            # Évaluer la grille — patcher min_grid_spacing_pct/min_atr_pct per_asset
             original_spacing = getattr(strategy._config, "min_grid_spacing_pct", 0.0)
+            original_min_atr = getattr(strategy._config, "min_atr_pct", 0.0)
             if hasattr(strategy._config, "min_grid_spacing_pct"):
                 strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
                     strategy, symbol, "min_grid_spacing_pct", original_spacing
+                )
+            if hasattr(strategy._config, "min_atr_pct"):
+                strategy._config.min_atr_pct = self._get_per_asset_float(
+                    strategy, symbol, "min_atr_pct", original_min_atr
                 )
             try:
                 levels = strategy.compute_grid(ctx, grid_state)
@@ -922,6 +927,8 @@ class Executor:
             finally:
                 if hasattr(strategy._config, "min_grid_spacing_pct"):
                     strategy._config.min_grid_spacing_pct = original_spacing
+                if hasattr(strategy._config, "min_atr_pct"):
+                    strategy._config.min_atr_pct = original_min_atr
 
             if not levels:
                 _close = tf_indicators.get("close", float("nan"))
