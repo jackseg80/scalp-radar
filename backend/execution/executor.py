@@ -924,6 +924,16 @@ class Executor:
                     strategy._config.min_grid_spacing_pct = original_spacing
 
             if not levels:
+                _close = tf_indicators.get("close", float("nan"))
+                _sma = tf_indicators.get("sma", float("nan"))
+                _atr = tf_indicators.get("atr", float("nan"))
+                _atr_pct = _atr / _close * 100 if _close > 0 else float("nan")
+                _min_atr = getattr(strategy._config, "min_atr_pct", 0.0)
+                logger.debug(
+                    "Executor entry: {} {} — pas de signal (close={:.2f}, sma={:.2f},"
+                    " atr_pct={:.2f}%, min_atr={}%)",
+                    strategy_name, symbol, _close, _sma, _atr_pct, _min_atr,
+                )
                 continue
 
             grid_leverage = self._get_grid_leverage(strategy_name)
