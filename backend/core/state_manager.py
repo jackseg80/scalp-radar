@@ -76,6 +76,9 @@ class StateManager:
             "runners": {},
         }
 
+        # SAFETY NOTE : cette boucle est entièrement synchrone (aucun await),
+        # ce qui garantit un snapshot atomique en asyncio coopératif.
+        # NE PAS ajouter d'await dans cette boucle.
         for runner in runners:
             # Position mono (LiveStrategyRunner) — _position est toujours None pour grid
             position_data = None

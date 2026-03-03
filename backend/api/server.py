@@ -216,13 +216,33 @@ async def _init_executors(
         )
         executor_mgr.add(strat_name, executor, risk_mgr)
 
-    if len(live_strategies) > 1 and not all(
-        config.has_dedicated_keys(s) for s in live_strategies
-    ):
-        logger.warning(
-            "Multi-Executor: certains executors partagent les mêmes clés API "
-            "— risque de rate limit. Recommandé : sous-comptes dédiés."
-        )
+    # P0-ME Audit : vérification de chevauchement de symboles entre executors
+    # partageant les mêmes clés API (mode one-way Bitget = 1 position/symbole)
+    if len(live_strategies) > 1:
+        shared_key_strategies = [
+            s for s in live_strategies if not config.has_dedicated_keys(s)
+        ]
+        if len(shared_key_strategies) > 1:
+            assets_by_strat: dict[str, set[str]] = {}
+            for s in shared_key_strategies:
+                cfg = getattr(config.strategies, s, None)
+                pa = getattr(cfg, "per_asset", {}) if cfg else {}
+                assets_by_strat[s] = set(pa.keys()) if isinstance(pa, dict) else set()
+            for i, s1 in enumerate(shared_key_strategies):
+                for s2 in shared_key_strategies[i + 1:]:
+                    overlap = assets_by_strat[s1] & assets_by_strat[s2]
+                    if overlap:
+                        raise RuntimeError(
+                            f"FATAL: {s1} et {s2} partagent des clés API "
+                            f"ET des symboles ({overlap}). "
+                            f"Utilisez des sous-comptes dédiés ou supprimez "
+                            f"les symboles en commun."
+                        )
+            logger.warning(
+                "Multi-Executor: {} executors partagent les mêmes clés API "
+                "— risque de rate limit. Recommandé : sous-comptes dédiés.",
+                len(shared_key_strategies),
+            )
 
     await selector.start()
 
@@ -234,6 +254,10 @@ async def _init_executors(
         executor.set_db(db)
         executor.set_data_engine(engine)
         executor.set_strategies(strategy_instances, simulator=simulator)
+        # P0-CR-1 Audit : callback sauvegarde immédiate après entry fill
+        executor.set_state_save_callback(
+            lambda ex, rm, sn=strat_name: state_manager.save_executor_state(ex, rm, strategy_name=sn)
+        )
         await sync_live_to_paper(executor, simulator)
         await executor.start_exit_monitor()
         engine.on_candle(executor._on_candle)

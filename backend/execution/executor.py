@@ -11,6 +11,7 @@ Règle de sécurité #1 : JAMAIS de position sans SL.
 from __future__ import annotations
 
 import asyncio
+import copy
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -219,6 +220,9 @@ class Executor:
         # Sprint 45 : persistance live trades en DB
         self._db: Any = None
 
+        # P0-CR-1 Audit : callback pour sauvegarde immédiate après events critiques
+        self._state_save_callback: Any = None  # async callable(executor, risk_manager)
+
     # ─── Properties ────────────────────────────────────────────────────
 
     @property
@@ -263,6 +267,18 @@ class Executor:
     def set_db(self, db: Any) -> None:
         """Injecte la DB pour persister les live trades (Sprint 45)."""
         self._db = db
+
+    def set_state_save_callback(self, callback: Any) -> None:
+        """Enregistre une callback async pour sauvegarde immédiate (P0-CR-1 Audit)."""
+        self._state_save_callback = callback
+
+    async def _save_state_now(self) -> None:
+        """Déclenche une sauvegarde immédiate de l'état si callback enregistrée."""
+        if self._state_save_callback:
+            try:
+                await self._state_save_callback(self, self._risk_manager)
+            except Exception as e:
+                logger.warning("{}: échec save state immédiat: {}", self._log_prefix, e)
 
     # ─── Order History (Sprint 32) ────────────────────────────────────
 
@@ -735,14 +751,25 @@ class Executor:
         strategies: dict[str, BaseGridStrategy],
         simulator: Any = None,
     ) -> None:
-        """Enregistre les instances de stratégie et le Simulator (source indicateurs)."""
-        if self._strategy_name:
-            # Multi-executor : filtrer à SA stratégie uniquement
-            self._strategies = {
-                k: v for k, v in strategies.items() if k == self._strategy_name
-            }
-        else:
-            self._strategies = strategies
+        """Enregistre les instances de stratégie et le Simulator (source indicateurs).
+
+        P0-RC-1 Audit : deep copy des stratégies pour que l'Executor ait ses
+        propres instances de config, isolées du Simulator (Paper Runner).
+        Évite les race conditions sur strategy._config lors des per-asset overrides.
+        """
+        source = (
+            {k: v for k, v in strategies.items() if k == self._strategy_name}
+            if self._strategy_name
+            else strategies
+        )
+        self._strategies = {}
+        for name, strat in source.items():
+            strat_copy = copy.copy(strat)  # shallow copy (strategy is stateless)
+            if hasattr(strat._config, "model_copy"):
+                strat_copy._config = strat._config.model_copy(deep=True)
+            else:
+                strat_copy._config = copy.deepcopy(strat._config)
+            self._strategies[name] = strat_copy
         self._simulator = simulator
         logger.info(
             "{}: {} stratégies enregistrées pour exit autonome",
@@ -1614,6 +1641,10 @@ class Executor:
             entry_fee=entry_fee,
         ))
 
+        # P0-CR-1 Audit : sauvegarder l'état AVANT le SL pour éviter la perte
+        # en cas de crash entre le fill et le placement SL
+        await self._save_state_now()
+
         # Rate limiting (comme _open_position)
         await asyncio.sleep(_ORDER_DELAY)
 
@@ -1833,9 +1864,9 @@ class Executor:
                     )
             except Exception as e:
                 logger.error("Executor: échec close grid {}: {}", futures_sym, e)
-                self._risk_manager.unregister_position(futures_sym)
-                self._record_grid_close(futures_sym)
-                self._grid_states.pop(futures_sym, None)
+                # P0-CR-2 Audit : NE PAS supprimer grid_states — la position
+                # est potentiellement encore ouverte sur l'exchange.
+                # L'exit monitor retente au prochain cycle.
                 return
         else:
             exit_price = event.exit_price or state.sl_price
