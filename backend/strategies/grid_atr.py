@@ -89,7 +89,14 @@ class GridATRStrategy(BaseGridStrategy):
 
         # Filtre volatilité minimum (Sprint 62b) — skip ouverture si ATR/close < seuil
         if self._config.min_atr_pct > 0 and close_val > 0:
-            if atr_val / close_val * 100 < self._config.min_atr_pct:
+            atr_pct = atr_val / close_val * 100
+            if atr_pct < self._config.min_atr_pct:
+                logger.debug(
+                    "grid_atr — min_atr_pct actif : atr_pct={:.2f}% < seuil={:.2f}%, skip {}",
+                    atr_pct,
+                    self._config.min_atr_pct,
+                    ctx.symbol,
+                )
                 return []
         min_spacing = self._config.min_grid_spacing_pct
         if min_spacing > 0 and close_val > 0:
