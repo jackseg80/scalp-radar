@@ -3039,11 +3039,11 @@ Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, exec
 
 ## ÉTAT ACTUEL (2 mars 2026)
 
-- **2239 tests, 2226 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
-- **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-01**
+- **2231 tests, 2226 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
+- **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
-- **19 assets** (OP/USDT et SUI/USDT retirés — volume insuffisant)
+- **28 assets** (BTC ETH SOL DOGE LINK ADA AVAX CRV DYDX FET GALA ICP NEAR UNI XRP BCH BNB AAVE ARB OP SUI DOT ATOM LTC FIL ETC TRX XLM)
 - **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **grid_momentum** : **ABANDONNÉ** — WFO terminé (1 Grade B / 21 assets, faux breakouts crypto)
@@ -3618,7 +3618,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 2226 passants, 0 régression
+- **Tests** : 2231 collectés, 2226 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
