@@ -186,6 +186,8 @@ class Executor:
         self._exchange: Any = None  # ccxt.pro.bitget (créé dans start)
         self._positions: dict[str, LivePosition] = {}
         self._grid_states: dict[str, GridLiveState] = {}  # {futures_sym: state}
+        # P1-RC-3 Audit : lock protège mutations _grid_states/_positions
+        self._state_lock = asyncio.Lock()
         self._running = False
         self._connected = False
         self._watch_task: asyncio.Task[None] | None = None
@@ -1073,6 +1075,11 @@ class Executor:
         (réplique check_global_tp_sl du backtest). Fallback sur should_close_all()
         pour les cas spéciaux (TP inverse, signal BolTrend, etc.).
         """
+        async with self._state_lock:  # P1-RC-3 Audit
+            await self._check_grid_exit_unlocked(futures_sym)
+
+    async def _check_grid_exit_unlocked(self, futures_sym: str) -> None:
+        """Implémentation interne (appelée sous _state_lock)."""
         import math
 
         state = self._grid_states.get(futures_sym)
@@ -1472,6 +1479,11 @@ class Executor:
         - Met à jour le SL global après chaque nouvelle entrée
         - PAS de TP trigger (TP dynamique = SMA, géré par le runner)
         """
+        async with self._state_lock:  # P1-RC-3 Audit
+            await self._open_grid_position_unlocked(event)
+
+    async def _open_grid_position_unlocked(self, event: TradeEvent) -> None:
+        """Implémentation interne (appelée sous _state_lock)."""
         futures_sym = to_futures_symbol(event.symbol)
 
         # Exclusion mutuelle mono/grid

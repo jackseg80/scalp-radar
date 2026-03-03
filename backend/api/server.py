@@ -9,8 +9,10 @@ Sprint Audit-A : hardening lifespan (try-except, timeout shutdown, health status
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -181,6 +183,14 @@ async def _init_executors(
 
     for strat_name in live_strategies:
         risk_mgr = LiveRiskManager(config, notifier=notifier)
+        # P1-CR-3 Audit : persist immédiat kill switch
+        # P1-ME-3 Audit : propager kill switch à tous les executors
+        async def _on_kill_switch(sn: str = strat_name, rm: LiveRiskManager = risk_mgr) -> None:
+            executor_mgr.propagate_kill_switch(sn, getattr(rm, "_kill_switch_reason", ""))
+            await state_manager.save_executor_state(
+                executor_mgr.get(sn), rm, strategy_name=sn,
+            )
+        risk_mgr.set_kill_switch_callback(_on_kill_switch)
         executor = Executor(
             config, risk_mgr, notifier,
             selector=selector, strategy_name=strat_name,
@@ -243,6 +253,13 @@ async def _init_executors(
                 "— risque de rate limit. Recommandé : sous-comptes dédiés.",
                 len(shared_key_strategies),
             )
+            # P1-ME-4 Audit : diviser le capital par le nombre d'executors
+            # co-localisés pour que le seuil kill switch session reste correct
+            n_shared = len(shared_key_strategies)
+            for s in shared_key_strategies:
+                rm = executor_mgr.risk_managers.get(s)
+                if rm:
+                    rm.set_capital_divisor(n_shared)
 
     await selector.start()
 
@@ -325,6 +342,23 @@ async def lifespan(app: FastAPI):
     """
     config = get_config()
     setup_logging(level=config.secrets.log_level)
+
+    # P1-CR-5 Audit : lock file anti double-instance
+    lock_path = Path("data/.bot.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if lock_path.exists():
+        try:
+            old_pid = int(lock_path.read_text().strip())
+            # Vérifier si le process est encore vivant
+            os.kill(old_pid, 0)
+            raise RuntimeError(
+                f"FATAL: une autre instance tourne déjà (PID {old_pid}). "
+                f"Si c'est un faux positif, supprimer {lock_path}"
+            )
+        except (OSError, ValueError):
+            # Process mort ou PID invalide — lock stale, on continue
+            logger.warning("Lock file stale détecté (PID absent), nettoyage")
+    lock_path.write_text(str(os.getpid()))
 
     # Suivi d'état pour /health
     components: dict[str, str] = {}
@@ -549,6 +583,12 @@ async def lifespan(app: FastAPI):
 
     if db:
         await _safe_stop("Database", db.close())
+
+    # P1-CR-5 : cleanup lock file
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     logger.info("Shutdown complet")
 
 

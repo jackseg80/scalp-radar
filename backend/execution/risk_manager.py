@@ -53,18 +53,35 @@ class LiveRiskManager:
         self._initial_capital: float = 0.0
         self._session_pnl: float = 0.0
         self._kill_switch_triggered: bool = False
+        self._kill_switch_reason: str = ""  # P1-ME-3 Audit : raison pour propagation
         self._open_positions: list[dict[str, Any]] = []
         self._trade_history: list[LiveTradeResult] = []
         self._total_orders: int = 0
         # P1 : reset quotidien session_pnl
         self._session_start_date: date = datetime.now(tz=timezone.utc).date()
+        # P1-CR-3 Audit : callback pour persister immédiatement après kill switch
+        self._on_kill_switch_callback: Any = None  # callable sync (sera schedulé async)
         # P1 : kill switch global (drawdown fenêtre glissante)
         self._balance_snapshots: deque[tuple[datetime, float]] = deque(maxlen=288)  # 24h @ 5min
 
     def set_initial_capital(self, capital: float) -> None:
-        """Définit le capital initial (appelé par Executor après fetch_balance)."""
-        self._initial_capital = capital
-        logger.info("RiskManager: capital initial = {:.2f} USDT", capital)
+        """Définit le capital initial (appelé par Executor après fetch_balance).
+
+        P1-ME-4 Audit : si _capital_divisor > 1, le seuil kill switch est
+        calculé sur capital/N au lieu du solde total. Cela empêche N executors
+        sur le même sous-compte d'avoir chacun un seuil à 25% du total
+        (= seuil effectif 50% avec 2 executors).
+        """
+        divisor = getattr(self, "_capital_divisor", 1)
+        self._initial_capital = capital / divisor
+        logger.info(
+            "RiskManager: capital initial = {:.2f} USDT (total={:.2f}, divisor={})",
+            self._initial_capital, capital, divisor,
+        )
+
+    def set_capital_divisor(self, n: int) -> None:
+        """P1-ME-4 Audit : divise le capital initial par N executors co-localisés."""
+        self._capital_divisor = max(1, n)
 
     # ─── Pre-trade checks ──────────────────────────────────────────────
 
@@ -182,10 +199,15 @@ class LiveRiskManager:
 
         if loss_pct >= max_loss:
             self._kill_switch_triggered = True
+            self._kill_switch_reason = (
+                f"session loss {loss_pct:.1f}% >= {max_loss:.1f}% "
+                f"(stratégie={result.strategy_name or 'unknown'})"
+            )
             logger.warning(
                 "KILL SWITCH LIVE: perte session {:.1f}% >= {:.1f}% (stratégie={})",
                 loss_pct, max_loss, result.strategy_name or "unknown",
             )
+            self._schedule_kill_switch_persist()
 
             # P1 : alerte Telegram
             if self._notifier:
@@ -240,11 +262,16 @@ class LiveRiskManager:
         drawdown_pct = (peak - current_balance) / peak * 100
         if drawdown_pct >= threshold:
             self._kill_switch_triggered = True
+            self._kill_switch_reason = (
+                f"global drawdown {drawdown_pct:.1f}% >= {threshold:.1f}% "
+                f"(peak={peak:.2f}, now={current_balance:.2f})"
+            )
             logger.critical(
                 "KILL SWITCH LIVE GLOBAL: drawdown {:.1f}% >= {:.1f}% "
                 "(peak={:.2f}, now={:.2f})",
                 drawdown_pct, threshold, peak, current_balance,
             )
+            self._schedule_kill_switch_persist()
 
             # Alerte Telegram
             if self._notifier:
@@ -260,6 +287,19 @@ class LiveRiskManager:
                     )
                 except Exception as e:
                     logger.error("RiskManager: erreur envoi alerte Telegram global: {}", e)
+
+    def set_kill_switch_callback(self, callback: Any) -> None:
+        """Enregistre une callback appelée quand le kill switch se déclenche (P1-CR-3)."""
+        self._on_kill_switch_callback = callback
+
+    def _schedule_kill_switch_persist(self) -> None:
+        """Schedule une sauvegarde immédiate de l'état après kill switch."""
+        if self._on_kill_switch_callback is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._on_kill_switch_callback())
+            except RuntimeError:
+                pass  # Pas d'event loop (tests unitaires)
 
     # ─── State persistence ─────────────────────────────────────────────
 

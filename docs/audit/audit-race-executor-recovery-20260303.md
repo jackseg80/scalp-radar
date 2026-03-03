@@ -16,6 +16,19 @@
 
 **Tests :** 2226 passed (5 pré-existants) après chaque fix.
 
+### Fixes appliqués (Phase 2)
+
+| Fix | Issue | Fichier modifié | Résolution |
+|-----|-------|----------------|------------|
+| P1-RC-3 | `_grid_states`/`_positions` mutés sans lock | `executor.py`, `order_monitor.py` | `asyncio.Lock` + pattern wrapper/unlocked |
+| P1-CR-3 | Kill switch non persisté immédiatement | `risk_manager.py`, `server.py` | Callback `_schedule_kill_switch_persist()` → save immédiat |
+| P1-CR-4 | Boot reconciler ignore orphelines | `boot_reconciler.py` | Créer `GridLiveState` + placer SL protectif au lieu d'ignorer |
+| P1-CR-5 | Pas de guard double-instance | `server.py` | Lock file `data/.bot.lock` avec PID |
+| P1-ME-3 | Kill switch per-executor, pas propagé | `executor_manager.py`, `server.py` | `propagate_kill_switch()` via callback |
+| P1-ME-4 | Capital initial = solde total par executor | `risk_manager.py`, `server.py` | `set_capital_divisor(N)` pour executors co-localisés |
+
+**Tests :** 2226 passed (5 pré-existants) après chaque fix.
+
 ---
 
 ## Résumé exécutif

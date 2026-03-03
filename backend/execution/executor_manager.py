@@ -166,6 +166,31 @@ class ExecutorManager:
                 results[name] = None
         return results
 
+    def propagate_kill_switch(self, source_strategy: str, reason: str = "") -> None:
+        """P1-ME-3 Audit : propager le kill switch à tous les executors.
+
+        Quand un executor trigger son kill switch, les autres doivent
+        s'arrêter aussi (flash crash = tous les assets touchés).
+        """
+        for name, rm in self._risk_managers.items():
+            if name == source_strategy:
+                continue
+            if not getattr(rm, "is_kill_switch_triggered", False):
+                rm._kill_switch_triggered = True
+                rm._kill_switch_reason = (
+                    f"propagé depuis {source_strategy}: {reason}"
+                    if reason else f"propagé depuis {source_strategy}"
+                )
+                logger.warning(
+                    "ExecutorManager: kill switch propagé {} → {}",
+                    source_strategy, name,
+                )
+
+    @property
+    def n_executors(self) -> int:
+        """Nombre d'executors actifs."""
+        return len(self._executors)
+
     async def stop_all(self) -> None:
         for name, executor in self._executors.items():
             try:

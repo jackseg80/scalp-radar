@@ -39,6 +39,12 @@ async def watch_orders_loop(ex: Any) -> None:
 
 async def process_watched_order(ex: Any, order: dict) -> None:
     """Traite un ordre détecté par watchOrders."""
+    async with ex._state_lock:  # P1-RC-3 Audit
+        await _process_watched_order_unlocked(ex, order)
+
+
+async def _process_watched_order_unlocked(ex: Any, order: dict) -> None:
+    """Implémentation interne (appelée sous _state_lock)."""
     order_id = order.get("id", "")
     status = order.get("status", "")
 
@@ -137,6 +143,12 @@ async def poll_positions_loop(ex: Any) -> None:
 
 async def check_position_still_open(ex: Any, symbol: str) -> None:
     """Vérifie si une position est toujours ouverte sur l'exchange."""
+    async with ex._state_lock:  # P1-RC-3 Audit
+        await _check_position_still_open_unlocked(ex, symbol)
+
+
+async def _check_position_still_open_unlocked(ex: Any, symbol: str) -> None:
+    """Implémentation interne (appelée sous _state_lock)."""
     pos = ex._positions.get(symbol)
     if pos is None:
         return
@@ -174,6 +186,12 @@ async def check_position_still_open(ex: Any, symbol: str) -> None:
 
 async def check_grid_still_open(ex: Any, symbol: str) -> None:
     """Vérifie si la position grid est toujours ouverte sur l'exchange."""
+    async with ex._state_lock:  # P1-RC-3 Audit
+        await _check_grid_still_open_unlocked(ex, symbol)
+
+
+async def _check_grid_still_open_unlocked(ex: Any, symbol: str) -> None:
+    """Implémentation interne (appelée sous _state_lock)."""
     state = ex._grid_states.get(symbol)
     if state is None:
         return

@@ -90,18 +90,67 @@ async def _reconcile_symbol(ex: Any, futures_sym: str) -> None:
         )
 
     # Cas 2 : exchange a une position, pas le local → orpheline
+    # P1-CR-4 Audit : créer un tracking local + SL protectif au lieu d'ignorer
     elif exchange_has_position and not local_has_position:
         pos_data = next(
             p for p in positions if float(p.get("contracts", 0)) > 0
         )
-        await ex._notifier.notify_reconciliation(
-            f"Position orpheline {futures_sym} détectée sur exchange "
-            f"(contracts={pos_data.get('contracts')}). Non touchée."
-        )
-        logger.warning(
-            "Executor: position orpheline sur exchange {} — non touchée",
-            futures_sym,
-        )
+        contracts = float(pos_data.get("contracts", 0))
+        entry_price = float(pos_data.get("entryPrice") or pos_data.get("markPrice") or 0)
+        side = pos_data.get("side", "long").lower()
+        direction = "LONG" if side == "long" else "SHORT"
+
+        if entry_price > 0 and contracts > 0:
+            from backend.execution.executor import GridLiveState, GridLivePosition
+
+            # Créer un state grid minimal pour le tracking
+            orphan_state = GridLiveState(
+                symbol=futures_sym,
+                direction=direction,
+                strategy_name=ex._strategy_name or "orphan_recovery",
+                leverage=ex._get_grid_leverage(ex._strategy_name or "grid_atr"),
+            )
+            orphan_state.positions.append(GridLivePosition(
+                level=0,
+                entry_price=entry_price,
+                quantity=contracts,
+                entry_order_id="orphan_recovery",
+            ))
+            ex._grid_states[futures_sym] = orphan_state
+            ex._risk_manager.register_position({
+                "symbol": futures_sym,
+                "direction": direction,
+                "entry_price": entry_price,
+                "quantity": contracts,
+            })
+
+            # Placer un SL protectif
+            try:
+                await ex._update_grid_sl(futures_sym, orphan_state)
+                sl_msg = f"SL placé à {orphan_state.sl_price:.2f}"
+            except Exception as sl_err:
+                sl_msg = f"ÉCHEC placement SL: {sl_err}"
+                logger.error(
+                    "Executor: échec SL protectif orpheline {}: {}", futures_sym, sl_err,
+                )
+
+            await ex._notifier.notify_reconciliation(
+                f"⚠️ Position orpheline {futures_sym} récupérée "
+                f"({direction}, {contracts} contracts @ {entry_price:.2f}). {sl_msg}"
+            )
+            logger.warning(
+                "Executor: position orpheline {} récupérée — {} {} contracts @ {:.2f}, {}",
+                futures_sym, direction, contracts, entry_price, sl_msg,
+            )
+        else:
+            await ex._notifier.notify_reconciliation(
+                f"Position orpheline {futures_sym} détectée sur exchange "
+                f"(contracts={pos_data.get('contracts')}). Prix invalide, non récupérable."
+            )
+            logger.warning(
+                "Executor: position orpheline {} — prix invalide, non récupérable",
+                futures_sym,
+            )
 
     # Cas 3 : local a une position, pas l'exchange → fermée pendant downtime
     elif not exchange_has_position and local_has_position:
