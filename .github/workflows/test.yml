@@ -9,13 +9,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
@@ -23,12 +23,22 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --all-groups
+
+      - name: Debug Workspace Content
+        run: |
+          ls -R config/
+          ls -R backend/core/
+          ls -R tests/
+
+      - name: Check Test Collection
+        run: uv run pytest tests/ --collect-only
 
       - name: Run tests
         env:
           PYTHON_JIT: "0"
-        run: uv run pytest tests/ -q --tb=short
+          DATABASE_URL: "sqlite:///:memory:"
+        run: uv run pytest tests/ -v --tb=long --maxfail=10
 
       - name: Lint (ruff)
         if: always()
