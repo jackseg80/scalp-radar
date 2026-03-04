@@ -1,15 +1,16 @@
 # Scalp Radar
 
 Multi-strategy automated trading platform for crypto futures (optimized for Bitget).
-Features 17 strategies (Scalp 5m, Swing 1h, and Grid/DCA 1h), automatic Walk-Forward Optimization (WFO), real-time Paper Trading, Live Mainnet Executor, and a comprehensive React dashboard.
+Features 18 strategies (Scalping 5m, Swing 1h, Grid/DCA 1h, and Trend Daily), automatic Walk-Forward Optimization (WFO), real-time Paper Trading, Live Mainnet Executor, and a comprehensive React dashboard.
 
 ## Key Features
 
-- **17 Strategies Implemented**: 4 Scalp (5m), 4 Swing (1h), and 9 Grid/DCA (1h).
+- **18 Strategies Implemented**: 4 Scalp (5m), 5 Swing/Trend (1h/1d), and 9 Grid/DCA (1h).
 - **Advanced Validation**: Walk-Forward Optimization (WFO) with anti-overfitting metrics (Monte Carlo, DSR, Stability).
 - **Real-time Performance**: High-performance 100% async Python backend (FastAPI) + React/Vite frontend.
+- **JIT Acceleration**: Numba-powered simulation loops for 5-10x faster optimization.
 - **Production Ready**: Full Docker Compose deployment, Telegram alerts, Watchdog monitoring, and automatic crash recovery.
-- **Risk Management**: Global Kill Switch (45% drawdown), Margin Guard (70%), and realistic SL/Fee accounting.
+- **Risk Management**: Global Kill Switch (45% drawdown), Margin Guard (70%), and Regime-based entry filters.
 
 ## Prerequisites
 
@@ -71,7 +72,7 @@ uv run python -m scripts.fetch_oi
 ```bash
 uv run pytest tests/ -v
 ```
-**~1840 tests** covering models, indicators, strategies, multi-position engines, simulator, arena, live executor, and WFO optimization.
+**2231 tests** covering models, indicators, strategies, multi-position engines, simulator, arena, live executor, and WFO optimization.
 
 ## Tech Stack
 
@@ -86,9 +87,9 @@ uv run pytest tests/ -v
 ## Project Structure
 
 ```text
-config/              # YAML parameters (assets, strategies, risk, exchanges)
+config/              # YAML parameters (28 assets, 18 strategies, risk, exchanges)
 backend/core/        # DataEngine, Indicators, StateManager, RiskManager
-backend/strategies/  # 17 strategies (GridATR, GridMultiTF, BolTrend, etc.)
+backend/strategies/  # 18 strategies (GridATR, GridMultiTF, BolTrend, TrendDaily, etc.)
 backend/optimization/# WFO, Overfitting detection, Fast Engines (JIT)
 backend/backtesting/ # Engines (Mono, Multi, Portfolio), Simulator, Arena
 backend/execution/   # Live Executor (Bitget), Adaptive Selector, Sync
@@ -97,10 +98,10 @@ scripts/             # CLI tools for optimization, history, and deployment
 frontend/src/        # React Dashboard (Scanner, Heatmap, Portfolio, Research)
 ```
 
-## Strategy Overview (17 Total)
+## Strategy Overview (18 Total)
 
-- **Grid/DCA 1h (9)**: `grid_atr` (Main), `grid_multi_tf`, `grid_boltrend`, `grid_funding`, `grid_trend`, `envelope_dca`, etc.
-- **Swing 1h (4)**: `bollinger_mr`, `donchian_breakout`, `supertrend`, `boltrend`.
+- **Grid/DCA 1h (9)**: `grid_atr` (Main LIVE), `grid_multi_tf` (LIVE), `grid_boltrend`, `grid_funding`, `grid_trend`, etc.
+- **Swing/Trend (5)**: `bollinger_mr`, `donchian_breakout`, `supertrend`, `boltrend`, `trend_follow_daily` (1d).
 - **Scalp 5m (4)**: `vwap_rsi`, `momentum`, `funding`, `liquidation`.
 
 ## Roadmap Progress
@@ -109,6 +110,7 @@ frontend/src/        # React Dashboard (Scanner, Heatmap, Portfolio, Research)
 - [x] **Phase 5**: Scaling (Adaptive Selector, Multi-Asset Live, Grid ATR).
 - [x] **Phase 6**: Optimization & Visualization (WFO Dashboard, Heatmaps, Diagnostic Panel).
 - [x] **Phase 7**: Portfolio Backtesting (Multi-Asset correlation, Liquidation simulation).
-- [x] **Sprint 30-38**: Multi-Timeframe WFO, JIT Numba Optimization (5-10x speedup), BolTrend Strategy, Log Viewer, Realistic P&L Tracking.
+- [x] **Phase 8 — Audit & Hardening**: Race conditions, Crash recovery, Multi-executor guard, Async I/O (Sprints 50-60).
+- [x] **Phase 9 — Operational Excellence**: Regime Monitor, Dashboard Overview, Enhanced Equity Charts, Telegram History (Sprints 61-63b).
 
-**Last Updated:** 2026-03-04 (Sprint 38b)
+**Last Updated:** 2026-03-04 (Sprint 63b)
