@@ -263,11 +263,32 @@ export default function Scanner({ wsData }) {
         )}
 
       {loading && assets.length === 0 && (
-        <div className="empty-state">
-          <div className="skeleton skeleton-line" style={{ width: '80%', margin: '0 auto' }} />
-          <div className="skeleton skeleton-line" style={{ width: '60%', margin: '8px auto 0' }} />
-          <div className="skeleton skeleton-line" style={{ width: '70%', margin: '8px auto 0' }} />
-        </div>
+        <table className="scanner-table">
+          <thead>
+            <tr>
+              <th style={{ width: '14%' }}>Actif</th>
+              <th style={{ width: '10%' }}>Prix</th>
+              <th style={{ width: '8%' }}>Var.</th>
+              <th style={{ width: '7%' }}>Dir.</th>
+              <th style={{ width: '12%' }}>Trend</th>
+              <th style={{ width: '7%' }}>Grade</th>
+              <th style={{ width: '7%' }}>Grid</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...Array(10)].map((_, i) => (
+              <tr key={i} className="scanner-row">
+                <td><div className="skeleton skeleton-cell" style={{ width: '60%' }} /></td>
+                <td><div className="skeleton skeleton-cell" style={{ width: '70%' }} /></td>
+                <td><div className="skeleton skeleton-cell" style={{ width: '50%' }} /></td>
+                <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                <td><div className="skeleton skeleton-spark" /></td>
+                <td><div className="skeleton skeleton-cell" style={{ width: '30%' }} /></td>
+                <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
 
       {!loading && assets.length === 0 && (

@@ -254,10 +254,15 @@ th {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  height: 32px;
 }
 td {
   padding: 7px 8px;
   border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  height: 48px;
+}
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -485,6 +490,16 @@ tr:last-child td { border-bottom: none; }
   margin-bottom: 8px;
 }
 .skeleton-line:last-child { margin-bottom: 0; }
+.skeleton-cell {
+  height: 14px;
+  width: 80%;
+  display: inline-block;
+}
+.skeleton-spark {
+  height: 24px;
+  width: 100%;
+  display: block;
+}
 
 /* ─── ANIMATIONS ───────────────────────────────────────────────────────── */
 @keyframes slideIn {
