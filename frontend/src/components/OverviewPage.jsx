@@ -144,42 +144,56 @@ export default function OverviewPage({ wsData }) {
       </CollapsibleCard>
 
       {/* Top/Bottom Assets */}
-      {(top3.length > 0 || bottom3.length > 0) && (
-        <CollapsibleCard title="Performance par Asset" defaultOpen={true} storageKey="overview-assets">
-          <div className="overview-assets-grid">
-            <div className="overview-asset-section">
-              <h3>Top gagnants</h3>
-              {top3.map(a => (
-                <div key={a.symbol} className="overview-asset-row">
-                  <span className="overview-asset-symbol">{a.symbol}</span>
-                  <span className="overview-asset-stat">{a.total_trades} trades</span>
-                  <span className="overview-asset-stat">{a.win_rate}%</span>
-                  <span className="overview-asset-pnl pnl-pos">+{a.total_pnl.toFixed(2)}$</span>
+      <CollapsibleCard title="Performance par Asset" defaultOpen={true} storageKey="overview-assets">
+        <div className="overview-assets-grid">
+          <div className="overview-asset-section">
+            <h3>Top gagnants</h3>
+            {top3.length > 0 ? top3.map(a => (
+              <div key={a.symbol} className="overview-asset-row">
+                <span className="overview-asset-symbol">{a.symbol}</span>
+                <span className="overview-asset-stat">{a.total_trades} trades</span>
+                <span className="overview-asset-stat">{a.win_rate}%</span>
+                <span className="overview-asset-pnl pnl-pos">+{a.total_pnl.toFixed(2)}$</span>
+              </div>
+            )) : (
+              [...Array(3)].map((_, i) => (
+                <div key={i} className="overview-asset-row">
+                  <div className="skeleton skeleton-cell" style={{ width: '40%' }} />
+                  <div className="skeleton skeleton-cell" style={{ width: '20%' }} />
+                  <div className="skeleton skeleton-cell" style={{ width: '20%' }} />
                 </div>
-              ))}
-            </div>
-            <div className="overview-asset-section">
-              <h3>Top perdants</h3>
-              {bottom3.map(a => (
-                <div key={a.symbol} className="overview-asset-row">
-                  <span className="overview-asset-symbol">{a.symbol}</span>
-                  <span className="overview-asset-stat">{a.total_trades} trades</span>
-                  <span className="overview-asset-stat">{a.win_rate}%</span>
-                  <span className="overview-asset-pnl pnl-neg">{a.total_pnl.toFixed(2)}$</span>
-                </div>
-              ))}
-            </div>
+              ))
+            )}
           </div>
-          <span
-            className="overview-see-all"
-            onClick={() => setActiveStrategy('overview')}
-            role="button"
-            tabIndex={0}
-          >
-            Voir tout dans Journal &rarr;
-          </span>
-        </CollapsibleCard>
-      )}
+          <div className="overview-asset-section">
+            <h3>Top perdants</h3>
+            {bottom3.length > 0 ? bottom3.map(a => (
+              <div key={a.symbol} className="overview-asset-row">
+                <span className="overview-asset-symbol">{a.symbol}</span>
+                <span className="overview-asset-stat">{a.total_trades} trades</span>
+                <span className="overview-asset-stat">{a.win_rate}%</span>
+                <span className="overview-asset-pnl pnl-neg">{a.total_pnl.toFixed(2)}$</span>
+              </div>
+            )) : (
+              [...Array(3)].map((_, i) => (
+                <div key={i} className="overview-asset-row">
+                  <div className="skeleton skeleton-cell" style={{ width: '40%' }} />
+                  <div className="skeleton skeleton-cell" style={{ width: '20%' }} />
+                  <div className="skeleton skeleton-cell" style={{ width: '20%' }} />
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <span
+          className="overview-see-all"
+          onClick={() => setActiveStrategy('overview')}
+          role="button"
+          tabIndex={0}
+        >
+          Voir tout dans Journal &rarr;
+        </span>
+      </CollapsibleCard>
 
       {/* Regime + Activite */}
       <div className="overview-bottom-grid">
@@ -202,41 +216,51 @@ export default function OverviewPage({ wsData }) {
               </div>
             </div>
           ) : (
-            <div className="empty-state">Regime non disponible</div>
+            <div style={{ padding: '8px 0' }}>
+              <div className="skeleton skeleton-line" style={{ width: '60%', height: 20 }} />
+              <div className="skeleton skeleton-line" style={{ width: '80%', marginTop: 12 }} />
+            </div>
           )}
         </CollapsibleCard>
 
         <CollapsibleCard title="Activite recente" defaultOpen={true} storageKey="overview-activity">
-          {events.length === 0 ? (
-            <div className="empty-state">Aucun evenement</div>
-          ) : (
-            <div>
-              {events.map((e, i) => {
-                const isOpen = e.event_type === 'OPEN'
-                return (
-                  <div key={i} className="overview-event-card">
-                    <div className="overview-event-left">
-                      <span
-                        className="overview-event-type"
-                        style={{
-                          background: isOpen ? 'var(--accent-dim)' : 'var(--red-dim)',
-                          color: isOpen ? 'var(--accent)' : 'var(--red)',
-                        }}
-                      >
-                        {isOpen ? 'OPEN' : 'CLOSE'}
-                      </span>
-                      <span className="overview-event-symbol">{e.symbol}</span>
-                      {e.direction && (
-                        <span className={`badge ${e.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>
-                          {e.direction}
+          {eventsData ? (
+            events.length === 0 ? <div className="empty-state">Aucun evenement</div> : (
+              <div>
+                {events.map((e, i) => {
+                  const isOpen = e.event_type === 'OPEN'
+                  return (
+                    <div key={i} className="overview-event-card">
+                      <div className="overview-event-left">
+                        <span
+                          className="overview-event-type"
+                          style={{
+                            background: isOpen ? 'var(--accent-dim)' : 'var(--red-dim)',
+                            color: isOpen ? 'var(--accent)' : 'var(--red)',
+                          }}
+                        >
+                          {isOpen ? 'OPEN' : 'CLOSE'}
                         </span>
-                      )}
+                        <span className="overview-event-symbol">{e.symbol}</span>
+                        {e.direction && (
+                          <span className={`badge ${e.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>
+                            {e.direction}
+                          </span>
+                        )}
+                      </div>
+                      <span className="overview-event-time">{timeAgo(e.timestamp)}</span>
                     </div>
-                    <span className="overview-event-time">{timeAgo(e.timestamp)}</span>
-                  </div>
-                )
-              })}
-            </div>
+                  )
+                })}
+              </div>
+            )
+          ) : (
+            [...Array(3)].map((_, i) => (
+              <div key={i} className="overview-event-card">
+                <div className="skeleton skeleton-cell" style={{ width: '70%' }} />
+                <div className="skeleton skeleton-cell" style={{ width: '20%' }} />
+              </div>
+            ))
           )}
         </CollapsibleCard>
       </div>

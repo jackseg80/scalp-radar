@@ -19,6 +19,10 @@
   border-radius: var(--radius-sm);
   padding: 14px 16px;
   text-align: center;
+  height: 84px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .overview-kpi-label {
@@ -50,11 +54,13 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  min-height: 120px;
 }
 
 @media (max-width: 900px) {
   .overview-assets-grid {
     grid-template-columns: 1fr;
+    min-height: 240px;
   }
 }
 
@@ -104,11 +110,13 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  min-height: 140px;
 }
 
 @media (max-width: 900px) {
   .overview-bottom-grid {
     grid-template-columns: 1fr;
+    min-height: 280px;
   }
 }
 
