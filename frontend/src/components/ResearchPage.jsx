@@ -227,268 +227,6 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
     }
   }
 
-  if (loading) {
-    return (
-      <div className="research-page">
-        <p style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-          Chargement des résultats WFO...
-        </p>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="research-page">
-        <p style={{ textAlign: 'center', padding: '40px', color: '#ef4444' }}>
-          Erreur: {error}
-        </p>
-      </div>
-    )
-  }
-
-  // Vue détail
-  if (view === 'detail') {
-    if (detailLoading) {
-      return (
-        <div className="research-page">
-          <button onClick={() => setView('table')} className="btn-back">← Retour</button>
-          <p style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-            Chargement du détail...
-          </p>
-        </div>
-      )
-    }
-
-    if (!detail) {
-      return (
-        <div className="research-page">
-          <button onClick={() => setView('table')} className="btn-back">← Retour</button>
-          <p style={{ textAlign: 'center', padding: '40px', color: '#ef4444' }}>
-            Aucun détail disponible
-          </p>
-        </div>
-      )
-    }
-
-    return (
-      <div className="research-page">
-        <button onClick={() => setView('table')} className="btn-back">← Retour au tableau</button>
-
-        <div className="detail-header">
-          <h2>{detail.strategy_name} × {detail.asset}</h2>
-          <div className="detail-meta">
-            <span className={`grade-badge grade-${detail.grade}`}>{detail.grade}</span>
-            {detail.n_windows != null && detail.n_windows < 24 && (
-              <span className="shallow-badge" title={`Validation partielle (${detail.n_windows} fenêtres < 24)`}>⚠</span>
-            )}
-            <span className="score">Score: {detail.total_score}/100</span>
-            <span className="date">{new Date(detail.created_at).toLocaleString('fr-FR')}</span>
-          </div>
-        </div>
-
-        {/* Paramètres retenus */}
-        <section className="detail-section">
-          <h3>Paramètres retenus</h3>
-          <div className="params-grid">
-            {Object.entries(detail.best_params || {}).map(([key, value]) => (
-              <div key={key} className="param-item">
-                <span className="param-key">{key}:</span>
-                <span className="param-value">{typeof value === 'number' ? value.toFixed(3) : value}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Scores */}
-        <section className="detail-section">
-          <h3>Critères de notation</h3>
-          <div className="scores-list">
-            <ScoreBar
-              label={
-                <>
-                  OOS/IS Ratio <InfoTooltip term="oos_is_ratio" />
-                </>
-              }
-              value={detail.oos_is_ratio}
-              max={1}
-            />
-            <ScoreBar
-              label={
-                <>
-                  Monte Carlo p-value <InfoTooltip term="monte_carlo_pvalue" />
-                </>
-              }
-              value={detail.monte_carlo_summary?.p_value}
-              max={1}
-              invert
-            />
-            <ScoreBar
-              label={
-                <>
-                  DSR <InfoTooltip term="dsr" />
-                </>
-              }
-              value={detail.dsr}
-              max={1}
-            />
-            <ScoreBar
-              label={
-                <>
-                  Stabilité Params <InfoTooltip term="param_stability" />
-                </>
-              }
-              value={detail.param_stability}
-              max={1}
-            />
-            <ScoreBar
-              label={
-                <>
-                  Transfer Bitget <InfoTooltip term="transfer_ratio" />
-                </>
-              }
-              value={detail.validation_summary?.transfer_ratio}
-              max={1}
-            />
-          </div>
-        </section>
-
-        {/* Equity Curve WFO */}
-        {detail.wfo_windows && detail.wfo_windows.length > 0 && (
-          <section className="detail-section">
-            <h3>
-              Equity Curve IS vs OOS <InfoTooltip term="is_vs_oos_chart" />
-            </h3>
-            <WfoChart windows={detail.wfo_windows} />
-          </section>
-        )}
-
-        {/* Trades OOS par fenêtre */}
-        {detail.wfo_windows && (() => {
-          let windows = detail.wfo_windows
-          if (typeof windows === 'string') try { windows = JSON.parse(windows) } catch { return null }
-          if (typeof windows === 'string') try { windows = JSON.parse(windows) } catch { return null }
-          if (!Array.isArray(windows)) windows = windows?.windows || []
-          if (!Array.isArray(windows) || windows.length === 0) return null
-
-          const trades = windows.map(w => w.oos_trades || 0)
-          const total = trades.reduce((a, b) => a + b, 0)
-          const avg = total / trades.length
-          const min = Math.min(...trades)
-          const max = Math.max(...trades)
-
-          return (
-            <section className="detail-section">
-              <h3>Trades OOS par fenetre</h3>
-              <div className="oos-summary">
-                <div className="metric-card"><div className="metric-label">Total OOS</div><div className="metric-value">{total}</div></div>
-                <div className="metric-card"><div className="metric-label">Moyenne</div><div className="metric-value">{avg.toFixed(1)}</div></div>
-                <div className="metric-card"><div className="metric-label">Min</div><div className="metric-value">{min}</div></div>
-                <div className="metric-card"><div className="metric-label">Max</div><div className="metric-value">{max}</div></div>
-              </div>
-              {total < 50 && (
-                <p style={{color: '#f59e0b', fontSize: '13px', marginTop: '8px', marginBottom: '12px'}}>
-                  {'\u26A0\uFE0F'} Moins de 50 trades OOS — resultats statistiquement fragiles
-                </p>
-              )}
-              <div className="oos-bars">
-                {windows.map((w, i) => {
-                  const t = w.oos_trades || 0
-                  const pct = max > 0 ? (t / max) * 100 : 0
-                  return (
-                    <div key={i} className="oos-bar-row" title={`Fenetre ${i+1}: ${t} trades`}>
-                      <span className="oos-bar-label">W{i+1}</span>
-                      <div className="oos-bar-bg">
-                        <div className="oos-bar-fill" style={{width: `${pct}%`, background: t < 10 ? '#ef4444' : t < 30 ? '#f59e0b' : '#10b981'}} />
-                      </div>
-                      <span className="oos-bar-value">{t}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-          )
-        })()}
-
-        {/* Lien Explorer */}
-        <div className="detail-explorer-link">
-          <span className="muted">Pour l'analyse detaillee (heatmap, scatter, distribution) {'\u2192'}</span>
-          <button className="btn-link" onClick={() => {
-            localStorage.setItem('explorer-strategy', detail.strategy_name)
-            localStorage.setItem('explorer-asset', detail.asset)
-            onTabChange?.('explorer')
-          }}>
-            Ouvrir dans Explorer
-          </button>
-        </div>
-
-        {/* Validation Bitget */}
-        <section className="detail-section">
-          <h3>Validation Bitget (OOS réel)</h3>
-          <div className="validation-grid">
-            <div className="validation-item">
-              <span className="label">Sharpe:</span>
-              <span className="value">{detail.validation_summary?.bitget_sharpe?.toFixed(2) ?? 'N/A'}</span>
-            </div>
-            <div className="validation-item">
-              <span className="label">Net Return:</span>
-              <span className="value">{detail.validation_summary?.bitget_net_return_pct?.toFixed(2) ?? 'N/A'}%</span>
-            </div>
-            <div className="validation-item">
-              <span className="label">Trades:</span>
-              <span className="value">{detail.validation_summary?.bitget_trades ?? 'N/A'}</span>
-            </div>
-            <div className="validation-item">
-              <span className="label">CI Sharpe:</span>
-              <span className="value">
-                [{detail.validation_summary?.bitget_sharpe_ci_low?.toFixed(2) ?? '?'}, {detail.validation_summary?.bitget_sharpe_ci_high?.toFixed(2) ?? '?'}]
-              </span>
-            </div>
-            <div className="validation-item">
-              <span className="label">Transfer Ratio:</span>
-              <span className="value">{(detail.validation_summary?.transfer_ratio * 100)?.toFixed(0) ?? 'N/A'}%</span>
-            </div>
-            <div className="validation-item">
-              <span className="label">Significatif:</span>
-              <span className="value">{detail.validation_summary?.transfer_significant ? 'Oui' : 'Non'}</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Monte Carlo */}
-        <section className="detail-section">
-          <h3>Monte Carlo</h3>
-          <div className="monte-carlo-grid">
-            <div className="mc-item">
-              <span className="label">p-value:</span>
-              <span className="value">{detail.monte_carlo_summary?.p_value?.toFixed(4) ?? 'N/A'}</span>
-            </div>
-            <div className="mc-item">
-              <span className="label">Significatif:</span>
-              <span className="value">{detail.monte_carlo_summary?.significant ? 'Oui (p < 0.05)' : 'Non'}</span>
-            </div>
-            <div className="mc-item">
-              <span className="label">Underpowered:</span>
-              <span className="value">{detail.monte_carlo_summary?.underpowered ? 'Oui (< 30 trades)' : 'Non'}</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Warnings */}
-        {detail.warnings && detail.warnings.length > 0 && (
-          <section className="detail-section">
-            <h3>Avertissements</h3>
-            <ul className="warnings-list">
-              {detail.warnings.map((w, i) => (
-                <li key={i} className="warning-item">{w}</li>
-              ))}
-            </ul>
-          </section>
-        )}
-      </div>
-    )
-  }
-
   // Vue tableau
   return (
     <div className="research-page">
@@ -642,7 +380,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
         />
       )}
 
-      {filters.strategy && filteredResults.length === 0 && (
+      {filters.strategy && !loading && filteredResults.length === 0 && (
         <div className="info-banner">
           <span>Aucun resultat pour {filters.strategy} avec les filtres actuels</span>
           {filters.minGrade && (
@@ -664,48 +402,64 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
       )}
 
       <div className="results-count">
-        {filteredResults.length} résultat(s) sur {results?.total || 0} total
+        {loading ? 'Chargement...' : `${filteredResults.length} résultat(s) sur ${results?.total || 0} total`}
       </div>
 
       <div className="table-container">
         <table className="results-table">
           <thead>
             <tr>
-              <th style={{ width: '14%' }} onClick={() => handleSort('strategy_name')}>
+              <th style={{ width: '14%' }} onClick={() => !loading ? handleSort('strategy_name') : undefined}>
                 Stratégie {sortBy === 'strategy_name' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '12%' }} onClick={() => handleSort('asset')}>
+              <th style={{ width: '12%' }} onClick={() => !loading ? handleSort('asset') : undefined}>
                 Asset {sortBy === 'asset' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th style={{ width: '5%' }}>TF</th>
-              <th style={{ width: '7%' }} onClick={() => handleSort('grade')}>
+              <th style={{ width: '7%' }} onClick={() => !loading ? handleSort('grade') : undefined}>
                 Grade {sortBy === 'grade' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '8%' }} onClick={() => handleSort('total_score')}>
+              <th style={{ width: '8%' }} onClick={() => !loading ? handleSort('total_score') : undefined}>
                 Score <InfoTooltip term="total_score" /> {sortBy === 'total_score' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '11%' }} onClick={() => handleSort('oos_sharpe')}>
+              <th style={{ width: '11%' }} onClick={() => !loading ? handleSort('oos_sharpe') : undefined}>
                 Sharpe <InfoTooltip term="oos_sharpe" /> {sortBy === 'oos_sharpe' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '11%' }} onClick={() => handleSort('consistency')}>
+              <th style={{ width: '11%' }} onClick={() => !loading ? handleSort('consistency') : undefined}>
                 Consist. <InfoTooltip term="consistency" /> {sortBy === 'consistency' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '9%' }} onClick={() => handleSort('oos_is_ratio')}>
+              <th style={{ width: '9%' }} onClick={() => !loading ? handleSort('oos_is_ratio') : undefined}>
                 OOS/IS <InfoTooltip term="oos_is_ratio" /> {sortBy === 'oos_is_ratio' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '7%' }} onClick={() => handleSort('dsr')}>
+              <th style={{ width: '7%' }} onClick={() => !loading ? handleSort('dsr') : undefined}>
                 DSR <InfoTooltip term="dsr" /> {sortBy === 'dsr' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '10%' }} onClick={() => handleSort('param_stability')}>
+              <th style={{ width: '10%' }} onClick={() => !loading ? handleSort('param_stability') : undefined}>
                 Stab. <InfoTooltip term="param_stability" /> {sortBy === 'param_stability' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '11%' }} onClick={() => handleSort('created_at')}>
+              <th style={{ width: '11%' }} onClick={() => !loading ? handleSort('created_at') : undefined}>
                 Date {sortBy === 'created_at' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
             </tr>
           </thead>
           <tbody>
-            {filteredResults.length === 0 ? (
+            {loading ? (
+              [...Array(10)].map((_, i) => (
+                <tr key={i}>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '80%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '60%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '50%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '30%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '70%' }} /></td>
+                </tr>
+              ))
+            ) : filteredResults.length === 0 ? (
               <tr>
                 <td colSpan={11} style={{ textAlign: 'center', color: '#888', padding: '40px' }}>
                   Aucun résultat trouvé

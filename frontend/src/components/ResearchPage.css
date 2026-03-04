@@ -145,6 +145,7 @@
   border: 1px solid #333;
   border-radius: 8px;
   overflow: hidden;
+  min-height: 400px; /* Réserver de l'espace pour le tableau */
 }
 
 .results-table {
@@ -164,10 +165,7 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-}
-
-.results-table th:hover {
-  background: #1a1a1a;
+  height: 45px; /* Fixer la hauteur du header */
 }
 
 .results-table td {
@@ -177,6 +175,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  height: 48px; /* Fixer la hauteur des lignes */
 }
 
 .clickable-row {
