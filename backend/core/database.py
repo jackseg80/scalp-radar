@@ -18,11 +18,8 @@ from loguru import logger
 
 from backend.core.models import (
     Candle,
-    Direction,
-    MarketRegime,
     SessionState,
     Signal,
-    SignalStrength,
     TimeFrame,
     Trade,
 )

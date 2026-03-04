@@ -10,6 +10,8 @@ Règle de sécurité #1 : JAMAIS de position sans SL.
 
 from __future__ import annotations
 
+from __future__ import annotations
+
 import asyncio
 import copy
 from collections import deque

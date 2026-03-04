@@ -388,7 +388,7 @@ class TestConfigAssets:
         assert "XTZ/USDT" not in symbols, "XTZ/USDT encore présent"
         assert "JUP/USDT" not in symbols, "JUP/USDT encore présent"
         assert "ARB/USDT" in symbols, "ARB/USDT manquant"
-        assert len(symbols) == 19, f"Attendu 19 assets, trouvé {len(symbols)}"
+        assert len(symbols) == 28, f"Attendu 28 assets, trouvé {len(symbols)}"
 
 
 # ─── Test route prefix ────────────────────────────────────────────────────

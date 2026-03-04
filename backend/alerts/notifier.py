@@ -120,9 +120,9 @@ class Notifier:
         if self._telegram:
             now = time.monotonic()
             cooldown = _ANOMALY_COOLDOWNS.get(anomaly_type, _DEFAULT_COOLDOWN)
-            last_sent = self._last_anomaly_sent.get(anomaly_type, 0)
+            last_sent = self._last_anomaly_sent.get(anomaly_type)
 
-            if now - last_sent >= cooldown:
+            if last_sent is None or (now - last_sent >= cooldown):
                 text = f"<b>Anomalie</b>\n{message}"
                 await self._telegram.send_message(text, alert_type="anomaly")
                 self._last_anomaly_sent[anomaly_type] = now

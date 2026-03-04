@@ -309,7 +309,6 @@ async def _run_backtest(db_path: str, body: RunPortfolioRequest, job_id: str) ->
 
         duration = time.monotonic() - t0
 
-        created_at = datetime.now(tz=timezone.utc).isoformat()
         result_id = await save_result_async(
             db_path,
             result,

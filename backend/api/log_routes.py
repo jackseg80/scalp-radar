@@ -7,12 +7,10 @@ et les retourne filtrées par niveau, module, texte et date.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Query
-from loguru import logger
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 

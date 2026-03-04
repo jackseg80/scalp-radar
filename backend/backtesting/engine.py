@@ -6,14 +6,13 @@ le position sizing avec coût SL réel, et l'alignement multi-timeframe.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-import numpy as np
 from loguru import logger
 
-from backend.core.models import Candle, Direction, MarketRegime
+from backend.core.models import Candle, MarketRegime
 from backend.core.position_manager import (
     PositionManager,
     PositionManagerConfig,

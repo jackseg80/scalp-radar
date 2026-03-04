@@ -160,7 +160,7 @@ grid_atr:
     step_days: 60
     embargo_days: 7
   default:
-    timeframe: ["1h"]
+    timeframe: ["1h", "4h"]
     ma_period: [7, 10, 14]
     atr_period: [10, 14]
     atr_multiplier_start: [2.0, 2.5, 3.0]
@@ -170,6 +170,7 @@ grid_atr:
     min_grid_spacing_pct: [1.2, 1.8]
     min_profit_pct: [0.0, 0.4]
     min_atr_pct: [0.0, 0.5, 1.0, 1.5]
+    sides: [["long"]]
 
 # Grid Range ATR : 2160 combos (4×3×5×2×3×3×2)
 grid_range_atr:
