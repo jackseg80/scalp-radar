@@ -14,59 +14,77 @@ done
 
 echo "========================================"
 echo "  SCALP RADAR - Deploy"
-if [ "$CLEAN" = true ]; then
-    echo "  Mode: CLEAN (fresh start)"
-else
-    echo "  Mode: NORMAL (state preserved)"
-fi
+echo "  Mode: $([ "$CLEAN" = true ] && echo "CLEAN (fresh start)" || echo "NORMAL (state preserved)")"
 echo "========================================"
 
-# Créer les dossiers persistants si absents
-mkdir -p data logs
+# 1. Préparation
+mkdir -p data/backups logs
 
-# Reset config files to git version — prod overrides go in .env (gitignored)
+# 2. Sauvegarde de sécurité (DB)
+if [ -f "data/scalp_radar.db" ]; then
+    echo "[*] Sauvegarde de la base de données..."
+    cp data/scalp_radar.db data/backups/scalp_radar_$(date +%Y%m%d_%H%M%S).db
+    # Garder seulement les 5 dernières sauvegardes pour économiser l'espace
+    ls -t data/backups/*.db 2>/dev/null | tail -n +6 | xargs -r rm -f || true
+fi
+
+# 3. Mise à jour du code
 echo "[*] Reset config files..."
 git checkout -- config/
-
-# Pull
 echo "[*] Mise à jour du code..."
 git pull origin main
 
-# Build
+# 4. Build (avec --pull pour les derniers patchs de sécurité)
 echo "[*] Build des images..."
-docker compose build
+docker compose build --pull
 
+# 5. Arrêt des containers
 if [ "$CLEAN" = true ]; then
-    # Kill brutal (pas de sauvegarde graceful au shutdown)
-    echo "[*] Kill backend (pas de sauvegarde état)..."
+    echo "[*] Kill backend (mode CLEAN)..."
     docker compose kill backend || true
     docker compose down --timeout 5 || true
-
-    # Suppression des fichiers state (PAS la DB)
-    echo "[*] 🧹 State files cleaned (fresh start)"
+    echo "[*] 🧹 Nettoyage des fichiers d'état JSON"
     rm -f data/simulator_state.json data/executor_state.json
 else
-    # Graceful shutdown (SIGTERM → lifespan sauvegarde l'état)
-    echo "[*] Arrêt propre des containers..."
+    echo "[*] Arrêt propre (timeout 30s)..."
     docker compose down --timeout 30 || true
-    echo "[*] 📦 State files preserved"
 fi
 
-# Start
+# 6. Lancement
 echo "[*] Lancement..."
 docker compose up -d
 
-# Health check avec rollback
+# 7. Health check avec boucle de retry et diagnostic
 echo "[*] Vérification health..."
-sleep 5
-if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-    echo "[OK] Deploy réussi"
-    echo "[OK] Backend  : http://localhost:8000"
-    echo "[OK] Frontend : http://localhost"
-    echo "[OK] Health   : http://localhost:8000/health"
-else
-    echo "[ERREUR] Health check échoué — rollback"
-    docker compose down
-    docker compose up -d --no-build
-    exit 1
-fi
+MAX_RETRIES=10
+COUNT=0
+HEALTH_URL="http://localhost:8000/health"
+
+while [ $COUNT -lt $MAX_RETRIES ]; do
+    if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
+        echo "[OK] Deploy réussi"
+        echo "[OK] Backend  : http://localhost:8000"
+        echo "[OK] Frontend : http://localhost"
+        
+        # Nettoyage des images Docker inutiles pour libérer de l'espace
+        echo "[*] Nettoyage des images orphelines..."
+        docker image prune -f
+        exit 0
+    fi
+    COUNT=$((COUNT+1))
+    echo "Attente de l'application... ($COUNT/$MAX_RETRIES)"
+    sleep 3
+done
+
+# ECHEC : Diagnostic et Rollback
+echo "========================================"
+echo "[ERREUR] Health check échoué !"
+echo "--- DERNIERS LOGS BACKEND ---"
+docker compose logs --tail=50 backend
+echo "-----------------------------"
+echo "[*] Tentative de Rollback vers les images précédentes..."
+docker compose down
+docker compose up -d --no-build
+echo "[AVERTISSEMENT] Rollback effectué."
+echo "========================================"
+exit 1
