@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
@@ -25,7 +25,7 @@ from backend.strategies.supertrend import SuperTrendStrategy
 from backend.strategies.vwap_rsi import VwapRsiStrategy
 
 if TYPE_CHECKING:
-    from backend.core.config import AppConfig
+    from backend.core.config import AppConfig, StrategyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,23 +57,29 @@ def get_strategy_class(name: str) -> type[BaseStrategy] | None:
     return STRATEGY_MAPPING.get(name)
 
 
+def create_strategy(name: str, config: StrategyConfig) -> BaseStrategy | None:
+    """Instancie une stratégie par son nom et sa config."""
+    strat_cls = get_strategy_class(name)
+    if not strat_cls:
+        return None
+    return strat_cls(config)
+
+
 def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
     """Instancie toutes les stratégies activées dans la config YAML."""
     enabled_instances = []
 
-    for name, strat_config in config.strategies.items():
-        if not strat_config.enabled:
+    # config.strategies est un objet Pydantic (StrategiesConfig)
+    # On itère sur les champs définis
+    for name in config.strategies.model_fields:
+        strat_config = getattr(config.strategies, name)
+        if not strat_config or not getattr(strat_config, "enabled", False):
             continue
 
-        strat_cls = get_strategy_class(name)
-        if strat_cls:
-            try:
-                # Instanciation avec sa config dédiée
-                instance = strat_cls(strat_config)
-                enabled_instances.append(instance)
-            except Exception as e:
-                logger.error("Erreur instanciation stratégie '{}': {}", name, e)
+        instance = create_strategy(name, strat_config)
+        if instance:
+            enabled_instances.append(instance)
         else:
-            logger.warning("Classe de stratégie inconnue: {}", name)
+            logger.warning("Classe de stratégie inconnue: %s", name)
 
     return enabled_instances

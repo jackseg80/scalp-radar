@@ -88,18 +88,19 @@ def test_classify_volatility_high():
 
 def test_resample_with_gaps():
     """Les jours avec < 20 candles sont ignorés."""
-    now = datetime.now(tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+    # Utiliser une date fixe pour éviter les problèmes de frontières UTC variables
+    start_ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
     candles = []
     # Jour 1 : 24 candles (complet)
-    day1 = now - timedelta(days=2)
+    day1 = start_ts
     for h in range(24):
         candles.append(_make_candle(day1 + timedelta(hours=h), 50_000.0))
     # Jour 2 : seulement 10 candles (incomplet → ignoré)
-    day2 = now - timedelta(days=1)
+    day2 = start_ts + timedelta(days=1)
     for h in range(10):
         candles.append(_make_candle(day2 + timedelta(hours=h), 51_000.0))
     # Jour 3 : 22 candles (suffisant)
-    day3 = now
+    day3 = start_ts + timedelta(days=2)
     for h in range(22):
         candles.append(_make_candle(day3 + timedelta(hours=h), 52_000.0))
 

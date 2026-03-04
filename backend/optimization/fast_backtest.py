@@ -1311,10 +1311,14 @@ def _simulate_trades(
     Dispatch vers la version JIT si numba est disponible, sinon
     boucle Python fallback.
 
-    Retourne (trade_pnls, trade_returns, final_capital).
+    Note: le test 'test_python_fallback' peut forcer la version Python
+    en désactivant NUMBA_AVAILABLE via mock ou env var.
     """
+    import os
+    force_python = os.environ.get("PYTHON_JIT") == "0"
+
     # Dispatch numba (par stratégie)
-    if NUMBA_AVAILABLE:
+    if NUMBA_AVAILABLE and not force_python:
         if strategy_name == "vwap_rsi":
             return _run_simulate_vwap_rsi(longs, shorts, cache, params, bt_config)
         if strategy_name == "momentum":
