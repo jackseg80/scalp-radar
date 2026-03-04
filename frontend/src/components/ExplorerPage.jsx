@@ -647,7 +647,7 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
                 Sous-grille de paramètres
                 <span className="combo-badge">{comboCount} combos</span>
               </h4>
-              {paramsExpanded && (
+              {paramsExpanded ? (
                 <>
                   <div className="params-list">
                     {Object.entries(paramGrid.params).map(([pName, pConfig]) => {
@@ -708,7 +708,7 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
                     )}
                   </div>
                 </>
-              )}
+              ) : null}
 
               <div className="divider" />
               <h4>Axes de la heatmap</h4>
@@ -759,6 +759,14 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
             </>
           )}
 
+          {!paramGrid && strategy && (
+            <div className="skeleton-params">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="skeleton skeleton-cell" style={{ height: 40, width: '100%', marginBottom: 12 }} />
+              ))}
+            </div>
+          )}
+
           <div className="divider" />
           <div className="action-buttons">
             <button
@@ -791,7 +799,17 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
               <p>Sélectionnez une stratégie et cliquez sur un asset pour voir la heatmap</p>
               {strategy && <p style={{ fontSize: '12px', color: '#666' }}>Cochez des assets puis cliquez sur "Lancer WFO" pour les tester</p>}
             </div>
-          ) : !heatmapData || heatmapData.x_values.length === 0 ? (
+          ) : !heatmapData ? (
+            <>
+              <div className="heatmap-header">
+                <h3>
+                  Heatmap {strategy} × {viewAsset}
+                </h3>
+                <div className="skeleton skeleton-line" style={{ width: '200px' }} />
+              </div>
+              <div className="skeleton skeleton-heatmap" />
+            </>
+          ) : heatmapData.x_values.length === 0 ? (
             <div className="empty-state">
               <p>Aucun résultat existant pour {viewAsset}.</p>
               <p>Cochez cet asset et lancez un WFO pour remplir la heatmap.</p>
