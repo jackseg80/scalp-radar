@@ -14,22 +14,22 @@ and presents results via a real-time dashboard.
 
 ## Documentation
 
-- **[ROADMAP.md](docs/ROADMAP.md)** — Roadmap Phases 1-7, sprints détaillés, **décompte de tests (fait autorité)**
-  - Mettre à jour après chaque sprint : résultats, bugs, nombre de tests, prochaine étape
-- **[docs/plans/](docs/plans/)** — Plans de sprint archivés (1 fichier par sprint)
-  - Copier le plan dans `docs/plans/sprint-{n}-{nom}.md` à chaque fin de sprint
-- **[docs/audit/](docs/audit/)** — Rapports d'audit (`audit-{sujet}-{YYYYMMDD}.md`)
-- **[STRATEGIES.md](docs/STRATEGIES.md)** — Guide complet des 17 stratégies
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Architecture runtime, flux de données, boot/shutdown
-- **[COMMANDS.md](COMMANDS.md)** — Toutes les commandes CLI — **consulter avant de proposer des commandes**
-- **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Dépannage production
+- **[ROADMAP.md](docs/ROADMAP.md)** — Roadmap Phases 1-7, detailed sprints, **test count (authoritative)**
+  - Update after each sprint: results, bugs, test count, next step
+- **[docs/plans/](docs/plans/)** — Archived sprint plans (1 file per sprint)
+  - Copy plan to `docs/plans/sprint-{n}-{name}.md` at the end of each sprint
+- **[docs/audit/](docs/audit/)** — Audit reports (`audit-{subject}-{YYYYMMDD}.md`)
+- **[STRATEGIES.md](docs/STRATEGIES.md)** — Full guide for the 17 strategies
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Runtime architecture, data flow, boot/shutdown
+- **[COMMANDS.md](COMMANDS.md)** — All CLI commands — **consult before proposing commands**
+- **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Production troubleshooting
 
 ## Developer Profile
 
 - Experienced crypto trader (swing trading, futures x10-x30 on Bitget)
-- Language: French — comments and UI can be in French
-- **Platform: Windows** — code doit fonctionner sur Windows (paths, CRLF pour .bat)
-- **Git: ne jamais ajouter de Co-Authored-By dans les commits**
+- **Communication: French**, **Documentation/Code: English** (Comments/UI can be French per user preference)
+- **Platform: Windows** — code must work on Windows (paths, CRLF for .bat)
+- **Git: NEVER add Co-Authored-By in commits**
 
 ## Architecture Decisions
 
@@ -49,13 +49,13 @@ and presents results via a real-time dashboard.
 
 ## Key Architecture Principles
 
-- **pyproject.toml à la racine** (pas dans backend/) → imports propres `from backend.core.models`
-- **Process unique** : DataEngine intégré dans le lifespan FastAPI (pas de process séparé)
-- **100% async** : database, data engine, scripts CLI utilisent `asyncio.run()`
-- **Buffer rolling borné** : max 500 bougies par (symbol, timeframe) en mémoire
-- **Rate limiter par catégorie** : market_data, trade, account, position (token bucket)
-- **SL réaliste** : coût SL inclut distance + taker_fee + slippage (configurable)
-- **Groupes de corrélation** : limite l'exposition sur assets corrélés
+- **pyproject.toml at root** (not in backend/) → clean imports `from backend.core.models`
+- **Single process**: DataEngine integrated into FastAPI lifespan (no separate process)
+- **100% async**: database, data engine, CLI scripts use `asyncio.run()`
+- **Bounded rolling buffer**: max 500 candles per (symbol, timeframe) in memory
+- **Rate limiter by category**: market_data, trade, account, position (token bucket)
+- **Realistic SL**: SL cost includes distance + taker_fee + slippage (configurable)
+- **Correlation groups**: limits exposure on correlated assets
 
 ## Project Structure
 
@@ -64,7 +64,7 @@ scalp-radar/
 ├── config/            # YAML configs (assets, strategies, risk, exchanges, param_grids)
 ├── backend/
 │   ├── core/          # models, config, database, indicators, state_manager, data_engine
-│   ├── strategies/    # base, base_grid, factory + 17 stratégies
+│   ├── strategies/    # base, base_grid, factory + 17 strategies
 │   ├── optimization/  # walk_forward, overfitting, report, indicator_cache, fast_backtest
 │   ├── backtesting/   # engine, multi_engine, simulator, arena, portfolio_engine
 │   ├── execution/     # executor, executor_manager, risk_manager, adaptive_selector
@@ -72,54 +72,54 @@ scalp-radar/
 │   ├── alerts/        # telegram, notifier, heartbeat
 │   └── monitoring/    # watchdog
 ├── frontend/          # React + Vite (48 components)
-├── tests/             # pytest (~1840 tests — voir ROADMAP.md)
+├── tests/             # pytest (~1840 tests — see ROADMAP.md)
 ├── scripts/           # backfill, fetch_history, optimize, portfolio_backtest, stress_test_leverage
-├── docs/plans/        # Sprint plans archivés
-└── docs/audit/        # Rapports d'audit
+├── docs/plans/        # Archived sprint plans
+└── docs/audit/        # Audit reports
 ```
 
-## Trading Strategies (17 implémentées)
+## Trading Strategies (17 implemented)
 
-**5m Scalp (4)** : vwap_rsi, momentum, funding (paper), liquidation (paper)
+**5m Scalp (4)**: vwap_rsi, momentum, funding (paper), liquidation (paper)
 
-**1h Swing (4)** : bollinger_mr, donchian_breakout, supertrend, boltrend (`enabled: false`)
+**1h Swing (4)**: bollinger_mr, donchian_breakout, supertrend, boltrend (`enabled: false`)
 
-**1h Grid/DCA (9)** :
-- `grid_atr` — Enveloppes ATR adaptatives (LIVE 7x, 14 assets)
+**1h Grid/DCA (9)**:
+- `grid_atr` — Adaptive ATR envelopes (LIVE 7x, 14 assets)
 - `grid_multi_tf` — Supertrend 4h + Grid ATR 1h (LIVE 3x, 14 assets)
-- `grid_boltrend` — DCA Bollinger breakout + SMA, TP inversé (paper, 2 assets, mise en pause Sprint 38b)
-- `grid_momentum` — Donchian breakout + DCA pullback (`enabled: false`, WFO à lancer)
-- `grid_range_atr` — Bidirectionnel LONG+SHORT (`enabled: false`)
-- `grid_funding` — DCA sur funding négatif (`enabled: false`)
-- `grid_trend` — EMA cross + ADX + trailing stop ATR (`enabled: false`, échoue bear market)
-- `envelope_dca` / `envelope_dca_short` — (`enabled: false`, remplacés par grid_atr)
+- `grid_boltrend` — DCA Bollinger breakout + SMA, inverse TP (paper, 2 assets, paused Sprint 38b)
+- `grid_momentum` — Donchian breakout + DCA pullback (`enabled: false`, WFO to be launched)
+- `grid_range_atr` — Bidirectional LONG+SHORT (`enabled: false`)
+- `grid_funding` — DCA on negative funding (`enabled: false`)
+- `grid_trend` — EMA cross + ADX + ATR trailing stop (`enabled: false`, fails in bear market)
+- `envelope_dca` / `envelope_dca_short` — (`enabled: false`, replaced by grid_atr)
 
-Détails complets : voir **[STRATEGIES.md](docs/STRATEGIES.md)** | Workflow WFO : voir **[WORKFLOW_WFO.md](docs/WORKFLOW_WFO.md)**
+Full details: see **[STRATEGIES.md](docs/STRATEGIES.md)** | WFO Workflow: see **[WORKFLOW_WFO.md](docs/WORKFLOW_WFO.md)**
 
 ## Critical Design Requirements
 
-- **Kill switch** : auto-stop à 45% drawdown (global + per-runner), persisté across restarts
-- **Margin accounting** : `margin = notional / leverage` déduit à l'ouverture, restitué à fermeture
-- **Entry fees** : comptabilisées à la clôture via `net_pnl` uniquement (jamais à l'ouverture)
-- **Position sizing** : `capital / nb_assets / levels`, margin guard 70% (`max_margin_ratio`)
-- **Fees** : Bitget taker 0.06%, maker 0.02% — toujours net de fees
-- **Règle #1** : JAMAIS de position sans SL (retry 2x → emergency close)
-- **Multi-Executor** : un Executor par stratégie live, `ExecutorManager` agrège via duck typing
-- **Sync WFO** : push auto local → serveur après chaque run, best-effort
+- **Kill switch**: auto-stop at 45% drawdown (global + per-runner), persisted across restarts
+- **Margin accounting**: `margin = notional / leverage` deducted at open, returned at close
+- **Entry fees**: accounted for at close via `net_pnl` only (never at open)
+- **Position sizing**: `capital / nb_assets / levels`, margin guard 70% (`max_margin_ratio`)
+- **Fees**: Bitget taker 0.06%, maker 0.02% — always net of fees
+- **Rule #1**: NEVER a position without SL (retry 2x → emergency close)
+- **Multi-Executor**: one Executor per live strategy, `ExecutorManager` aggregates via duck typing
+- **WFO Sync**: auto push local → server after each run, best-effort
 
 ## Config Files (5 YAML)
 
-- `assets.yaml` — 19 assets, timeframes, groupes corrélation
-- `strategies.yaml` — 17 stratégies + per_asset overrides
+- `assets.yaml` — 19 assets, timeframes, correlation groups
+- `strategies.yaml` — 17 strategies + per_asset overrides
 - `risk.yaml` — kill switch, sizing, fees, slippage, max_margin_ratio
 - `exchanges.yaml` — Bitget WebSocket, rate limits
-- `param_grids.yaml` — espaces de recherche WFO + config per-strategy
+- `param_grids.yaml` — WFO search spaces + per-strategy config
 
-## Lifespan Complet (server.py)
+## Complete Lifespan (server.py)
 
-**Startup :** DB → Telegram → DataEngine → StateManager → Simulator.start() → Arena → AdaptiveSelector → ExecutorManager → Watchdog → Heartbeat
+**Startup:** DB → Telegram → DataEngine → StateManager → Simulator.start() → Arena → AdaptiveSelector → ExecutorManager → Watchdog → Heartbeat
 
-**Shutdown :** notify → heartbeat → watchdog → selector → executor save+stop → state_manager → simulator → data_engine → db
+**Shutdown:** notify → heartbeat → watchdog → selector → executor save+stop → state_manager → simulator → data_engine → db
 
 ## Dev Workflow
 
@@ -127,14 +127,14 @@ Détails complets : voir **[STRATEGIES.md](docs/STRATEGIES.md)** | Workflow WFO 
 Windows (VSCode) → git push → SSH + deploy.sh → docker compose up -d → curl /health
 ```
 
-- `deploy.sh --clean` : fresh start sans perdre la DB
-- **JAMAIS éditer `config/*.yaml` sur le serveur** — overrides via `.env` uniquement
-- Voir **[COMMANDS.md](COMMANDS.md)** et **`.claude/rules/deployment.md`** pour détails
+- `deploy.sh --clean`: fresh start without losing the DB
+- **NEVER edit `config/*.yaml` on the server** — overrides via `.env` only
+- See **[COMMANDS.md](COMMANDS.md)** and **`.claude/rules/deployment.md`** for details
 
 ## References
 
 - Bitget API docs: <https://www.bitget.com/api-doc/>
 - ccxt Bitget: <https://docs.ccxt.com/#/exchanges/bitget>
 - Frontend prototype: `docs/prototypes/Scalp radar v2.jsx`
-- Plans détaillés : `docs/plans/sprint-{n}-*.md`
-- Pièges résolus : `.claude/rules/` (git, testing, grid-strategy, deployment, wfo-optimization)
+- Detailed plans: `docs/plans/sprint-{n}-*.md`
+- Resolved pitfalls: `.claude/rules/` (git, testing, grid-strategy, deployment, wfo-optimization)
