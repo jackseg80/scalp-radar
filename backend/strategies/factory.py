@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
@@ -66,20 +66,31 @@ def create_strategy(name: str, config: StrategyConfig) -> BaseStrategy | None:
 
 
 def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
-    """Instancie toutes les stratégies activées dans la config YAML."""
+    """Instancie toutes les stratégies activées dans la config YAML.
+    
+    Respecte également le filtre ACTIVE_STRATEGIES du .env s'il est présent.
+    """
     enabled_instances = []
 
-    # config.strategies est un objet Pydantic (StrategiesConfig)
-    # On itère sur les champs définis
-    for name in config.strategies.model_fields:
-        strat_config = getattr(config.strategies, name)
-        if not strat_config or not getattr(strat_config, "enabled", False):
+    # Correction Pydantic V2.11+ : accès model_fields via la classe
+    strategies_model = config.strategies.__class__
+    
+    # Récupérer le filtre des stratégies actives (si défini dans AppConfig)
+    active_filter = getattr(config, "_active_strategies", [])
+    
+    for name in strategies_model.model_fields:
+        # 1. Si un filtre est présent, la stratégie doit être dedans
+        if active_filter and name not in active_filter:
             continue
-
-        instance = create_strategy(name, strat_config)
-        if instance:
-            enabled_instances.append(instance)
-        else:
-            logger.warning("Classe de stratégie inconnue: %s", name)
+            
+        strat_config = getattr(config.strategies, name)
+        
+        # 2. La stratégie doit être activée dans sa config propre
+        if strat_config and getattr(strat_config, "enabled", False):
+            instance = create_strategy(name, strat_config)
+            if instance:
+                enabled_instances.append(instance)
+            else:
+                logger.warning("Classe de stratégie inconnue: %s", name)
 
     return enabled_instances
