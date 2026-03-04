@@ -4,60 +4,6 @@
  * Utilise useApi('/api/simulator/conditions', 10000) pour les données de conditions.
  * Colonnes dynamiques : Score/Signaux masqués si aucune stratégie mono, Dist.SMA affiché si grid actif.
  */
-import { useState, useMemo, Fragment } from 'react'
-import { useApi } from '../hooks/useApi'
-import SignalDots from './SignalDots'
-import SignalDetail from './SignalDetail'
-import { formatPrice } from '../utils/format'
-import GridDetail from './GridDetail'
-import Spark from './Spark'
-import Tooltip from './Tooltip'
-import ActivePositions from './ActivePositions'
-import CollapsibleCard from './CollapsibleCard'
-import { buildGridLookupBySymbol } from '../hooks/useFilteredWsData'
-import { useStrategyContext } from '../contexts/StrategyContext'
-
-function getAssetScore(asset) {
-  const strats = asset.strategies || {}
-  let bestRatio = 0
-  Object.values(strats).forEach(s => {
-    const conditions = s.conditions || []
-    const total = conditions.length || 1
-    const met = conditions.filter(c => c.met).length
-    const ratio = met / total
-    if (ratio > bestRatio) bestRatio = ratio
-  })
-  return bestRatio
-}
-
-function scoreColor(score) {
-  if (score >= 0.75) return 'var(--accent)'
-  if (score >= 0.55) return 'var(--yellow)'
-  if (score >= 0.35) return 'var(--orange)'
-  return 'var(--red)'
-}
-
-function getDirection(indicators, gridInfo) {
-  // Si grid actif avec positions ouvertes, montrer la direction des positions
-  if (gridInfo && gridInfo.levels_open > 0) {
-    return gridInfo.direction === 'long' ? 'LONG' : 'SHORT'
-  }
-  // Fallback mono : RSI/VWAP
-  if (!indicators) return null
-  const rsi = indicators.rsi_14
-  const vwap = indicators.vwap_distance_pct
-  if (rsi == null) return null
-  if (rsi < 30) return 'LONG'
-  if (rsi > 70) return 'SHORT'
-  if (vwap != null) {
-    if (vwap < -0.3) return 'LONG'
-    if (vwap > 0.3) return 'SHORT'
-  }
-  return null
-}
-
-const GRADE_ORDER = { A: 5, B: 4, C: 3, D: 2, F: 1 }
-
 import { useState, useMemo, Fragment, useEffect, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import SignalDots from './SignalDots'
