@@ -809,14 +809,41 @@ tr:last-child td { border-bottom: none; }
   50% { opacity: 0.4; }
 }
 
- . s c a n n e r - t a b l e   t h [ o n C l i c k ] : h o v e r   { 
-     b a c k g r o u n d :   v a r ( - - b g - c a r d - h o v e r ) ; 
-     c o l o r :   v a r ( - - t e x t - b r i g h t ) ; 
- } 
- 
- . s c a n n e r - t a b l e   t h . a c t i v e - s o r t   { 
-     c o l o r :   v a r ( - - a c c e n t ) ; 
-     b a c k g r o u n d :   r g b a ( 0 ,   2 5 5 ,   1 5 7 ,   0 . 0 5 ) ; 
- } 
-  
- 
+/* ─── SCANNER ENHANCEMENTS ────────────────────────────────────────────── */
+.scanner-table th[onClick]:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+.scanner-table th.active-sort {
+  color: var(--accent);
+  background: rgba(0, 255, 157, 0.05);
+}
+
+/* Sticky Header */
+.scanner-table--sticky thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-secondary);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Price Flash Animations */
+@keyframes flash-up {
+  0% { background-color: rgba(0, 255, 157, 0.25); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flash-down {
+  0% { background-color: rgba(255, 68, 102, 0.25); }
+  100% { background-color: transparent; }
+}
+
+.price-flash-up {
+  animation: flash-up 0.6s ease-out;
+}
+
+.price-flash-down {
+  animation: flash-down 0.6s ease-out;
+}

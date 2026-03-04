@@ -58,6 +58,86 @@ function getDirection(indicators, gridInfo) {
 
 const GRADE_ORDER = { A: 5, B: 4, C: 3, D: 2, F: 1 }
 
+import { useState, useMemo, Fragment, useEffect, useRef } from 'react'
+import { useApi } from '../hooks/useApi'
+import SignalDots from './SignalDots'
+import SignalDetail from './SignalDetail'
+import { formatPrice } from '../utils/format'
+import GridDetail from './GridDetail'
+import Spark from './Spark'
+import Tooltip from './Tooltip'
+import ActivePositions from './ActivePositions'
+import CollapsibleCard from './CollapsibleCard'
+import { buildGridLookupBySymbol } from '../hooks/useFilteredWsData'
+import { useStrategyContext } from '../contexts/StrategyContext'
+import { GRID_STRATEGIES, GRADE_ORDER, SCANNER_COLUMNS } from '../constants'
+
+function getAssetScore(asset) {
+  const strats = asset.strategies || {}
+  let bestRatio = 0
+  Object.values(strats).forEach(s => {
+    const conditions = s.conditions || []
+    const total = conditions.length || 1
+    const met = conditions.filter(c => c.met).length
+    const ratio = met / total
+    if (ratio > bestRatio) bestRatio = ratio
+  })
+  return bestRatio
+}
+
+function scoreColor(score) {
+  if (score >= 0.75) return 'var(--accent)'
+  if (score >= 0.55) return 'var(--yellow)'
+  if (score >= 0.35) return 'var(--orange)'
+  return 'var(--red)'
+}
+
+function getDirection(indicators, gridInfo) {
+  // Si grid actif avec positions ouvertes, montrer la direction des positions
+  if (gridInfo && gridInfo.levels_open > 0) {
+    return gridInfo.direction === 'long' ? 'LONG' : 'SHORT'
+  }
+  // Fallback mono : RSI/VWAP
+  if (!indicators) return null
+  const rsi = indicators.rsi_14
+  const vwap = indicators.vwap_distance_pct
+  if (rsi == null) return null
+  if (rsi < 30) return 'LONG'
+  if (rsi > 70) return 'SHORT'
+  if (vwap != null) {
+    if (vwap < -0.3) return 'LONG'
+    if (vwap > 0.3) return 'SHORT'
+  }
+  return null
+}
+
+// Composant pour l'affichage du prix avec flash
+function PriceCell({ symbol, price }) {
+  const prevPriceRef = useRef(price)
+  const [flash, setFlash] = useState(null) // 'up', 'down', null
+
+  useEffect(() => {
+    if (price > prevPriceRef.current) {
+      setFlash('up')
+      const timer = setTimeout(() => setFlash(null), 500)
+      return () => clearTimeout(timer)
+    } else if (price < prevPriceRef.current) {
+      setFlash('down')
+      const timer = setTimeout(() => setFlash(null), 500)
+      return () => clearTimeout(timer)
+    }
+    prevPriceRef.current = price
+  }, [price])
+
+  const flashClass = flash === 'up' ? 'price-flash-up' : flash === 'down' ? 'price-flash-down' : ''
+
+  return (
+    <td className={`mono ${flashClass}`}>
+      {price != null ? formatPrice(price) : '--'}
+    </td>
+  )
+}
+
 export default function Scanner({ wsData }) {
   const { data, loading } = useApi('/api/simulator/conditions', 10000)
   const { data: gradesData } = useApi('/api/optimization/results?latest_only=true&limit=500', 60000)
@@ -102,11 +182,11 @@ export default function Scanner({ wsData }) {
   const getSortValue = (asset, key) => {
     const gridInfo = gridLookup[asset.symbol]
     switch (key) {
-      case 'symbol': return asset.symbol
-      case 'change': return asset.change_pct ?? -999
-      case 'dir': return getDirection(asset.indicators, gridInfo) || ''
-      case 'grade': return GRADE_ORDER[gradesLookup[asset.symbol]?.grade || 'F'] || 0
-      case 'dist_sma':
+      case SCANNER_COLUMNS.SYMBOL: return asset.symbol
+      case SCANNER_COLUMNS.CHANGE: return asset.change_pct ?? -999
+      case SCANNER_COLUMNS.DIR: return getDirection(asset.indicators, gridInfo) || ''
+      case SCANNER_COLUMNS.GRADE: return GRADE_ORDER[gradesLookup[asset.symbol]?.grade || 'F'] || 0
+      case SCANNER_COLUMNS.DIST_SMA:
         if (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0) {
           return ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
         }
@@ -152,10 +232,6 @@ export default function Scanner({ wsData }) {
   }, [enrichedAssets, strategyFilter, watchedSymbols, inPositionSymbols])
 
   // Détecter quels types de stratégies sont actives
-  const GRID_STRATEGIES = new Set([
-    'grid_atr', 'grid_boltrend', 'grid_multi_tf', 'grid_range_atr',
-    'grid_trend', 'grid_funding', 'grid_momentum', 'envelope_dca', 'envelope_dca_short',
-  ])
   const hasGridStrategies = Object.keys(gridLookup).length > 0
     || (strategyFilter && GRID_STRATEGIES.has(strategyFilter))
   const hasMonoStrategies = filteredAssets.some(a => {
@@ -164,7 +240,6 @@ export default function Scanner({ wsData }) {
   })
 
   // Nombre de colonnes dynamique pour colSpan du détail
-  // Base: Actif, Prix, Var, Dir, Trend, Grade, Grid = 7
   const colCount = 7 + (hasMonoStrategies ? 2 : 0) + (hasGridStrategies ? 1 : 0)
 
   // Trier les assets
@@ -254,33 +329,33 @@ export default function Scanner({ wsData }) {
       )}
 
       {sortedAssets.length > 0 && (
-        <table className="scanner-table">
+        <table className="scanner-table scanner-table--sticky">
           <thead>
             <tr>
               <th 
                 style={{ width: '14%', cursor: 'pointer' }} 
-                onClick={() => handleSort('symbol')}
-                className={sortKey === 'symbol' ? 'active-sort' : ''}
+                onClick={() => handleSort(SCANNER_COLUMNS.SYMBOL)}
+                className={sortKey === SCANNER_COLUMNS.SYMBOL ? 'active-sort' : ''}
               >
-                Actif {sortKey === 'symbol' && (sortDirection === 'asc' ? '↑' : '↓')}
+                Actif {sortKey === SCANNER_COLUMNS.SYMBOL && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
               <th style={{ width: '10%' }}>Prix</th>
               <th 
                 style={{ width: '8%', cursor: 'pointer' }} 
-                onClick={() => handleSort('change')}
-                className={sortKey === 'change' ? 'active-sort' : ''}
+                onClick={() => handleSort(SCANNER_COLUMNS.CHANGE)}
+                className={sortKey === SCANNER_COLUMNS.CHANGE ? 'active-sort' : ''}
               >
                 <Tooltip content="Variation de prix entre les 2 dernières bougies 1 min">
-                  Var. {sortKey === 'change' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  Var. {sortKey === SCANNER_COLUMNS.CHANGE && (sortDirection === 'asc' ? '↑' : '↓')}
                 </Tooltip>
               </th>
               <th 
                 style={{ width: '7%', cursor: 'pointer' }} 
-                onClick={() => handleSort('dir')}
-                className={sortKey === 'dir' ? 'active-sort' : ''}
+                onClick={() => handleSort(SCANNER_COLUMNS.DIR)}
+                className={sortKey === SCANNER_COLUMNS.DIR ? 'active-sort' : ''}
               >
                 <Tooltip content="Direction suggérée par les indicateurs ou positions grid ouvertes">
-                  Dir. {sortKey === 'dir' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  Dir. {sortKey === SCANNER_COLUMNS.DIR && (sortDirection === 'asc' ? '↑' : '↓')}
                 </Tooltip>
               </th>
               <th style={{ width: '12%' }}><Tooltip content="Sparkline des 60 derniers prix de clôture (1 min)">Trend</Tooltip></th>
@@ -289,11 +364,11 @@ export default function Scanner({ wsData }) {
               )}
               <th 
                 style={{ width: '7%', cursor: 'pointer' }} 
-                onClick={() => handleSort('grade')}
-                className={sortKey === 'grade' ? 'active-sort' : ''}
+                onClick={() => handleSort(SCANNER_COLUMNS.GRADE)}
+                className={sortKey === SCANNER_COLUMNS.GRADE ? 'active-sort' : ''}
               >
                 <Tooltip content="Grade WFO de la stratégie (A=excellent, F=mauvais)">
-                  Grade {sortKey === 'grade' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  Grade {sortKey === SCANNER_COLUMNS.GRADE && (sortDirection === 'asc' ? '↑' : '↓')}
                 </Tooltip>
               </th>
               {hasMonoStrategies && (
@@ -302,11 +377,11 @@ export default function Scanner({ wsData }) {
               {hasGridStrategies && (
                 <th 
                   style={{ width: '9%', cursor: 'pointer' }} 
-                  onClick={() => handleSort('dist_sma')}
-                  className={sortKey === 'dist_sma' ? 'active-sort' : ''}
+                  onClick={() => handleSort(SCANNER_COLUMNS.DIST_SMA)}
+                  className={sortKey === SCANNER_COLUMNS.DIST_SMA ? 'active-sort' : ''}
                 >
                   <Tooltip content="Distance du prix à la SMA (négatif = sous la SMA)">
-                    Dist.SMA {sortKey === 'dist_sma' && (sortDirection === 'asc' ? '↑' : '↓')}
+                    Dist.SMA {sortKey === SCANNER_COLUMNS.DIST_SMA && (sortDirection === 'asc' ? '↑' : '↓')}
                   </Tooltip>
                 </th>
               )}
@@ -336,9 +411,7 @@ export default function Scanner({ wsData }) {
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asset.symbol}</span>
                       </div>
                     </td>
-                    <td>
-                      {asset.price != null ? formatPrice(asset.price) : '--'}
-                    </td>
+                    <PriceCell price={asset.price} />
                     <td>
                       {changePct != null ? (
                         <span style={{ color: changePct >= 0 ? 'var(--accent)' : 'var(--red)', fontWeight: 600 }}>
