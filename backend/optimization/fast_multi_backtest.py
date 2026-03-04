@@ -184,7 +184,6 @@ def _simulate_grid_common(
     initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
-    maker_fee = bt_config.maker_fee
     slippage_pct = bt_config.slippage_pct
     max_margin_ratio = bt_config.max_margin_ratio
     max_dd_threshold = bt_config.max_wfo_drawdown_pct / 100
@@ -567,7 +566,6 @@ def _simulate_grid_range(
     initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
-    maker_fee = bt_config.maker_fee
     slippage_pct = bt_config.slippage_pct
     max_margin_ratio = bt_config.max_margin_ratio  # Sprint 56: margin guard
     n = cache.n_candles
@@ -1051,7 +1049,6 @@ def _simulate_grid_boltrend(
     initial_capital = capital
     leverage = bt_config.leverage
     taker_fee = bt_config.taker_fee
-    maker_fee = bt_config.maker_fee
     slippage_pct = bt_config.slippage_pct
     max_margin_ratio = bt_config.max_margin_ratio  # Sprint 56: margin guard
 

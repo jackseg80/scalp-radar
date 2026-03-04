@@ -1,12 +1,10 @@
-"""Factory pour créer les stratégies depuis la config."""
+"""Factory pour l'instanciation des stratégies — Scalp Radar."""
 
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from backend.core.config import AppConfig
-
-logger = logging.getLogger(__name__)
 from backend.strategies.base import BaseStrategy
 from backend.strategies.bollinger_mr import BollingerMRStrategy
 from backend.strategies.boltrend import BolTrendStrategy
@@ -26,86 +24,56 @@ from backend.strategies.momentum import MomentumStrategy
 from backend.strategies.supertrend import SuperTrendStrategy
 from backend.strategies.vwap_rsi import VwapRsiStrategy
 
+if TYPE_CHECKING:
+    from backend.core.config import AppConfig
 
-def create_strategy(name: str, config: AppConfig) -> BaseStrategy:
-    """Crée une stratégie par nom depuis la config."""
-    strategies_config = config.strategies
-    mapping: dict[str, tuple] = {
-        "vwap_rsi": (VwapRsiStrategy, strategies_config.vwap_rsi),
-        "momentum": (MomentumStrategy, strategies_config.momentum),
-        "funding": (FundingStrategy, strategies_config.funding),
-        "liquidation": (LiquidationStrategy, strategies_config.liquidation),
-        "bollinger_mr": (BollingerMRStrategy, strategies_config.bollinger_mr),
-        "donchian_breakout": (DonchianBreakoutStrategy, strategies_config.donchian_breakout),
-        "supertrend": (SuperTrendStrategy, strategies_config.supertrend),
-        "boltrend": (BolTrendStrategy, strategies_config.boltrend),
-        "envelope_dca": (EnvelopeDCAStrategy, strategies_config.envelope_dca),
-        "envelope_dca_short": (EnvelopeDCAShortStrategy, strategies_config.envelope_dca_short),
-        "grid_atr": (GridATRStrategy, strategies_config.grid_atr),
-        "grid_range_atr": (GridRangeATRStrategy, strategies_config.grid_range_atr),
-        "grid_multi_tf": (GridMultiTFStrategy, strategies_config.grid_multi_tf),
-        "grid_funding": (GridFundingStrategy, strategies_config.grid_funding),
-        "grid_trend": (GridTrendStrategy, strategies_config.grid_trend),
-        "grid_boltrend": (GridBolTrendStrategy, strategies_config.grid_boltrend),
-        "grid_momentum": (GridMomentumStrategy, strategies_config.grid_momentum),
-    }
-    if name not in mapping:
-        raise ValueError(f"Stratégie inconnue : {name}")
+logger = logging.getLogger(__name__)
 
-    cls, strat_config = mapping[name]
-    return cls(strat_config)
+# Mapping nom -> classe
+STRATEGY_MAPPING: dict[str, type[BaseStrategy]] = {
+    "vwap_rsi": VwapRsiStrategy,
+    "momentum": MomentumStrategy,
+    "funding": FundingStrategy,
+    "liquidation": LiquidationStrategy,
+    "bollinger_mr": BollingerMRStrategy,
+    "donchian_breakout": DonchianBreakoutStrategy,
+    "supertrend": SuperTrendStrategy,
+    "boltrend": BolTrendStrategy,
+    # Multi-position (Grid/DCA)
+    "envelope_dca": EnvelopeDCAStrategy,
+    "envelope_dca_short": EnvelopeDCAShortStrategy,
+    "grid_atr": GridATRStrategy,
+    "grid_multi_tf": GridMultiTFStrategy,
+    "grid_funding": GridFundingStrategy,
+    "grid_trend": GridTrendStrategy,
+    "grid_range_atr": GridRangeATRStrategy,
+    "grid_boltrend": GridBolTrendStrategy,
+    "grid_momentum": GridMomentumStrategy,
+}
+
+
+def get_strategy_class(name: str) -> type[BaseStrategy] | None:
+    """Retourne la classe de stratégie par son nom technique."""
+    return STRATEGY_MAPPING.get(name)
 
 
 def get_enabled_strategies(config: AppConfig) -> list[BaseStrategy]:
-    """Retourne la liste des stratégies activées dans la config."""
-    strategies: list[BaseStrategy] = []
-    strats = config.strategies
+    """Instancie toutes les stratégies activées dans la config YAML."""
+    enabled_instances = []
 
-    if strats.vwap_rsi.enabled:
-        strategies.append(VwapRsiStrategy(strats.vwap_rsi))
-    if strats.momentum.enabled:
-        strategies.append(MomentumStrategy(strats.momentum))
-    if strats.funding.enabled:
-        strategies.append(FundingStrategy(strats.funding))
-    if strats.liquidation.enabled:
-        strategies.append(LiquidationStrategy(strats.liquidation))
-    if strats.bollinger_mr.enabled:
-        strategies.append(BollingerMRStrategy(strats.bollinger_mr))
-    if strats.donchian_breakout.enabled:
-        strategies.append(DonchianBreakoutStrategy(strats.donchian_breakout))
-    if strats.supertrend.enabled:
-        strategies.append(SuperTrendStrategy(strats.supertrend))
-    if strats.boltrend.enabled:
-        strategies.append(BolTrendStrategy(strats.boltrend))
-    if strats.envelope_dca.enabled:
-        strategies.append(EnvelopeDCAStrategy(strats.envelope_dca))
-    if strats.envelope_dca_short.enabled:
-        strategies.append(EnvelopeDCAShortStrategy(strats.envelope_dca_short))
-    if strats.grid_atr.enabled:
-        strategies.append(GridATRStrategy(strats.grid_atr))
-    if strats.grid_range_atr.enabled:
-        strategies.append(GridRangeATRStrategy(strats.grid_range_atr))
-    if strats.grid_multi_tf.enabled:
-        strategies.append(GridMultiTFStrategy(strats.grid_multi_tf))
-    if strats.grid_funding.enabled:
-        strategies.append(GridFundingStrategy(strats.grid_funding))
-    if strats.grid_trend.enabled:
-        strategies.append(GridTrendStrategy(strats.grid_trend))
-    if strats.grid_boltrend.enabled:
-        strategies.append(GridBolTrendStrategy(strats.grid_boltrend))
-    if strats.grid_momentum.enabled:
-        strategies.append(GridMomentumStrategy(strats.grid_momentum))
+    for name, strat_config in config.strategies.items():
+        if not strat_config.enabled:
+            continue
 
-    # Filtre ACTIVE_STRATEGIES (env var)
-    if config.active_strategies:
-        before = len(strategies)
-        strategies = [s for s in strategies if s.name in config.active_strategies]
-        skipped = before - len(strategies)
-        if skipped > 0:
-            logger.info(
-                "Factory: %d stratégie(s) skippée(s) par ACTIVE_STRATEGIES (gardé: %s)",
-                skipped,
-                [s.name for s in strategies],
-            )
+        strat_cls = get_strategy_class(name)
+        if strat_cls:
+            try:
+                # Instanciation avec sa config dédiée
+                instance = strat_cls(strat_config)
+                enabled_instances.append(instance)
+            except Exception as e:
+                logger.error("Erreur instanciation stratégie '{}': {}", name, e)
+        else:
+            logger.warning("Classe de stratégie inconnue: {}", name)
 
-    return strategies
+    return enabled_instances

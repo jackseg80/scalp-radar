@@ -8,7 +8,6 @@ Timeframe : 1h.
 from __future__ import annotations
 
 import numpy as np
-from loguru import logger
 
 from backend.core.config import DonchianBreakoutConfig
 from backend.core.indicators import (
@@ -17,7 +16,7 @@ from backend.core.indicators import (
     detect_market_regime,
     sma,
 )
-from backend.core.models import Candle, Direction, MarketRegime, SignalStrength
+from backend.core.models import Candle, Direction, SignalStrength
 from backend.strategies.base import BaseStrategy, OpenPosition, StrategyContext, StrategySignal
 
 

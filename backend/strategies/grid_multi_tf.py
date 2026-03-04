@@ -58,7 +58,6 @@ class GridMultiTFStrategy(BaseGridStrategy):
             return result
 
         candles = candles_by_tf[tf]
-        n = len(candles)
         closes = np.array([c.close for c in candles], dtype=float)
         highs = np.array([c.high for c in candles], dtype=float)
         lows = np.array([c.low for c in candles], dtype=float)

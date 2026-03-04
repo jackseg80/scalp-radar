@@ -1339,7 +1339,6 @@ def _simulate_trades(
     slippage_pct = bt_config.slippage_pct
     high_vol_slippage_mult = bt_config.high_vol_slippage_mult
     max_risk_per_trade = bt_config.max_risk_per_trade
-    leverage = bt_config.leverage
     peak_capital = capital  # Sprint 53 : kill switch tracking
 
     # État position

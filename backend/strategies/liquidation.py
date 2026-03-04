@@ -15,7 +15,6 @@ from backend.core.config import LiquidationConfig
 from backend.core.models import Candle, Direction, MarketRegime, SignalStrength
 from backend.strategies.base import (
     EXTRA_OI_CHANGE_PCT,
-    EXTRA_OPEN_INTEREST,
     BaseStrategy,
     OpenPosition,
     StrategyContext,
@@ -67,7 +66,6 @@ class LiquidationStrategy(BaseStrategy):
 
         # OI data depuis extra_data
         oi_change = ctx.extra_data.get(EXTRA_OI_CHANGE_PCT, 0.0)
-        oi_snapshots = ctx.extra_data.get(EXTRA_OPEN_INTEREST, [])
 
         # Condition 1 : OI doit avoir augmenté significativement
         if oi_change < self._config.oi_change_threshold:

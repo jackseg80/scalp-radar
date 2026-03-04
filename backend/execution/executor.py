@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from backend.core.models import Candle
     from backend.execution.adaptive_selector import AdaptiveSelector
     from backend.execution.risk_manager import LiveRiskManager
-    from backend.strategies.base_grid import BaseGridStrategy
+    from backend.strategies.base_grid import BaseGridStrategy, GridState
 
 
 # ─── TYPES ─────────────────────────────────────────────────────────────────

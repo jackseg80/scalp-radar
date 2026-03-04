@@ -1691,7 +1691,6 @@ class Database:
         # (diviser le P&L cumulé par un peak lui-même issu du P&L donne
         # des valeurs aberrantes). Affiché N/A côté frontend jusqu'à
         # qu'un vrai tracking de l'equity soit disponible.
-        max_drawdown_pct = None
 
         # Trades par jour
         try:

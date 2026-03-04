@@ -14,7 +14,7 @@ import numpy as np
 from backend.core.config import EnvelopeDCAConfig
 from backend.core.indicators import sma
 from backend.core.models import Candle, Direction
-from backend.strategies.base import OpenPosition, StrategyContext
+from backend.strategies.base import StrategyContext
 from backend.strategies.base_grid import BaseGridStrategy, GridLevel, GridState
 
 

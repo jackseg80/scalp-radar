@@ -14,7 +14,7 @@ from typing import Any
 import aiosqlite
 from loguru import logger
 
-from backend.optimization.report import FinalReport, compute_grade
+from backend.optimization.report import FinalReport
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -104,8 +104,6 @@ def save_result_sync(
 
         # Transaction is_latest
         conn.execute("BEGIN")
-
-        n_combos = report.n_distinct_combos or 0
 
         # Le run le plus récent est toujours is_latest=1, indépendamment du score.
         # Les anciens runs peuvent avoir des bugs (ex: mauvais levier) — le nouveau run prime.
@@ -228,7 +226,6 @@ def save_result_from_payload_sync(db_path: str, payload: dict) -> str:
 
         # 2. Inséré avec succès → conditionner is_latest
         new_id = cursor.lastrowid
-        n_combos = payload.get("n_distinct_combos") or 0
 
         # Le run le plus récent est toujours is_latest=1, indépendamment du score.
         strategy = payload["strategy_name"]

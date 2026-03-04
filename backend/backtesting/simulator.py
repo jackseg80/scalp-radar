@@ -14,7 +14,7 @@ import sqlite3
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from loguru import logger
@@ -39,7 +39,7 @@ from backend.strategies.base import (
     OpenPosition,
     StrategyContext,
 )
-from backend.strategies.base_grid import BaseGridStrategy, GridLevel, GridPosition
+from backend.strategies.base_grid import BaseGridStrategy, GridPosition
 from backend.strategies.factory import get_enabled_strategies
 
 if TYPE_CHECKING:
@@ -389,7 +389,6 @@ class LiveStrategyRunner:
         # Kill switch
         session_loss_pct = abs(min(0, self._stats.net_pnl)) / self._initial_capital * 100
         max_session = self._config.risk.kill_switch.max_session_loss_percent
-        max_daily = self._config.risk.kill_switch.max_daily_loss_percent
 
         if session_loss_pct >= max_session:
             self._kill_switch_triggered = True
@@ -1175,7 +1174,9 @@ class GridStrategyRunner:
                     )
                     if total_margin_used + margin_per_level > pos_raw * max_margin_ratio:
                         _h = getattr(self, "_on_skip_local", None)
-                        if callable(_h): _h(symbol)
+                        if callable(_h):
+                            _h(symbol)
+
                         continue  # Skip ce niveau, pas assez de marge
 
                     # Global margin guard (Sprint 24a) — portfolio backtest seulement
@@ -1190,7 +1191,9 @@ class GridStrategyRunner:
                         )
                         if global_margin + margin_per_level > portfolio_cap * max_margin_ratio:
                             _h = getattr(self, "_on_skip_global", None)
-                            if callable(_h): _h(symbol)
+                            if callable(_h):
+                                _h(symbol)
+
                             continue  # Skip — marge globale dépasserait le seuil
 
                     pos_capital = margin_per_level * num_levels
@@ -1222,7 +1225,9 @@ class GridStrategyRunner:
                             else:
                                 self._hwm[symbol] = candle.low
                         _h = getattr(self, "_on_position_opened", None)
-                        if callable(_h): _h(symbol)
+                        if callable(_h):
+                            _h(symbol)
+
                         logger.info(
                             "[{}] GRID {} level {} @ {:.2f} ({}) — {}/{} positions "
                             "(marge={:.2f}, capital={:.2f})",

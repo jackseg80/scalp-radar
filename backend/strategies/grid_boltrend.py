@@ -9,7 +9,6 @@ Timeframe : 1h (défaut).
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import numpy as np
@@ -316,8 +315,6 @@ class GridBolTrendStrategy(BaseGridStrategy):
             return {}
 
         closes = np.array([c.close for c in candles], dtype=float)
-        highs_arr = np.array([c.high for c in candles], dtype=float)
-        lows_arr = np.array([c.low for c in candles], dtype=float)
 
         bb_sma_arr, bb_upper_arr, bb_lower_arr = bollinger_bands(
             closes, self._config.bol_window, self._config.bol_std,

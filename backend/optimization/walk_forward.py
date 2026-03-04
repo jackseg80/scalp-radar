@@ -18,7 +18,7 @@ import time
 os.environ.setdefault("PYTHON_JIT", "0")
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 import threading
@@ -27,11 +27,11 @@ import numpy as np
 import yaml
 from loguru import logger
 
-from backend.backtesting.engine import BacktestConfig, BacktestResult, run_backtest_single
+from backend.backtesting.engine import BacktestConfig, run_backtest_single
 from backend.backtesting.extra_data_builder import build_extra_data_map
 from backend.backtesting.metrics import _classify_regime, calculate_metrics
 from backend.core.database import Database
-from backend.core.models import Candle, TimeFrame
+from backend.core.models import Candle
 from backend.core.position_manager import TradeResult
 
 

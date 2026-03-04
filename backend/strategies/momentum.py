@@ -14,11 +14,10 @@ from backend.core.indicators import (
     adx,
     atr,
     detect_market_regime,
-    rsi,
     sma,
     volume_sma,
 )
-from backend.core.models import Candle, Direction, MarketRegime, SignalStrength
+from backend.core.models import Candle, Direction, SignalStrength
 from backend.strategies.base import BaseStrategy, OpenPosition, StrategyContext, StrategySignal
 
 

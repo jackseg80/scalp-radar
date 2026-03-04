@@ -18,13 +18,11 @@ import bisect
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from itertools import groupby
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from backend.regime.btc_regime_signal import RegimeSignal
 
-import numpy as np
 from loguru import logger
 
 from backend.backtesting.metrics import _classify_regime

@@ -20,7 +20,7 @@ from backend.core.indicators import (
     detect_market_regime,
     sma,
 )
-from backend.core.models import Candle, Direction, MarketRegime, SignalStrength
+from backend.core.models import Candle, Direction, SignalStrength
 from backend.strategies.base import BaseStrategy, OpenPosition, StrategyContext, StrategySignal
 
 

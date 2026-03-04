@@ -118,7 +118,6 @@ class MultiPositionEngine:
         apply_funding = self._strategy.name in _GRID_STRATEGIES_WITH_FUNDING
 
         main_candles = candles_by_tf[main_tf]
-        main_indicators = indicators_by_tf.get(main_tf, {})
 
         from datetime import datetime
 

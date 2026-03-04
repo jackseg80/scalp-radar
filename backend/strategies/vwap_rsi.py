@@ -77,7 +77,6 @@ class VwapRsiStrategy(BaseStrategy):
         rsi_arr = rsi(closes, self._config.rsi_period)
         adx_arr, di_plus_arr, di_minus_arr = adx(highs, lows, closes)
         atr_arr = atr(highs, lows, closes)
-        atr_sma_arr = sma(atr_arr[~np.isnan(atr_arr)], 20) if np.any(~np.isnan(atr_arr)) else np.array([])
 
         indicators: dict[str, dict[str, float]] = {}
 
