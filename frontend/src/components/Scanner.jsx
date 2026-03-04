@@ -62,6 +62,8 @@ export default function Scanner({ wsData }) {
   const { data, loading } = useApi('/api/simulator/conditions', 10000)
   const { data: gradesData } = useApi('/api/optimization/results?latest_only=true&limit=500', 60000)
   const [selectedAsset, setSelectedAsset] = useState(null)
+  const [sortKey, setSortKey] = useState(null) // null, 'symbol', 'change', 'dir', 'grade', 'dist_sma'
+  const [sortDirection, setSortDirection] = useState('desc')
   const { strategyFilter } = useStrategyContext()
 
   // Backend renvoie assets comme dict {symbol: data}, convertir en tableau
@@ -95,6 +97,34 @@ export default function Scanner({ wsData }) {
     () => buildGridLookupBySymbol(wsData?.grid_state?.grid_positions),
     [wsData?.grid_state?.grid_positions],
   )
+
+  // Helper pour extraire la valeur de tri
+  const getSortValue = (asset, key) => {
+    const gridInfo = gridLookup[asset.symbol]
+    switch (key) {
+      case 'symbol': return asset.symbol
+      case 'change': return asset.change_pct ?? -999
+      case 'dir': return getDirection(asset.indicators, gridInfo) || ''
+      case 'grade': return GRADE_ORDER[gradesLookup[asset.symbol]?.grade || 'F'] || 0
+      case 'dist_sma':
+        if (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0) {
+          return ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
+        }
+        const conds = asset.strategies?.[strategyFilter]?.conditions || []
+        const firstLevel = conds.find(c => !c.gate && c.distance_pct != null)
+        return firstLevel?.distance_pct ?? -999
+      default: return 0
+    }
+  }
+
+  const handleSort = (key) => {
+    if (sortKey === key) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDirection('desc')
+    }
+  }
 
   // Symbols qui ont une position grid ouverte
   const inPositionSymbols = useMemo(() => {
@@ -137,20 +167,36 @@ export default function Scanner({ wsData }) {
   // Base: Actif, Prix, Var, Dir, Trend, Grade, Grid = 7
   const colCount = 7 + (hasMonoStrategies ? 2 : 0) + (hasGridStrategies ? 1 : 0)
 
-  // Trier : positions grid ouvertes en premier, puis par grade décroissant
-  const sortedAssets = [...filteredAssets].sort((a, b) => {
-    const aHasGrid = gridLookup[a.symbol] ? 1 : 0
-    const bHasGrid = gridLookup[b.symbol] ? 1 : 0
-    if (aHasGrid !== bHasGrid) return bHasGrid - aHasGrid
-    // Au sein des grids ouvertes, trier par P&L non réalisé desc
-    if (aHasGrid && bHasGrid) {
-      return (gridLookup[b.symbol]?.unrealized_pnl || 0) - (gridLookup[a.symbol]?.unrealized_pnl || 0)
+  // Trier les assets
+  const sortedAssets = useMemo(() => {
+    const result = [...filteredAssets]
+    
+    if (sortKey) {
+      result.sort((a, b) => {
+        const valA = getSortValue(a, sortKey)
+        const valB = getSortValue(b, sortKey)
+        if (valA < valB) return sortDirection === 'asc' ? -1 : 1
+        if (valA > valB) return sortDirection === 'asc' ? 1 : -1
+        return 0
+      })
+    } else {
+      // Tri par défaut : positions grid ouvertes en premier, puis par grade décroissant
+      result.sort((a, b) => {
+        const aHasGrid = gridLookup[a.symbol] ? 1 : 0
+        const bHasGrid = gridLookup[b.symbol] ? 1 : 0
+        if (aHasGrid !== bHasGrid) return bHasGrid - aHasGrid
+        // Au sein des grids ouvertes, trier par P&L non réalisé desc
+        if (aHasGrid && bHasGrid) {
+          return (gridLookup[b.symbol]?.unrealized_pnl || 0) - (gridLookup[a.symbol]?.unrealized_pnl || 0)
+        }
+        // Non-grid : trier par grade
+        const aGrade = gradesLookup[a.symbol]?.grade || 'F'
+        const bGrade = gradesLookup[b.symbol]?.grade || 'F'
+        return (GRADE_ORDER[bGrade] || 0) - (GRADE_ORDER[aGrade] || 0)
+      })
     }
-    // Non-grid : trier par grade
-    const aGrade = gradesLookup[a.symbol]?.grade || 'F'
-    const bGrade = gradesLookup[b.symbol]?.grade || 'F'
-    return (GRADE_ORDER[bGrade] || 0) - (GRADE_ORDER[aGrade] || 0)
-  })
+    return result
+  }, [filteredAssets, sortKey, sortDirection, gridLookup, gradesLookup, strategyFilter])
 
   const handleRowClick = (symbol) => {
     setSelectedAsset(prev => prev === symbol ? null : symbol)
@@ -211,20 +257,58 @@ export default function Scanner({ wsData }) {
         <table className="scanner-table">
           <thead>
             <tr>
-              <th style={{ width: '14%' }}>Actif</th>
+              <th 
+                style={{ width: '14%', cursor: 'pointer' }} 
+                onClick={() => handleSort('symbol')}
+                className={sortKey === 'symbol' ? 'active-sort' : ''}
+              >
+                Actif {sortKey === 'symbol' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </th>
               <th style={{ width: '10%' }}>Prix</th>
-              <th style={{ width: '8%' }}><Tooltip content="Variation de prix entre les 2 dernières bougies 1 min">Var.</Tooltip></th>
-              <th style={{ width: '7%' }}><Tooltip content="Direction suggérée par les indicateurs ou positions grid ouvertes">Dir.</Tooltip></th>
+              <th 
+                style={{ width: '8%', cursor: 'pointer' }} 
+                onClick={() => handleSort('change')}
+                className={sortKey === 'change' ? 'active-sort' : ''}
+              >
+                <Tooltip content="Variation de prix entre les 2 dernières bougies 1 min">
+                  Var. {sortKey === 'change' && (sortDirection === 'asc' ? '↑' : '↓')}
+                </Tooltip>
+              </th>
+              <th 
+                style={{ width: '7%', cursor: 'pointer' }} 
+                onClick={() => handleSort('dir')}
+                className={sortKey === 'dir' ? 'active-sort' : ''}
+              >
+                <Tooltip content="Direction suggérée par les indicateurs ou positions grid ouvertes">
+                  Dir. {sortKey === 'dir' && (sortDirection === 'asc' ? '↑' : '↓')}
+                </Tooltip>
+              </th>
               <th style={{ width: '12%' }}><Tooltip content="Sparkline des 60 derniers prix de clôture (1 min)">Trend</Tooltip></th>
               {hasMonoStrategies && (
                 <th style={{ width: '7%' }}><Tooltip content="Score = ratio de conditions remplies de la meilleure stratégie (100 = toutes remplies)">Score</Tooltip></th>
               )}
-              <th style={{ width: '7%' }}><Tooltip content="Grade WFO de la stratégie (A=excellent, F=mauvais)">Grade</Tooltip></th>
+              <th 
+                style={{ width: '7%', cursor: 'pointer' }} 
+                onClick={() => handleSort('grade')}
+                className={sortKey === 'grade' ? 'active-sort' : ''}
+              >
+                <Tooltip content="Grade WFO de la stratégie (A=excellent, F=mauvais)">
+                  Grade {sortKey === 'grade' && (sortDirection === 'asc' ? '↑' : '↓')}
+                </Tooltip>
+              </th>
               {hasMonoStrategies && (
                 <th style={{ width: '20%' }}><Tooltip content="Pastilles par stratégie active">Signaux</Tooltip></th>
               )}
               {hasGridStrategies && (
-                <th style={{ width: '9%' }}><Tooltip content="Distance du prix à la SMA (négatif = sous la SMA)">Dist.SMA</Tooltip></th>
+                <th 
+                  style={{ width: '9%', cursor: 'pointer' }} 
+                  onClick={() => handleSort('dist_sma')}
+                  className={sortKey === 'dist_sma' ? 'active-sort' : ''}
+                >
+                  <Tooltip content="Distance du prix à la SMA (négatif = sous la SMA)">
+                    Dist.SMA {sortKey === 'dist_sma' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </Tooltip>
+                </th>
               )}
               <th style={{ width: '7%' }}><Tooltip content="Niveaux grid DCA remplis / total. Coloré selon P&L non réalisé">Grid</Tooltip></th>
             </tr>

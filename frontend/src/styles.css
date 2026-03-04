@@ -808,3 +808,15 @@ tr:last-child td { border-bottom: none; }
 @keyframes blink {
   50% { opacity: 0.4; }
 }
+
+ . s c a n n e r - t a b l e   t h [ o n C l i c k ] : h o v e r   { 
+     b a c k g r o u n d :   v a r ( - - b g - c a r d - h o v e r ) ; 
+     c o l o r :   v a r ( - - t e x t - b r i g h t ) ; 
+ } 
+ 
+ . s c a n n e r - t a b l e   t h . a c t i v e - s o r t   { 
+     c o l o r :   v a r ( - - a c c e n t ) ; 
+     b a c k g r o u n d :   r g b a ( 0 ,   2 5 5 ,   1 5 7 ,   0 . 0 5 ) ; 
+ } 
+  
+ 
