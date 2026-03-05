@@ -464,6 +464,8 @@ export default function Scanner({ wsData }) {
                             conditions={asset.strategies?.[strategyFilter]?.conditions}
                             strategyName={strategyFilter}
                             sparkline={asset.sparkline}
+                            hasMono={hasMonoStrategies}
+                            hasGrid={hasGridStrategies}
                           />
                         ) : (
                           <SignalDetail asset={asset} />

@@ -1,5 +1,6 @@
 /**
  * GridDetail — Détail d'un asset grid au clic dans le Scanner.
+ * Aligné strictement sur les colonnes du tableau parent via une table interne.
  */
 import Tooltip from './Tooltip'
 import { formatPrice } from '../utils/format'
@@ -24,7 +25,7 @@ const STRATEGY_LABELS = {
   envelope_dca_short: 'Envelope DCA Short',
 }
 
-export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, price, conditions = [], strategyName, sparkline = [] }) {
+export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, price, conditions = [], strategyName, sparkline = [], hasMono, hasGrid }) {
   const hasPosition = !!gridInfo
   const condLevels = (conditions || []).filter(c => !c.gate)
   const gates = (conditions || []).filter(c => c.gate)
@@ -51,6 +52,10 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
   const rsi = indicators?.rsi_14
   const adx = indicators?.adx
   const atrPct = indicators?.atr_pct
+  const distSma = (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0)
+    ? ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
+    : null
+
   const stratLabel = gridInfo?.strategy || strategyName || 'grid'
 
   const chartLevels = allLevels.map(l => ({
@@ -60,10 +65,10 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
   }))
 
   return (
-    <div className="scanner-expand">
+    <div className="scanner-expand" style={{ padding: '12px 0' }}>
       {/* Gates */}
       {gates.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, paddingLeft: 16 }}>
           {gates.map((gate, i) => (
             <div key={i} style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -79,107 +84,116 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
         </div>
       )}
 
-      {/* Structure Alignée sur les colonnes du Scanner (14+10+8+7+12+7+7+20+9+7) */}
-      <div style={{ display: 'flex', alignItems: 'stretch' }}>
-        
-        {/* BLOC 1 : Résumé + Niveaux (sous Actif, Prix, Var, Dir -> 14+10+8+7 = 39%) */}
-        <div style={{ width: '39%', display: 'flex', gap: 16, paddingRight: 10 }}>
-          {/* Résumé (sous Actif ~14%) */}
-          <div style={{ width: '35%', textAlign: 'center', flexShrink: 0 }}>
-            <div className="grid-detail-summary">
-              <div className="grid-detail-ratio">
-                <span className={filledSet.size > 0 ? 'pnl-pos' : 'muted'}>{filledSet.size}</span>
-                <span className="muted">/{maxLevels}</span>
-              </div>
-              {hasPosition && gridInfo?.unrealized_pnl != null && (
-                <div className={`mono text-xs ${gridInfo.unrealized_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ marginTop: 4 }}>
-                  {gridInfo.unrealized_pnl >= 0 ? '+' : ''}{gridInfo.unrealized_pnl.toFixed(2)}$
+      {/* Table interne pour alignement parfait avec le header du Scanner */}
+      <table style={{ tableLayout: 'fixed', width: '100%', borderCollapse: 'collapse', border: 'none' }}>
+        <tbody>
+          <tr>
+            {/* Colonne Actif (14%) - Résumé */}
+            <td style={{ width: '14%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
+              <div className="grid-detail-summary">
+                <div className="grid-detail-ratio">
+                  <span className={filledSet.size > 0 ? 'pnl-pos' : 'muted'}>{filledSet.size}</span>
+                  <span className="muted">/{maxLevels}</span>
                 </div>
-              )}
-              <div className="text-xs muted" style={{ marginTop: 2 }}>
-                {STRATEGY_LABELS[stratLabel] || stratLabel}
-              </div>
-            </div>
-          </div>
-
-          {/* Niveaux Grid (sous Prix, Var, Dir ~25%) */}
-          <div style={{ flex: 1 }}>
-            <div className="grid-detail-levels">
-              {allLevels.map(lvl => (
-                <div key={lvl.index} className={`grid-level ${lvl.filled ? 'grid-level--filled' : 'grid-level--pending'}`}>
-                  <span className="grid-level-name">Lvl {lvl.index + 1}</span>
-                  <div className="grid-level-bar">
-                    <div className={`grid-level-fill ${lvl.filled ? 'grid-level-fill--green' : 'grid-level-fill--red'}`} 
-                         style={{ width: lvl.filled ? '100%' : '0%' }} />
+                {hasPosition && gridInfo?.unrealized_pnl != null && (
+                  <div className={`mono text-xs ${gridInfo.unrealized_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}`} style={{ marginTop: 4 }}>
+                    {gridInfo.unrealized_pnl >= 0 ? '+' : ''}{gridInfo.unrealized_pnl.toFixed(2)}$
                   </div>
-                  <span className="mono" style={{ minWidth: 70, textAlign: 'right' }}>
-                    {lvl.entry_price ? formatPrice(lvl.entry_price) : '--'}
-                  </span>
-                  {lvl.distance_pct != null && (
-                    <span className="mono text-xs" style={{ 
-                      minWidth: 45, textAlign: 'right', marginLeft: 'auto',
-                      color: PROXIMITY_COLORS[lvl.proximity] || 'var(--muted)'
-                    }}>
-                      {lvl.distance_pct >= 0 ? '+' : ''}{lvl.distance_pct.toFixed(1)}%
+                )}
+                <div className="text-xs muted" style={{ marginTop: 2 }}>
+                  {STRATEGY_LABELS[stratLabel] || stratLabel}
+                </div>
+              </div>
+            </td>
+
+            {/* Colonnes Prix(10), Var(8), Dir(7) - Niveaux Grid */}
+            <td colSpan="3" style={{ width: '25%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
+              <div className="grid-detail-levels">
+                {allLevels.map(lvl => (
+                  <div key={lvl.index} className={`grid-level ${lvl.filled ? 'grid-level--filled' : 'grid-level--pending'}`}>
+                    <span className="grid-level-name">Lvl {lvl.index + 1}</span>
+                    <div className="grid-level-bar">
+                      <div className={`grid-level-fill ${lvl.filled ? 'grid-level-fill--green' : 'grid-level-fill--red'}`} 
+                           style={{ width: lvl.filled ? '100%' : '0%' }} />
+                    </div>
+                    <span className="mono" style={{ minWidth: 60, textAlign: 'right', fontSize: '11px' }}>
+                      {lvl.entry_price ? formatPrice(lvl.entry_price) : '--'}
                     </span>
+                    {lvl.distance_pct != null && (
+                      <span className="mono text-xs" style={{ 
+                        marginLeft: 'auto', color: PROXIMITY_COLORS[lvl.proximity] || 'var(--muted)'
+                      }}>
+                        {lvl.distance_pct >= 0 ? '+' : ''}{lvl.distance_pct.toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </td>
+
+            {/* Colonne Trend (12%) - Graphique GridChart */}
+            <td style={{ width: '12%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
+              <div style={{ height: 80, minWidth: 160 }}>
+                <GridChart
+                  data={sparkline}
+                  levels={chartLevels}
+                  currentPrice={price}
+                  tpPrice={gridInfo?.tp_price}
+                  slPrice={gridInfo?.sl_price}
+                  width="100%"
+                  height="100%"
+                />
+              </div>
+            </td>
+
+            {/* Colonne Score (7%) - SI hasMono */}
+            {hasMono && <td style={{ width: '7%', border: 'none' }} />}
+
+            {/* Colonne Grade (7%) */}
+            <td style={{ width: '7%', border: 'none' }} />
+
+            {/* Colonne Signaux (20%) - SI hasMono */}
+            {hasMono && <td style={{ width: '20%', border: 'none' }} />}
+
+            {/* Colonne Dist.SMA (9%) - Targets TP/SL */}
+            <td style={{ width: '9%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
+              {hasPosition && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {gridInfo?.tp_price != null && (
+                    <div className="text-xs">
+                      <span className="muted">TP: </span>
+                      <span className="mono pnl-pos">{formatPrice(gridInfo.tp_price)}</span>
+                    </div>
+                  )}
+                  {gridInfo?.sl_price != null && (
+                    <div className="text-xs">
+                      <span className="muted">SL: </span>
+                      <span className="mono pnl-neg">{formatPrice(gridInfo.sl_price)}</span>
+                    </div>
+                  )}
+                  {gridInfo?.margin_used != null && (
+                    <div className="text-xs">
+                      <span className="muted">Margin: </span>
+                      <span className="mono">{gridInfo.margin_used.toFixed(1)}$</span>
+                    </div>
                   )}
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* BLOC 2 : Graphique (sous Trend -> 12%) */}
-        <div style={{ width: '12%', minWidth: 180, display: 'flex', alignItems: 'center', padding: '0 8px' }}>
-          <GridChart
-            data={sparkline}
-            levels={chartLevels}
-            currentPrice={price}
-            tpPrice={gridInfo?.tp_price}
-            slPrice={gridInfo?.sl_price}
-            width="100%"
-            height="100%"
-          />
-        </div>
-
-        {/* BLOC 3 : Spacer pour Score, Grade, Signaux (7+7+20 = 34%) */}
-        <div style={{ width: '34%' }} />
-
-        {/* BLOC 4 : TP / SL (sous Dist.SMA -> 9%) */}
-        <div style={{ width: '9%', display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center' }}>
-          {hasPosition && (
-            <>
-              {gridInfo?.tp_price != null && (
-                <div className="text-xs">
-                  <span className="muted">TP </span>
-                  <span className="mono pnl-pos">{formatPrice(gridInfo.tp_price)}</span>
-                </div>
               )}
-              {gridInfo?.sl_price != null && (
-                <div className="text-xs">
-                  <span className="muted">SL </span>
-                  <span className="mono pnl-neg">{formatPrice(gridInfo.sl_price)}</span>
-                </div>
-              )}
-              {gridInfo?.margin_used != null && (
-                <div className="text-xs">
-                  <span className="muted">Marge </span>
-                  <span className="mono">{gridInfo.margin_used.toFixed(1)}$</span>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+            </td>
 
-        {/* BLOC 5 : Indicateurs (sous Grid -> 7%) */}
-        <div style={{ width: '6%', flex: 1, paddingLeft: 10, display: 'flex', flexDirection: 'column', gap: 4, justifyContent: 'center' }}>
-          {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
-          {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
-          {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
-          {regime && <IndicatorRow label="Régime" value={regime} badge />}
-        </div>
-
-      </div>
+            {/* Colonne Grid (7%) - Indicateurs */}
+            <td style={{ width: '7%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
+                {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
+                {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
+                {atrPct != null && <IndicatorRow label="ATR%" value={`${Number(atrPct).toFixed(2)}%`} />}
+                {regime && <IndicatorRow label="Rég." value={regime} badge />}
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -187,7 +201,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 function IndicatorRow({ label, value, color, badge }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
-      <span className="muted" style={{ width: 40, flexShrink: 0 }}>{label}</span>
+      <span className="muted" style={{ width: 32, flexShrink: 0 }}>{label}</span>
       {badge ? (
         <span className="badge badge-ranging" style={{ padding: '0 4px', fontSize: '9px' }}>{value}</span>
       ) : (
