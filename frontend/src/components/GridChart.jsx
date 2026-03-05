@@ -6,7 +6,7 @@
  */
 import { useMemo, useState } from 'react'
 
-export default function GridChart({ data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false }) {
+export default function GridChart({ symbol, data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false }) {
   const [isHovered, setIsHovered] = useState(false)
 
   // Calculer les bornes du graphique
