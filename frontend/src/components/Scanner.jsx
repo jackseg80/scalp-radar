@@ -156,14 +156,27 @@ export default function Scanner({ wsData }) {
 
   // Filtrer les assets : actifs vs ignorés
   const { activeAssets, ignoredAssets } = useMemo(() => {
+    // 1. Symbols qui ont une position grid ouverte
+    const inPosSet = new Set()
+    for (const g of Object.values(wsData?.grid_state?.grid_positions || {})) {
+      inPosSet.add(g.symbol)
+    }
+
+    // 2. Symbols surveillés par la stratégie (whitelist)
+    let watchedSet = null
+    if (strategyFilter) {
+      const ws = wsData?.strategies?.[strategyFilter]?.watched_symbols
+      if (ws && ws.length > 0) watchedSet = new Set(ws)
+    }
+
     if (!strategyFilter) return { activeAssets: enrichedAssets, ignoredAssets: [] }
     
     const active = []
     const ignored = []
     
     enrichedAssets.forEach(a => {
-      const isWatched = watchedSymbols?.has(a.symbol)
-      const isInPosition = inPositionSymbols.has(a.symbol)
+      const isWatched = watchedSet?.has(a.symbol)
+      const isInPosition = inPosSet.has(a.symbol)
       
       if (isWatched || isInPosition) {
         active.push(a)
@@ -173,7 +186,7 @@ export default function Scanner({ wsData }) {
     })
     
     return { activeAssets: active, ignoredAssets: ignored }
-  }, [enrichedAssets, strategyFilter, watchedSymbols, inPositionSymbols])
+  }, [enrichedAssets, strategyFilter, wsData?.grid_state?.grid_positions, wsData?.strategies])
 
   // Détecter quels types de stratégies sont actives (basé sur les actifs actifs)
   const hasGridStrategies = Object.keys(gridLookup).length > 0
@@ -373,7 +386,9 @@ export default function Scanner({ wsData }) {
             {wsData?.strategies?.[strategyFilter]?.leverage && (
               <> — x{wsData.strategies[strategyFilter].leverage}</>
             )}
-            {watchedSymbols && <> — {watchedSymbols.size} assets</>}
+            {wsData?.strategies?.[strategyFilter]?.watched_symbols && (
+              <> — {wsData.strategies[strategyFilter].watched_symbols.length} assets</>
+            )}
             {wsData?.strategies?.[strategyFilter]?.circuit_breaker && (
               <span className="circuit-breaker-badge" title={`${wsData.strategies[strategyFilter].crash_count} crashes`}>
                 DISABLED
@@ -415,7 +430,7 @@ export default function Scanner({ wsData }) {
         <div className="empty-state">En attente de données...</div>
       )}
 
-      {sortedAssets.length > 0 && (
+      {(sortedActive.length > 0 || sortedIgnored.length > 0) && (
         <table className="scanner-table scanner-table--sticky">
           <thead>
             <tr>
