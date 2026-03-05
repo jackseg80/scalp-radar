@@ -2,9 +2,10 @@
  * GridChart — Graphique détaillé pour GridDetail.
  * Affiche la courbe de prix (sparkline) + niveaux Grid (horizontal lines).
  * 
- * Nouveau : Clic pour ouvrir en plein écran (Modal).
+ * Nouveau : Utilisation de createPortal pour la modale afin d'éviter les problèmes de z-index et de clipping.
  */
 import { useMemo, useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { formatPrice } from '../utils/format'
 
 export default function GridChart({ symbol, data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false }) {
@@ -125,6 +126,109 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
     </svg>
   )
 
+  const modal = isModalOpen && createPortal(
+    <div 
+      style={{
+        position: 'fixed',
+        top: 0, left: 0, width: '100vw', height: '100vh',
+        background: 'rgba(0,0,0,0.85)', // Fond sombre pour focus
+        zIndex: 99999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '2vh 5vw'
+      }}
+      onClick={() => setIsModalOpen(false)}
+    >
+      <div 
+        style={{
+          width: '80vw',
+          height: '90vh',
+          background: '#06080d', // OPAQUE TOTAL
+          borderRadius: 12,
+          border: '2px solid var(--accent)',
+          boxShadow: '0 0 40px rgba(0, 230, 138, 0.2)',
+          display: 'flex',
+          flexDirection: 'column',
+          position: 'relative',
+          padding: '20px',
+          overflow: 'hidden'
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header unique */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 15 }}>
+          <div>
+            <h2 style={{ margin: 0, color: 'var(--accent)', fontSize: '24px', lineHeight: 1 }}>{symbol}</h2>
+            <div className="muted" style={{ fontSize: '12px', marginTop: 4 }}>Détail des niveaux Grid & Prix actuel</div>
+          </div>
+          <button 
+            style={{ 
+              background: 'rgba(255,255,255,0.05)', 
+              border: '1px solid var(--border)', 
+              color: 'white', 
+              padding: '6px 14px', 
+              borderRadius: 6, 
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: 600
+            }}
+            onClick={() => setIsModalOpen(false)}
+          >
+            Fermer [Esc]
+          </button>
+        </div>
+
+        {/* Graphique unique qui prend tout le reste de la place */}
+        <div style={{ flex: 1, position: 'relative', background: 'rgba(255,255,255,0.01)', borderRadius: 4 }}>
+          {renderSVG(true)}
+
+          {/* Labels superposés au graphique */}
+          {currentPrice && (
+            <div style={{
+              position: 'absolute',
+              right: 10,
+              top: `${getY(currentPrice)}%`,
+              transform: 'translateY(-50%)',
+              background: 'var(--yellow)',
+              color: '#000',
+              fontSize: '14px',
+              padding: '4px 10px',
+              borderRadius: 4,
+              fontWeight: 900,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+              zIndex: 10
+            }}>
+              {currentPrice.toLocaleString()}
+            </div>
+          )}
+
+          {tpPrice && (
+            <div style={{ position: 'absolute', left: 20, top: `${getY(tpPrice)}%`, transform: 'translateY(-110%)', color: 'var(--accent)', fontSize: '13px', fontWeight: 800 }}>
+              TAKE PROFIT: {tpPrice.toLocaleString()}
+            </div>
+          )}
+
+          {slPrice && (
+            <div style={{ position: 'absolute', left: 20, top: `${getY(slPrice)}%`, transform: 'translateY(10%)', color: 'var(--red)', fontSize: '13px', fontWeight: 800 }}>
+              STOP LOSS: {slPrice.toLocaleString()}
+            </div>
+          )}
+
+          {/* Liste des niveaux en bas à gauche */}
+          <div style={{ position: 'absolute', left: 20, bottom: 20, display: 'flex', flexDirection: 'column', gap: 4, background: 'rgba(0,0,0,0.4)', padding: '8px', borderRadius: 4 }}>
+            {levels.map((lvl, i) => lvl.price && (
+              <div key={i} style={{ fontSize: '11px', color: lvl.filled ? 'var(--accent)' : 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                 L{i+1}: {formatPrice(lvl.price)} {lvl.filled ? '(FILLED)' : ''}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+
   return (
     <>
       <div 
@@ -163,88 +267,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
         )}
       </div>
 
-      {/* MODALE PLEIN ÉCRAN */}
-      {isModalOpen && (
-        <div 
-          style={{
-            position: 'fixed',
-            top: 0, left: 0, width: '80vw', height: '90vh',
-            margin: '2vh 10vw',
-            background: 'rgba(6, 8, 13, 0.98)',
-            zIndex: 9999,
-            display: 'flex',
-            flexDirection: 'column',
-            padding: '30px',
-            borderRadius: 12,
-            border: '1px solid var(--accent)',
-            boxShadow: '0 20px 50px rgba(0,0,0,0.8)',
-            animation: 'slideIn 0.2s ease-out'
-          }}
-          onClick={() => setIsModalOpen(false)}
-        >
-          {/* Header Modale */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <div>
-              <h2 style={{ margin: 0, color: 'var(--accent)', fontSize: '24px' }}>{symbol}</h2>
-              <div className="muted" style={{ fontSize: '14px' }}>Détail des niveaux Grid & Prix</div>
-            </div>
-            <button 
-              style={{ background: 'transparent', border: '1px solid var(--border)', color: 'white', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' }}
-              onClick={() => setIsModalOpen(false)}
-            >
-              Fermer (Echap)
-            </button>
-          </div>
-
-          {/* Corps Modale (Graphique Géant) */}
-          <div 
-            style={{ flex: 1, position: 'relative', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8, padding: 20 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {renderSVG(true)}
-
-            {/* Overlay Labels Prix dans la modale */}
-            {currentPrice && (
-              <div style={{
-                position: 'absolute',
-                right: 10,
-                top: `${getY(currentPrice)}%`,
-                transform: 'translateY(-50%)',
-                background: 'var(--yellow)',
-                color: '#000',
-                fontSize: '14px',
-                padding: '4px 10px',
-                borderRadius: 4,
-                fontWeight: 900,
-                boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
-              }}>
-                {currentPrice.toLocaleString()}
-              </div>
-            )}
-
-            {tpPrice && (
-              <div style={{ position: 'absolute', left: 20, top: `${getY(tpPrice)}%`, transform: 'translateY(-110%)', color: 'var(--accent)', fontSize: '13px', fontWeight: 800 }}>
-                TAKE PROFIT: {tpPrice.toLocaleString()}
-              </div>
-            )}
-
-            {slPrice && (
-              <div style={{ position: 'absolute', left: 20, top: `${getY(slPrice)}%`, transform: 'translateY(10%)', color: 'var(--red)', fontSize: '13px', fontWeight: 800 }}>
-                STOP LOSS: {slPrice.toLocaleString()}
-              </div>
-            )}
-
-            {/* Liste des niveaux sur le côté gauche */}
-            <div style={{ position: 'absolute', left: 20, bottom: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {levels.map((lvl, i) => lvl.price && (
-                <div key={i} style={{ fontSize: '11px', color: lvl.filled ? 'var(--accent)' : 'var(--text-dim)' }}>
-                   L{i+1}: {formatPrice(lvl.price)} {lvl.filled ? '(FILLED)' : ''}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      {modal}
     </>
   )
 }
