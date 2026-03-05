@@ -2440,10 +2440,22 @@ class Simulator:
                             }
                             break
 
+                # Résoudre les paramètres per-asset (ex: min_atr_pct, min_grid_spacing_pct)
+                # pour que le dashboard affiche les vraies valeurs configurées.
+                params = runner.strategy.get_params()
+                if "min_atr_pct" in params:
+                    params["min_atr_pct"] = self._get_per_asset_float(
+                        symbol, "min_atr_pct", params["min_atr_pct"]
+                    )
+                if "min_grid_spacing_pct" in params:
+                    params["min_grid_spacing_pct"] = self._get_per_asset_float(
+                        symbol, "min_grid_spacing_pct", params["min_grid_spacing_pct"]
+                    )
+
                 asset_data["strategies"][runner.name] = {
                     "last_signal": last_signal,
                     "conditions": conditions,
-                    "params": runner.strategy.get_params(),
+                    "params": params,
                 }
 
                 # Position ouverte sur cet asset (vérifier le symbol)
