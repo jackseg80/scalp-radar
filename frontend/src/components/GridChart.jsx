@@ -110,11 +110,11 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
         <polyline
           points={points}
           fill="none"
-          stroke={mini ? ((data.length > 1 && data[data.length-1] > data[0]) ? 'var(--accent)' : 'var(--red)') : 'var(--text-secondary)'}
+          stroke={(data.length > 1 && data[data.length-1] > data[0]) ? 'var(--accent)' : 'var(--red)'}
           strokeWidth={isModal ? "0.5" : (mini ? "1.2" : "1")}
           strokeLinejoin="round"
           strokeLinecap="round"
-          opacity={isModal ? 1 : (mini ? 1 : 0.8)}
+          opacity={isModal ? 1 : (mini ? 1 : 0.6)}
         />
       ) : !mini && (
         <text x="50" y="50" fontSize="4" fill="var(--text-dim)" textAnchor="middle">En attente de données...</text>
