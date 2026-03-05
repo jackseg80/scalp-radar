@@ -10,6 +10,7 @@ import SignalDots from './SignalDots'
 import SignalDetail from './SignalDetail'
 import { formatPrice } from '../utils/format'
 import GridDetail from './GridDetail'
+import Spark from './Spark'
 import GridChart from './GridChart'
 import Tooltip from './Tooltip'
 import ActivePositions from './ActivePositions'
@@ -430,7 +431,9 @@ export default function Scanner({ wsData }) {
                         <span className="dim text-xs">--</span>
                       )}
                     </td>
-                    <TrendCell asset={asset} gridInfo={gridInfo} strategyFilter={strategyFilter} />
+                    <td>
+                      <Spark data={asset.sparkline} h={32} />
+                    </td>
                     {hasMonoStrategies && (
                       <td>
                         <span className="score-number" style={{ color: scoreColor(score) }}>

@@ -100,6 +100,9 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
       )}
 
       <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
+        {/* Spacer pour aligner sous la colonne Trend (14 + 10 + 8 + 7 = 39%) */}
+        <div style={{ width: '39%', flexShrink: 0 }} />
+
         {/* Graphique Grid */}
         <GridChart
           data={sparkline}
@@ -107,7 +110,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
           currentPrice={price}
           tpPrice={gridInfo?.tp_price}
           slPrice={gridInfo?.sl_price}
-          width={300}
+          width={180}
         />
 
         {/* Résumé grid */}
