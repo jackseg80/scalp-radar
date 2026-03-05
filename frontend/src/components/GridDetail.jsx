@@ -93,11 +93,8 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
       )
     }
 
-    // 3. Vérifier si plancher spacing actif (depuis le flag backend ou recalculé)
-    const spacingGate = gates.find(g => g.name === "Plancher Spacing")
-    const isSpacingActive = spacingGate?.spacing_pct_active ?? (minGridSpacing > atrPct)
-
-    if (minGridSpacing > 0 && isSpacingActive) {
+    // 3. Vérifier si plancher spacing actif
+    if (minGridSpacing > 0 && atrPct < minGridSpacing) {
       return (
         <div style={{ color: 'var(--yellow)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
           ⚡ Spacing élargi : ATR planché à {minGridSpacing.toFixed(1)}% (raw {atrPct.toFixed(1)}%) — en attente bougie 1h (dans {minutesToNextHour}min)
