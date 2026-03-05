@@ -2443,6 +2443,7 @@ class Simulator:
                 asset_data["strategies"][runner.name] = {
                     "last_signal": last_signal,
                     "conditions": conditions,
+                    "params": runner.strategy.get_params(),
                 }
 
                 # Position ouverte sur cet asset (vérifier le symbol)

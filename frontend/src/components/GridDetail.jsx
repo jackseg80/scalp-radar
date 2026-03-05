@@ -25,7 +25,7 @@ const STRATEGY_LABELS = {
   envelope_dca_short: 'Envelope DCA Short',
 }
 
-export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, price, conditions = [], strategyName, sparkline = [], hasMono, hasGrid }) {
+export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, price, conditions = [], strategyName, sparkline = [], hasMono, hasGrid, params = {} }) {
   const hasPosition = !!gridInfo
   const condLevels = (conditions || []).filter(c => !c.gate)
   const gates = (conditions || []).filter(c => c.gate)
@@ -52,6 +52,11 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
   const rsi = indicators?.rsi_14
   const adx = indicators?.adx
   const atrPct = indicators?.atr_pct
+  
+  // Paramètres depuis le backend (Sprint improvement)
+  const minAtrPct = params?.min_atr_pct ?? 0
+  const minGridSpacing = params?.min_grid_spacing_pct ?? 0
+
   const distSma = (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0)
     ? ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
     : null
@@ -64,25 +69,49 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
     direction: l.direction
   }))
 
+  // Logique du message de statut (Sprint improvement)
+  const getStatusMessage = () => {
+    // 1. Si grid active (positions ouvertes) -> ne rien afficher (les niveaux parlent d'eux-mêmes)
+    if (filledSet.size > 0) return null
+
+    // 2. Vérifier si bloqué par ATR trop bas
+    if (minAtrPct > 0 && atrPct < minAtrPct) {
+      const manque = minAtrPct - atrPct
+      return (
+        <div style={{ color: 'var(--orange)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
+          ⏳ ATR trop bas : {atrPct.toFixed(1)}% (seuil {minAtrPct.toFixed(1)}%) — manque +{manque.toFixed(1)}%
+        </div>
+      )
+    }
+
+    // 3. Vérifier si plancher spacing actif
+    const currentAtrVal = (indicators?.atr_pct / 100) * price
+    const floorAtrVal = (minGridSpacing / 100) * price
+    if (minGridSpacing > 0 && floorAtrVal > currentAtrVal) {
+      return (
+        <div style={{ color: 'var(--yellow)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
+          ⚡ Spacing élargi : ATR planché à {minGridSpacing.toFixed(1)}% (raw {atrPct.toFixed(1)}%)
+        </div>
+      )
+    }
+
+    // 4. Si tout est ok mais pas de position -> en attente
+    return (
+      <div style={{ color: 'var(--accent)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
+        ✅ Conditions OK — en attente bougie 1h
+      </div>
+    )
+  }
+
+  const statusMsg = getStatusMessage()
+
   return (
     <div className="scanner-expand" style={{ padding: '12px 0' }}>
-      {/* Gates */}
-      {gates.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, paddingLeft: 16 }}>
-          {gates.map((gate, i) => (
-            <div key={i} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-              background: gate.met ? 'rgba(0, 230, 138, 0.12)' : 'rgba(255, 255, 255, 0.04)',
-              color: gate.met ? 'var(--accent)' : 'var(--muted)',
-              border: `1px solid ${gate.met ? 'rgba(0, 230, 138, 0.25)' : 'rgba(255, 255, 255, 0.08)'}`,
-            }}>
-              <span>{gate.name}</span>
-              <span style={{ fontWeight: 700 }}>{gate.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      
+      {/* Ligne de Statut (remplace les Gates badges) */}
+      <div style={{ paddingLeft: 16 }}>
+        {statusMsg}
+      </div>
 
       {/* Table interne pour alignement parfait avec le header du Scanner */}
       <table style={{ tableLayout: 'fixed', width: '100%', borderCollapse: 'collapse', border: 'none' }}>
@@ -188,7 +217,8 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
                 {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
                 {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
                 {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
-                {atrPct != null && <IndicatorRow label="ATR%" value={`${Number(atrPct).toFixed(2)}%`} />}
+                {atrPct != null && <IndicatorRow label="ATR%" value={`${Number(atrPct).toFixed(1)}%`} />}
+                {minAtrPct > 0 && <IndicatorRow label="Min.ATR" value={`${minAtrPct.toFixed(1)}%`} />}
                 {regime && <IndicatorRow label="Rég." value={regime} badge />}
               </div>
             </td>
@@ -202,7 +232,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 function IndicatorRow({ label, value, color, badge }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
-      <span className="muted" style={{ width: 32, flexShrink: 0 }}>{label}</span>
+      <span className="muted" style={{ width: 36, flexShrink: 0 }}>{label}</span>
       {badge ? (
         <span className="badge badge-ranging" style={{ padding: '0 4px', fontSize: '9px' }}>{value}</span>
       ) : (
