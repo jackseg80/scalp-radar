@@ -219,7 +219,8 @@ class GridATRStrategy(BaseGridStrategy):
                 "met": True,
                 "value": "ACTIF" if floor_active else "Inactif",
                 "threshold": f"{self._config.min_grid_spacing_pct:.1f}%",
-                "gate": True
+                "gate": True,
+                "spacing_pct_active": floor_active
             })
 
         return conditions

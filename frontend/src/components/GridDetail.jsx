@@ -79,8 +79,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
     direction: l.direction
   }))
 
-  // Logique du message de statut (Sprint improvement)
-  const getStatusMessage = () => {
+  const statusMsg = useMemo(() => {
     // 1. Si grid active (positions ouvertes) -> ne rien afficher
     if (filledSet.size > 0) return null
 
@@ -94,10 +93,11 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
       )
     }
 
-    // 3. Vérifier si plancher spacing actif
-    const currentAtrVal = (indicators?.atr_pct / 100) * price
-    const floorAtrVal = (minGridSpacing / 100) * price
-    if (minGridSpacing > 0 && floorAtrVal > currentAtrVal) {
+    // 3. Vérifier si plancher spacing actif (depuis le flag backend ou recalculé)
+    const spacingGate = gates.find(g => g.name === "Plancher Spacing")
+    const isSpacingActive = spacingGate?.spacing_pct_active ?? ((minGridSpacing / 100 * price) > ((indicators?.atr_pct / 100) * price))
+
+    if (minGridSpacing > 0 && isSpacingActive) {
       return (
         <div style={{ color: 'var(--yellow)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
           ⚡ Spacing élargi : ATR planché à {minGridSpacing.toFixed(1)}% (raw {atrPct.toFixed(1)}%) — en attente bougie 1h (dans {minutesToNextHour}min)
@@ -111,9 +111,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
         ✅ Conditions OK — en attente bougie 1h (dans {minutesToNextHour}min)
       </div>
     )
-  }
-
-  const statusMsg = getStatusMessage()
+  }, [filledSet.size, minAtrPct, atrPct, gates, minGridSpacing, price, indicators?.atr_pct, minutesToNextHour])
   const isTheoretical = !hasPosition
 
   return (

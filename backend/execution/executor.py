@@ -918,6 +918,10 @@ class Executor:
                 strategy._config.min_atr_pct = self._get_per_asset_float(
                     strategy, symbol, "min_atr_pct", original_min_atr
                 )
+            
+            # Hotfix: Capture la valeur effective AVANT compute_grid pour le log correct
+            _min_atr_effective = getattr(strategy._config, "min_atr_pct", 0.0)
+
             try:
                 levels = strategy.compute_grid(ctx, grid_state)
             except Exception as e:
@@ -937,11 +941,10 @@ class Executor:
                 _sma = tf_indicators.get("sma", float("nan"))
                 _atr = tf_indicators.get("atr", float("nan"))
                 _atr_pct = _atr / _close * 100 if _close > 0 else float("nan")
-                _min_atr = getattr(strategy._config, "min_atr_pct", 0.0)
                 logger.debug(
                     "Executor entry: {} {} — pas de signal (close={:.2f}, sma={:.2f},"
                     " atr_pct={:.2f}%, min_atr={}%)",
-                    strategy_name, symbol, _close, _sma, _atr_pct, _min_atr,
+                    strategy_name, symbol, _close, _sma, _atr_pct, _min_atr_effective,
                 )
                 continue
 
