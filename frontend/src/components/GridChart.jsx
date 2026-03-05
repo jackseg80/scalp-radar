@@ -34,13 +34,14 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
     const max = Math.max(...allPrices)
     const range = max - min || (max * 0.01)
     
-    const p = mini ? 0.05 : 0.1
+    // Augmenter le padding si la modale est ouverte pour éviter de couper les paliers extrêmes
+    const p = isModalOpen ? 0.15 : (mini ? 0.05 : 0.1)
     return {
       min: min - range * p,
       max: max + range * p,
       range: range * (1 + p * 2)
     }
-  }, [data, levels, currentPrice, tpPrice, slPrice, mini])
+  }, [data, levels, currentPrice, tpPrice, slPrice, mini, isModalOpen])
 
   const getY = (price) => {
     if (!price || bounds.range === 0) return 0
