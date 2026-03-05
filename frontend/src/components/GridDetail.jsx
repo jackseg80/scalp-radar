@@ -5,10 +5,11 @@
  * 1. Mode position (gridInfo non null) : affiche positions remplies, P&L, TP/SL, marge
  * 2. Mode conditions (gridInfo null, conditions fourni) : affiche niveaux calculés + gates
  *
- * Props : symbol, gridInfo, indicators, regime, price, conditions, strategyName
+ * Props : symbol, gridInfo, indicators, regime, price, conditions, strategyName, sparkline
  */
 import Tooltip from './Tooltip'
 import { formatPrice } from '../utils/format'
+import GridChart from './GridChart'
 
 const PROXIMITY_COLORS = {
   imminent: 'var(--accent)',
@@ -29,7 +30,7 @@ const STRATEGY_LABELS = {
   envelope_dca_short: 'Envelope DCA Short',
 }
 
-export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, price, conditions = [], strategyName }) {
+export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, price, conditions = [], strategyName, sparkline = [] }) {
   const hasPosition = !!gridInfo
   const condLevels = (conditions || []).filter(c => !c.gate)
   const gates = (conditions || []).filter(c => c.gate)
@@ -67,6 +68,13 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 
   const stratLabel = gridInfo?.strategy || strategyName || 'grid'
 
+  // Mapper levels pour GridChart
+  const chartLevels = allLevels.map(l => ({
+    price: l.entry_price,
+    filled: l.filled,
+    direction: l.direction
+  }))
+
   return (
     <div className="scanner-expand">
       {/* Gates en haut */}
@@ -91,9 +99,19 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
+        {/* Graphique Grid */}
+        <GridChart
+          data={sparkline}
+          levels={chartLevels}
+          currentPrice={price}
+          tpPrice={gridInfo?.tp_price}
+          slPrice={gridInfo?.sl_price}
+          width={180}
+        />
+
         {/* Résumé grid */}
-        <div style={{ flexShrink: 0, textAlign: 'center', minWidth: 90 }}>
+        <div style={{ flexShrink: 0, textAlign: 'center', minWidth: 90, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <div className="grid-detail-summary">
             {hasPosition ? (
               <>

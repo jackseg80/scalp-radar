@@ -462,6 +462,7 @@ export default function Scanner({ wsData }) {
                             price={asset.price}
                             conditions={asset.strategies?.[strategyFilter]?.conditions}
                             strategyName={strategyFilter}
+                            sparkline={asset.sparkline}
                           />
                         ) : (
                           <SignalDetail asset={asset} />
