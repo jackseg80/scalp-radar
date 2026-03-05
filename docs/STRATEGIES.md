@@ -71,6 +71,26 @@ Cap 25% du capital par asset. Margin guard global 70% (`max_margin_ratio` dans `
 
 ---
 
+## Dashboard & Analyse Visuelle (Grid)
+
+Les stratégies Grid disposent d'outils d'analyse spécifiques dans le Scanner pour faciliter le monitoring :
+
+### 1. GridChart (Visualisation en temps réel)
+Chaque actif affiche un graphique SVG dynamique :
+- **Sparkline** : historique des prix sur les 60 dernières minutes.
+- **Niveaux Grid** : lignes horizontales (L1, L2, L3) avec étiquettes de prix sur la droite.
+- **Targets** : lignes TP (vert) et SL (rouge) avec prix.
+- **Statut visuel** : opacité réduite (70%) pour les niveaux "estimés" (quand aucune position n'est ouverte) vs opacité totale (100%) pour les niveaux actifs.
+- **Mode Plein Écran** : clic sur le graphique pour ouvrir une modale géante (Portal) permettant une analyse ultra-précise.
+
+### 2. Ligne de Statut Intelligente
+Remplace les indicateurs techniques bruts par des messages actionnables :
+- ⏳ **ATR trop bas** : indique le manque de volatilité pour ouvrir un cycle.
+- ⚡ **Spacing élargi** : prévient quand le plancher `min_grid_spacing_pct` est actif au lieu de l'ATR réel.
+- ✅ **Conditions OK** : confirme que la stratégie est prête et affiche un **countdown** (ex: "dans 12min") avant la prochaine évaluation à la clôture de bougie.
+
+---
+
 ## Stratégies Grid/DCA (actives)
 
 ### 1. grid_atr — Stratégie principale (LIVE, 13 assets)
@@ -97,6 +117,11 @@ SHORT : entry_price[i] = SMA + effective_atr × multiplier[i]
 ```
 
 **V2 (Sprint 47)** : `min_grid_spacing_pct` empêche les grilles microscopiques en basse volatilité. Si 0.0 = désactivé (comportement V1). Utilisé par 17/21 assets (médiane 1.2%).
+
+**V3 (Sprint 62+)** : 
+- **Filtre Volatilité** : `min_atr_pct` bloque l'ouverture d'un nouveau cycle si l'ATR% est insuffisant (évite le "flat trading"). Le manque de volatilité est affiché en temps réel dans le scanner.
+- **Diagnostic Plancher** : le dashboard indique explicitement si le spacing est "planché" (artificiellement élargi pour respecter `min_grid_spacing_pct`).
+- **Niveaux Estimés** : les niveaux sont calculés et affichés même sans position active, permettant d'anticiper les entrées.
 
 **Exemple numérique** : Si `SMA = 100`, `ATR = 5`, `atr_multiplier_start = 1.5`, `atr_multiplier_step = 1.0`, `num_levels = 3` :
 - Level 0 LONG : `100 - 5 × 1.5 = 92.50` (multiplier = 1.5)

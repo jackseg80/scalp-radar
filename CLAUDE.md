@@ -14,7 +14,7 @@ and presents results via a real-time dashboard.
 
 ## Documentation
 
-- **[ROADMAP.md](docs/ROADMAP.md)** — Roadmap Phases 1-9, detailed sprints, **2231 tests (authoritative)**
+- **[ROADMAP.md](docs/ROADMAP.md)** — Roadmap Phases 1-9, detailed sprints, **2233 tests (authoritative)**
   - Update after each sprint: results, bugs, test count, next step
 - **[docs/plans/](docs/plans/)** — Archived sprint plans (1 file per sprint)
   - Copy plan to `docs/plans/sprint-{n}-{name}.md` at the end of each sprint

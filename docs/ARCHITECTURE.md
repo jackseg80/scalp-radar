@@ -475,6 +475,15 @@ Fichier : [state_manager.py](../backend/core/state_manager.py)
 | `portfolio_snapshots` | Snapshots journal (5 min) | StateManager |
 | `position_events` | Événements positions (Sprint 25) | Simulator |
 
+### DiagnosticEncoder
+
+Fichier : [simulator.py](../backend/backtesting/simulator.py)
+
+Pour éviter les erreurs 500 lors de la sérialisation JSON des payloads API (FastAPI), un encodeur personnalisé est utilisé :
+- **Types Numpy** : conversion automatique de `np.float64`, `np.int64` et `np.ndarray` en types Python natifs.
+- **Robustesse** : capture les objets non-sérialisables et les remplace par un marqueur `<<NON-SERIALIZABLE>>` au lieu de faire planter la requête.
+- **Logging** : logue précisément le champ et le type fautif pour faciliter le debug.
+
 ---
 
 ## 7. Frontend (WebSocket)

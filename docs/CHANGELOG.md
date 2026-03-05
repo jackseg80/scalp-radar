@@ -5,6 +5,21 @@ Pour l'historique complet sprint par sprint, voir [ROADMAP.md](ROADMAP.md).
 
 ---
 
+## 2026-03-05
+
+### Scanner Improvements & Simulator Hardening
+
+- **feat(frontend)** : nouveau composant `GridChart` (SVG) affichant la courbe de prix, les niveaux Grid (L1, L2, L3), le TP et le SL avec étiquettes de prix dynamiques.
+- **feat(frontend)** : mode plein écran (Modal) pour le graphique via React Portals, avec opacité totale et alignement optimisé (80vw, ne couvre pas la barre latérale).
+- **feat(frontend)** : ligne de statut unifiée et intelligente dans `GridDetail` (⏳ ATR trop bas, ⚡ Spacing élargi, ✅ Conditions OK) avec décompte (countdown) en temps réel avant la prochaine bougie.
+- **feat(frontend)** : distinction visuelle entre niveaux "estimés" (opacité réduite + tooltip) et niveaux actifs.
+- **feat(frontend)** : alignement vertical strict du détail asset avec les colonnes du Scanner (Actif, Trend, Dist.SMA, Grid) via une structure de tableau interne.
+- **feat(backend)** : enrichment du payload `/api/simulator/conditions` avec les paramètres de stratégie (`params`) résolus par actif (overrides `per_asset`).
+- **feat(backend)** : implémentation de `DiagnosticEncoder` pour gérer la sérialisation des types `numpy` et fournir des logs détaillés en cas de données non-sérialisables.
+- **fix(backend)** : sécurisation de `get_conditions` avec des blocs `try...except` granulaires pour éviter les erreurs 500 globales lors d'échecs partiels de stratégies.
+- **fix(backend)** : correction du log `min_atr_pct` dans `executor.py` pour capturer la valeur effective avant la réinitialisation de la config.
+- **tests** : 3 nouveaux tests dans `tests/test_simulator_payload.py` (Numpy serialization, per-asset resolution, API robustness), 2233 total.
+
 ## 2026-02-22
 
 ### Sprint 38 — Shallow Validation + WFO Regression Analysis
