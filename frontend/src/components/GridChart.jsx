@@ -13,7 +13,7 @@
  */
 import { useMemo } from 'react'
 
-export default function GridChart({ data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = '100%', mini = false }) {
+export default function GridChart({ data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false }) {
   // Calculer les bornes du graphique pour englober tous les niveaux importants
   const bounds = useMemo(() => {
     if (!data.length && !levels.length && !currentPrice) return { min: 0, max: 100 }

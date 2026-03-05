@@ -85,41 +85,6 @@ function PriceCell({ symbol, price }) {
   )
 }
 
-// Composant pour la cellule Trend (graphique mini)
-function TrendCell({ asset, gridInfo, strategyFilter }) {
-  const levels = useMemo(() => {
-    const conds = (asset.strategies?.[strategyFilter]?.conditions || []).filter(c => !c.gate)
-    const positions = gridInfo?.positions || []
-    const maxLevels = gridInfo?.levels_max || conds.length || 3
-    
-    const res = []
-    for (let i = 0; i < maxLevels; i++) {
-      const p = positions.find(pos => pos.level === i)
-      const c = conds[i]
-      res.push({
-        price: p?.entry_price || (c?.value != null ? Number(c.value) : null),
-        filled: !!p,
-        direction: p?.direction || gridInfo?.direction || (c?.name?.includes('short') ? 'short' : 'long')
-      })
-    }
-    return res
-  }, [asset, gridInfo, strategyFilter])
-
-  return (
-    <td style={{ padding: '4px 8px' }}>
-      <GridChart 
-        data={asset.sparkline} 
-        levels={levels}
-        currentPrice={asset.price}
-        tpPrice={gridInfo?.tp_price}
-        slPrice={gridInfo?.sl_price}
-        h={32}
-        mini={true}
-      />
-    </td>
-  )
-}
-
 export default function Scanner({ wsData }) {
   const { data, loading } = useApi('/api/simulator/conditions', 10000)
   const { data: gradesData } = useApi('/api/optimization/results?latest_only=true&limit=500', 60000)
