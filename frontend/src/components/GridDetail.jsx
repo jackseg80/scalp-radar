@@ -135,6 +135,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
             <td style={{ width: '12%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
               <div style={{ height: 80, minWidth: 160 }}>
                 <GridChart
+                  symbol={symbol}
                   data={sparkline}
                   levels={chartLevels}
                   currentPrice={price}
