@@ -134,8 +134,8 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
       style={{
         position: 'fixed',
         top: 0, left: 0, width: '100vw', height: '100vh',
-        background: 'rgba(0,0,0,0.85)', // Fond sombre pour focus
-        zIndex: 99999,
+        background: 'rgba(0,0,0,0.9)', 
+        zIndex: 100000,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -146,44 +146,44 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
       <div 
         style={{
           width: '80vw',
-          height: '90vh',
-          background: '#06080d', // OPAQUE TOTAL
+          height: '85vh',
+          background: '#000', // OPAQUE TOTAL NOIR
           borderRadius: 12,
           border: '2px solid var(--accent)',
-          boxShadow: '0 0 40px rgba(0, 230, 138, 0.2)',
+          boxShadow: '0 0 60px rgba(0, 0, 0, 1)',
           display: 'flex',
           flexDirection: 'column',
           position: 'relative',
-          padding: '20px',
+          padding: '24px',
           overflow: 'hidden'
         }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header unique */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 15 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexShrink: 0 }}>
           <div>
-            <h2 style={{ margin: 0, color: 'var(--accent)', fontSize: '24px', lineHeight: 1 }}>{symbol}</h2>
-            <div className="muted" style={{ fontSize: '12px', marginTop: 4 }}>Détail des niveaux Grid & Prix actuel</div>
+            <h2 style={{ margin: 0, color: 'var(--accent)', fontSize: '26px', fontWeight: 800 }}>{symbol}</h2>
+            <div className="muted" style={{ fontSize: '13px' }}>Niveaux Grid & Prix en temps réel</div>
           </div>
           <button 
             style={{ 
-              background: 'rgba(255,255,255,0.05)', 
-              border: '1px solid var(--border)', 
-              color: 'white', 
-              padding: '6px 14px', 
+              background: 'var(--accent)', 
+              border: 'none', 
+              color: '#000', 
+              padding: '8px 20px', 
               borderRadius: 6, 
               cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: 600
+              fontSize: '13px',
+              fontWeight: 800
             }}
             onClick={() => setIsModalOpen(false)}
           >
-            Fermer [Esc]
+            FERMER [ESC]
           </button>
         </div>
 
-        {/* Graphique unique qui prend tout le reste de la place */}
-        <div style={{ flex: 1, position: 'relative', background: 'rgba(255,255,255,0.01)', borderRadius: 4 }}>
+        {/* Graphique unique - Remplit tout l'espace */}
+        <div style={{ flex: 1, position: 'relative', width: '100%', height: '100%', background: '#000' }}>
           {renderSVG(true)}
 
           {/* Labels superposés au graphique */}
