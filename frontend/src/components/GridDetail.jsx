@@ -1,11 +1,5 @@
 /**
  * GridDetail — Détail d'un asset grid au clic dans le Scanner.
- *
- * Deux modes :
- * 1. Mode position (gridInfo non null) : affiche positions remplies, P&L, TP/SL, marge
- * 2. Mode conditions (gridInfo null, conditions fourni) : affiche niveaux calculés + gates
- *
- * Props : symbol, gridInfo, indicators, regime, price, conditions, strategyName, sparkline
  */
 import Tooltip from './Tooltip'
 import { formatPrice } from '../utils/format'
@@ -35,12 +29,10 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
   const condLevels = (conditions || []).filter(c => !c.gate)
   const gates = (conditions || []).filter(c => c.gate)
 
-  // Mode position : niveaux depuis gridInfo
   const maxLevels = gridInfo?.levels_max || condLevels.length || 3
   const positions = gridInfo?.positions || []
   const filledSet = new Set(positions.map(p => p.level))
 
-  // Construire niveaux
   const allLevels = []
   for (let i = 0; i < maxLevels; i++) {
     const filled = positions.find(p => p.level === i)
@@ -56,17 +48,11 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
     })
   }
 
-  // Indicateurs
   const rsi = indicators?.rsi_14
   const adx = indicators?.adx
   const atrPct = indicators?.atr_pct
-  const distSma = (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0)
-    ? ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
-    : null
-
   const stratLabel = gridInfo?.strategy || strategyName || 'grid'
 
-  // Mapper levels pour GridChart
   const chartLevels = allLevels.map(l => ({
     price: l.entry_price,
     filled: l.filled,
@@ -75,13 +61,13 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 
   return (
     <div className="scanner-expand">
-      {/* Gates en haut */}
+      {/* Gates */}
       {gates.length > 0 && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           {gates.map((gate, i) => (
             <div key={i} style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
               background: gate.met ? 'rgba(0, 230, 138, 0.12)' : 'rgba(255, 255, 255, 0.04)',
               color: gate.met ? 'var(--accent)' : 'var(--muted)',
               border: `1px solid ${gate.met ? 'rgba(0, 230, 138, 0.25)' : 'rgba(255, 255, 255, 0.08)'}`,
@@ -93,12 +79,13 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+      {/* Structure Alignée sur les colonnes du Scanner (14+10+8+7+12+7+7+20+9+7) */}
+      <div style={{ display: 'flex', alignItems: 'stretch' }}>
         
-        {/* BLOC 1 : Résumé + Niveaux (sous Actif, Prix, Var, Dir -> 39%) */}
-        <div style={{ width: '39%', display: 'flex', gap: 20, paddingRight: 10 }}>
-          {/* Résumé (0/3) */}
-          <div style={{ width: 90, textAlign: 'center', flexShrink: 0 }}>
+        {/* BLOC 1 : Résumé + Niveaux (sous Actif, Prix, Var, Dir -> 14+10+8+7 = 39%) */}
+        <div style={{ width: '39%', display: 'flex', gap: 16, paddingRight: 10 }}>
+          {/* Résumé (sous Actif ~14%) */}
+          <div style={{ width: '35%', textAlign: 'center', flexShrink: 0 }}>
             <div className="grid-detail-summary">
               <div className="grid-detail-ratio">
                 <span className={filledSet.size > 0 ? 'pnl-pos' : 'muted'}>{filledSet.size}</span>
@@ -115,21 +102,23 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
             </div>
           </div>
 
-          {/* Niveaux Grid */}
+          {/* Niveaux Grid (sous Prix, Var, Dir ~25%) */}
           <div style={{ flex: 1 }}>
             <div className="grid-detail-levels">
               {allLevels.map(lvl => (
-                <div key={lvl.index} className={`grid-level ${lvl.filled ? 'grid-level--filled' : 'grid-level--pending'}`} style={{ padding: '2px 0' }}>
-                  <span className="grid-level-name" style={{ fontSize: '11px' }}>Lvl {lvl.index + 1}</span>
-                  <span className="mono" style={{ minWidth: 70, textAlign: 'right', fontSize: '11px' }}>
+                <div key={lvl.index} className={`grid-level ${lvl.filled ? 'grid-level--filled' : 'grid-level--pending'}`}>
+                  <span className="grid-level-name">Lvl {lvl.index + 1}</span>
+                  <div className="grid-level-bar">
+                    <div className={`grid-level-fill ${lvl.filled ? 'grid-level-fill--green' : 'grid-level-fill--red'}`} 
+                         style={{ width: lvl.filled ? '100%' : '0%' }} />
+                  </div>
+                  <span className="mono" style={{ minWidth: 70, textAlign: 'right' }}>
                     {lvl.entry_price ? formatPrice(lvl.entry_price) : '--'}
-                  </span>
-                  <span className={`text-xs ${lvl.filled ? '' : 'muted'}`} style={{ minWidth: 45, marginLeft: 8 }}>
-                    {lvl.filled ? lvl.direction.toUpperCase() : (lvl.entry_price ? lvl.direction.toUpperCase() : 'wait')}
                   </span>
                   {lvl.distance_pct != null && (
                     <span className="mono text-xs" style={{ 
-                      marginLeft: 'auto', color: PROXIMITY_COLORS[lvl.proximity] || 'var(--muted)'
+                      minWidth: 45, textAlign: 'right', marginLeft: 'auto',
+                      color: PROXIMITY_COLORS[lvl.proximity] || 'var(--muted)'
                     }}>
                       {lvl.distance_pct >= 0 ? '+' : ''}{lvl.distance_pct.toFixed(1)}%
                     </span>
@@ -141,7 +130,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
         </div>
 
         {/* BLOC 2 : Graphique (sous Trend -> 12%) */}
-        <div style={{ width: '12%', minWidth: 180, padding: '0 10px' }}>
+        <div style={{ width: '12%', minWidth: 180, display: 'flex', alignItems: 'center', padding: '0 8px' }}>
           <GridChart
             data={sparkline}
             levels={chartLevels}
@@ -149,49 +138,45 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
             tpPrice={gridInfo?.tp_price}
             slPrice={gridInfo?.sl_price}
             width="100%"
-            height={70}
+            height="100%"
           />
         </div>
 
-        {/* BLOC 3 : Spacer pour Score, Grade, Signaux (34%) */}
-        <div style={{ width: '23%' }} />
+        {/* BLOC 3 : Spacer pour Score, Grade, Signaux (7+7+20 = 34%) */}
+        <div style={{ width: '34%' }} />
 
         {/* BLOC 4 : TP / SL (sous Dist.SMA -> 9%) */}
-        <div style={{ width: '13%', padding: '0 10px' }}>
+        <div style={{ width: '9%', display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center' }}>
           {hasPosition && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div className="text-xs dim uppercase">Targets</div>
+            <>
               {gridInfo?.tp_price != null && (
                 <div className="text-xs">
-                  <span className="muted">TP: </span>
-                  <span className="mono accent">{formatPrice(gridInfo.tp_price)}</span>
+                  <span className="muted">TP </span>
+                  <span className="mono pnl-pos">{formatPrice(gridInfo.tp_price)}</span>
                 </div>
               )}
               {gridInfo?.sl_price != null && (
                 <div className="text-xs">
-                  <span className="muted">SL: </span>
-                  <span className="mono red">{formatPrice(gridInfo.sl_price)}</span>
+                  <span className="muted">SL </span>
+                  <span className="mono pnl-neg">{formatPrice(gridInfo.sl_price)}</span>
                 </div>
               )}
               {gridInfo?.margin_used != null && (
                 <div className="text-xs">
-                  <span className="muted">Marge: </span>
+                  <span className="muted">Marge </span>
                   <span className="mono">{gridInfo.margin_used.toFixed(1)}$</span>
                 </div>
               )}
-            </div>
+            </>
           )}
         </div>
 
-        {/* BLOC 5 : Indicateurs (sous Grid -> 7% + reste) */}
-        <div style={{ flex: 1, paddingLeft: 10 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
-            {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
-            {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
-            {atrPct != null && <IndicatorRow label="ATR%" value={`${Number(atrPct).toFixed(2)}%`} />}
-            {regime && <IndicatorRow label="Régime" value={regime} badge />}
-          </div>
+        {/* BLOC 5 : Indicateurs (sous Grid -> 7%) */}
+        <div style={{ width: '6%', flex: 1, paddingLeft: 10, display: 'flex', flexDirection: 'column', gap: 4, justifyContent: 'center' }}>
+          {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
+          {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
+          {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
+          {regime && <IndicatorRow label="Régime" value={regime} badge />}
         </div>
 
       </div>
@@ -201,10 +186,10 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 
 function IndicatorRow({ label, value, color, badge }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-      <span className="muted" style={{ width: 45 }}>{label}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
+      <span className="muted" style={{ width: 40, flexShrink: 0 }}>{label}</span>
       {badge ? (
-        <span className="badge badge-ranging" style={{ fontSize: '9px', padding: '1px 4px' }}>{value}</span>
+        <span className="badge badge-ranging" style={{ padding: '0 4px', fontSize: '9px' }}>{value}</span>
       ) : (
         <span className="mono" style={{ color: color || 'var(--text-primary)', marginLeft: 'auto' }}>{value}</span>
       )}
