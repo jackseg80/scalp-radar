@@ -64,8 +64,8 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
   const atrPct = indicators?.atr_pct
   
   // Paramètres depuis le backend
-  const minAtrPct = params?.min_atr_pct ?? 0
-  const minGridSpacing = params?.min_grid_spacing_pct ?? 0
+  const minAtrPct = params?.min_atr_pct ?? params?.min_atr ?? 0
+  const minGridSpacing = params?.min_grid_spacing_pct ?? params?.min_spacing ?? 0
 
   const distSma = (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0)
     ? ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
@@ -239,7 +239,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
                 {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
                 {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
                 {atrPct != null && <IndicatorRow label="ATR%" value={`${Number(atrPct).toFixed(1)}%`} />}
-                {minAtrPct > 0 && <IndicatorRow label="Min.ATR" value={`${minAtrPct.toFixed(1)}%`} color="var(--yellow)" />}
+                <IndicatorRow label="Min.ATR" value={`${Number(minAtrPct).toFixed(1)}%`} color="var(--yellow)" />
                 {regime && <IndicatorRow label="Rég." value={regime} badge />}
               </div>
             </td>
