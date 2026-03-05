@@ -9,6 +9,7 @@ Sprint 11 : GridStrategyRunner pour les stratégies grid/DCA (envelope_dca).
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import sqlite3
 from collections import deque
@@ -54,6 +55,19 @@ REGIME_LIVE_TO_WFO: dict[MarketRegime, str] = {
     # LOW_VOLATILITY intentionnellement absent → toujours autorisé
 }
 
+
+class DiagnosticEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.integer, np.int64)):
+            return int(obj)
+        if isinstance(obj, (np.floating, np.float64)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        try:
+            return super().default(obj)
+        except TypeError:
+            return f"<<NON-SERIALIZABLE: {type(obj)} val={repr(obj)}>>"
 
 def _safe_round(val: Any, decimals: int = 1) -> float | None:
     """Arrondi safe — retourne None si NaN ou None."""
@@ -2305,6 +2319,8 @@ class Simulator:
         symbols = self._data_engine.get_all_symbols()
         assets: dict[str, dict] = {}
 
+        logger.debug("Simulator: get_conditions pour {} symbols", len(symbols))
+
         for symbol in symbols:
             asset_data: dict[str, Any] = {
                 "price": None,
@@ -2386,97 +2402,145 @@ class Simulator:
 
             # Conditions par runner/stratégie (enrichissement si runner actif)
             for runner in self._runners:
-                ctx = runner.build_context(symbol)
-                if ctx is None:
-                    continue
-
-                # Régime (du runner, mis à jour à chaque candle) — priorité au runner actif
-                asset_data["regime"] = runner.current_regime.value
-
-                # Indicateurs : si déjà calculés globalement, les enrichir avec les données du runner si différent TF
-                # Sinon, calculer depuis le context du runner
-                if not asset_data["indicators"]:
-                    main_tf = list(runner.strategy.min_candles.keys())[0]
-                    main_ind = ctx.indicators.get(main_tf, {})
-                    if main_ind:
-                        close = main_ind.get("close")
-                        vwap = main_ind.get("vwap")
-                        atr_val = main_ind.get("atr")
-
-                        asset_data["indicators"] = {
-                            "rsi_14": _safe_round(main_ind.get("rsi"), 1),
-                            "vwap_distance_pct": None,
-                            "adx": _safe_round(main_ind.get("adx"), 1),
-                            "atr_pct": None,
-                        }
-
-                        # VWAP distance
-                        if close and vwap and vwap > 0:
-                            asset_data["indicators"]["vwap_distance_pct"] = round(
-                                (close - vwap) / vwap * 100, 2
-                            )
-
-                        # ATR %
-                        if close and atr_val and close > 0:
-                            asset_data["indicators"]["atr_pct"] = round(
-                                atr_val / close * 100, 2
-                            )
-
-                # Conditions de la stratégie (toutes les stratégies, y compris grid)
                 try:
-                    conditions = runner.strategy.get_current_conditions(ctx)
-                except Exception:
-                    conditions = []
+                    ctx = runner.build_context(symbol)
+                    if ctx is None:
+                        continue
 
-                # Dernier signal (uniquement pour stratégies mono, pas grid)
-                last_signal = None
-                if not isinstance(runner, GridStrategyRunner):
-                    for trade_dict in self.get_all_trades():
-                        if trade_dict["strategy"] == runner.name:
-                            last_signal = {
-                                "score": trade_dict.get("score"),
-                                "direction": trade_dict["direction"],
-                                "timestamp": trade_dict["entry_time"],
+                    # Régime (du runner, mis à jour à chaque candle) — priorité au runner actif
+                    asset_data["regime"] = runner.current_regime.value
+
+                    # Indicateurs : si déjà calculés globalement, les enrichir avec les données du runner si différent TF
+                    # Sinon, calculer depuis le context du runner
+                    if not asset_data["indicators"]:
+                        main_tf = list(runner.strategy.min_candles.keys())[0]
+                        main_ind = ctx.indicators.get(main_tf, {})
+                        if main_ind:
+                            close = main_ind.get("close")
+                            vwap = main_ind.get("vwap")
+                            atr_val = main_ind.get("atr")
+
+                            asset_data["indicators"] = {
+                                "rsi_14": _safe_round(main_ind.get("rsi"), 1),
+                                "vwap_distance_pct": None,
+                                "adx": _safe_round(main_ind.get("adx"), 1),
+                                "atr_pct": None,
                             }
-                            break
 
-                # Résoudre les paramètres per-asset (ex: min_atr_pct, min_grid_spacing_pct)
-                # pour que le dashboard affiche les vraies valeurs configurées.
-                params = runner.strategy.get_params()
-                if "min_atr_pct" in params:
-                    params["min_atr_pct"] = self._get_per_asset_float(
-                        symbol, "min_atr_pct", params["min_atr_pct"]
-                    )
-                if "min_grid_spacing_pct" in params:
-                    params["min_grid_spacing_pct"] = self._get_per_asset_float(
-                        symbol, "min_grid_spacing_pct", params["min_grid_spacing_pct"]
-                    )
+                            # VWAP distance
+                            if close and vwap and vwap > 0:
+                                asset_data["indicators"]["vwap_distance_pct"] = round(
+                                    (close - vwap) / vwap * 100, 2
+                                )
 
-                asset_data["strategies"][runner.name] = {
-                    "last_signal": last_signal,
-                    "conditions": conditions,
-                    "params": params,
-                }
+                            # ATR %
+                            if close and atr_val and close > 0:
+                                asset_data["indicators"]["atr_pct"] = round(
+                                    atr_val / close * 100, 2
+                                )
 
-                # Position ouverte sur cet asset (vérifier le symbol)
-                if runner._position is not None and runner._position_symbol == symbol:
-                    asset_data["position"] = {
-                        "direction": runner._position.direction.value,
-                        "entry_price": runner._position.entry_price,
-                        "tp_price": runner._position.tp_price,
-                        "sl_price": runner._position.sl_price,
-                        "strategy": runner.name,
-                        "entry_time": runner._position.entry_time.isoformat(),
+                    # Conditions de la stratégie (toutes les stratégies, y compris grid)
+                    try:
+                        conditions = runner.strategy.get_current_conditions(ctx)
+                    except Exception:
+                        conditions = []
+
+                    # Dernier signal (uniquement pour stratégies mono, pas grid)
+                    last_signal = None
+                    if not isinstance(runner, GridStrategyRunner):
+                        for trade_dict in self.get_all_trades():
+                            if trade_dict["strategy"] == runner.name:
+                                last_signal = {
+                                    "score": trade_dict.get("score"),
+                                    "direction": trade_dict["direction"],
+                                    "timestamp": trade_dict["entry_time"],
+                                }
+                                break
+
+                    # Résoudre les paramètres per-asset (ex: min_atr_pct, min_grid_spacing_pct)
+                    # pour que le dashboard affiche les vraies valeurs configurées.
+                    params = {}
+                    try:
+                        if hasattr(runner.strategy, "get_params"):
+                            params = runner.strategy.get_params()
+                        
+                        if isinstance(params, dict) and hasattr(runner, "_get_per_asset_float"):
+                            if "min_atr_pct" in params:
+                                params["min_atr_pct"] = runner._get_per_asset_float(
+                                    symbol, "min_atr_pct", params["min_atr_pct"]
+                                )
+                            if "min_grid_spacing_pct" in params:
+                                params["min_grid_spacing_pct"] = runner._get_per_asset_float(
+                                    symbol, "min_grid_spacing_pct", params["min_grid_spacing_pct"]
+                                )
+                    except Exception as e:
+                        logger.error("Simulator: erreur lors de la résolution des params pour {} {}: {}", runner.name, symbol, e)
+
+                    asset_data["strategies"][runner.name] = {
+                        "last_signal": last_signal,
+                        "conditions": conditions,
+                        "params": params,
                     }
 
-            assets[symbol] = asset_data
+                    # Position ouverte sur cet asset (vérifier le symbol)
+                    if runner._position is not None and runner._position_symbol == symbol:
+                        asset_data["position"] = {
+                            "direction": runner._position.direction.value,
+                            "entry_price": runner._position.entry_price,
+                            "tp_price": runner._position.tp_price,
+                            "sl_price": runner._position.sl_price,
+                            "strategy": runner.name,
+                            "entry_time": runner._position.entry_time.isoformat(),
+                        }
+                except Exception as e:
+                    logger.error("Simulator: crash get_conditions pour runner {} et symbol {}: {}", runner.name, symbol, e)
 
-        result = {
-            "assets": assets,
-            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-        }
-        self._conditions_cache = result
-        return result
+            assets[symbol] = asset_data
+            
+            # Diagnostic : Vérifier si cet asset est sérialisable JSON
+            try:
+                import json
+                json.dumps(asset_data)
+            except TypeError as e:
+                logger.error("Simulator: asset {} contient des données non-sérialisables: {}", symbol, e)
+                # Log détaillé des types pour trouver le coupable
+                for k, v in asset_data.items():
+                    try:
+                        json.dumps(v)
+                    except TypeError:
+                        logger.error("  Champ '{}' est non-sérialisable: type={} val={}", k, type(v), v)
+                        if k == "strategies":
+                            for sk, sv in v.items():
+                                try:
+                                    json.dumps(sv)
+                                except TypeError:
+                                    logger.error("    Stratégie '{}' non-sérialisable", sk)
+                                    for pk, pv in sv.get("params", {}).items():
+                                        try:
+                                            json.dumps(pv)
+                                        except TypeError:
+                                            logger.error("      Param '{}' non-sérialisable: type={} val={}", pk, type(pv), pv)
+
+        try:
+            result = {
+                "assets": assets,
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            }
+            
+            # Diagnostic final : Sérialisation complète
+            try:
+                import json
+                json.dumps(result)
+            except TypeError as e:
+                logger.error("Simulator: payload global non-sérialisable: {}", e)
+                # On ne raise pas ici car on veut voir si FastAPI s'en sort,
+                # mais le log nous dira si c'est le problème.
+
+            self._conditions_cache = result
+            return result
+        except Exception as e:
+            logger.exception("Simulator: erreur fatale lors de la construction du payload conditions")
+            raise e
 
     def get_signal_matrix(self) -> dict:
         """Matrice conditions met/total pour la Heatmap : ratio par (strategy, asset)."""
