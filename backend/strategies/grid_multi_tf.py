@@ -108,6 +108,22 @@ class GridMultiTFStrategy(BaseGridStrategy):
             "threshold": "directionnel",
             "gate": True,
         })
+
+        # Plancher Spacing Info
+        indicators_1h = ctx.indicators.get(self._config.timeframe, {})
+        close_val = indicators_1h.get("close", float("nan"))
+        atr_val = indicators_1h.get("atr", float("nan"))
+        min_spacing = self._config.min_grid_spacing_pct
+        if min_spacing > 0 and not np.isnan(close_val) and close_val > 0:
+            floor_active = (close_val * min_spacing / 100) > atr_val
+            conditions.insert(1, {
+                "name": "Plancher Spacing",
+                "met": True,
+                "value": "ACTIF" if floor_active else "Inactif",
+                "threshold": f"{min_spacing:.1f}%",
+                "gate": True
+            })
+
         return conditions
 
     def compute_grid(
