@@ -6,6 +6,7 @@
  */
 import { useMemo, useState, useEffect } from 'react'
 import { formatPrice } from '../utils/format'
+import * as np from 'numpy' // Simulé, on utilise Math
 
 export default function GridChart({ symbol, data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -70,6 +71,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
         if (!lvl.price) return null
         const y = getY(lvl.price)
         const color = lvl.filled ? 'var(--accent)' : 'var(--text-dim)'
+        const opacity = isModal ? 1 : 0.8
         return (
           <g key={i}>
             <line 
@@ -77,9 +79,10 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
               stroke={color} 
               strokeWidth={lvl.filled ? (mini ? "0.4" : "0.6") : (mini ? "0.2" : "0.3")} 
               strokeDasharray={lvl.filled ? "" : "2,1"}
+              opacity={opacity}
             />
             {(!mini || isModal) && (
-              <g>
+              <g opacity={opacity}>
                 <rect x="0" y={y-2} width="8" height="4" fill={color} opacity="0.2" />
                 <text x="1" y={y+1} fontSize={isModal ? "1.5" : "3"} fill={color} fontWeight="bold">L{i+1}</text>
               </g>
@@ -89,14 +92,14 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
       })}
 
       {slPrice && (
-        <g>
+        <g opacity={isModal ? 1 : 0.8}>
           <line x1="0" y1={getY(slPrice)} x2="100" y2={getY(slPrice)} stroke="var(--red)" strokeWidth={mini ? "0.4" : "0.8"} strokeDasharray="2,2" />
           {(!mini || isModal) && <text x={isModal ? "95" : "88"} y={getY(slPrice)-1.5} fontSize={isModal ? "2.5" : "4"} fill="var(--red)" fontWeight="bold">SL</text>}
         </g>
       )}
 
       {tpPrice && (
-        <g>
+        <g opacity={isModal ? 1 : 0.8}>
           <line x1="0" y1={getY(tpPrice)} x2="100" y2={getY(tpPrice)} stroke="var(--accent)" strokeWidth={mini ? "0.4" : "0.8"} strokeDasharray="2,2" />
           {(!mini || isModal) && <text x={isModal ? "95" : "88"} y={getY(tpPrice)-1.5} fontSize={isModal ? "2.5" : "4"} fill="var(--accent)" fontWeight="bold">TP</text>}
         </g>
@@ -110,13 +113,13 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
           strokeWidth={isModal ? "0.5" : (mini ? "1.2" : "1")}
           strokeLinejoin="round"
           strokeLinecap="round"
-          opacity={mini ? 1 : 0.8}
+          opacity={isModal ? 1 : (mini ? 1 : 0.8)}
         />
       )}
 
       {currentPrice && (
-        <g>
-          <line x1="0" y1={getY(currentPrice)} x2="100" y2={getY(currentPrice)} stroke="var(--yellow)" strokeWidth={mini ? "0.3" : "0.5"} opacity="0.8" />
+        <g opacity={isModal ? 1 : 0.8}>
+          <line x1="0" y1={getY(currentPrice)} x2="100" y2={getY(currentPrice)} stroke="var(--yellow)" strokeWidth={mini ? "0.3" : "0.5"} opacity={isModal ? 1 : 0.8} />
           <circle cx="100" cy={getY(currentPrice)} r={mini ? "1.2" : (isModal ? "1" : "2")} fill="var(--yellow)" />
         </g>
       )}
@@ -141,7 +144,6 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
           {renderSVG(false)}
         </div>
         
-        {/* Label Prix Actuel (seulement en mode normal) */}
         {!mini && currentPrice && (
           <div style={{
             position: 'absolute',
@@ -168,7 +170,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
           style={{
             position: 'fixed',
             top: 0, left: 0, width: '100vw', height: '100vh',
-            background: 'rgba(0,0,0,0.92)',
+            background: 'rgba(0,0,0,0.95)',
             zIndex: 9999,
             display: 'flex',
             flexDirection: 'column',
@@ -193,7 +195,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
 
           {/* Corps Modale (Graphique Géant) */}
           <div 
-            style={{ flex: 1, position: 'relative', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border)', borderRadius: 8, padding: 20 }}
+            style={{ flex: 1, position: 'relative', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8, padding: 20 }}
             onClick={(e) => e.stopPropagation()}
           >
             {renderSVG(true)}

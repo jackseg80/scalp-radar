@@ -95,7 +95,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 
     // 3. Vérifier si plancher spacing actif (depuis le flag backend ou recalculé)
     const spacingGate = gates.find(g => g.name === "Plancher Spacing")
-    const isSpacingActive = spacingGate?.spacing_pct_active ?? ((minGridSpacing / 100 * price) > ((indicators?.atr_pct / 100) * price))
+    const isSpacingActive = spacingGate?.spacing_pct_active ?? (minGridSpacing > atrPct)
 
     if (minGridSpacing > 0 && isSpacingActive) {
       return (
