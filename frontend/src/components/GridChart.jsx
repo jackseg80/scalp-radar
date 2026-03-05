@@ -6,7 +6,6 @@
  */
 import { useMemo, useState, useEffect } from 'react'
 import { formatPrice } from '../utils/format'
-import * as np from 'numpy' // Simulé, on utilise Math
 
 export default function GridChart({ symbol, data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
