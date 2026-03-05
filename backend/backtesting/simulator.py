@@ -1517,6 +1517,11 @@ class Simulator:
         self._notifier: Any = None
         self._warmup_ended_at: datetime | None = None
 
+    @property
+    def config(self) -> AppConfig:
+        """Retourne la configuration actuelle."""
+        return self._config
+
     def set_notifier(self, notifier: Any) -> None:
         """Injecte le Notifier pour les alertes kill switch global."""
         self._notifier = notifier

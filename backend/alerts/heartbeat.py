@@ -52,12 +52,22 @@ class Heartbeat:
     def _build_message(self) -> str:
         """Construit le message heartbeat."""
         status = self._simulator.get_all_status()
+        config = self._simulator.config
+        is_live_trading = config.secrets.live_trading
+
         total_pnl = 0.0
         total_trades = 0
         total_wins = 0
         active_strategies: list[str] = []
 
         for name, s in status.items():
+            # Si on est en mode live, on ne montre que les stratégies live_eligible
+            # qui sont activement exécutées par l'Executor.
+            if is_live_trading:
+                strat_cfg = getattr(config.strategies, name, None)
+                if not strat_cfg or not getattr(strat_cfg, "live_eligible", False):
+                    continue
+
             total_pnl += s.get("net_pnl", 0)
             total_trades += s.get("total_trades", 0)
             total_wins += s.get("wins", 0)
