@@ -91,6 +91,7 @@ export default function Scanner({ wsData }) {
   const [selectedAsset, setSelectedAsset] = useState(null)
   const [sortKey, setSortKey] = useState(null) // null, 'symbol', 'change', 'dir', 'grade', 'dist_sma'
   const [sortDirection, setSortDirection] = useState('desc')
+  const [showIgnored, setShowIgnored] = useState(false)
   const { strategyFilter } = useStrategyContext()
 
   // Backend renvoie assets comme dict {symbol: data}, convertir en tableau
@@ -153,35 +154,31 @@ export default function Scanner({ wsData }) {
     }
   }
 
-  // Symbols qui ont une position grid ouverte
-  const inPositionSymbols = useMemo(() => {
-    const symbols = new Set()
-    for (const g of Object.values(wsData?.grid_state?.grid_positions || {})) {
-      symbols.add(g.symbol)
-    }
-    return symbols
-  }, [wsData?.grid_state?.grid_positions])
-
-  // Symbols surveillés par la stratégie filtrée (whitelist per_asset)
-  const watchedSymbols = useMemo(() => {
-    if (!strategyFilter) return null
-    const ws = wsData?.strategies?.[strategyFilter]?.watched_symbols
-    if (!ws || ws.length === 0) return null
-    return new Set(ws)
-  }, [strategyFilter, wsData?.strategies])
-
-  // Filtrer les assets : watched > in-position > tous
-  const filteredAssets = useMemo(() => {
-    if (!strategyFilter) return enrichedAssets
-    if (watchedSymbols) return enrichedAssets.filter(a => watchedSymbols.has(a.symbol))
-    if (inPositionSymbols.size > 0) return enrichedAssets.filter(a => inPositionSymbols.has(a.symbol))
-    return enrichedAssets
+  // Filtrer les assets : actifs vs ignorés
+  const { activeAssets, ignoredAssets } = useMemo(() => {
+    if (!strategyFilter) return { activeAssets: enrichedAssets, ignoredAssets: [] }
+    
+    const active = []
+    const ignored = []
+    
+    enrichedAssets.forEach(a => {
+      const isWatched = watchedSymbols?.has(a.symbol)
+      const isInPosition = inPositionSymbols.has(a.symbol)
+      
+      if (isWatched || isInPosition) {
+        active.push(a)
+      } else {
+        ignored.push(a)
+      }
+    })
+    
+    return { activeAssets: active, ignoredAssets: ignored }
   }, [enrichedAssets, strategyFilter, watchedSymbols, inPositionSymbols])
 
-  // Détecter quels types de stratégies sont actives
+  // Détecter quels types de stratégies sont actives (basé sur les actifs actifs)
   const hasGridStrategies = Object.keys(gridLookup).length > 0
     || (strategyFilter && GRID_STRATEGIES.has(strategyFilter))
-  const hasMonoStrategies = filteredAssets.some(a => {
+  const hasMonoStrategies = activeAssets.some(a => {
     const strats = a.strategies || {}
     return Object.keys(strats).some(name => !GRID_STRATEGIES.has(name) && (strats[name].conditions || []).length > 0)
   })
@@ -189,10 +186,9 @@ export default function Scanner({ wsData }) {
   // Nombre de colonnes dynamique pour colSpan du détail
   const colCount = 7 + (hasMonoStrategies ? 2 : 0) + (hasGridStrategies ? 1 : 0)
 
-  // Trier les assets
-  const sortedAssets = useMemo(() => {
-    const result = [...filteredAssets]
-    
+  // Helper de tri
+  const sortAssets = (list) => {
+    const result = [...list]
     if (sortKey) {
       result.sort((a, b) => {
         const valA = getSortValue(a, sortKey)
@@ -202,26 +198,149 @@ export default function Scanner({ wsData }) {
         return 0
       })
     } else {
-      // Tri par défaut : positions grid ouvertes en premier, puis par grade décroissant
       result.sort((a, b) => {
         const aHasGrid = gridLookup[a.symbol] ? 1 : 0
         const bHasGrid = gridLookup[b.symbol] ? 1 : 0
         if (aHasGrid !== bHasGrid) return bHasGrid - aHasGrid
-        // Au sein des grids ouvertes, trier par P&L non réalisé desc
         if (aHasGrid && bHasGrid) {
           return (gridLookup[b.symbol]?.unrealized_pnl || 0) - (gridLookup[a.symbol]?.unrealized_pnl || 0)
         }
-        // Non-grid : trier par grade
         const aGrade = gradesLookup[a.symbol]?.grade || 'F'
         const bGrade = gradesLookup[b.symbol]?.grade || 'F'
         return (GRADE_ORDER[bGrade] || 0) - (GRADE_ORDER[aGrade] || 0)
       })
     }
     return result
-  }, [filteredAssets, sortKey, sortDirection, gridLookup, gradesLookup, strategyFilter])
+  }
+
+  const sortedActive = useMemo(() => sortAssets(activeAssets), [activeAssets, sortKey, sortDirection, gridLookup, gradesLookup])
+  const sortedIgnored = useMemo(() => sortAssets(ignoredAssets), [ignoredAssets, sortKey, sortDirection, gridLookup, gradesLookup])
 
   const handleRowClick = (symbol) => {
     setSelectedAsset(prev => prev === symbol ? null : symbol)
+  }
+
+  const renderAssetRow = (asset, isIgnored = false) => {
+    const isSelected = selectedAsset === asset.symbol
+    const score = getAssetScore(asset)
+    const gridInfo = gridLookup[asset.symbol]
+    const direction = getDirection(asset.indicators, gridInfo)
+    const changePct = asset.change_pct
+    const gradeInfo = gradesLookup[asset.symbol]
+
+    return (
+      <Fragment key={asset.symbol}>
+        <tr
+          className={`scanner-row ${isSelected ? 'selected' : ''} ${isIgnored ? 'scanner-row--inactive' : ''}`}
+          onClick={() => handleRowClick(asset.symbol)}
+        >
+          <td style={{ fontWeight: 700 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+              <span className="asset-dot" style={{ opacity: isIgnored ? 0.3 : 1 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asset.symbol}</span>
+            </div>
+          </td>
+          <PriceCell price={asset.price} />
+          <td>
+            {changePct != null ? (
+              <span style={{ color: changePct >= 0 ? 'var(--accent)' : 'var(--red)', fontWeight: 600 }}>
+                {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%
+              </span>
+            ) : '--'}
+          </td>
+          <td>
+            {direction ? (
+              <span className={`badge ${direction === 'LONG' ? 'badge-long' : 'badge-short'}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
+                {direction}
+              </span>
+            ) : (
+              <span className="dim text-xs">--</span>
+            )}
+          </td>
+          <td>
+            <div style={{ opacity: isIgnored ? 0.4 : 1 }}>
+              <Spark data={asset.sparkline} h={32} />
+            </div>
+          </td>
+          {hasMonoStrategies && (
+            <td>
+              <span className="score-number" style={{ color: scoreColor(score), opacity: isIgnored ? 0.5 : 1 }}>
+                {Math.round(score * 100)}
+              </span>
+            </td>
+          )}
+          <td>
+            {gradeInfo ? (
+              <span className={`grade-badge grade-${gradeInfo.grade}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
+                {gradeInfo.grade}
+              </span>
+            ) : (
+              <span className="dim text-xs">--</span>
+            )}
+          </td>
+          {hasMonoStrategies && (
+            <td>
+              <div style={{ opacity: isIgnored ? 0.4 : 1 }}>
+                <SignalDots strategies={asset.strategies} />
+              </div>
+            </td>
+          )}
+          {hasGridStrategies && (
+            <td className="mono" style={{ textAlign: 'center' }}>
+              {(() => {
+                if (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0) {
+                  const dist = ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
+                  const color = dist >= 0 ? 'var(--accent)' : 'var(--red)'
+                  return <span style={{ color, opacity: isIgnored ? 0.5 : 1 }}>{dist >= 0 ? '+' : ''}{dist.toFixed(1)}%</span>
+                }
+                const conds = asset.strategies?.[strategyFilter]?.conditions || []
+                const firstLevel = conds.find(c => !c.gate && c.distance_pct != null)
+                if (firstLevel) {
+                  const d = firstLevel.distance_pct
+                  const color = Math.abs(d) < 1 ? 'var(--accent)' : Math.abs(d) < 3 ? 'var(--yellow)' : 'var(--muted)'
+                  return <span style={{ color, opacity: isIgnored ? 0.5 : 1 }}>{d >= 0 ? '+' : ''}{d.toFixed(1)}%</span>
+                }
+                return <span className="muted">--</span>
+              })()}
+            </td>
+          )}
+          <td>
+            {gridInfo ? (
+              <span className={`grid-cell ${gridInfo.unrealized_pnl >= 0 ? 'grid-cell--profit' : 'grid-cell--loss'}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
+                {gridInfo.levels_open}/{gridInfo.levels_max}
+              </span>
+            ) : (
+              <span className="grid-cell grid-cell--empty">--</span>
+            )}
+          </td>
+        </tr>
+        {isSelected && (
+          <tr>
+            <td colSpan={colCount} style={{ padding: 0, overflow: 'visible' }}>
+              <div style={{ opacity: isIgnored ? 0.7 : 1 }}>
+                {gridInfo || (strategyFilter && GRID_STRATEGIES.has(strategyFilter)) ? (
+                  <GridDetail
+                    symbol={asset.symbol}
+                    gridInfo={gridInfo}
+                    indicators={asset.indicators}
+                    regime={asset.regime}
+                    price={asset.price}
+                    conditions={asset.strategies?.[strategyFilter]?.conditions}
+                    strategyName={strategyFilter}
+                    sparkline={asset.sparkline}
+                    hasMono={hasMonoStrategies}
+                    hasGrid={hasGridStrategies}
+                    params={asset.strategies?.[strategyFilter]?.params}
+                  />
+                ) : (
+                  <SignalDetail asset={asset} />
+                )}
+              </div>
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    )
   }
 
   // Résumé pour ActivePositions
@@ -357,126 +476,26 @@ export default function Scanner({ wsData }) {
             </tr>
           </thead>
           <tbody>
-            {sortedAssets.map(asset => {
-              const isSelected = selectedAsset === asset.symbol
-              const score = getAssetScore(asset)
-              const gridInfo = gridLookup[asset.symbol]
-              const direction = getDirection(asset.indicators, gridInfo)
-              const changePct = asset.change_pct
-              const gradeInfo = gradesLookup[asset.symbol]
-              // Asset grisé seulement s'il y a au moins une position ouverte ET que cet asset n'en a pas
-              const isInactive = !!strategyFilter && !!watchedSymbols && inPositionSymbols.size > 0 && !inPositionSymbols.has(asset.symbol)
-
-              return (
-                <Fragment key={asset.symbol}>
-                  <tr
-                    className={`scanner-row ${isSelected ? 'selected' : ''} ${isInactive ? 'scanner-row--inactive' : ''}`}
-                    onClick={() => handleRowClick(asset.symbol)}
-                  >
-                    <td style={{ fontWeight: 700 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
-                        <span className="asset-dot" />
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asset.symbol}</span>
-                      </div>
-                    </td>
-                    <PriceCell price={asset.price} />
-                    <td>
-                      {changePct != null ? (
-                        <span style={{ color: changePct >= 0 ? 'var(--accent)' : 'var(--red)', fontWeight: 600 }}>
-                          {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%
-                        </span>
-                      ) : '--'}
-                    </td>
-                    <td>
-                      {direction ? (
-                        <span className={`badge ${direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>
-                          {direction}
-                        </span>
-                      ) : (
-                        <span className="dim text-xs">--</span>
-                      )}
-                    </td>
-                    <td>
-                      <Spark data={asset.sparkline} h={32} />
-                    </td>
-                    {hasMonoStrategies && (
-                      <td>
-                        <span className="score-number" style={{ color: scoreColor(score) }}>
-                          {Math.round(score * 100)}
-                        </span>
-                      </td>
-                    )}
-                    <td>
-                      {gradeInfo ? (
-                        <span className={`grade-badge grade-${gradeInfo.grade}`}>
-                          {gradeInfo.grade}
-                        </span>
-                      ) : (
-                        <span className="dim text-xs">--</span>
-                      )}
-                    </td>
-                    {hasMonoStrategies && (
-                      <td>
-                        <SignalDots strategies={asset.strategies} />
-                      </td>
-                    )}
-                    {hasGridStrategies && (
-                      <td className="mono" style={{ textAlign: 'center' }}>
-                        {(() => {
-                          // Si position grid : TP connu
-                          if (gridInfo?.tp_price && gridInfo?.current_price && gridInfo.tp_price > 0) {
-                            const dist = ((gridInfo.current_price - gridInfo.tp_price) / gridInfo.tp_price * 100)
-                            const color = dist >= 0 ? 'var(--accent)' : 'var(--red)'
-                            return <span style={{ color }}>{dist >= 0 ? '+' : ''}{dist.toFixed(1)}%</span>
-                          }
-                          // Sans position : distance du 1er level depuis conditions
-                          const conds = asset.strategies?.[strategyFilter]?.conditions || []
-                          const firstLevel = conds.find(c => !c.gate && c.distance_pct != null)
-                          if (firstLevel) {
-                            const d = firstLevel.distance_pct
-                            const color = Math.abs(d) < 1 ? 'var(--accent)' : Math.abs(d) < 3 ? 'var(--yellow)' : 'var(--muted)'
-                            return <span style={{ color }}>{d >= 0 ? '+' : ''}{d.toFixed(1)}%</span>
-                          }
-                          return <span className="muted">--</span>
-                        })()}
-                      </td>
-                    )}
-                    <td>
-                      {gridInfo ? (
-                        <span className={`grid-cell ${gridInfo.unrealized_pnl >= 0 ? 'grid-cell--profit' : 'grid-cell--loss'}`}>
-                          {gridInfo.levels_open}/{gridInfo.levels_max}
-                        </span>
-                      ) : (
-                        <span className="grid-cell grid-cell--empty">--</span>
-                      )}
-                    </td>
-                  </tr>
-                  {isSelected && (
-                    <tr>
-                      <td colSpan={colCount} style={{ padding: 0, overflow: 'visible' }}>
-                        {gridInfo || (strategyFilter && GRID_STRATEGIES.has(strategyFilter)) ? (
-                          <GridDetail
-                            symbol={asset.symbol}
-                            gridInfo={gridInfo}
-                            indicators={asset.indicators}
-                            regime={asset.regime}
-                            price={asset.price}
-                            conditions={asset.strategies?.[strategyFilter]?.conditions}
-                            strategyName={strategyFilter}
-                            sparkline={asset.sparkline}
-                            hasMono={hasMonoStrategies}
-                            hasGrid={hasGridStrategies}
-                            params={asset.strategies?.[strategyFilter]?.params}
-                          />
-                        ) : (
-                          <SignalDetail asset={asset} />
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              )
-            })}
+            {sortedActive.map(asset => renderAssetRow(asset, false))}
+            
+            {sortedIgnored.length > 0 && (
+              <>
+                <tr 
+                  className="scanner-ignored-toggle"
+                  onClick={() => setShowIgnored(!showIgnored)}
+                  style={{ cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
+                >
+                  <td colSpan={colCount} style={{ padding: '8px 16px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>{showIgnored ? '▼' : '▶'}</span>
+                      <span>AUTRES ACTIFS ({sortedIgnored.length})</span>
+                      <div style={{ height: '1px', flex: 1, background: 'var(--border)', opacity: 0.5 }} />
+                    </div>
+                  </td>
+                </tr>
+                {showIgnored && sortedIgnored.map(asset => renderAssetRow(asset, true))}
+              </>
+            )}
           </tbody>
         </table>
       )}
