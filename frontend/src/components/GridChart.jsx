@@ -230,7 +230,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
 
             {/* Liste des niveaux sur le côté gauche */}
             <div style={{ position: 'absolute', left: 20, bottom: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {allLevels.map((lvl, i) => lvl.price && (
+              {levels.map((lvl, i) => lvl.price && (
                 <div key={i} style={{ fontSize: '11px', color: lvl.filled ? 'var(--accent)' : 'var(--text-dim)' }}>
                    L{i+1}: {formatPrice(lvl.price)} {lvl.filled ? '(FILLED)' : ''}
                 </div>
