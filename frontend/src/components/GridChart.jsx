@@ -261,9 +261,71 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
             borderRadius: 2,
             fontWeight: 800,
             pointerEvents: 'none',
-            zIndex: 5
+            zIndex: 10,
+            boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
           }}>
             {currentPrice.toLocaleString()}
+          </div>
+        )}
+
+        {/* Labels des niveaux Grid sur la droite */}
+        {!mini && !isModalOpen && levels.map((lvl, i) => lvl.price && (
+          <div key={i} style={{
+            position: 'absolute',
+            right: 2,
+            top: `${getY(lvl.price)}%`,
+            transform: 'translateY(-50%)',
+            color: lvl.filled ? 'var(--accent)' : 'var(--text-dim)',
+            fontSize: '8px',
+            fontFamily: 'var(--font-mono)',
+            pointerEvents: 'none',
+            fontWeight: lvl.filled ? 700 : 400,
+            background: 'rgba(0,0,0,0.4)',
+            padding: '0 2px',
+            borderRadius: 2,
+            zIndex: 5
+          }}>
+            {lvl.price.toLocaleString()}
+          </div>
+        ))}
+
+        {/* Labels TP/SL sur la droite */}
+        {!mini && !isModalOpen && tpPrice && (
+          <div style={{
+            position: 'absolute',
+            right: 2,
+            top: `${getY(tpPrice)}%`,
+            transform: 'translateY(-50%)',
+            color: 'var(--accent)',
+            fontSize: '8px',
+            fontFamily: 'var(--font-mono)',
+            fontWeight: 800,
+            pointerEvents: 'none',
+            background: 'rgba(0,0,0,0.4)',
+            padding: '0 2px',
+            borderRadius: 2,
+            zIndex: 6
+          }}>
+            TP {tpPrice.toLocaleString()}
+          </div>
+        )}
+        {!mini && !isModalOpen && slPrice && (
+          <div style={{
+            position: 'absolute',
+            right: 2,
+            top: `${getY(slPrice)}%`,
+            transform: 'translateY(-50%)',
+            color: 'var(--red)',
+            fontSize: '8px',
+            fontFamily: 'var(--font-mono)',
+            fontWeight: 800,
+            pointerEvents: 'none',
+            background: 'rgba(0,0,0,0.4)',
+            padding: '0 2px',
+            borderRadius: 2,
+            zIndex: 6
+          }}>
+            SL {slPrice.toLocaleString()}
           </div>
         )}
       </div>
