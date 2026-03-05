@@ -2,6 +2,7 @@
  * GridDetail — Détail d'un asset grid au clic dans le Scanner.
  * Aligné strictement sur les colonnes du tableau parent via une table interne.
  */
+import { useMemo, useState, useEffect } from 'react'
 import Tooltip from './Tooltip'
 import { formatPrice } from '../utils/format'
 import GridChart from './GridChart'
@@ -26,6 +27,15 @@ const STRATEGY_LABELS = {
 }
 
 export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, price, conditions = [], strategyName, sparkline = [], hasMono, hasGrid, params = {} }) {
+  const [minutesToNextHour, setMinutesToNextHour] = useState(60 - new Date().getUTCMinutes())
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setMinutesToNextHour(60 - new Date().getUTCMinutes())
+    }, 10000)
+    return () => clearInterval(timer)
+  }, [])
+
   const hasPosition = !!gridInfo
   const condLevels = (conditions || []).filter(c => !c.gate)
   const gates = (conditions || []).filter(c => c.gate)
@@ -53,7 +63,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
   const adx = indicators?.adx
   const atrPct = indicators?.atr_pct
   
-  // Paramètres depuis le backend (Sprint improvement)
+  // Paramètres depuis le backend
   const minAtrPct = params?.min_atr_pct ?? 0
   const minGridSpacing = params?.min_grid_spacing_pct ?? 0
 
@@ -71,7 +81,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 
   // Logique du message de statut (Sprint improvement)
   const getStatusMessage = () => {
-    // 1. Si grid active (positions ouvertes) -> ne rien afficher (les niveaux parlent d'eux-mêmes)
+    // 1. Si grid active (positions ouvertes) -> ne rien afficher
     if (filledSet.size > 0) return null
 
     // 2. Vérifier si bloqué par ATR trop bas
@@ -90,7 +100,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
     if (minGridSpacing > 0 && floorAtrVal > currentAtrVal) {
       return (
         <div style={{ color: 'var(--yellow)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
-          ⚡ Spacing élargi : ATR planché à {minGridSpacing.toFixed(1)}% (raw {atrPct.toFixed(1)}%)
+          ⚡ Spacing élargi : ATR planché à {minGridSpacing.toFixed(1)}% (raw {atrPct.toFixed(1)}%) — en attente bougie 1h (dans {minutesToNextHour}min)
         </div>
       )
     }
@@ -98,17 +108,18 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
     // 4. Si tout est ok mais pas de position -> en attente
     return (
       <div style={{ color: 'var(--accent)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
-        ✅ Conditions OK — en attente bougie 1h
+        ✅ Conditions OK — en attente bougie 1h (dans {minutesToNextHour}min)
       </div>
     )
   }
 
   const statusMsg = getStatusMessage()
+  const isTheoretical = !hasPosition
 
   return (
     <div className="scanner-expand" style={{ padding: '12px 0' }}>
       
-      {/* Ligne de Statut (remplace les Gates badges) */}
+      {/* Ligne de Statut */}
       <div style={{ paddingLeft: 16 }}>
         {statusMsg}
       </div>
@@ -137,7 +148,17 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 
             {/* Colonnes Prix(10), Var(8), Dir(7) - Niveaux Grid */}
             <td colSpan="3" style={{ width: '25%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
-              <div className="grid-detail-levels">
+              <div style={{ marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className="text-xs dim uppercase" style={{ letterSpacing: 0.5 }}>
+                  {isTheoretical ? 'Prochains niveaux (estimés)' : 'Niveaux grid'}
+                </span>
+                {isTheoretical && (
+                  <Tooltip content="Ces niveaux seront recalculés à la clôture de la bougie 1h. Ils sont affichés ici à titre indicatif basés sur le dernier scan.">
+                    <span style={{ fontSize: 10, cursor: 'help' }}>ℹ️</span>
+                  </Tooltip>
+                )}
+              </div>
+              <div className="grid-detail-levels" style={{ opacity: isTheoretical ? 0.7 : 1 }}>
                 {allLevels.map(lvl => (
                   <div key={lvl.index} className={`grid-level ${lvl.filled ? 'grid-level--filled' : 'grid-level--pending'}`}>
                     <span className="grid-level-name">Lvl {lvl.index + 1}</span>
@@ -162,7 +183,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 
             {/* Colonne Trend (12%) - Graphique GridChart */}
             <td style={{ width: '12%', verticalAlign: 'top', padding: '0 8px', border: 'none', overflow: 'visible' }}>
-              <div style={{ height: 80, minWidth: 160, position: 'relative' }}>
+              <div style={{ height: 80, minWidth: 160, position: 'relative', opacity: isTheoretical ? 0.8 : 1 }}>
                 <GridChart
                   symbol={symbol}
                   data={sparkline}
@@ -211,14 +232,14 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
               )}
             </td>
 
-            {/* Colonne Grid (7%) - Indicateurs */}
-            <td style={{ width: '7%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
+            {/* Colonne Grid (7% -> 10%) - Indicateurs */}
+            <td style={{ width: '10%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
                 {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
                 {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
                 {atrPct != null && <IndicatorRow label="ATR%" value={`${Number(atrPct).toFixed(1)}%`} />}
-                {minAtrPct > 0 && <IndicatorRow label="Min.ATR" value={`${minAtrPct.toFixed(1)}%`} />}
+                {minAtrPct > 0 && <IndicatorRow label="Min.ATR" value={`${minAtrPct.toFixed(1)}%`} color="var(--yellow)" />}
                 {regime && <IndicatorRow label="Rég." value={regime} badge />}
               </div>
             </td>
@@ -232,7 +253,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
 function IndicatorRow({ label, value, color, badge }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
-      <span className="muted" style={{ width: 36, flexShrink: 0 }}>{label}</span>
+      <span className="muted" style={{ width: 40, flexShrink: 0 }}>{label}</span>
       {badge ? (
         <span className="badge badge-ranging" style={{ padding: '0 4px', fontSize: '9px' }}>{value}</span>
       ) : (
