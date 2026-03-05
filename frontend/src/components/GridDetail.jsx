@@ -176,9 +176,9 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
               </div>
             </td>
 
-            {/* Colonne Trend (12%) - Graphique GridChart */}
-            <td style={{ width: '12%', verticalAlign: 'top', padding: '0 8px', border: 'none', overflow: 'visible' }}>
-              <div style={{ height: 80, minWidth: 160, position: 'relative', opacity: isTheoretical ? 0.8 : 1 }}>
+            {/* Colonnes Trend à Dist.SMA - Graphique Large (Fusion des cellules) */}
+            <td colSpan={hasMono ? 5 : 3} style={{ verticalAlign: 'top', padding: '0 12px', border: 'none', overflow: 'visible' }}>
+              <div style={{ height: 130, width: '100%', position: 'relative' }}>
                 <GridChart
                   symbol={symbol}
                   data={sparkline}
@@ -192,42 +192,9 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
               </div>
             </td>
 
-            {/* Colonne Score (7%) - SI hasMono */}
-            {hasMono && <td style={{ width: '7%', border: 'none' }} />}
+            {/* Supprimer les cellules individuelles qui sont maintenant fusionnées dans le colSpan ci-dessus */}
 
-            {/* Colonne Grade (7%) */}
-            <td style={{ width: '7%', border: 'none' }} />
-
-            {/* Colonne Signaux (20%) - SI hasMono */}
-            {hasMono && <td style={{ width: '20%', border: 'none' }} />}
-
-            {/* Colonne Dist.SMA (9%) - Targets TP/SL */}
-            <td style={{ width: '9%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
-              {hasPosition && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {gridInfo?.tp_price != null && (
-                    <div className="text-xs">
-                      <span className="muted">TP: </span>
-                      <span className="mono pnl-pos">{formatPrice(gridInfo.tp_price)}</span>
-                    </div>
-                  )}
-                  {gridInfo?.sl_price != null && (
-                    <div className="text-xs">
-                      <span className="muted">SL: </span>
-                      <span className="mono pnl-neg">{formatPrice(gridInfo.sl_price)}</span>
-                    </div>
-                  )}
-                  {gridInfo?.margin_used != null && (
-                    <div className="text-xs">
-                      <span className="muted">Margin: </span>
-                      <span className="mono">{gridInfo.margin_used.toFixed(1)}$</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </td>
-
-            {/* Colonne Grid (7% -> 10%) - Indicateurs */}
+            {/* Colonne Grid (10%) - Indicateurs */}
             <td style={{ width: '10%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
