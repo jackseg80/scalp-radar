@@ -13,7 +13,7 @@
  */
 import { useMemo } from 'react'
 
-export default function GridChart({ data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = '100%' }) {
+export default function GridChart({ data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = '100%', mini = false }) {
   // Calculer les bornes du graphique pour englober tous les niveaux importants
   const bounds = useMemo(() => {
     if (!data.length && !levels.length && !currentPrice) return { min: 0, max: 100 }
@@ -28,13 +28,14 @@ export default function GridChart({ data = [], levels = [], currentPrice, tpPric
     const max = Math.max(...allPrices)
     const range = max - min || (max * 0.01) // 1% par défaut si range nul
     
-    // Ajouter 10% de padding en haut et en bas
+    // Ajouter 10% de padding en haut et en bas (moins en mini)
+    const p = mini ? 0.05 : 0.1
     return {
-      min: min - range * 0.1,
-      max: max + range * 0.1,
-      range: range * 1.2
+      min: min - range * p,
+      max: max + range * p,
+      range: range * (1 + p * 2)
     }
-  }, [data, levels, currentPrice, tpPrice, slPrice])
+  }, [data, levels, currentPrice, tpPrice, slPrice, mini])
 
   const getY = (price) => {
     if (!price || bounds.range === 0) return 0
@@ -52,12 +53,23 @@ export default function GridChart({ data = [], levels = [], currentPrice, tpPric
   }, [data, bounds])
 
   return (
-    <div style={{ width, height, position: 'relative', background: 'rgba(255,255,255,0.02)', borderRadius: 4, overflow: 'hidden', border: '1px solid var(--border)' }}>
+    <div style={{ 
+      width, 
+      height, 
+      position: 'relative', 
+      background: mini ? 'transparent' : 'rgba(255,255,255,0.02)', 
+      borderRadius: 4, 
+      overflow: 'hidden', 
+      border: mini ? 'none' : '1px solid var(--border)' 
+    }}>
       <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ display: 'block' }}>
-        {/* Grilles horizontales (optionnel, pour lisibilité) */}
-        <line x1="0" y1="25" x2="100" y2="25" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
-        <line x1="0" y1="50" x2="100" y2="50" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
-        <line x1="0" y1="75" x2="100" y2="75" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
+        {!mini && (
+          <>
+            <line x1="0" y1="25" x2="100" y2="25" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
+            <line x1="0" y1="50" x2="100" y2="50" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
+            <line x1="0" y1="75" x2="100" y2="75" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
+          </>
+        )}
 
         {/* Niveaux Grid */}
         {levels.map((lvl, i) => {
@@ -69,12 +81,15 @@ export default function GridChart({ data = [], levels = [], currentPrice, tpPric
               <line 
                 x1="0" y1={y} x2="100" y2={y} 
                 stroke={color} 
-                strokeWidth={lvl.filled ? "0.6" : "0.3"} 
+                strokeWidth={lvl.filled ? (mini ? "0.4" : "0.6") : (mini ? "0.2" : "0.3")} 
                 strokeDasharray={lvl.filled ? "" : "2,1"}
               />
-              {/* Indicateur de niveau à gauche */}
-              <rect x="0" y={y-2} width="8" height="4" fill={color} opacity="0.2" />
-              <text x="1" y={y+1} fontSize="3" fill={color} fontWeight="bold">L{i+1}</text>
+              {!mini && (
+                <>
+                  <rect x="0" y={y-2} width="8" height="4" fill={color} opacity="0.2" />
+                  <text x="1" y={y+1} fontSize="3" fill={color} fontWeight="bold">L{i+1}</text>
+                </>
+              )}
             </g>
           )
         })}
@@ -82,16 +97,16 @@ export default function GridChart({ data = [], levels = [], currentPrice, tpPric
         {/* Stop Loss */}
         {slPrice && (
           <g>
-            <line x1="0" y1={getY(slPrice)} x2="100" y2={getY(slPrice)} stroke="var(--red)" strokeWidth="0.8" strokeDasharray="2,2" />
-            <text x="85" y={getY(slPrice)-1.5} fontSize="4" fill="var(--red)" fontWeight="bold">SL</text>
+            <line x1="0" y1={getY(slPrice)} x2="100" y2={getY(slPrice)} stroke="var(--red)" strokeWidth={mini ? "0.4" : "0.8"} strokeDasharray="2,2" />
+            {!mini && <text x="85" y={getY(slPrice)-1.5} fontSize="4" fill="var(--red)" fontWeight="bold">SL</text>}
           </g>
         )}
 
         {/* Take Profit */}
         {tpPrice && (
           <g>
-            <line x1="0" y1={getY(tpPrice)} x2="100" y2={getY(tpPrice)} stroke="var(--accent)" strokeWidth="0.8" strokeDasharray="2,2" />
-            <text x="85" y={getY(tpPrice)-1.5} fontSize="4" fill="var(--accent)" fontWeight="bold">TP</text>
+            <line x1="0" y1={getY(tpPrice)} x2="100" y2={getY(tpPrice)} stroke="var(--accent)" strokeWidth={mini ? "0.4" : "0.8"} strokeDasharray="2,2" />
+            {!mini && <text x="85" y={getY(tpPrice)-1.5} fontSize="4" fill="var(--accent)" fontWeight="bold">TP</text>}
           </g>
         )}
 
@@ -100,25 +115,25 @@ export default function GridChart({ data = [], levels = [], currentPrice, tpPric
           <polyline
             points={points}
             fill="none"
-            stroke="var(--text-secondary)"
-            strokeWidth="1"
+            stroke={mini ? (data[data.length-1] > data[0] ? 'var(--accent)' : 'var(--red)') : 'var(--text-secondary)'}
+            strokeWidth={mini ? "1.2" : "1"}
             strokeLinejoin="round"
             strokeLinecap="round"
-            opacity="0.8"
+            opacity={mini ? 1 : 0.8}
           />
         )}
 
         {/* Prix Actuel */}
         {currentPrice && (
           <g>
-            <line x1="0" y1={getY(currentPrice)} x2="100" y2={getY(currentPrice)} stroke="var(--yellow)" strokeWidth="0.5" opacity="0.8" />
-            <circle cx="100" cy={getY(currentPrice)} r="2" fill="var(--yellow)" />
+            <line x1="0" y1={getY(currentPrice)} x2="100" y2={getY(currentPrice)} stroke="var(--yellow)" strokeWidth={mini ? "0.3" : "0.5"} opacity="0.8" />
+            <circle cx="100" cy={getY(currentPrice)} r={mini ? "1.2" : "2"} fill="var(--yellow)" />
           </g>
         )}
       </svg>
       
-      {/* Label Prix Actuel (overlay HTML pour rester lisible) */}
-      {currentPrice && (
+      {/* Label Prix Actuel (seulement en mode normal) */}
+      {!mini && currentPrice && (
         <div style={{
           position: 'absolute',
           right: 2,
@@ -138,8 +153,8 @@ export default function GridChart({ data = [], levels = [], currentPrice, tpPric
         </div>
       )}
 
-      {/* Label TP (overlay) */}
-      {tpPrice && (
+      {/* Label TP (seulement en mode normal) */}
+      {!mini && tpPrice && (
         <div style={{
           position: 'absolute',
           left: 2,
@@ -155,8 +170,8 @@ export default function GridChart({ data = [], levels = [], currentPrice, tpPric
         </div>
       )}
 
-      {/* Label SL (overlay) */}
-      {slPrice && (
+      {/* Label SL (seulement en mode normal) */}
+      {!mini && slPrice && (
         <div style={{
           position: 'absolute',
           left: 2,

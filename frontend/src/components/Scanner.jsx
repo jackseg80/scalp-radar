@@ -10,7 +10,7 @@ import SignalDots from './SignalDots'
 import SignalDetail from './SignalDetail'
 import { formatPrice } from '../utils/format'
 import GridDetail from './GridDetail'
-import Spark from './Spark'
+import GridChart from './GridChart'
 import Tooltip from './Tooltip'
 import ActivePositions from './ActivePositions'
 import CollapsibleCard from './CollapsibleCard'
@@ -80,6 +80,41 @@ function PriceCell({ symbol, price }) {
   return (
     <td className={`mono ${flashClass}`}>
       {price != null ? formatPrice(price) : '--'}
+    </td>
+  )
+}
+
+// Composant pour la cellule Trend (graphique mini)
+function TrendCell({ asset, gridInfo, strategyFilter }) {
+  const levels = useMemo(() => {
+    const conds = (asset.strategies?.[strategyFilter]?.conditions || []).filter(c => !c.gate)
+    const positions = gridInfo?.positions || []
+    const maxLevels = gridInfo?.levels_max || conds.length || 3
+    
+    const res = []
+    for (let i = 0; i < maxLevels; i++) {
+      const p = positions.find(pos => pos.level === i)
+      const c = conds[i]
+      res.push({
+        price: p?.entry_price || (c?.value != null ? Number(c.value) : null),
+        filled: !!p,
+        direction: p?.direction || gridInfo?.direction || (c?.name?.includes('short') ? 'short' : 'long')
+      })
+    }
+    return res
+  }, [asset, gridInfo, strategyFilter])
+
+  return (
+    <td style={{ padding: '4px 8px' }}>
+      <GridChart 
+        data={asset.sparkline} 
+        levels={levels}
+        currentPrice={asset.price}
+        tpPrice={gridInfo?.tp_price}
+        slPrice={gridInfo?.sl_price}
+        h={32}
+        mini={true}
+      />
     </td>
   )
 }
@@ -395,9 +430,7 @@ export default function Scanner({ wsData }) {
                         <span className="dim text-xs">--</span>
                       )}
                     </td>
-                    <td>
-                      <Spark data={asset.sparkline} h={32} />
-                    </td>
+                    <TrendCell asset={asset} gridInfo={gridInfo} strategyFilter={strategyFilter} />
                     {hasMonoStrategies && (
                       <td>
                         <span className="score-number" style={{ color: scoreColor(score) }}>

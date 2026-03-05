@@ -107,7 +107,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
           currentPrice={price}
           tpPrice={gridInfo?.tp_price}
           slPrice={gridInfo?.sl_price}
-          width={180}
+          width={300}
         />
 
         {/* Résumé grid */}
