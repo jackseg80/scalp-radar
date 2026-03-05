@@ -132,8 +132,8 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
             </td>
 
             {/* Colonne Trend (12%) - Graphique GridChart */}
-            <td style={{ width: '12%', verticalAlign: 'top', padding: '0 8px', border: 'none' }}>
-              <div style={{ height: 80, minWidth: 160 }}>
+            <td style={{ width: '12%', verticalAlign: 'top', padding: '0 8px', border: 'none', overflow: 'visible' }}>
+              <div style={{ height: 80, minWidth: 160, position: 'relative' }}>
                 <GridChart
                   symbol={symbol}
                   data={sparkline}

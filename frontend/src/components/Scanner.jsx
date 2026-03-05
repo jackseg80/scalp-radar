@@ -453,7 +453,7 @@ export default function Scanner({ wsData }) {
                   </tr>
                   {isSelected && (
                     <tr>
-                      <td colSpan={colCount} style={{ padding: 0 }}>
+                      <td colSpan={colCount} style={{ padding: 0, overflow: 'visible' }}>
                         {gridInfo || (strategyFilter && GRID_STRATEGIES.has(strategyFilter)) ? (
                           <GridDetail
                             symbol={asset.symbol}
