@@ -168,12 +168,16 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
         <div 
           style={{
             position: 'fixed',
-            top: 0, left: 0, width: '100vw', height: '100vh',
-            background: 'rgba(0,0,0,0.95)',
+            top: 0, left: 0, width: '80vw', height: '90vh',
+            margin: '2vh 10vw',
+            background: 'rgba(6, 8, 13, 0.98)',
             zIndex: 9999,
             display: 'flex',
             flexDirection: 'column',
-            padding: '40px',
+            padding: '30px',
+            borderRadius: 12,
+            border: '1px solid var(--accent)',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.8)',
             animation: 'slideIn 0.2s ease-out'
           }}
           onClick={() => setIsModalOpen(false)}
