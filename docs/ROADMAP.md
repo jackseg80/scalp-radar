@@ -3614,6 +3614,19 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 ---
 
+## AUDITS TECHNIQUES RÉCENTS
+
+### Audit Self-Healing & Parity (06 Mars 2026) ✅
+
+**Objectif** : Sécuriser le trading 1h (H1) contre les micro-coupures réseau et les désynchronisations Exchange.
+
+**Réalisations** :
+- **DataEngine Self-Healing** : Détection de gaps WebSocket et récupération REST immédiate (`fetch_ohlcv`). Garantit que les indicateurs techniques ne sont jamais calculés sur des buffers incomplets.
+- **Parity Watchdog** : Réconciliation périodique (15 min) des positions réelles Bitget via le `Watchdog`. Corrige les ordres orphelins ou les fermetures manuelles détectées à chaud.
+- **Tests** : Ajout de `tests/test_dataengine_autoheal.py` et `tests/test_watchdog_parity.py`. Validation de l'intégralité de la suite (2225 tests passés).
+
+---
+
 ## RESSOURCES
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git

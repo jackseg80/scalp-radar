@@ -166,8 +166,9 @@ Pour chaque candle reçue :
 2. **Validation** (DataValidator) :
    - `low <= high`, `volume >= 0`, `open > 0`, `close > 0`
    - Pas de doublon (check 5 dernières candles)
-   - Détection gap (> 1.5× la durée attendue)
-3. **Buffer** : ajout au buffer rolling `_buffers[symbol][timeframe]`, borné à `MAX_BUFFER_SIZE = 500`
+   - **Détection gap** (> 1.5× la durée attendue)
+3. **Self-Healing (Auto-guérison)** : si un gap est détecté, `_heal_gap()` est appelé. Il effectue un `fetch_ohlcv()` REST sur Bitget pour récupérer les bougies manquantes et les injecter dans le buffer avant de traiter la nouvelle bougie.
+4. **Buffer** : ajout au buffer rolling `_buffers[symbol][timeframe]`, borné à `MAX_BUFFER_SIZE = 500`
 4. **Write buffer** : ajout à `_write_buffer` (flush DB toutes les 5s par `_flush_candle_buffer()`)
 5. **Callbacks** : appel de tous les callbacks enregistrés via `on_candle(callback)`
 
@@ -548,6 +549,9 @@ Checks toutes les **30 secondes** :
 | Stratégies actives | `ALL_STOPPED` | 1h |
 | Kill switch déclenché | `KILL_SWITCH` | 1h |
 | SL manquant (position sans SL) | `MISSING_SL` | 5 min |
+| **Parité Bot/Exchange** | (Détails via Telegram) | 15 min |
+
+**Parity Watchdog** : toutes les 15 minutes, le Watchdog appelle `reconcile_on_boot()` (de `boot_reconciler.py`) pour chaque Executor actif. Cela garantit que toute divergence entre l'état local du bot et l'état réel de Bitget (ex: ordre fermé manuellement, WebSocket manqué) est détectée et corrigée à chaud.
 
 Anti-spam : cooldown par type d'anomalie. Le log WARNING est toujours émis, seul l'envoi Telegram est throttlé.
 

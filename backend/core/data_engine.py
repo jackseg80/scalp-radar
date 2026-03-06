@@ -739,6 +739,117 @@ class DataEngine:
                         # Toujours yield à l'event loop pour éviter de l'affamer
                         await asyncio.sleep(1.0)
 
+    async def _heal_gap(
+        self, symbol: str, timeframe: str, start_dt: datetime, end_dt: datetime
+    ) -> None:
+        """Récupère les candles manquantes via REST (Bitget) et les insère dans le buffer.
+
+        start_dt: timestamp de la dernière candle avant le gap.
+        end_dt: timestamp de la nouvelle candle reçue.
+        """
+        if self._exchange is None:
+            return
+
+        try:
+            # since est inclusif, on commence 1ms après start_dt
+            since_ms = int(start_dt.timestamp() * 1000) + 1
+
+            # Calcul du nombre de bougies manquantes (approximatif)
+            tf = TimeFrame.from_string(timeframe)
+            expected_delta = tf.to_milliseconds()
+            actual_delta_ms = (end_dt - start_dt).total_seconds() * 1000
+            missing_count = int(actual_delta_ms / expected_delta)
+
+            if missing_count <= 1:
+                return  # Pas de bougie complète manquante (ex: simple retard)
+
+            logger.info(
+                "DataEngine: tentative de guérison de {} bougies manquantes pour {}/{} ({} -> {})",
+                missing_count - 1,
+                symbol,
+                timeframe,
+                start_dt.strftime("%H:%M"),
+                end_dt.strftime("%H:%M"),
+            )
+
+            # fetch_ohlcv(symbol, timeframe, since, limit)
+            # On demande missing_count pour couvrir tout le gap
+            healed_ohlcv = await self._exchange.fetch_ohlcv(
+                symbol, timeframe, since=since_ms, limit=missing_count
+            )
+
+            if not healed_ohlcv:
+                logger.warning(
+                    "DataEngine: aucune donnée de guérison reçue pour {}/{}",
+                    symbol,
+                    timeframe,
+                )
+                return
+
+            healed_candles: list[Candle] = []
+            for o in healed_ohlcv:
+                ts = datetime.fromtimestamp(o[0] / 1000, tz=timezone.utc)
+                # Ne pas inclure la bougie end_dt (elle sera ajoutée après par _on_candle_received)
+                if ts >= end_dt:
+                    continue
+
+                try:
+                    c = Candle(
+                        timestamp=ts,
+                        open=float(o[1]),
+                        high=float(o[2]),
+                        low=float(o[3]),
+                        close=float(o[4]),
+                        volume=float(o[5]) if len(o) > 5 else 0.0,
+                        symbol=symbol,
+                        timeframe=tf,
+                    )
+                    if self.validator.validate_candle(c):
+                        healed_candles.append(c)
+                except Exception:
+                    continue
+
+            if healed_candles:
+                buffer = self._buffers[symbol][timeframe]
+
+                # Éviter les doublons si le WS a déjà envoyé une partie (peu probable ici)
+                existing_ts = {c.timestamp for c in buffer[-10:]}
+                to_add = [
+                    c for c in healed_candles if c.timestamp not in existing_ts
+                ]
+
+                if to_add:
+                    buffer.extend(to_add)
+                    buffer.sort(key=lambda x: x.timestamp)
+
+                    # Persistance DB (via write_buffer pour le flush périodique)
+                    self._write_buffer.extend(to_add)
+
+                    logger.success(
+                        "DataEngine: {} bougies guéries insérées pour {}/{}",
+                        len(to_add),
+                        symbol,
+                        timeframe,
+                    )
+
+                    # Notification succès (via notifier)
+                    if self._notifier:
+                        try:
+                            await self._notifier.notify_anomaly(
+                                AnomalyType.DATA_GAP,
+                                f"✅ {symbol}/{timeframe} : {len(to_add)} bougies récupérées et injectées.",
+                            )
+                        except Exception:
+                            pass
+
+        except Exception as e:
+            logger.error(
+                "DataEngine: échec de la guérison du gap {}/{}: {}",
+                symbol,
+                timeframe,
+                e,
+            )
+
     async def _on_candle_received(
         self,
         symbol: str,
@@ -781,7 +892,8 @@ class DataEngine:
             if silence_s > 300:
                 logger.info(
                     "DataEngine: {} de retour après {:.0f}s de silence",
-                    symbol, silence_s,
+                    symbol,
+                    silence_s,
                 )
         self._last_update_per_symbol[symbol] = now_dt
 
@@ -823,6 +935,7 @@ class DataEngine:
             if self._notifier is not None:
                 try:
                     from backend.alerts.notifier import AnomalyType
+
                     await self._notifier.notify_anomaly(
                         AnomalyType.DATA_GAP,
                         f"{symbol}/{timeframe_str} gap {gap_seconds:.0f}s "
@@ -830,6 +943,9 @@ class DataEngine:
                     )
                 except Exception:
                     pass  # Ne pas bloquer le flux de données
+
+            # Tentative de guérison immédiate (Self-Healing)
+            await self._heal_gap(symbol, timeframe_str, gap_from, gap_to)
 
         # Ajouter au buffer (borné)
         buffer.append(candle)

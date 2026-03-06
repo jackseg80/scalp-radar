@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from backend.alerts.notifier import AnomalyType
+from backend.execution.boot_reconciler import reconcile_on_boot
 
 _ZOMBIE_THRESHOLD_HOURS = 24
 
@@ -59,6 +60,7 @@ class Watchdog:
         self._alerts_sent: int = 0
         self._last_check: datetime | None = None
         self._current_issues: list[str] = []
+        self._heartbeat_tick: int = 0
 
         # Cooldown : dernière alerte par type
         self._last_alert_time: dict[AnomalyType, datetime] = {}
@@ -175,6 +177,28 @@ class Watchdog:
 
         # 7. Positions zombie (ouvertes > 24h)
         await self._check_zombie_positions(executors_to_check)
+
+        # 8. Parité Bot <=> Exchange (toutes les 15 min si intervalle=30s)
+        self._heartbeat_tick += 1
+        ticks_15min = max(1, 900 // self._check_interval)
+        if self._heartbeat_tick % ticks_15min == 0:
+            await self._check_parity(executors_to_check)
+
+    async def _check_parity(self, executors: list[tuple[str, object]]) -> None:
+        """Vérifie la parité des positions avec l'exchange via REST."""
+        for prefix, ex in executors:
+            # ex est duck-typed, on vérifie is_enabled via getattr
+            if not getattr(ex, "is_enabled", False):
+                continue
+
+            tag = f" [{prefix}]" if prefix else ""
+            try:
+                logger.info("Watchdog: lancement check parité{}...", tag)
+                # On réutilise le réconciliateur de boot qui est sûr et idempotent.
+                # Il va fetch les positions réelles et corriger l'état local si besoin.
+                await reconcile_on_boot(ex)
+            except Exception as e:
+                logger.error("Watchdog: erreur check parité{}: {}", tag, e)
 
     async def _check_zombie_positions(
         self, executors: list[tuple[str, object]],
