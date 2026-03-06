@@ -62,9 +62,9 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
     <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ display: 'block' }}>
       {!mini && (
         <>
-          <line x1="0" y1="25" x2="100" y2="25" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
-          <line x1="0" y1="50" x2="100" y2="50" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
-          <line x1="0" y1="75" x2="100" y2="75" stroke="var(--border)" strokeWidth="0.1" strokeDasharray="1,1" />
+          <line x1="0" y1="25" x2="100" y2="25" stroke="var(--border)" strokeWidth="0.05" strokeDasharray="1,1" opacity="0.5" />
+          <line x1="0" y1="50" x2="100" y2="50" stroke="var(--border)" strokeWidth="0.05" strokeDasharray="1,1" opacity="0.5" />
+          <line x1="0" y1="75" x2="100" y2="75" stroke="var(--border)" strokeWidth="0.05" strokeDasharray="1,1" opacity="0.5" />
         </>
       )}
 
@@ -78,31 +78,23 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
             <line 
               x1="0" y1={y} x2="100" y2={y} 
               stroke={color} 
-              strokeWidth={lvl.filled ? (mini ? "0.4" : "0.6") : (mini ? "0.2" : "0.3")} 
+              strokeWidth={lvl.filled ? (mini ? "0.4" : "0.4") : (mini ? "0.2" : "0.2")} 
               strokeDasharray={lvl.filled ? "" : "2,1"}
               opacity={opacity}
             />
-            {(!mini || isModal) && (
-              <g opacity={opacity}>
-                <rect x="0" y={y-2} width="8" height="4" fill={color} opacity="0.2" />
-                <text x="1" y={y+1} fontSize={isModal ? "1.5" : "3"} fill={color} fontWeight="bold">L{i+1}</text>
-              </g>
-            )}
           </g>
         )
       })}
 
       {slPrice && (
         <g opacity={isModal ? 1 : 0.8}>
-          <line x1="0" y1={getY(slPrice)} x2="100" y2={getY(slPrice)} stroke="var(--red)" strokeWidth={mini ? "0.4" : "0.8"} strokeDasharray="2,2" />
-          {(!mini || isModal) && <text x={isModal ? "95" : "88"} y={getY(slPrice)-1.5} fontSize={isModal ? "2.5" : "4"} fill="var(--red)" fontWeight="bold">SL</text>}
+          <line x1="0" y1={getY(slPrice)} x2="100" y2={getY(slPrice)} stroke="var(--red)" strokeWidth={mini ? "0.4" : "0.6"} strokeDasharray="2,2" />
         </g>
       )}
 
       {tpPrice && (
         <g opacity={isModal ? 1 : 0.8}>
-          <line x1="0" y1={getY(tpPrice)} x2="100" y2={getY(tpPrice)} stroke="var(--accent)" strokeWidth={mini ? "0.4" : "0.8"} strokeDasharray="2,2" />
-          {(!mini || isModal) && <text x={isModal ? "95" : "88"} y={getY(tpPrice)-1.5} fontSize={isModal ? "2.5" : "4"} fill="var(--accent)" fontWeight="bold">TP</text>}
+          <line x1="0" y1={getY(tpPrice)} x2="100" y2={getY(tpPrice)} stroke="var(--accent)" strokeWidth={mini ? "0.4" : "0.6"} strokeDasharray="2,2" />
         </g>
       )}
 
@@ -111,7 +103,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
           points={points}
           fill="none"
           stroke={(data.length > 1 && data[data.length-1] > data[0]) ? 'var(--accent)' : 'var(--red)'}
-          strokeWidth={isModal ? "0.5" : (mini ? "1.2" : "1")}
+          strokeWidth={isModal ? "0.4" : (mini ? "1.2" : "0.8")}
           strokeLinejoin="round"
           strokeLinecap="round"
           opacity={isModal ? 1 : (mini ? 1 : 0.6)}
@@ -122,8 +114,8 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
 
       {currentPrice && (
         <g opacity={isModal ? 1 : 0.8}>
-          <line x1="0" y1={getY(currentPrice)} x2="100" y2={getY(currentPrice)} stroke="var(--yellow)" strokeWidth={mini ? "0.3" : "0.5"} opacity={isModal ? 1 : 0.8} />
-          <circle cx="100" cy={getY(currentPrice)} r={mini ? "1.2" : (isModal ? "1" : "2")} fill="var(--yellow)" />
+          <line x1="0" y1={getY(currentPrice)} x2="100" y2={getY(currentPrice)} stroke="var(--yellow)" strokeWidth={mini ? "0.3" : "0.4"} opacity={isModal ? 1 : 0.8} />
+          <circle cx="100" cy={getY(currentPrice)} r={mini ? "1.2" : (isModal ? "0.6" : "1.5")} fill="var(--yellow)" />
         </g>
       )}
     </svg>
@@ -134,47 +126,53 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
       style={{
         position: 'fixed',
         top: 0, left: 0, width: '100vw', height: '100vh',
-        background: 'rgba(0,0,0,0.9)', 
+        background: 'rgba(0,0,0,0.92)', 
         zIndex: 100000,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '2vh 5vw'
+        padding: '2vh 2vw'
       }}
       onClick={() => setIsModalOpen(false)}
     >
       <div 
         style={{
-          width: '80vw',
-          height: '85vh',
-          background: '#000', // OPAQUE TOTAL NOIR
-          borderRadius: 12,
-          border: '2px solid var(--accent)',
+          width: '95vw',
+          height: '90vh',
+          background: '#0a0a0a', 
+          borderRadius: 8,
+          border: '1px solid var(--border)',
           boxShadow: '0 0 60px rgba(0, 0, 0, 1)',
           display: 'flex',
           flexDirection: 'column',
           position: 'relative',
-          padding: '24px',
+          padding: '20px',
           overflow: 'hidden'
         }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header unique */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexShrink: 0 }}>
-          <div>
-            <h2 style={{ margin: 0, color: 'var(--accent)', fontSize: '26px', fontWeight: 800 }}>{symbol}</h2>
-            <div className="muted" style={{ fontSize: '13px' }}>Niveaux Grid & Prix en temps réel</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+            <h2 style={{ margin: 0, color: 'var(--accent)', fontSize: '28px', fontWeight: 900, letterSpacing: '-0.5px' }}>{symbol}</h2>
+            <div style={{ height: 24, width: 1, background: 'var(--border)' }} />
+            <div className="mono" style={{ fontSize: '18px', color: 'var(--yellow)', fontWeight: 700 }}>
+              {formatPrice(currentPrice)}
+            </div>
+            <div className="muted" style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: 1 }}>
+              Chart Expert • {levels.length} Niveaux
+            </div>
           </div>
           <button 
             style={{ 
-              background: 'var(--accent)', 
-              border: 'none', 
-              color: '#000', 
-              padding: '8px 20px', 
-              borderRadius: 6, 
+              background: 'transparent', 
+              border: '1px solid var(--border)', 
+              color: 'var(--text-dim)', 
+              padding: '6px 16px', 
+              borderRadius: 4, 
               cursor: 'pointer',
-              fontSize: '13px',
-              fontWeight: 800
+              fontSize: '12px',
+              fontWeight: 600
             }}
             onClick={() => setIsModalOpen(false)}
           >
@@ -183,48 +181,142 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
         </div>
 
         {/* Graphique unique - Remplit tout l'espace */}
-        <div style={{ flex: 1, position: 'relative', width: '100%', height: '100%', background: '#000' }}>
-          {renderSVG(true)}
+        <div style={{ flex: 1, position: 'relative', width: '100%', height: '100%', background: '#050505', border: '1px solid #1a1a1a', borderRadius: 4 }}>
+          {/* Grille de prix (Axe Y à droite) */}
+          <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 60, borderLeft: '1px solid #1a1a1a', zIndex: 1, pointerEvents: 'none' }}>
+            {[0, 25, 50, 75, 100].map(p => {
+              const priceAtY = bounds.max - (bounds.range * p / 100)
+              return (
+                <div key={p} style={{
+                  position: 'absolute',
+                  top: `${p}%`,
+                  right: 5,
+                  transform: 'translateY(-50%)',
+                  fontSize: '10px',
+                  color: 'var(--text-dim)',
+                  fontFamily: 'var(--font-mono)'
+                }}>
+                  {formatPrice(priceAtY)}
+                </div>
+              )
+            })}
+          </div>
 
-          {/* Labels superposés au graphique */}
-          {currentPrice && (
-            <div style={{
-              position: 'absolute',
-              right: 10,
-              top: `${getY(currentPrice)}%`,
-              transform: 'translateY(-50%)',
-              background: 'var(--yellow)',
-              color: '#000',
-              fontSize: '14px',
-              padding: '4px 10px',
-              borderRadius: 4,
-              fontWeight: 900,
-              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-              zIndex: 10
-            }}>
-              {currentPrice.toLocaleString()}
-            </div>
-          )}
+          <div style={{ position: 'absolute', inset: '0 60px 0 0' }}>
+            {renderSVG(true)}
 
-          {tpPrice && (
-            <div style={{ position: 'absolute', left: 20, top: `${getY(tpPrice)}%`, transform: 'translateY(-110%)', color: 'var(--accent)', fontSize: '13px', fontWeight: 800 }}>
-              TAKE PROFIT: {tpPrice.toLocaleString()}
-            </div>
-          )}
-
-          {slPrice && (
-            <div style={{ position: 'absolute', left: 20, top: `${getY(slPrice)}%`, transform: 'translateY(10%)', color: 'var(--red)', fontSize: '13px', fontWeight: 800 }}>
-              STOP LOSS: {slPrice.toLocaleString()}
-            </div>
-          )}
-
-          {/* Liste des niveaux en bas à gauche */}
-          <div style={{ position: 'absolute', left: 20, bottom: 20, display: 'flex', flexDirection: 'column', gap: 4, background: 'rgba(0,0,0,0.4)', padding: '8px', borderRadius: 4 }}>
+            {/* Labels à GAUCHE alignés sur les lignes */}
             {levels.map((lvl, i) => lvl.price && (
-              <div key={i} style={{ fontSize: '11px', color: lvl.filled ? 'var(--accent)' : 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                 L{i+1}: {formatPrice(lvl.price)} {lvl.filled ? '(FILLED)' : ''}
+              <div key={i} style={{
+                position: 'absolute',
+                left: 0,
+                top: `${getY(lvl.price)}%`,
+                transform: 'translateY(-50%)',
+                zIndex: 10,
+                display: 'flex',
+                alignItems: 'center'
+              }}>
+                <div style={{
+                  background: lvl.filled ? 'var(--accent)' : '#1a1a1a',
+                  color: lvl.filled ? '#000' : 'var(--text-dim)',
+                  fontSize: '12px',
+                  fontWeight: 900,
+                  padding: '4px 8px',
+                  borderRadius: '0 4px 4px 0',
+                  boxShadow: '4px 0 10px rgba(0,0,0,0.5)',
+                  minWidth: 100,
+                  border: lvl.filled ? 'none' : '1px solid #333',
+                  borderLeft: 'none',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 10
+                }}>
+                  <span>L{i+1}</span>
+                  <span className="mono">{formatPrice(lvl.price)}</span>
+                </div>
+                {lvl.filled && <div style={{ width: 10, height: 1, background: 'var(--accent)' }} />}
               </div>
             ))}
+
+            {tpPrice && (
+              <div style={{
+                position: 'absolute',
+                left: 0,
+                top: `${getY(tpPrice)}%`,
+                transform: 'translateY(-50%)',
+                zIndex: 11
+              }}>
+                <div style={{
+                  background: 'var(--accent)',
+                  color: '#000',
+                  fontSize: '12px',
+                  fontWeight: 900,
+                  padding: '4px 8px',
+                  borderRadius: '0 4px 4px 0',
+                  boxShadow: '4px 0 10px rgba(0,0,0,0.5)',
+                  minWidth: 120,
+                  display: 'flex',
+                  justifyContent: 'space-between'
+                }}>
+                  <span>TAKE PROFIT</span>
+                  <span className="mono">{formatPrice(tpPrice)}</span>
+                </div>
+              </div>
+            )}
+
+            {slPrice && (
+              <div style={{
+                position: 'absolute',
+                left: 0,
+                top: `${getY(slPrice)}%`,
+                transform: 'translateY(-50%)',
+                zIndex: 11
+              }}>
+                <div style={{
+                  background: 'var(--red)',
+                  color: '#fff',
+                  fontSize: '12px',
+                  fontWeight: 900,
+                  padding: '4px 8px',
+                  borderRadius: '0 4px 4px 0',
+                  boxShadow: '4px 0 10px rgba(0,0,0,0.5)',
+                  minWidth: 120,
+                  display: 'flex',
+                  justifyContent: 'space-between'
+                }}>
+                  <span>STOP LOSS</span>
+                  <span className="mono">{formatPrice(slPrice)}</span>
+                </div>
+              </div>
+            )}
+
+            {currentPrice && (
+              <div style={{
+                position: 'absolute',
+                left: 0,
+                top: `${getY(currentPrice)}%`,
+                transform: 'translateY(-50%)',
+                zIndex: 12
+              }}>
+                <div style={{
+                  background: 'var(--yellow)',
+                  color: '#000',
+                  fontSize: '13px',
+                  fontWeight: 900,
+                  padding: '5px 10px',
+                  borderRadius: '0 6px 6px 0',
+                  boxShadow: '4px 0 15px rgba(0,0,0,0.6)',
+                  minWidth: 130,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  borderLeft: 'none'
+                }}>
+                  <span>PRIX</span>
+                  <span className="mono">{formatPrice(currentPrice)}</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -266,7 +358,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
             zIndex: 10,
             boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
           }}>
-            {currentPrice.toLocaleString()}
+            {formatPrice(currentPrice)}
           </div>
         )}
 
@@ -288,7 +380,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
             zIndex: 5,
             border: isModalOpen ? `1px solid ${lvl.filled ? 'var(--accent-dim)' : 'var(--border)'}` : 'none'
           }}>
-            {isModalOpen && `L${i+1} `}{lvl.price.toLocaleString()}
+            {isModalOpen && `L${i+1} `}{formatPrice(lvl.price)}
           </div>
         ))}
 
@@ -310,7 +402,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
             zIndex: 6,
             border: isModalOpen ? '1px solid var(--accent)' : 'none'
           }}>
-            TP {tpPrice.toLocaleString()}
+            TP {formatPrice(tpPrice)}
           </div>
         )}
         {!mini && slPrice && (
@@ -330,7 +422,7 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
             zIndex: 6,
             border: isModalOpen ? '1px solid var(--red)' : 'none'
           }}>
-            SL {slPrice.toLocaleString()}
+            SL {formatPrice(slPrice)}
           </div>
         )}
       </div>
