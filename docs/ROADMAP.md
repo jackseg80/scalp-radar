@@ -3622,6 +3622,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 **Réalisations Techniques** :
 - **DataEngine Native Aggregation** : Optimisation majeure des flux WebSocket. Le bot s'abonne uniquement au plus petit timeframe (ex: 5m) et reconstruit tous les autres (15m, 1h, 4h, 1d) localement en temps réel. Réduction du trafic WS de ~80% et suppression des délais sur les TFs lents.
+- **Hybrid Polling Fallback** : Sécurité pour les actifs instables (GALA, FIL, ETC). Si le WebSocket échoue 3 fois, l'actif bascule automatiquement en mode polling REST (fetch_ohlcv toutes les 30s) pour garantir la continuité des données. Récupération WebSocket tentée toutes les heures.
 - **DataEngine Self-Healing** : Détection de gaps WebSocket et récupération REST immédiate (`fetch_ohlcv`) sur le flux source.
 - **Parity Watchdog** : Réconciliation périodique (15 min) via le `Watchdog`. Correction à chaud des écarts Bot/Exchange.
 - **SL Accumulation Fix** :

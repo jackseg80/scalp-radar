@@ -166,10 +166,11 @@ Pour chaque candle reçue du flux source :
 2. **Validation** (DataValidator) : cohérence OHLCV, doublons, gaps.
 3. **Self-Healing (Auto-guérison)** : si un gap est détecté sur le flux source, `_heal_gap()` récupère les bougies manquantes via REST.
 4. **Stockage Source** : `_store_and_dispatch()` enregistre la bougie dans le buffer et notifie les indicateurs du TF source.
-5. **Native Aggregation (Optimisation)** : boucle sur les TFs supérieurs (`target_tfs`) :
+5. **Hybrid Polling (Résilience)** : si un actif échoue 3 fois de suite en WebSocket (stale > 5 min), le bot bascule automatiquement en mode **Polling REST**. Une tâche dédiée effectue un `fetch_ohlcv` toutes les 30s. Récupération WebSocket tentée toutes les heures.
+6. **Native Aggregation (Optimisation)** : boucle sur les TFs supérieurs (`target_tfs`) :
    - `_aggregate_to_target_tf()` : calcule la bougie consolidée (H1, H4, etc.) à partir des bougies source en mémoire.
    - `_store_and_dispatch()` : enregistre et notifie pour chaque TF agrégé.
-6. **Flush DB** : `_write_buffer` (toutes les 30s) garantit que source ET agrégés sont persistés.
+7. **Flush DB** : `_write_buffer` (toutes les 30s) garantit que source ET agrégés sont persistés.
 
 ### Structure du buffer
 

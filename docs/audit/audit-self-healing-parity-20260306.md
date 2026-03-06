@@ -40,6 +40,14 @@ Sécuriser le trading en timeframe 1h (H1) contre les instabilités réseau (gap
 - **Gain Performance** : Réduction du trafic WS de ~80% et suppression des erreurs stale sur les TFs lents.
 **Validation** : `tests/test_dataengine_aggregation.py`.
 
+### 5. DataEngine — Mode Hybride Polling (Résilience)
+**Problème** : Certains actifs (GALA, FIL, ETC) présentent des flux WebSocket instables sur Bitget, menant à leur abandon après 3 tentatives de relance.
+**Solution** : 
+- **Fallback REST** : Au lieu d'être abandonnés, les actifs instables basculent désormais automatiquement en **mode Polling REST** (`fetch_ohlcv` toutes les 30s).
+- **Recovery** : Le bot tente de repasser en mode WebSocket toutes les heures pour voir si la stabilité est revenue.
+- **Transparence** : Les données polluées sont injectées et agrégées normalement, garantissant la continuité du trading sans interruption.
+**Validation** : `tests/test_dataengine_fallback_polling.py`.
+
 ---
 
 ## 📊 Impact sur la Fiabilité
