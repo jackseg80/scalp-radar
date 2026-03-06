@@ -3616,12 +3616,13 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 ## AUDITS TECHNIQUES RÉCENTS
 
-### Audit Self-Healing, Parity & SL Fix (06 Mars 2026) ✅
+### Audit & Optimisation (06 Mars 2026) ✅
 
-**Objectif** : Sécuriser le trading 1h (H1) contre les micro-coupures, les désynchronisations et l'accumulation d'ordres orphelins sur Bitget.
+**Objectif** : Fiabiliser et alléger le moteur de données pour le trading H1.
 
 **Réalisations Techniques** :
-- **DataEngine Self-Healing** : Détection de gaps WebSocket et récupération REST immédiate (`fetch_ohlcv`).
+- **DataEngine Native Aggregation** : Optimisation majeure des flux WebSocket. Le bot s'abonne uniquement au plus petit timeframe (ex: 5m) et reconstruit tous les autres (15m, 1h, 4h, 1d) localement en temps réel. Réduction du trafic WS de ~80% et suppression des délais sur les TFs lents.
+- **DataEngine Self-Healing** : Détection de gaps WebSocket et récupération REST immédiate (`fetch_ohlcv`) sur le flux source.
 - **Parity Watchdog** : Réconciliation périodique (15 min) via le `Watchdog`. Correction à chaud des écarts Bot/Exchange.
 - **SL Accumulation Fix** :
     - Gestion de l'erreur 40109 (OrderNotFound) : reset `sl_order_id` local et purge exhaustive via `stop` et `plan` params (Bitget v2).
@@ -3635,7 +3636,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 - **DIR Column Fix** : Affiche désormais la direction réelle des positions ouvertes ou `--` sinon.
 
 **Validation** :
-- Nouveaux tests : `tests/test_dataengine_autoheal.py`, `tests/test_watchdog_parity.py`, `tests/test_mission_sl_fix.py`.
+- Nouveaux tests : `tests/test_dataengine_autoheal.py`, `tests/test_dataengine_aggregation.py`, `tests/test_watchdog_parity.py`, `tests/test_mission_sl_fix.py`.
 - Validation globale : **2228 tests passés**, 0 régression.
 
 ---

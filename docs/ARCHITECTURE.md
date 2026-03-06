@@ -158,19 +158,18 @@ Les souscriptions sont staggerées par batch de 5 avec 2.0s de délai entre les 
 
 ### Réception des candles
 
-`_watch_symbol()` → `_subscribe_klines()` → `watch_ohlcv()` (ccxt) → `_on_candle_received()`
+`_watch_symbol()` → Identifie le plus petit TF (Source) → `_subscribe_klines([Source])` → `watch_ohlcv()` (ccxt) → `_on_candle_received()`
 
-Pour chaque candle reçue :
+Pour chaque candle reçue du flux source :
 
 1. **Parsing** : timestamp ms → Candle dataclass
-2. **Validation** (DataValidator) :
-   - `low <= high`, `volume >= 0`, `open > 0`, `close > 0`
-   - Pas de doublon (check 5 dernières candles)
-   - **Détection gap** (> 1.5× la durée attendue)
-3. **Self-Healing (Auto-guérison)** : si un gap est détecté, `_heal_gap()` est appelé. Il effectue un `fetch_ohlcv()` REST sur Bitget pour récupérer les bougies manquantes et les injecter dans le buffer avant de traiter la nouvelle bougie.
-4. **Buffer** : ajout au buffer rolling `_buffers[symbol][timeframe]`, borné à `MAX_BUFFER_SIZE = 500`
-4. **Write buffer** : ajout à `_write_buffer` (flush DB toutes les 5s par `_flush_candle_buffer()`)
-5. **Callbacks** : appel de tous les callbacks enregistrés via `on_candle(callback)`
+2. **Validation** (DataValidator) : cohérence OHLCV, doublons, gaps.
+3. **Self-Healing (Auto-guérison)** : si un gap est détecté sur le flux source, `_heal_gap()` récupère les bougies manquantes via REST.
+4. **Stockage Source** : `_store_and_dispatch()` enregistre la bougie dans le buffer et notifie les indicateurs du TF source.
+5. **Native Aggregation (Optimisation)** : boucle sur les TFs supérieurs (`target_tfs`) :
+   - `_aggregate_to_target_tf()` : calcule la bougie consolidée (H1, H4, etc.) à partir des bougies source en mémoire.
+   - `_store_and_dispatch()` : enregistre et notifie pour chaque TF agrégé.
+6. **Flush DB** : `_write_buffer` (toutes les 30s) garantit que source ET agrégés sont persistés.
 
 ### Structure du buffer
 

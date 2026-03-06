@@ -31,6 +31,15 @@ Sécuriser le trading en timeframe 1h (H1) contre les instabilités réseau (gap
 - **Sécurité Stale Price** : Blocage des modifications SL si les prix datent de plus de 5 minutes.
 **Validation** : `tests/test_mission_sl_fix.py`.
 
+### 4. DataEngine — Optimisation par Agrégation Native
+**Problème** : La multiplication des flux WebSocket (un par timeframe) saturait la bande passante et provoquait des retards de données (stale data).
+**Solution** :
+- **Source Unique** : Le bot s'abonne désormais uniquement au plus petit timeframe (ex: 5m).
+- **Moteur d'Agrégation** : Reconstruction locale en temps réel des TFs supérieurs (15m, 1h, 4h, 1d) via `_aggregate_to_target_tf`.
+- **Mise à jour Intra-bougie** : Les indicateurs et l'UI sont rafraîchis à chaque tick du flux source, même pour les TFs agrégés.
+- **Gain Performance** : Réduction du trafic WS de ~80% et suppression des erreurs stale sur les TFs lents.
+**Validation** : `tests/test_dataengine_aggregation.py`.
+
 ---
 
 ## 📊 Impact sur la Fiabilité
