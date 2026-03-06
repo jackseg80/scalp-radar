@@ -230,10 +230,21 @@ async def _reconcile_grid_symbol(ex: Any, futures_sym: str) -> None:
                     )
                     return
             except Exception as e:
-                logger.error(
-                    "Executor: erreur détection SL pendant downtime {}: {}",
-                    futures_sym, e,
-                )
+                err_str = str(e)
+                # Bitget code 40109 = Order not found
+                if "40109" in err_str or "OrderNotFound" in err_str:
+                    logger.warning(
+                        "Executor: SL id {} introuvable (40109) pour {} — reset et purge",
+                        state.sl_order_id, futures_sym
+                    )
+                    state.sl_order_id = None
+                    # Nettoyer le terrain au cas où d'autres orphelins trainent
+                    await ex._cancel_all_open_orders(futures_sym)
+                else:
+                    logger.error(
+                        "Executor: erreur détection SL pendant downtime {}: {}",
+                        futures_sym, e,
+                    )
 
         # Rétablir le leverage
         try:

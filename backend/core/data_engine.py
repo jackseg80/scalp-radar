@@ -183,6 +183,10 @@ class DataEngine:
         """Retourne le dernier funding rate connu pour un symbol."""
         return self._funding_rates.get(symbol)
 
+    def get_last_update(self, symbol: str) -> datetime | None:
+        """Retourne le timestamp de la dernière bougie reçue pour un symbol."""
+        return self._last_update_per_symbol.get(symbol)
+
     def get_open_interest(self, symbol: str) -> list[OISnapshot]:
         """Retourne les snapshots d'OI pour un symbol."""
         return list(self._open_interest.get(symbol, []))

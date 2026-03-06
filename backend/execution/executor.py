@@ -1288,6 +1288,19 @@ class Executor:
         """Ouvre une position réelle avec SL/TP server-side."""
         futures_sym = to_futures_symbol(event.symbol)
 
+        # 0. Sécurité : Données Stale ? (Mission 2026-03-06)
+        if self._data_engine:
+            spot_sym = event.symbol
+            last_update = self._data_engine.get_last_update(spot_sym)
+            if last_update:
+                age = (datetime.now(tz=timezone.utc) - last_update).total_seconds()
+                if age > 300:  # 5 minutes
+                    logger.error(
+                        "Executor: prix STALE ({:.0f}s) pour {} — ouverture interdite par sécurité",
+                        age, futures_sym
+                    )
+                    return
+
         # Déjà une position ouverte sur ce symbole ?
         if futures_sym in self._positions:
             logger.warning(
@@ -1735,6 +1748,19 @@ class Executor:
         Appelée à chaque ouverture de niveau (le prix moyen change → le SL change).
         Quantité du SL = total_quantity (toutes les positions agrégées).
         """
+        # 0. Sécurité : Données Stale ? (Mission 2026-03-06)
+        if self._data_engine:
+            spot_sym = futures_sym.split(":")[0]
+            last_update = self._data_engine.get_last_update(spot_sym)
+            if last_update:
+                age = (datetime.now(tz=timezone.utc) - last_update).total_seconds()
+                if age > 300:  # 5 minutes
+                    logger.error(
+                        "Executor: prix STALE ({:.0f}s) pour {} — modification SL interdite par sécurité",
+                        age, futures_sym
+                    )
+                    return
+
         # 1. Annuler l'ancien SL s'il existe
         if state.sl_order_id:
             try:
@@ -1745,11 +1771,17 @@ class Executor:
                     "Executor: ancien SL {} annulé pour {}", state.sl_order_id, futures_sym,
                 )
             except Exception as e:
-                logger.warning(
-                    "Executor: échec cancel ancien SL {} pour {}: {} — fallback cancel_all",
-                    state.sl_order_id, futures_sym, e,
-                )
-                await self._cancel_all_open_orders(futures_sym)
+                # Si l'ordre n'existe plus (40109), on reset l'id et on continue
+                err_str = str(e)
+                if "40109" in err_str or "OrderNotFound" in err_str:
+                    logger.warning("Executor: ancien SL {} déjà inexistant (40109)", state.sl_order_id)
+                    state.sl_order_id = ""
+                else:
+                    logger.warning(
+                        "Executor: échec cancel ancien SL {} pour {}: {} — fallback cancel_all",
+                        state.sl_order_id, futures_sym, e,
+                    )
+                    await self._cancel_all_open_orders(futures_sym)
 
         # 2. Calculer nouveau SL
         sl_pct = self._get_grid_sl_percent(state.strategy_name)
@@ -1759,12 +1791,25 @@ class Executor:
             new_sl = state.avg_entry_price * (1 + sl_pct / 100)
         new_sl = self._round_price(new_sl, futures_sym)
 
-        # 3. Placer SL (retry 3x) — quantité = total agrégé
+        # 2.5 Idempotence : vérifier si un SL identique existe déjà sur l'exchange
+        # (évite l'accumulation si le tracking local a été perdu mais l'ordre est là)
         close_side = "sell" if state.direction == "LONG" else "buy"
-        sl_order_id = await self._place_sl_with_retry(
-            futures_sym, close_side, state.total_quantity, new_sl,
-            state.strategy_name,
+        existing_sl_id = await self._find_existing_sl(
+            futures_sym, close_side, state.total_quantity, new_sl
         )
+
+        if existing_sl_id:
+            logger.info(
+                "Executor: SL identique trouvé sur l'exchange ({}), réutilisation",
+                existing_sl_id
+            )
+            sl_order_id = existing_sl_id
+        else:
+            # 3. Placer SL (retry 3x) — quantité = total agrégé
+            sl_order_id = await self._place_sl_with_retry(
+                futures_sym, close_side, state.total_quantity, new_sl,
+                state.strategy_name,
+            )
 
         if sl_order_id is None:
             # Règle #1 : JAMAIS de position sans SL
@@ -1776,6 +1821,35 @@ class Executor:
 
         state.sl_order_id = sl_order_id
         state.sl_price = new_sl
+
+    async def _find_existing_sl(
+        self, symbol: str, side: str, quantity: float, trigger_price: float
+    ) -> str | None:
+        """Recherche un SL identique déjà présent sur l'exchange (idempotence)."""
+        if not self._exchange:
+            return None
+
+        # Bitget v2 supporte 'stop': True ou 'plan': True selon CCXT
+        for p_name, p_val in [("stop", True), ("plan", True)]:
+            try:
+                orders = await self._exchange.fetch_open_orders(
+                    symbol, params={"type": "swap", p_name: p_val},
+                )
+                for o in orders:
+                    # Vérifier si c'est un SL (market trigger)
+                    o_trigger = float(o.get("triggerPrice") or o.get("params", {}).get("triggerPrice") or 0)
+                    o_qty = float(o.get("amount") or 0)
+                    o_side = o.get("side", "").lower()
+
+                    # Tolérance minime pour les flottants
+                    if (abs(o_trigger - trigger_price) < 0.0001 and
+                        abs(o_qty - quantity) < 0.0001 and
+                        o_side == side.lower()):
+                        return str(o.get("id"))
+            except Exception as e:
+                logger.debug("Executor: _find_existing_sl error ({}): {}", p_name, e)
+
+        return None
 
     async def _emergency_close_grid(
         self, futures_sym: str, state: GridLiveState,
@@ -1815,7 +1889,7 @@ class Executor:
 
         Utilisé à la fermeture d'un cycle grid pour nettoyer les éventuels
         ordres trigger orphelins (anciens SL dont le cancel a échoué).
-        Sur Bitget, les trigger orders (SL) requièrent un endpoint séparé.
+        Sur Bitget v2, les trigger orders requièrent 'stop': True ou 'plan': True.
         """
         cancelled = 0
 
@@ -1836,29 +1910,35 @@ class Executor:
         except Exception as e:
             logger.error("Executor: échec fetch_open_orders {}: {}", futures_sym, e)
 
-        # 2. Trigger orders (SL trigger) — endpoint séparé sur Bitget
-        try:
-            trigger_orders = await self._exchange.fetch_open_orders(
-                futures_sym, params={"type": "swap", "stop": True},
-            )
-            for order in trigger_orders:
-                try:
-                    await self._exchange.cancel_order(
-                        order["id"], futures_sym,
-                        params={"stop": True},
-                    )
-                    cancelled += 1
-                except Exception as e:
-                    logger.warning(
-                        "Executor: échec cancel trigger {} sur {}: {}",
-                        order.get("id"), futures_sym, e,
-                    )
-        except Exception as e:
-            logger.error("Executor: échec fetch trigger orders {}: {}", futures_sym, e)
+        # 2. Trigger orders (SL trigger) — Bitget v2 supporte 'stop': True ou 'plan': True
+        for p_name, p_val in [("stop", True), ("plan", True)]:
+            try:
+                trigger_orders = await self._exchange.fetch_open_orders(
+                    futures_sym, params={"type": "swap", p_name: p_val},
+                )
+                for order in trigger_orders:
+                    try:
+                        await self._exchange.cancel_order(
+                            order["id"], futures_sym,
+                            params={p_name: p_val},
+                        )
+                        cancelled += 1
+                        logger.info(
+                            "Executor: trigger orphelin annulé ({}) : {} sur {}",
+                            p_name, order["id"], futures_sym
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Executor: échec cancel trigger ({}) {} sur {}: {}",
+                            p_name, order.get("id"), futures_sym, e,
+                        )
+            except Exception as e:
+                # Log debug car certains endpoints peuvent ne pas être supportés selon la version de l'API
+                logger.debug("Executor: fetch_open_orders ({}) {} non supporté: {}", p_name, futures_sym, e)
 
         if cancelled:
             logger.info(
-                "Executor: {} ordre(s) annulé(s) pour {}", cancelled, futures_sym,
+                "Executor: {} ordre(s) au total annulé(s) pour {}", cancelled, futures_sym,
             )
         return cancelled
 

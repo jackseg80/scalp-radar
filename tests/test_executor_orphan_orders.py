@@ -404,8 +404,8 @@ class TestCancelAllIncludesTriggers:
 
         count = await executor._cancel_all_open_orders(futures_sym)
 
-        # fetch_open_orders appelé 2 fois
-        assert executor._exchange.fetch_open_orders.call_count == 2
+        # fetch_open_orders appelé 3 fois (normal, stop, plan)
+        assert executor._exchange.fetch_open_orders.call_count == 3
         executor._exchange.fetch_open_orders.assert_any_call(
             futures_sym, params={"type": "swap"},
         )
