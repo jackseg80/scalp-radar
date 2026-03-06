@@ -181,7 +181,8 @@ class Watchdog:
         # 8. Parité Bot <=> Exchange (toutes les 15 min si intervalle=30s)
         self._heartbeat_tick += 1
         ticks_15min = max(1, 900 // self._check_interval)
-        if self._heartbeat_tick % ticks_15min == 0:
+        if self._heartbeat_tick >= ticks_15min:
+            self._heartbeat_tick = 0
             await self._check_parity(executors_to_check)
 
     async def _check_parity(self, executors: list[tuple[str, object]]) -> None:

@@ -539,6 +539,7 @@ class TestReconciliation:
         executor._exchange.fetch_my_trades = AsyncMock(return_value=[
             {"price": 100_500.0},
         ])
+        executor._running = False # Simule boot pour avoir l'alerte
 
         await executor._reconcile_on_boot()
 
@@ -670,6 +671,7 @@ class TestOrphanOrders:
             {"id": "orphan_sl_1", "symbol": "BTC/USDT:USDT", "type": "limit"},
             {"id": "orphan_tp_2", "symbol": "BTC/USDT:USDT", "type": "limit"},
         ])
+        executor._running = False # Simule boot pour avoir l'alerte
 
         await executor._reconcile_on_boot()
 

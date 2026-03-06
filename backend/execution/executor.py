@@ -621,7 +621,12 @@ class Executor:
             watched = None
             if self._strategy_name and self._strategy_name in self._strategies:
                 strat = self._strategies[self._strategy_name]
-                watched = getattr(strat._config, "watched_symbols", None)
+                # Les stratégies grid utilisent 'per_asset' dans leur config
+                if hasattr(strat._config, "per_asset"):
+                    watched = set(strat._config.per_asset.keys())
+                # Fallback pour d'autres types de config (si existants)
+                elif hasattr(strat._config, "watched_symbols"):
+                    watched = set(strat._config.watched_symbols)
 
             for asset in self._config.assets:
                 # Si watched est défini, ignorer les assets hors whitelist

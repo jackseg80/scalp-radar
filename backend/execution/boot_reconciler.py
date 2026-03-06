@@ -79,6 +79,7 @@ async def _reconcile_symbol(ex: Any, futures_sym: str) -> None:
         float(p.get("contracts", 0)) > 0 for p in positions
     )
     # FIX : check mono positions ET cycles grid (pour éviter spam orphelines dans Watchdog)
+    # On considère une position comme "active" si elle est déjà dans le tracking local.
     local_has_position = (futures_sym in ex._positions) or (futures_sym in ex._grid_states)
 
     # Cas 1 : les deux côtés ont une position → reprendre le suivi
@@ -96,6 +97,9 @@ async def _reconcile_symbol(ex: Any, futures_sym: str) -> None:
     # Cas 2 : exchange a une position, pas le local → orpheline
     # P1-CR-4 Audit : créer un tracking local + SL protectif au lieu d'ignorer
     elif exchange_has_position and not local_has_position:
+        # Si on est au runtime (Watchdog) et qu'on découvre une orpheline, on alerte.
+        # Mais si Case 1 a été correctement géré, Case 2 ne devrait pas spammer
+        # car la position sera ajoutée à ex._grid_states ci-dessous.
         pos_data = next(
             p for p in positions if float(p.get("contracts", 0)) > 0
         )
@@ -178,10 +182,12 @@ async def _reconcile_symbol(ex: Any, futures_sym: str) -> None:
         ex._reconciliation_pnl += net_pnl
         ex._reconciliation_count += 1
 
-        await ex._notifier.notify_reconciliation(
-            f"Position {futures_sym} fermée pendant downtime. "
-            f"P&L estimé: {net_pnl:+.2f}$"
-        )
+        # Alerte uniquement au boot réel
+        if not getattr(ex, "_running", False):
+            await ex._notifier.notify_reconciliation(
+                f"Position {futures_sym} fermée pendant downtime. "
+                f"P&L estimé: {net_pnl:+.2f}$"
+            )
         logger.info(
             "Executor: position {} fermée pendant downtime, P&L={:+.2f}",
             futures_sym, net_pnl,
@@ -241,7 +247,9 @@ async def _reconcile_grid_symbol(ex: Any, futures_sym: str) -> None:
             )
 
         # Replacer le SL si absent (positions restaurées depuis sync.py au boot)
-        if not state.sl_order_id and state.total_quantity > 0:
+        # On ne replace que si on n'est pas déjà en train de tourner (Watchdog)
+        # pour éviter le spam API/Telegram si le placement échoue répétitivement.
+        if not state.sl_order_id and state.total_quantity > 0 and not getattr(ex, "_running", False):
             logger.info(
                 "Executor: SL manquant pour {} (restauré via sync) — replacement en cours",
                 futures_sym,
@@ -334,7 +342,9 @@ async def cancel_orphan_orders(ex: Any) -> None:
             )
 
     if cancelled:
-        await ex._notifier.notify_reconciliation(
-            f"Ordres trigger orphelins annulés ({len(cancelled)}): "
-            + ", ".join(cancelled)
-        )
+        # Alerte uniquement au boot réel pour éviter le spam périodique
+        if not getattr(ex, "_running", False):
+            await ex._notifier.notify_reconciliation(
+                f"Ordres trigger orphelins annulés ({len(cancelled)}): "
+                + ", ".join(cancelled)
+            )

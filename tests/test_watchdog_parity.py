@@ -49,11 +49,10 @@ async def test_watchdog_triggers_parity_check():
         
         # Exécuter un check
         await watchdog._check()
-        
-        # 900 % 900 == 0 -> doit appeler reconcile_on_boot
-        assert watchdog._heartbeat_tick == 900
-        mock_reconcile.assert_called_once_with(executor)
 
+        # Le tick doit être reset à 0 après avoir atteint ticks_15min (900)
+        assert watchdog._heartbeat_tick == 0
+        mock_reconcile.assert_called_once_with(executor)
 
 @pytest.mark.asyncio
 async def test_watchdog_parity_skips_disabled_executor():
@@ -80,6 +79,7 @@ async def test_watchdog_parity_skips_disabled_executor():
         
         await watchdog._check()
         
-        assert watchdog._heartbeat_tick == 1
+        # ticks_15min = 900 // 900 = 1. Donc tick devient 1 puis reset à 0.
+        assert watchdog._heartbeat_tick == 0
         # Ne doit PAS être appelé car executor.is_enabled est False
         mock_reconcile.assert_not_called()
