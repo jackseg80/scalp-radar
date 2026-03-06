@@ -22,14 +22,16 @@ Sécuriser le trading en timeframe 1h (H1) contre les instabilités réseau (gap
 - Correction automatique des écarts et notification Telegram détaillée.
 **Validation** : `tests/test_watchdog_parity.py`.
 
-### 3. Executor — Accumulation de SL Orphelins (Critique)
-**Problème** : Des dizaines de SL triggers restaient actifs sur Bitget pour quelques positions réelles. Cause : IDs de SL désynchronisés (40109 OrderNotFound) et nettoyage incomplet des "Plan Orders" sur Bitget v2.
+### 3. Executor — Accumulation de SL Orphelins & Anti-Position Nue (Critique)
+**Problème** : Des dizaines de SL triggers restaient actifs sur Bitget pour quelques positions réelles. À l'inverse, une faille permettait à une position de rester "nue" (sans SL) si le flux WS était interrompu ou si le bot était déjà en cours d'exécution lors d'une purge.
 **Solution** :
 - **Gestion 40109** : Si un SL est introuvable via son ID local, le bot reset l'ID et purge exhaustivement le symbole.
 - **Purge Renforcée** : `_cancel_all_open_orders` balaie désormais les types `stop` et `plan` (Bitget v2) pour ne laisser aucun orphelin.
-- **Idempotence SL** : Vérification `_find_existing_sl` avant création pour réutiliser un ordre trigger identique déjà présent.
-- **Sécurité Stale Price** : Blocage des modifications SL si les prix datent de plus de 5 minutes.
-**Validation** : `tests/test_mission_sl_fix.py`.
+- **Replacement Forcé & Bloquant** : Le `boot_reconciler` force désormais le replacement immédiat du SL s'il est absent, sans condition sur le statut `_running` du bot.
+- **Watchdog Proactif** : L'Executor vérifie toutes les 60s la présence d'un SL local pour chaque position active et le replace si nécessaire.
+- **Emergency Price (Anti-Stale)** : En cas de données WS obsolètes (> 5 min), le bot utilise un prix de secours via REST (`fetch_ticker`) pour sécuriser le placement du SL.
+- **Persistence Prioritaire** : Sauvegarde immédiate de l'état JSON après chaque placement de SL.
+**Validation** : `tests/test_mission_sl_fix.py`, `tests/test_executor_sl_safety.py`.
 
 ### 4. DataEngine — Optimisation par Agrégation Native
 **Problème** : La multiplication des flux WebSocket (un par timeframe) saturait la bande passante et provoquait des retards de données (stale data).

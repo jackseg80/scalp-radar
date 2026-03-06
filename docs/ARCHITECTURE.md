@@ -337,10 +337,11 @@ Simulator → TradeEvent → executor.handle_event()
 ### Sécurités et Fiabilité SL
 
 - **Règle #1** : JAMAIS de position ouverte sans Stop Loss (SL) placé sur l'exchange.
-- **Self-Healing SL** : si `fetch_order` retourne une erreur 40109 (OrderNotFound) lors de la réconciliation, le bot reset l'ID local et déclenche une purge exhaustive du symbole.
-- **Annulation Exhaustive** : `_cancel_all_open_orders` balaie systématiquement les ordres normaux, les ordres `stop` et les ordres `plan` (triggers) pour Bitget v2 afin d'éviter l'accumulation d'orphelins.
-- **Idempotence SL** : avant de placer un nouveau SL, le bot vérifie via `_find_existing_sl` si un ordre trigger identique est déjà présent pour le réutiliser au lieu d'en créer un doublon.
-- **Stale Price Guard** : bloque toute ouverture ou modification de SL si les données de prix datent de plus de 5 minutes.
+- **Replacement Forcé** : si un SL est manquant ou purgé lors de la réconciliation (erreur 40109), le bot déclenche un replacement **immédiat et bloquant** avant de poursuivre.
+- **Watchdog Proactif** : l'Executor vérifie toutes les 60s que chaque position active possède un `sl_order_id` valide ; il le replace de manière autonome si besoin.
+- **Emergency Price (Anti-Stale)** : si le flux WebSocket est interrompu (> 5 min), le bot récupère un prix de secours via REST (`fetch_ticker`) pour garantir le placement du SL au lieu de bloquer l'opération.
+- **Idempotence SL** : avant de créer un nouveau SL, le bot vérifie via `_find_existing_sl` si un ordre trigger identique est déjà présent pour le réutiliser au lieu d'en créer un doublon.
+- **Persistence Prioritaire** : sauvegarde forcée de l'état JSON immédiatement après chaque succès de placement SL.
 
 ### AdaptiveSelector
 

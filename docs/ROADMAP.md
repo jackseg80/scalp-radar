@@ -3618,17 +3618,19 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 ### Audit & Optimisation (06 Mars 2026) ✅
 
-**Objectif** : Fiabiliser et alléger le moteur de données pour le trading H1.
+**Objectif** : Fiabiliser et alléger le moteur de données pour le trading H1 et sécuriser le placement des protections.
 
 **Réalisations Techniques** :
 - **DataEngine Native Aggregation** : Optimisation majeure des flux WebSocket. Le bot s'abonne uniquement au plus petit timeframe (ex: 5m) et reconstruit tous les autres (15m, 1h, 4h, 1d) localement en temps réel. Réduction du trafic WS de ~80% et suppression des délais sur les TFs lents.
-- **Hybrid Polling Fallback** : Sécurité pour les actifs instables (GALA, FIL, ETC). Si le WebSocket échoue 3 fois, l'actif bascule automatiquement en mode polling REST (fetch_ohlcv toutes les 30s) pour garantir la continuité des données. Récupération WebSocket tentée toutes les heures.
+- **Hybrid Polling Fallback** : Sécurité pour les actifs instables (GALA, FIL, ETC). Si le WebSocket échoue 3 fois, l'actif bascule automatiquement en mode polling REST (fetch_ohlcv toutes les 30s). Récupération WebSocket tentée toutes les heures.
+- **Anti-Position Nue (SL Safety)** :
+    - **Replacement Forcé** : Le `boot_reconciler` force désormais le replacement immédiat et bloquant du SL s'il est manquant ou purgé, même si le bot tourne déjà.
+    - **Watchdog Proactif** : L'Executor vérifie désormais toutes les 60s la présence d'un SL local pour chaque position active et le replace de manière autonome si besoin.
+    - **Emergency Price** : En cas de données WS "stale", le bot récupère un prix de secours via REST (`fetch_ticker`) pour sécuriser le placement du SL au lieu de bloquer.
+    - **Persistence Prioritaire** : Sauvegarde immédiate de l'état après chaque placement de SL réussi.
 - **DataEngine Self-Healing** : Détection de gaps WebSocket et récupération REST immédiate (`fetch_ohlcv`) sur le flux source.
 - **Parity Watchdog** : Réconciliation périodique (15 min) via le `Watchdog`. Correction à chaud des écarts Bot/Exchange.
-- **SL Accumulation Fix** :
-    - Gestion de l'erreur 40109 (OrderNotFound) : reset `sl_order_id` local et purge exhaustive via `stop` et `plan` params (Bitget v2).
-    - Idempotence du SL : vérification des ordres existants avant création pour éviter les doublons.
-    - Sécurité "Stale Price" : blocage des modifications SL si les prix ont plus de 5 minutes.
+- **SL Accumulation Fix** : Gestion de l'erreur 40109, idempotence du SL et purge exhaustive (stop/plan).
 - **Heartbeat Telegram V2** : Inclusion du PnL réalisé/latent session, détail des positions ouvertes et compte réel des trades live.
 
 **Améliorations UI (Scanner & Charts)** :
@@ -3637,7 +3639,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 - **DIR Column Fix** : Affiche désormais la direction réelle des positions ouvertes ou `--` sinon.
 
 **Validation** :
-- Nouveaux tests : `tests/test_dataengine_autoheal.py`, `tests/test_dataengine_aggregation.py`, `tests/test_watchdog_parity.py`, `tests/test_mission_sl_fix.py`.
+- Nouveaux tests : `tests/test_dataengine_autoheal.py`, `tests/test_dataengine_aggregation.py`, `tests/test_watchdog_parity.py`, `tests/test_mission_sl_fix.py`, `tests/test_executor_sl_safety.py`.
 - Validation globale : **2228 tests passés**, 0 régression.
 
 ---
