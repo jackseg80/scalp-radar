@@ -616,7 +616,18 @@ class Executor:
         if self._data_engine is None:
             return
         try:
+            # Filtrer les assets si l'executor est dédié à une stratégie (Sprint F)
+            # Évite de taguer DYDX [grid_atr] si non configuré dans grid_atr
+            watched = None
+            if self._strategy_name and self._strategy_name in self._strategies:
+                strat = self._strategies[self._strategy_name]
+                watched = getattr(strat._config, "watched_symbols", None)
+
             for asset in self._config.assets:
+                # Si watched est défini, ignorer les assets hors whitelist
+                if watched is not None and asset.symbol not in watched:
+                    continue
+
                 rate = self._data_engine.get_funding_rate(asset.symbol)
                 if rate is None:
                     continue

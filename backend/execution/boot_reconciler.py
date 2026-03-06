@@ -78,13 +78,17 @@ async def _reconcile_symbol(ex: Any, futures_sym: str) -> None:
     exchange_has_position = any(
         float(p.get("contracts", 0)) > 0 for p in positions
     )
-    local_has_position = futures_sym in ex._positions
+    # FIX : check mono positions ET cycles grid (pour éviter spam orphelines dans Watchdog)
+    local_has_position = (futures_sym in ex._positions) or (futures_sym in ex._grid_states)
 
     # Cas 1 : les deux côtés ont une position → reprendre le suivi
     if exchange_has_position and local_has_position:
-        await ex._notifier.notify_reconciliation(
-            f"Position {futures_sym} trouvée sur exchange et en local — reprise."
-        )
+        # Alerte uniquement au boot réel (ex._running est False pendant le bootstrapping)
+        # Sinon c'est du spam du Watchdog toutes les 15 min.
+        if not getattr(ex, "_running", False):
+            await ex._notifier.notify_reconciliation(
+                f"Position {futures_sym} trouvée sur exchange et en local — reprise."
+            )
         logger.info(
             "Executor: réconciliation {} OK — position reprise", futures_sym,
         )
