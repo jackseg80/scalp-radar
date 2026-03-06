@@ -207,9 +207,9 @@ class TestCandleBuffer:
         await engine._on_candle_received("BTC/USDT", "1m", [ts_ms, 49.0, 51.0, 48.0, 50.0, 1.0])
         assert len(callback_calls) == 1
 
-        # Même timestamp → mise à jour in-place, callback PAS rappelé
+        # Même timestamp → mise à jour in-place, callback rappelé (Mission Agrégation 2026-03-06)
         await engine._on_candle_received("BTC/USDT", "1m", [ts_ms, 49.0, 56.0, 48.0, 55.0, 2.0])
-        assert len(callback_calls) == 1  # toujours 1
+        assert len(callback_calls) == 2  # Changé : on veut la mise à jour UI
 
     @pytest.mark.asyncio
     async def test_old_duplicate_still_rejected(self):

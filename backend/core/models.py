@@ -68,6 +68,9 @@ class TimeFrame(str, Enum):
                 return member
         raise ValueError(f"TimeFrame inconnu : {value}")
 
+    def to_minutes(self) -> int:
+        return self.to_milliseconds() // 60_000
+
     def to_milliseconds(self) -> int:
         mapping = {
             TimeFrame.M1: 60_000,
@@ -78,6 +81,26 @@ class TimeFrame(str, Enum):
             TimeFrame.D1: 86_400_000,
         }
         return mapping[self]
+
+    def floor_timestamp(self, dt: datetime) -> datetime:
+        """Aligne un datetime sur le début de la période du timeframe."""
+        minutes = self.to_minutes()
+        if minutes < 60:
+            return dt.replace(
+                minute=(dt.minute // minutes) * minutes,
+                second=0,
+                microsecond=0,
+            )
+        elif minutes < 1440:
+            hours = minutes // 60
+            return dt.replace(
+                hour=(dt.hour // hours) * hours,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+        else:
+            return dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 # ─── DATA MODELS ────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Callable, Optional
 
 import ccxt.pro as ccxtpro
@@ -147,6 +147,12 @@ class DataEngine:
         # Backoff restart stale : compteur de tentatives et symbols abandonnés
         self._stale_restart_count: dict[str, int] = {}
         self._stale_abandoned: set[str] = set()
+
+        # Mission 2026-03-06 : Agrégation native
+        # source_tf: le plus petit TF pour lequel on s'abonne réellement au WS
+        self._source_tfs: dict[str, str] = {}
+        # target_tfs: les TFs supérieurs calculés par agrégation
+        self._target_tfs: dict[str, list[str]] = {}
 
         # Compteur de gaps détectés (exposé pour /health et tests)
         self.gap_count: int = 0
@@ -624,6 +630,26 @@ class DataEngine:
         reconnect_delay = self.config.exchange.websocket.reconnect_delay
         attempt = 0
 
+        # Mission 2026-03-06 : Identifier source et cibles pour l'agrégation native
+        if not timeframes:
+            logger.error("DataEngine: aucun timeframe configuré pour {}", symbol)
+            return
+
+        source_tf = min(
+            timeframes, key=lambda t: TimeFrame.from_string(t).to_minutes()
+        )
+        target_tfs = [t for t in timeframes if t != source_tf]
+
+        self._source_tfs[symbol] = source_tf
+        self._target_tfs[symbol] = target_tfs
+
+        logger.info(
+            "DataEngine: {} source_tf={}, targets={}",
+            symbol,
+            source_tf,
+            target_tfs,
+        )
+
         while self._running:
             try:
                 attempt += 1
@@ -634,7 +660,8 @@ class DataEngine:
                         attempt,
                     )
 
-                await self._subscribe_klines(symbol, timeframes)
+                # On ne s'abonne qu'au source_tf
+                await self._subscribe_klines(symbol, [source_tf])
 
                 # Connexion réussie → reset le compteur
                 attempt = 0
@@ -854,13 +881,82 @@ class DataEngine:
                 e,
             )
 
+    async def _aggregate_to_target_tf(
+        self, symbol: str, source_tf_str: str, target_tf_str: str
+    ) -> None:
+        """Agrège les bougies du source_tf pour mettre à jour le target_tf."""
+        target_tf = TimeFrame.from_string(target_tf_str)
+        source_buffer = self._buffers[symbol][source_tf_str]
+
+        if not source_buffer:
+            return
+
+        # La bougie à agréger est celle correspondant au timestamp de la dernière bougie source
+        last_source = source_buffer[-1]
+        period_start = target_tf.floor_timestamp(last_source.timestamp)
+
+        # Trouver tous les constituants de cette période dans le buffer source
+        # On cherche les bougies [period_start, period_start + duration[
+        constituents = [
+            c
+            for c in source_buffer
+            if period_start
+            <= c.timestamp
+            < period_start + timedelta(minutes=target_tf.to_minutes())
+        ]
+
+        if not constituents:
+            return
+
+        # Construire la bougie agrégée
+        agg_candle = Candle(
+            timestamp=period_start,
+            open=constituents[0].open,
+            high=max(c.high for c in constituents),
+            low=min(c.low for c in constituents),
+            close=constituents[-1].close,
+            volume=sum(c.volume for c in constituents),
+            symbol=symbol,
+            timeframe=target_tf,
+        )
+
+        # Stocker et diffuser
+        await self._store_and_dispatch(symbol, target_tf_str, agg_candle)
+
+    async def _store_and_dispatch(
+        self, symbol: str, timeframe_str: str, candle: Candle
+    ) -> None:
+        """Stocke une bougie en mémoire et DB, puis notifie les callbacks."""
+        buffer = self._buffers[symbol][timeframe_str]
+
+        # Mise à jour in-place si même timestamp
+        if buffer and buffer[-1].timestamp == candle.timestamp:
+            buffer[-1] = candle
+        else:
+            # Nouveau timestamp -> ajout au buffer
+            buffer.append(candle)
+            if len(buffer) > MAX_BUFFER_SIZE:
+                del buffer[: len(buffer) - MAX_BUFFER_SIZE]
+
+        # Ajouter au buffer d'écriture (flush périodique toutes les 30s)
+        self._write_buffer.append(candle)
+
+        # Notifier les callbacks (indicateurs, UI, etc.)
+        for callback in self._callbacks:
+            try:
+                result = callback(symbol, timeframe_str, candle)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.error("DataEngine: erreur callback: {}", e)
+
     async def _on_candle_received(
         self,
         symbol: str,
         timeframe_str: str,
         ohlcv: list,
     ) -> None:
-        """Traite une candle reçue du WebSocket."""
+        """Traite une candle reçue du WebSocket (source TF)."""
         try:
             tf = TimeFrame.from_string(timeframe_str)
             candle = Candle(
@@ -883,25 +979,13 @@ class DataEngine:
         if not self.validator.validate_candle(candle):
             return
 
-        # Freshness : tout message WS valide rafraîchit le timestamp
-        # (même si la candle est un doublon = mise à jour de la candle en cours)
+        # Freshness
         now_dt = datetime.now(tz=timezone.utc)
         self._last_update = now_dt
         self._last_candle_received = time.time()
-
-        # Tracking per-symbol + log si le symbol revient après un silence
-        prev_sym_update = self._last_update_per_symbol.get(symbol)
-        if prev_sym_update is not None:
-            silence_s = (now_dt - prev_sym_update).total_seconds()
-            if silence_s > 300:
-                logger.info(
-                    "DataEngine: {} de retour après {:.0f}s de silence",
-                    symbol,
-                    silence_s,
-                )
         self._last_update_per_symbol[symbol] = now_dt
 
-        # Reset backoff si le symbol était en compteur de restart
+        # Reset backoff
         if symbol in self._stale_restart_count:
             del self._stale_restart_count[symbol]
         if symbol in self._stale_abandoned:
@@ -909,19 +993,20 @@ class DataEngine:
 
         buffer = self._buffers[symbol][timeframe_str]
 
-        # Candle en cours (même timestamp que la dernière) → mise à jour in-place
-        # Le WS Bitget envoie des mises à jour OHLCV sur la bougie en cours ;
-        # on remplace l'entrée pour que buffer[-1].close soit toujours le dernier tick.
-        # Pas de callback ni d'écriture DB (la candle sera persistée à sa clôture).
+        # 1. Candle en cours (même timestamp que la dernière) → mise à jour in-place
         if buffer and buffer[-1].timestamp == candle.timestamp:
-            buffer[-1] = candle
+            await self._store_and_dispatch(symbol, timeframe_str, candle)
+            # Propager la mise à jour aux TFs supérieurs
+            targets = self._target_tfs.get(symbol, [])
+            for target_tf in targets:
+                await self._aggregate_to_target_tf(symbol, timeframe_str, target_tf)
             return
 
-        # Doublon plus ancien → rejeter
+        # 2. Doublon plus ancien → rejeter
         if self.validator.is_duplicate(candle, buffer):
             return
 
-        # Gap ?
+        # Gap ? (Uniquement sur le flux source)
         if buffer and self.validator.check_gap(buffer[-1], candle, tf):
             self.gap_count += 1
             gap_from = buffer[-1].timestamp
@@ -946,27 +1031,19 @@ class DataEngine:
                         f"({gap_from.strftime('%H:%M')}→{gap_to.strftime('%H:%M')})",
                     )
                 except Exception:
-                    pass  # Ne pas bloquer le flux de données
+                    pass
 
-            # Tentative de guérison immédiate (Self-Healing)
+            # Tentative de guérison immédiate
             await self._heal_gap(symbol, timeframe_str, gap_from, gap_to)
 
-        # Ajouter au buffer (borné)
-        buffer.append(candle)
-        if len(buffer) > MAX_BUFFER_SIZE:
-            del buffer[: len(buffer) - MAX_BUFFER_SIZE]
+        # 1. Stocker et diffuser la bougie source
+        await self._store_and_dispatch(symbol, timeframe_str, candle)
 
-        # Ajouter au buffer d'écriture (flush périodique toutes les 5s)
-        self._write_buffer.append(candle)
-
-        # Notifier les callbacks
-        for callback in self._callbacks:
-            try:
-                result = callback(symbol, timeframe_str, candle)
-                if asyncio.iscoroutine(result):
-                    await result
-            except Exception as e:
-                logger.error("DataEngine: erreur callback: {}", e)
+        # 2. Déclencher l'agrégation pour les timeframes supérieurs
+        # (Mission 2026-03-06)
+        targets = self._target_tfs.get(symbol, [])
+        for target_tf in targets:
+            await self._aggregate_to_target_tf(symbol, timeframe_str, target_tf)
 
     # ─── FLUSH BUFFER ──────────────────────────────────────────────────────
 
