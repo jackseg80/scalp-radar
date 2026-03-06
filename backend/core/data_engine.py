@@ -154,6 +154,11 @@ class DataEngine:
         # target_tfs: les TFs supérieurs calculés par agrégation
         self._target_tfs: dict[str, list[str]] = {}
 
+        # Mission 2026-03-06 : Mode Hybride Polling
+        # Symbols en mode polling REST au lieu de WebSocket
+        self._polling_tasks: dict[str, asyncio.Task] = {}
+        self._polling_modes: set[str] = set()
+
         # Compteur de gaps détectés (exposé pour /health et tests)
         self.gap_count: int = 0
 
@@ -450,13 +455,7 @@ class DataEngine:
     # ─── HEARTBEAT ──────────────────────────────────────────────────────────
 
     async def _heartbeat_loop(self) -> None:
-        """Vérifie l'état du DataEngine toutes les minutes.
-
-        - Chaque minute : check silence global > 5 min → full_reconnect
-        - Chaque minute : relance les tasks watch_ mortes
-        - Toutes les 5 min : détecte les symbols sans données (stale per-symbol)
-        - Toutes les 15 min : log résumé actif/total + nb candles en buffer
-        """
+        """Vérifie l'état du DataEngine toutes les minutes."""
         while self._running:
             try:
                 await asyncio.sleep(60)
@@ -486,10 +485,6 @@ class DataEngine:
                         logger.info("DataEngine: heartbeat — reconnexion OK")
                     except Exception as e:
                         logger.error("DataEngine: full_reconnect échoué: {}", e)
-                else:
-                    logger.debug(
-                        "DataEngine: heartbeat OK — dernière candle il y a {:.0f}s", elapsed
-                    )
 
                 # ── 2. Relance des tasks watch_ mortes (chaque minute) ──
                 try:
@@ -505,6 +500,8 @@ class DataEngine:
                 if self._heartbeat_tick % 5 == 0:
                     stale: list[tuple[str, float | None]] = []
                     for sym in self.get_all_symbols():
+                        if sym in self._polling_modes:
+                            continue
                         last = self._last_update_per_symbol.get(sym)
                         if last is None:
                             stale.append((sym, None))
@@ -520,30 +517,21 @@ class DataEngine:
                             len(stale), ", ".join(stale_names),
                         )
 
-                        # Auto-guérison — relancer les symbols stale > 5 min (avec backoff)
                         for sym, age in stale:
                             if age is not None and age <= 300:
-                                continue  # Pas encore assez longtemps
-
-                            # Skip les symbols abandonnés
+                                continue
                             if sym in self._stale_abandoned:
                                 continue
 
                             count = self._stale_restart_count.get(sym, 0)
-
                             if count >= 3:
-                                # Abandonner après 3 tentatives
-                                self._stale_abandoned.add(sym)
-                                logger.error(
-                                    "DataEngine: {} abandonné après {} tentatives de relance — "
-                                    "vérifier si la paire existe sur Bitget ou retirer de la config",
-                                    sym, count,
-                                )
+                                # Mission 2026-03-06 : Basculer en mode POLLING
+                                await self._start_polling(sym)
                                 if self._notifier:
                                     try:
                                         await self._notifier.notify_anomaly(
                                             AnomalyType.DATA_STALE,
-                                            f"{sym} abandonné après {count} relances échouées — retirer de la config ?",
+                                            f"⚠️ {sym} : passage en mode POLLING REST suite à {count} échecs WebSocket.",
                                         )
                                     except Exception:
                                         pass
@@ -553,43 +541,25 @@ class DataEngine:
                                 restarted_sym = await self.restart_stale_symbol(sym)
                                 if restarted_sym:
                                     self._stale_restart_count[sym] = count + 1
-                                    if age is not None:
-                                        logger.warning(
-                                            "DataEngine: {} relancé après {:.0f}s de silence (tentative {}/3)",
-                                            sym, age, count + 1,
-                                        )
-                                    else:
-                                        logger.warning(
-                                            "DataEngine: {} relancé — jamais reçu de données (tentative {}/3)",
-                                            sym, count + 1,
-                                        )
+                                    logger.warning(
+                                        "DataEngine: {} relancé (tentative {}/3)",
+                                        sym, count + 1,
+                                    )
                             except Exception as e:
-                                logger.error(
-                                    "DataEngine: erreur restart_stale_symbol {}: {}",
-                                    sym, e,
-                                )
+                                logger.error("DataEngine: erreur restart {}: {}", sym, e)
 
                         # Escalade : si > 50% symbols stale > 15 min → full_reconnect
                         all_count = len(self.get_all_symbols())
                         if len(stale) > all_count // 2:
-                            long_stale = [
-                                s for s, a in stale
-                                if a is not None and a > 900
-                            ]
+                            long_stale = [s for s, a in stale if a is not None and a > 900]
                             if len(long_stale) > 5:
-                                logger.critical(
-                                    "DataEngine: {} symbols stale > 15min — full_reconnect",
-                                    len(long_stale),
-                                )
+                                logger.critical("DataEngine: {} symbols stale > 15min — full_reconnect", len(long_stale))
                                 try:
                                     await self.full_reconnect()
                                     self._last_candle_received = time.time()
                                 except Exception as e:
-                                    logger.error(
-                                        "DataEngine: full_reconnect échoué: {}", e
-                                    )
+                                    logger.error("DataEngine: full_reconnect échoué: {}", e)
 
-                        # Alerte Telegram si > 3 symbols stale
                         if self._notifier and len(stale) > 3:
                             try:
                                 await self._notifier.notify_anomaly(
@@ -597,29 +567,29 @@ class DataEngine:
                                     f"{len(stale)} symbols sans données: {', '.join(stale_names[:5])}",
                                 )
                             except Exception as notif_err:
-                                logger.warning(
-                                    "DataEngine: erreur alerte stale symbols: {}", notif_err
-                                )
+                                logger.warning("DataEngine: erreur alerte Telegram: {}", notif_err)
 
-                # ── 4. Log résumé toutes les 15 min ──
+                # ── 4. Recovery Polling -> WebSocket (toutes les heures) ──
+                if self._heartbeat_tick % 60 == 0 and self._polling_modes:
+                    logger.info("DataEngine: tentative de récupération WebSocket pour : {}", ", ".join(self._polling_modes))
+                    for sym in list(self._polling_modes):
+                        await self._stop_polling(sym)
+                        await self.restart_stale_symbol(sym)
+                        if sym in self._stale_restart_count:
+                            del self._stale_restart_count[sym]
+
+                # ── 5. Log résumé toutes les 15 min ──
                 if self._heartbeat_tick % 15 == 0:
                     all_syms = self.get_all_symbols()
-                    active = sum(
-                        1 for sym in all_syms
-                        if sym in self._last_update_per_symbol
-                        and (now_dt - self._last_update_per_symbol[sym]).total_seconds() < 120
-                    )
-                    total_candles = sum(
-                        len(bufs) for sym_bufs in self._buffers.values()
-                        for bufs in sym_bufs.values()
-                    )
-                    logger.info(
-                        "DataEngine: {}/{} symbols actifs, {} candles en buffer",
-                        active, len(all_syms), total_candles,
-                    )
+                    active = sum(1 for sym in all_syms if sym in self._last_update_per_symbol 
+                                 and (now_dt - self._last_update_per_symbol[sym]).total_seconds() < 120)
+                    total_candles = sum(len(bufs) for sym_bufs in self._buffers.values() for bufs in sym_bufs.values())
+                    logger.info("DataEngine: {}/{} symbols actifs, {} candles en buffer", active, len(all_syms), total_candles)
 
             except asyncio.CancelledError:
                 break
+            except Exception as e:
+                logger.error("DataEngine: erreur heartbeat loop: {}", e)
 
     # ─── WATCH LOOP ─────────────────────────────────────────────────────────
 
@@ -630,256 +600,105 @@ class DataEngine:
         reconnect_delay = self.config.exchange.websocket.reconnect_delay
         attempt = 0
 
-        # Mission 2026-03-06 : Identifier source et cibles pour l'agrégation native
         if not timeframes:
             logger.error("DataEngine: aucun timeframe configuré pour {}", symbol)
             return
 
-        source_tf = min(
-            timeframes, key=lambda t: TimeFrame.from_string(t).to_minutes()
-        )
+        source_tf = min(timeframes, key=lambda t: TimeFrame.from_string(t).to_minutes())
         target_tfs = [t for t in timeframes if t != source_tf]
 
         self._source_tfs[symbol] = source_tf
         self._target_tfs[symbol] = target_tfs
 
-        logger.info(
-            "DataEngine: {} source_tf={}, targets={}",
-            symbol,
-            source_tf,
-            target_tfs,
-        )
+        logger.info("DataEngine: {} source_tf={}, targets={}", symbol, source_tf, target_tfs)
 
         while self._running:
             try:
                 attempt += 1
-                if attempt > 1:
-                    logger.info(
-                        "DataEngine: reconnexion {} (tentative {})",
-                        symbol,
-                        attempt,
-                    )
-
-                # On ne s'abonne qu'au source_tf
                 await self._subscribe_klines(symbol, [source_tf])
-
-                # Connexion réussie → reset le compteur
                 attempt = 0
-
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if not self._running:
-                    break
-
+                if not self._running: break
                 err_str = str(e)
-
-                # Symbol invalide → abandonner immédiatement
                 if "does not have market symbol" in err_str:
-                    logger.warning(
-                        "DataEngine: {} retiré de la surveillance (non disponible sur bitget)",
-                        symbol,
-                    )
+                    logger.warning("DataEngine: {} retiré (non dispo)", symbol)
                     break
-
-                logger.error(
-                    "DataEngine: erreur watch {} : {} (tentative {})",
-                    symbol,
-                    e,
-                    attempt,
-                )
-
-                # Backoff exponentiel plafonné à 5 min, SANS max_attempts
+                logger.error("DataEngine: erreur watch {} : {} (tentative {})", symbol, e, attempt)
                 delay = reconnect_delay * min(2 ** (attempt - 1), 300)
                 await asyncio.sleep(delay)
-
-                # Reset après long backoff pour éviter overflow
-                if attempt > 20:
-                    attempt = 10
-
-    # Rate limit retry config
-    _RATE_LIMIT_DELAY = 2.0  # secondes d'attente sur rate limit
-    _RATE_LIMIT_MAX_RETRIES = 3
-    _RATE_LIMIT_CODES = {"30006", "429"}  # Bitget rate limit codes
+                if attempt > 20: attempt = 10
 
     async def _subscribe_klines(
         self, symbol: str, timeframes: list[str]
     ) -> None:
-        """S'abonne aux klines via ccxt watch_ohlcv avec gestion rate limit."""
+        """S'abonne aux klines via ccxt watch_ohlcv."""
         assert self._exchange is not None
         consecutive_errors = 0
 
         while self._running:
             for tf in timeframes:
-                if not self._running:
-                    return
+                if not self._running: return
                 try:
                     ohlcv_list = await self._exchange.watch_ohlcv(symbol, tf)
-                    consecutive_errors = 0  # Reset on success
+                    consecutive_errors = 0
                     for ohlcv in ohlcv_list:
                         await self._on_candle_received(symbol, tf, ohlcv)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     err_str = str(e)
-                    is_rate_limit = any(
-                        code in err_str for code in self._RATE_LIMIT_CODES
-                    )
-
+                    is_rate_limit = any(code in err_str for code in ["30006", "429"])
                     if is_rate_limit:
                         consecutive_errors += 1
-                        if consecutive_errors <= self._RATE_LIMIT_MAX_RETRIES:
-                            delay = self._RATE_LIMIT_DELAY * consecutive_errors
-                            logger.info(
-                                "DataEngine: rate limit {}/{}, retry dans {:.0f}s ({}/{})",
-                                symbol,
-                                tf,
-                                delay,
-                                consecutive_errors,
-                                self._RATE_LIMIT_MAX_RETRIES,
-                            )
-                            await asyncio.sleep(delay)
-                        else:
-                            # Trop de retries → remonter l'exception pour le backoff de _watch_symbol
-                            logger.warning(
-                                "DataEngine: rate limit persistant {}/{}, passage au backoff global",
-                                symbol,
-                                tf,
-                            )
-                            raise
+                        if consecutive_errors <= 3:
+                            await asyncio.sleep(2.0 * consecutive_errors)
+                        else: raise
                     else:
-                        # Log throttle : ne pas spammer pour les erreurs répétitives
                         consecutive_errors += 1
                         if consecutive_errors <= 3:
-                            logger.warning(
-                                "DataEngine: erreur kline {}/{}: {}",
-                                symbol,
-                                tf,
-                                e,
-                            )
-                        elif consecutive_errors == 4:
-                            logger.warning(
-                                "DataEngine: erreurs répétées {}, suppression logs...",
-                                symbol,
-                            )
-
-                        # Erreur fatale (symbol invalide) → remonter pour backoff global
-                        if "does not have market symbol" in err_str:
-                            raise
-
-                        # Toujours yield à l'event loop pour éviter de l'affamer
+                            logger.warning("DataEngine: erreur kline {}/{}: {}", symbol, tf, e)
+                        if "does not have market symbol" in err_str: raise
                         await asyncio.sleep(1.0)
 
     async def _heal_gap(
         self, symbol: str, timeframe: str, start_dt: datetime, end_dt: datetime
     ) -> None:
-        """Récupère les candles manquantes via REST (Bitget) et les insère dans le buffer.
-
-        start_dt: timestamp de la dernière candle avant le gap.
-        end_dt: timestamp de la nouvelle candle reçue.
-        """
-        if self._exchange is None:
-            return
-
+        """Récupère les candles manquantes via REST (Bitget) et les insère dans le buffer."""
+        if self._exchange is None: return
         try:
-            # since est inclusif, on commence 1ms après start_dt
             since_ms = int(start_dt.timestamp() * 1000) + 1
-
-            # Calcul du nombre de bougies manquantes (approximatif)
             tf = TimeFrame.from_string(timeframe)
             expected_delta = tf.to_milliseconds()
             actual_delta_ms = (end_dt - start_dt).total_seconds() * 1000
             missing_count = int(actual_delta_ms / expected_delta)
 
-            if missing_count <= 1:
-                return  # Pas de bougie complète manquante (ex: simple retard)
+            if missing_count <= 1: return
 
-            logger.info(
-                "DataEngine: tentative de guérison de {} bougies manquantes pour {}/{} ({} -> {})",
-                missing_count - 1,
-                symbol,
-                timeframe,
-                start_dt.strftime("%H:%M"),
-                end_dt.strftime("%H:%M"),
-            )
+            logger.info("DataEngine: guérison {} bougies pour {}/{}", missing_count - 1, symbol, timeframe)
+            healed_ohlcv = await self._exchange.fetch_ohlcv(symbol, timeframe, since=since_ms, limit=missing_count)
 
-            # fetch_ohlcv(symbol, timeframe, since, limit)
-            # On demande missing_count pour couvrir tout le gap
-            healed_ohlcv = await self._exchange.fetch_ohlcv(
-                symbol, timeframe, since=since_ms, limit=missing_count
-            )
-
-            if not healed_ohlcv:
-                logger.warning(
-                    "DataEngine: aucune donnée de guérison reçue pour {}/{}",
-                    symbol,
-                    timeframe,
-                )
-                return
-
-            healed_candles: list[Candle] = []
-            for o in healed_ohlcv:
-                ts = datetime.fromtimestamp(o[0] / 1000, tz=timezone.utc)
-                # Ne pas inclure la bougie end_dt (elle sera ajoutée après par _on_candle_received)
-                if ts >= end_dt:
-                    continue
-
-                try:
-                    c = Candle(
-                        timestamp=ts,
-                        open=float(o[1]),
-                        high=float(o[2]),
-                        low=float(o[3]),
-                        close=float(o[4]),
-                        volume=float(o[5]) if len(o) > 5 else 0.0,
-                        symbol=symbol,
-                        timeframe=tf,
-                    )
+            if healed_ohlcv:
+                healed_candles = []
+                for o in healed_ohlcv:
+                    ts = datetime.fromtimestamp(o[0] / 1000, tz=timezone.utc)
+                    if ts >= end_dt: continue
+                    c = Candle(timestamp=ts, open=o[1], high=o[2], low=o[3], close=o[4], volume=o[5], symbol=symbol, timeframe=tf)
                     if self.validator.validate_candle(c):
                         healed_candles.append(c)
-                except Exception:
-                    continue
 
-            if healed_candles:
-                buffer = self._buffers[symbol][timeframe]
-
-                # Éviter les doublons si le WS a déjà envoyé une partie (peu probable ici)
-                existing_ts = {c.timestamp for c in buffer[-10:]}
-                to_add = [
-                    c for c in healed_candles if c.timestamp not in existing_ts
-                ]
-
-                if to_add:
-                    buffer.extend(to_add)
-                    buffer.sort(key=lambda x: x.timestamp)
-
-                    # Persistance DB (via write_buffer pour le flush périodique)
-                    self._write_buffer.extend(to_add)
-
-                    logger.success(
-                        "DataEngine: {} bougies guéries insérées pour {}/{}",
-                        len(to_add),
-                        symbol,
-                        timeframe,
-                    )
-
-                    # Notification succès (via notifier)
-                    if self._notifier:
-                        try:
-                            await self._notifier.notify_anomaly(
-                                AnomalyType.DATA_GAP,
-                                f"✅ {symbol}/{timeframe} : {len(to_add)} bougies récupérées et injectées.",
-                            )
-                        except Exception:
-                            pass
-
+                if healed_candles:
+                    buffer = self._buffers[symbol][timeframe]
+                    existing_ts = {c.timestamp for c in buffer[-10:]}
+                    to_add = [c for c in healed_candles if c.timestamp not in existing_ts]
+                    if to_add:
+                        buffer.extend(to_add)
+                        buffer.sort(key=lambda x: x.timestamp)
+                        self._write_buffer.extend(to_add)
+                        logger.success("DataEngine: {} bougies guéries pour {}/{}", len(to_add), symbol, timeframe)
         except Exception as e:
-            logger.error(
-                "DataEngine: échec de la guérison du gap {}/{}: {}",
-                symbol,
-                timeframe,
-                e,
-            )
+            logger.error("DataEngine: échec guérison {}/{}: {}", symbol, timeframe, e)
 
     async def _aggregate_to_target_tf(
         self, symbol: str, source_tf_str: str, target_tf_str: str
@@ -887,28 +706,13 @@ class DataEngine:
         """Agrège les bougies du source_tf pour mettre à jour le target_tf."""
         target_tf = TimeFrame.from_string(target_tf_str)
         source_buffer = self._buffers[symbol][source_tf_str]
+        if not source_buffer: return
 
-        if not source_buffer:
-            return
-
-        # La bougie à agréger est celle correspondant au timestamp de la dernière bougie source
         last_source = source_buffer[-1]
         period_start = target_tf.floor_timestamp(last_source.timestamp)
+        constituents = [c for c in source_buffer if period_start <= c.timestamp < period_start + timedelta(minutes=target_tf.to_minutes())]
+        if not constituents: return
 
-        # Trouver tous les constituants de cette période dans le buffer source
-        # On cherche les bougies [period_start, period_start + duration[
-        constituents = [
-            c
-            for c in source_buffer
-            if period_start
-            <= c.timestamp
-            < period_start + timedelta(minutes=target_tf.to_minutes())
-        ]
-
-        if not constituents:
-            return
-
-        # Construire la bougie agrégée
         agg_candle = Candle(
             timestamp=period_start,
             open=constituents[0].open,
@@ -919,8 +723,6 @@ class DataEngine:
             symbol=symbol,
             timeframe=target_tf,
         )
-
-        # Stocker et diffuser
         await self._store_and_dispatch(symbol, target_tf_str, agg_candle)
 
     async def _store_and_dispatch(
@@ -928,126 +730,129 @@ class DataEngine:
     ) -> None:
         """Stocke une bougie en mémoire et DB, puis notifie les callbacks."""
         buffer = self._buffers[symbol][timeframe_str]
-
-        # Mise à jour in-place si même timestamp
         if buffer and buffer[-1].timestamp == candle.timestamp:
             buffer[-1] = candle
         else:
-            # Nouveau timestamp -> ajout au buffer
             buffer.append(candle)
-            if len(buffer) > MAX_BUFFER_SIZE:
-                del buffer[: len(buffer) - MAX_BUFFER_SIZE]
+            if len(buffer) > MAX_BUFFER_SIZE: del buffer[: len(buffer) - MAX_BUFFER_SIZE]
 
-        # Ajouter au buffer d'écriture (flush périodique toutes les 30s)
         self._write_buffer.append(candle)
-
-        # Notifier les callbacks (indicateurs, UI, etc.)
         for callback in self._callbacks:
             try:
-                result = callback(symbol, timeframe_str, candle)
-                if asyncio.iscoroutine(result):
-                    await result
-            except Exception as e:
-                logger.error("DataEngine: erreur callback: {}", e)
+                res = callback(symbol, timeframe_str, candle)
+                if asyncio.iscoroutine(res): await res
+            except Exception as e: logger.error("DataEngine: erreur callback: {}", e)
 
     async def _on_candle_received(
-        self,
-        symbol: str,
-        timeframe_str: str,
-        ohlcv: list,
+        self, symbol: str, timeframe_str: str, ohlcv: list
     ) -> None:
         """Traite une candle reçue du WebSocket (source TF)."""
+        await self._process_ohlcv_item(symbol, timeframe_str, ohlcv, is_ws=True)
+
+    async def _process_ohlcv_item(
+        self, symbol: str, timeframe_str: str, ohlcv: list, is_ws: bool = True
+    ) -> None:
+        """Parse, valide et dispatch une bougie (WS ou Polling)."""
         try:
             tf = TimeFrame.from_string(timeframe_str)
             candle = Candle(
-                timestamp=datetime.fromtimestamp(
-                    ohlcv[0] / 1000, tz=timezone.utc
-                ),
-                open=float(ohlcv[1]),
-                high=float(ohlcv[2]),
-                low=float(ohlcv[3]),
-                close=float(ohlcv[4]),
+                timestamp=datetime.fromtimestamp(ohlcv[0] / 1000, tz=timezone.utc),
+                open=float(ohlcv[1]), high=float(ohlcv[2]), low=float(ohlcv[3]), close=float(ohlcv[4]),
                 volume=float(ohlcv[5]) if len(ohlcv) > 5 else 0.0,
-                symbol=symbol,
-                timeframe=tf,
+                symbol=symbol, timeframe=tf
             )
         except (ValueError, IndexError) as e:
             logger.warning("DataEngine: candle malformée: {}", e)
             return
 
-        # Validation
-        if not self.validator.validate_candle(candle):
-            return
+        if not self.validator.validate_candle(candle): return
 
-        # Freshness
         now_dt = datetime.now(tz=timezone.utc)
         self._last_update = now_dt
         self._last_candle_received = time.time()
         self._last_update_per_symbol[symbol] = now_dt
 
-        # Reset backoff
-        if symbol in self._stale_restart_count:
-            del self._stale_restart_count[symbol]
-        if symbol in self._stale_abandoned:
-            self._stale_abandoned.discard(symbol)
+        if is_ws:
+            if symbol in self._stale_restart_count: del self._stale_restart_count[symbol]
+            if symbol in self._stale_abandoned: self._stale_abandoned.discard(symbol)
 
         buffer = self._buffers[symbol][timeframe_str]
-
-        # 1. Candle en cours (même timestamp que la dernière) → mise à jour in-place
         if buffer and buffer[-1].timestamp == candle.timestamp:
             await self._store_and_dispatch(symbol, timeframe_str, candle)
-            # Propager la mise à jour aux TFs supérieurs
-            targets = self._target_tfs.get(symbol, [])
-            for target_tf in targets:
+            for target_tf in self._target_tfs.get(symbol, []):
                 await self._aggregate_to_target_tf(symbol, timeframe_str, target_tf)
             return
 
-        # 2. Doublon plus ancien → rejeter
-        if self.validator.is_duplicate(candle, buffer):
-            return
+        if self.validator.is_duplicate(candle, buffer): return
 
-        # Gap ? (Uniquement sur le flux source)
-        if buffer and self.validator.check_gap(buffer[-1], candle, tf):
+        if is_ws and buffer and self.validator.check_gap(buffer[-1], candle, tf):
             self.gap_count += 1
-            gap_from = buffer[-1].timestamp
-            gap_to = candle.timestamp
-            gap_seconds = (gap_to - gap_from).total_seconds()
-            logger.warning(
-                "DataEngine: gap détecté {}/{} entre {} et {} ({:.0f}s, #{} total)",
-                symbol,
-                timeframe_str,
-                gap_from,
-                gap_to,
-                gap_seconds,
-                self.gap_count,
-            )
-            if self._notifier is not None:
-                try:
-                    from backend.alerts.notifier import AnomalyType
-
-                    await self._notifier.notify_anomaly(
-                        AnomalyType.DATA_GAP,
-                        f"{symbol}/{timeframe_str} gap {gap_seconds:.0f}s "
-                        f"({gap_from.strftime('%H:%M')}→{gap_to.strftime('%H:%M')})",
-                    )
-                except Exception:
-                    pass
-
-            # Tentative de guérison immédiate
+            gap_from, gap_to = buffer[-1].timestamp, candle.timestamp
+            logger.warning("DataEngine: gap détecté {}/{} entre {} et {}", symbol, timeframe_str, gap_from, gap_to)
+            if self._notifier:
+                try: await self._notifier.notify_anomaly(AnomalyType.DATA_GAP, f"{symbol}/{timeframe_str} gap")
+                except Exception: pass
             await self._heal_gap(symbol, timeframe_str, gap_from, gap_to)
 
-        # 1. Stocker et diffuser la bougie source
         await self._store_and_dispatch(symbol, timeframe_str, candle)
-
-        # 2. Déclencher l'agrégation pour les timeframes supérieurs
-        # (Mission 2026-03-06)
-        targets = self._target_tfs.get(symbol, [])
-        for target_tf in targets:
+        for target_tf in self._target_tfs.get(symbol, []):
             await self._aggregate_to_target_tf(symbol, timeframe_str, target_tf)
+
+    # ─── HYBRID POLLING ───────────────────────────────────────────────────
+
+    async def _start_polling(self, symbol: str) -> None:
+        """Bascule un symbole en mode Polling REST."""
+        if symbol in self._polling_tasks: return
+        source_tf = self._source_tfs.get(symbol)
+        if not source_tf: return
+
+        await self._stop_watch_task(symbol)
+        self._polling_modes.add(symbol)
+        task = asyncio.create_task(self._poll_symbol_rest(symbol, source_tf), name=f"poll_{symbol}")
+        self._polling_tasks[symbol] = task
+        logger.warning("DataEngine: passage en mode POLLING pour {} suite à instabilité WebSocket", symbol)
+
+    async def _stop_polling(self, symbol: str) -> None:
+        """Arrête le mode polling pour un symbole."""
+        task = self._polling_tasks.pop(symbol, None)
+        if task:
+            task.cancel()
+            try: await task
+            except asyncio.CancelledError: pass
+        self._polling_modes.discard(symbol)
+
+    async def _stop_watch_task(self, symbol: str) -> None:
+        """Arrête la tâche watch_ d'un symbole."""
+        task_name = f"watch_{symbol}"
+        new_tasks = []
+        for task in self._tasks:
+            if task.get_name() == task_name:
+                if not task.done():
+                    task.cancel()
+                    try: await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+                    except Exception: pass
+            else: new_tasks.append(task)
+        self._tasks = new_tasks
+
+    async def _poll_symbol_rest(self, symbol: str, timeframe: str) -> None:
+        """Tâche de polling REST pour un symbole instable."""
+        interval = 30
+        while self._running and symbol in self._polling_modes:
+            try:
+                if not self._exchange:
+                    await asyncio.sleep(1)
+                    continue
+                ohlcv_list = await self._exchange.fetch_ohlcv(symbol, timeframe, limit=5)
+                if ohlcv_list:
+                    for ohlcv in ohlcv_list:
+                        await self._process_ohlcv_item(symbol, timeframe, ohlcv, is_ws=False)
+            except asyncio.CancelledError: break
+            except Exception as e: logger.error("DataEngine: erreur polling REST {}: {}", symbol, e)
+            await asyncio.sleep(interval)
 
     # ─── FLUSH BUFFER ──────────────────────────────────────────────────────
 
-    _FLUSH_INTERVAL = 30  # secondes (réduit la contention SQLite)
+    _FLUSH_INTERVAL = 30
 
     async def _flush_candle_buffer(self) -> None:
         """Flush périodique du buffer de candles vers la DB."""
@@ -1055,65 +860,47 @@ class DataEngine:
             try:
                 await asyncio.sleep(self._FLUSH_INTERVAL)
                 if self._write_buffer:
-                    batch = self._write_buffer.copy()
-                    self._write_buffer.clear()
-                    try:
-                        await self.db.insert_candles_batch(batch)
-                    except Exception as e:
-                        logger.error("DataEngine: erreur flush candles: {}", e)
-            except asyncio.CancelledError:
-                break
+                    batch, self._write_buffer = self._write_buffer.copy(), []
+                    try: await self.db.insert_candles_batch(batch)
+                    except Exception as e: logger.error("DataEngine: erreur flush candles: {}", e)
+            except asyncio.CancelledError: break
 
     # ─── POLLING FUNDING & OI ──────────────────────────────────────────────
 
     async def _poll_funding_rates(self) -> None:
         """Polling des funding rates toutes les 5 minutes."""
         while self._running:
-            try:
-                await self._fetch_funding_rates()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning("DataEngine: erreur polling funding: {}", e)
-            await asyncio.sleep(300)  # 5 min
+            try: await self._fetch_funding_rates()
+            except asyncio.CancelledError: break
+            except Exception as e: logger.warning("DataEngine: erreur polling funding: {}", e)
+            await asyncio.sleep(300)
 
     async def _poll_open_interest(self) -> None:
         """Polling de l'open interest toutes les 60 secondes."""
         while self._running:
-            try:
-                await self._fetch_open_interest()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning("DataEngine: erreur polling OI: {}", e)
-            await asyncio.sleep(60)  # 60s
+            try: await self._fetch_open_interest()
+            except asyncio.CancelledError: break
+            except Exception as e: logger.warning("DataEngine: erreur polling OI: {}", e)
+            await asyncio.sleep(60)
 
     @staticmethod
     def _to_swap_symbol(spot_symbol: str) -> str:
-        """Convertit un symbole spot en futures swap pour les appels funding/OI."""
-        if ":USDT" not in spot_symbol:
-            return f"{spot_symbol}:USDT"
+        if ":USDT" not in spot_symbol: return f"{spot_symbol}:USDT"
         return spot_symbol
 
     async def _fetch_funding_rates(self) -> None:
-        """Récupère les funding rates via ccxt."""
-        if not self._exchange:
-            return
+        if not self._exchange: return
         for asset in self.config.assets:
             try:
                 swap_sym = self._to_swap_symbol(asset.symbol)
                 result = await self._exchange.fetch_funding_rate(swap_sym)
                 if result and "fundingRate" in result:
                     rate = result["fundingRate"]
-                    if rate is not None:
-                        self._funding_rates[asset.symbol] = float(rate) * 100  # en %
-            except Exception as e:
-                logger.debug("DataEngine: funding rate non dispo pour {}: {}", asset.symbol, e)
+                    if rate is not None: self._funding_rates[asset.symbol] = float(rate) * 100
+            except Exception as e: logger.debug("DataEngine: funding rate non dispo pour {}: {}", asset.symbol, e)
 
     async def _fetch_open_interest(self) -> None:
-        """Récupère l'open interest via ccxt."""
-        if not self._exchange:
-            return
+        if not self._exchange: return
         now = datetime.now(tz=timezone.utc)
         for asset in self.config.assets:
             try:
@@ -1122,23 +909,10 @@ class DataEngine:
                 if result and "openInterestAmount" in result:
                     oi_value = float(result["openInterestAmount"])
                     snapshots = self._open_interest.setdefault(asset.symbol, [])
-
-                    # Calculer le changement vs snapshot précédent
                     change_pct = 0.0
                     if snapshots:
                         prev = snapshots[-1].value
-                        if prev > 0:
-                            change_pct = (oi_value - prev) / prev * 100
-
-                    snapshots.append(OISnapshot(
-                        timestamp=now,
-                        symbol=asset.symbol,
-                        value=oi_value,
-                        change_pct=change_pct,
-                    ))
-
-                    # Borner l'historique
-                    if len(snapshots) > self._oi_max_snapshots:
-                        self._open_interest[asset.symbol] = snapshots[-self._oi_max_snapshots:]
-            except Exception as e:
-                logger.debug("DataEngine: OI non dispo pour {}: {}", asset.symbol, e)
+                        if prev > 0: change_pct = (oi_value - prev) / prev * 100
+                    snapshots.append(OISnapshot(timestamp=now, symbol=asset.symbol, value=oi_value, change_pct=change_pct))
+                    if len(snapshots) > self._oi_max_snapshots: self._open_interest[asset.symbol] = snapshots[-self._oi_max_snapshots:]
+            except Exception as e: logger.debug("DataEngine: OI non dispo pour {}: {}", asset.symbol, e)
