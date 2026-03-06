@@ -40,21 +40,15 @@ function scoreColor(score) {
 }
 
 function getDirection(indicators, gridInfo) {
-  // Si grid actif avec positions ouvertes, montrer la direction des positions
+  // Si grid actif avec positions ouvertes, montrer la direction des positions réelles
   if (gridInfo && gridInfo.levels_open > 0) {
-    return gridInfo.direction === 'long' ? 'LONG' : 'SHORT'
+    const dir = gridInfo.direction?.toLowerCase()
+    if (dir === 'long') return 'LONG'
+    if (dir === 'short') return 'SHORT'
   }
-  // Fallback mono : RSI/VWAP
-  if (!indicators) return null
-  const rsi = indicators.rsi_14
-  const vwap = indicators.vwap_distance_pct
-  if (rsi == null) return null
-  if (rsi < 30) return 'LONG'
-  if (rsi > 70) return 'SHORT'
-  if (vwap != null) {
-    if (vwap < -0.3) return 'LONG'
-    if (vwap > 0.3) return 'SHORT'
-  }
+  
+  // Suppression du fallback RSI/VWAP selon demande utilisateur
+  // On ne retourne plus de signal directionnel s'il n'y a pas de position.
   return null
 }
 
