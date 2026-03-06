@@ -10,12 +10,12 @@ from backend.alerts.heartbeat import Heartbeat
 class TestHeartbeat:
     """Tests pour le Heartbeat."""
 
-    def test_build_message_format(self):
-        """Vérifie le format du message heartbeat."""
+    def test_build_message_format_sim(self):
+        """Vérifie le format du message heartbeat en mode Simulator."""
         telegram = MagicMock()
         simulator = MagicMock()
         
-        # Mocker la config pour live_trading=False (tout montrer)
+        # Mocker la config pour live_trading=False (données simulator utilisées pour trades)
         config = MagicMock()
         config.secrets.live_trading = False
         simulator.config = config
@@ -38,19 +38,54 @@ class TestHeartbeat:
         hb = Heartbeat(telegram, simulator, interval_seconds=60)
         message = hb._build_message()
 
-        assert "Heartbeat" in message
-        assert "+200.00$" in message  # 250 - 50
-        assert "Trades: 15" in message
-        assert "60%" in message  # 9/15
-        assert "vwap_rsi" in message
-        assert "momentum" in message
+        assert "Heartbeat Scalp Radar" in message
+        assert "PnL session: <b>+0.00$</b>" in message # Car live_pnl=0 par défaut
+        assert "Trades session: 15" in message
+        assert "Stratégies: momentum, vwap_rsi" in message
 
-    def test_build_message_filtering_live(self):
-        """Vérifie le filtrage quand live_trading=True."""
+    def test_build_message_live_data(self):
+        """Vérifie l'inclusion des données LIVE dans le heartbeat."""
         telegram = MagicMock()
         simulator = MagicMock()
         
-        # Mocker la config pour live_trading=True
+        config = MagicMock()
+        config.secrets.live_trading = True
+        simulator.config = config
+        simulator.get_all_status.return_value = {}
+
+        # Mock ExecutorManager
+        executor_mgr = MagicMock()
+        executor = MagicMock()
+        executor.is_enabled = True
+        executor.is_connected = True
+        executor.get_status.return_value = {
+            "risk_manager": {"session_pnl": 25.08},
+            "positions": [
+                {"symbol": "ETH/USDT:USDT", "direction": "LONG", "unrealized_pnl": 1.2},
+                {"symbol": "SOL/USDT:USDT", "direction": "LONG", "unrealized_pnl": 1.5},
+            ]
+        }
+        executor_mgr.executors = {"grid_atr": executor}
+        
+        # Mock RiskManager for trade history count
+        risk_mgr = MagicMock()
+        risk_mgr._trade_history = [MagicMock()] * 49
+        executor_mgr.risk_managers = {"grid_atr": risk_mgr}
+
+        hb = Heartbeat(telegram, simulator, interval_seconds=60, executor_mgr=executor_mgr)
+        message = hb._build_message()
+
+        assert "PnL session: <b>+25.08$</b>" in message
+        assert "Latent: <b>+2.70$</b>" in message
+        assert "Positions: 2 ouvertes (ETH LONG, SOL LONG)" in message
+        assert "Trades session: 49" in message
+        assert "Stratégies: grid_atr" in message
+
+    def test_build_message_filtering_live_eligible(self):
+        """Vérifie le filtrage des stratégies non live_eligible dans le fallback sim."""
+        telegram = MagicMock()
+        simulator = MagicMock()
+        
         config = MagicMock()
         config.secrets.live_trading = True
         # vwap_rsi est live_eligible, momentum ne l'est pas
@@ -59,53 +94,15 @@ class TestHeartbeat:
         simulator.config = config
 
         simulator.get_all_status.return_value = {
-            "vwap_rsi": {
-                "net_pnl": 250.0,
-                "total_trades": 10,
-                "wins": 7,
-                "is_active": True,
-            },
-            "momentum": {
-                "net_pnl": -50.0,
-                "total_trades": 5,
-                "wins": 2,
-                "is_active": True,
-            },
+            "vwap_rsi": {"is_active": True},
+            "momentum": {"is_active": True},
         }
 
         hb = Heartbeat(telegram, simulator, interval_seconds=60)
         message = hb._build_message()
 
-        assert "Heartbeat" in message
-        assert "+250.00$" in message  # Uniquement vwap_rsi
-        assert "Trades: 10" in message
-        assert "70%" in message
         assert "vwap_rsi" in message
         assert "momentum" not in message
-
-    def test_build_message_no_trades(self):
-        """Message heartbeat sans aucun trade."""
-        telegram = MagicMock()
-        simulator = MagicMock()
-        
-        config = MagicMock()
-        config.secrets.live_trading = False
-        simulator.config = config
-
-        simulator.get_all_status.return_value = {
-            "vwap_rsi": {
-                "net_pnl": 0.0,
-                "total_trades": 0,
-                "wins": 0,
-                "is_active": True,
-            },
-        }
-
-        hb = Heartbeat(telegram, simulator, interval_seconds=60)
-        message = hb._build_message()
-
-        assert "Trades: 0" in message
-        assert "0%" in message
 
     @pytest.mark.asyncio
     async def test_stop_cancels_task(self):

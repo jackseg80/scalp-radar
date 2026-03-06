@@ -307,6 +307,7 @@ async def _init_monitoring(
         heartbeat = Heartbeat(
             telegram, simulator,
             interval_seconds=config.secrets.heartbeat_interval,
+            executor_mgr=executor_mgr,
         )
         await heartbeat.start()
 
