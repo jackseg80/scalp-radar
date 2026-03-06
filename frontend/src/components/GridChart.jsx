@@ -8,7 +8,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { formatPrice } from '../utils/format'
 
-export default function GridChart({ symbol, data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false }) {
+export default function GridChart({ symbol, data = [], levels = [], currentPrice, tpPrice, slPrice, width = 160, height = 32, mini = false, status = null }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
 
   // Fermer la modale avec la touche Echap
@@ -182,6 +182,30 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
 
         {/* Graphique unique - Remplit tout l'espace */}
         <div style={{ flex: 1, position: 'relative', width: '100%', height: '100%', background: '#050505', border: '1px solid #1a1a1a', borderRadius: 4 }}>
+          {/* Badge de statut dans la modale */}
+          {status && (
+            <div style={{
+              position: 'absolute',
+              top: 20,
+              right: 80, 
+              zIndex: 20,
+              background: status.color || 'var(--accent)',
+              color: '#000',
+              padding: '6px 14px',
+              borderRadius: 4,
+              fontSize: '14px',
+              fontWeight: 900,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.8)',
+              border: '1px solid rgba(255,255,255,0.2)'
+            }}>
+              <span style={{ fontSize: '18px' }}>{status.icon}</span>
+              <span>{status.label.toUpperCase()}</span>
+            </div>
+          )}
+
           {/* Grille de prix (Axe Y à droite) */}
           <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 60, borderLeft: '1px solid #1a1a1a', zIndex: 1, pointerEvents: 'none' }}>
             {[0, 25, 50, 75, 100].map(p => {
@@ -341,6 +365,29 @@ export default function GridChart({ symbol, data = [], levels = [], currentPrice
         <div style={{ width: '100%', height: '100%', overflow: 'hidden' }}>
           {renderSVG(false)}
         </div>
+
+        {/* Badge status en mode mini */}
+        {!mini && status && (
+          <div style={{
+            position: 'absolute',
+            top: 4,
+            left: 4,
+            background: status.color || 'var(--accent)',
+            color: '#000',
+            fontSize: '9px',
+            fontWeight: 900,
+            padding: '2px 6px',
+            borderRadius: 3,
+            zIndex: 20,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4
+          }}>
+            <span>{status.icon}</span>
+            <span style={{ letterSpacing: 0.5 }}>{status.label.split(':')[0]}</span>
+          </div>
+        )}
         
         {!mini && currentPrice && (
           <div style={{

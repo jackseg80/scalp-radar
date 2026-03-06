@@ -79,6 +79,14 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
     direction: l.direction
   }))
 
+  // Calcul du statut pour le graphique
+  const chartStatus = useMemo(() => {
+    if (filledSet.size > 0) return { label: 'Positions Actives', color: 'var(--accent)', icon: '⚡' }
+    if (minAtrPct > 0 && atrPct < minAtrPct) return { label: 'ATR Trop Bas', color: 'var(--orange)', icon: '⏳' }
+    if (minGridSpacing > 0 && atrPct < minGridSpacing) return { label: 'Spacing Élargi', color: 'var(--yellow)', icon: '⚡' }
+    return { label: 'En Attente', color: 'var(--accent)', icon: '✅' }
+  }, [filledSet.size, minAtrPct, atrPct, minGridSpacing])
+
   const statusMsg = useMemo(() => {
     // 1. Si grid active (positions ouvertes) -> ne rien afficher
     if (filledSet.size > 0) return null
@@ -87,8 +95,11 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
     if (minAtrPct > 0 && atrPct < minAtrPct) {
       const manque = minAtrPct - atrPct
       return (
-        <div style={{ color: 'var(--orange)', fontSize: '12px', fontWeight: 600, marginBottom: 10 }}>
-          ⏳ ATR trop bas : {atrPct.toFixed(1)}% (seuil {minAtrPct.toFixed(1)}%) — manque +{manque.toFixed(1)}%
+        <div style={{ color: 'var(--orange)', fontSize: '12px', fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>⏳ ATR trop bas : {atrPct.toFixed(2)}% (seuil {minAtrPct.toFixed(1)}%) — manque +{manque.toFixed(2)}%</span>
+          <div style={{ width: 60, height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ width: `${(atrPct / minAtrPct) * 100}%`, height: '100%', background: 'var(--orange)' }} />
+          </div>
         </div>
       )
     }
@@ -108,7 +119,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
         ✅ Conditions OK — en attente bougie 1h (dans {minutesToNextHour}min)
       </div>
     )
-  }, [filledSet.size, minAtrPct, atrPct, gates, minGridSpacing, price, indicators?.atr_pct, minutesToNextHour])
+  }, [filledSet.size, minAtrPct, atrPct, minGridSpacing, minutesToNextHour])
   const isTheoretical = !hasPosition
 
   return (
@@ -186,6 +197,7 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
                   currentPrice={price}
                   tpPrice={gridInfo?.tp_price}
                   slPrice={gridInfo?.sl_price}
+                  status={chartStatus}
                   width="100%"
                   height="100%"
                 />
@@ -200,7 +212,14 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
                 {price != null && <IndicatorRow label="Prix" value={formatPrice(price)} />}
                 {rsi != null && <IndicatorRow label="RSI" value={Number(rsi).toFixed(1)} color={rsi < 30 ? 'var(--accent)' : rsi > 70 ? 'var(--red)' : null} />}
                 {adx != null && <IndicatorRow label="ADX" value={Number(adx).toFixed(1)} />}
-                {atrPct != null && <IndicatorRow label="ATR%" value={`${Number(atrPct).toFixed(1)}%`} />}
+                {atrPct != null && (
+                  <IndicatorRow 
+                    label="ATR%" 
+                    value={`${Number(atrPct).toFixed(2)}%`} 
+                    gauge={(atrPct / (minAtrPct || 1)) * 100}
+                    gaugeColor={atrPct < minAtrPct ? 'var(--orange)' : 'var(--accent)'}
+                  />
+                )}
                 <IndicatorRow label="Min.ATR" value={`${Number(minAtrPct).toFixed(1)}%`} color="var(--yellow)" />
                 {regime && <IndicatorRow label="Rég." value={regime} badge />}
               </div>
@@ -212,14 +231,21 @@ export default function GridDetail({ symbol, gridInfo, indicators = {}, regime, 
   )
 }
 
-function IndicatorRow({ label, value, color, badge }) {
+function IndicatorRow({ label, value, color, badge, gauge, gaugeColor }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
-      <span className="muted" style={{ width: 40, flexShrink: 0 }}>{label}</span>
-      {badge ? (
-        <span className="badge badge-ranging" style={{ padding: '0 4px', fontSize: '9px' }}>{value}</span>
-      ) : (
-        <span className="mono" style={{ color: color || 'var(--text-primary)', marginLeft: 'auto' }}>{value}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
+        <span className="muted" style={{ width: 40, flexShrink: 0 }}>{label}</span>
+        {badge ? (
+          <span className="badge badge-ranging" style={{ padding: '0 4px', fontSize: '9px' }}>{value}</span>
+        ) : (
+          <span className="mono" style={{ color: color || 'var(--text-primary)', marginLeft: 'auto' }}>{value}</span>
+        )}
+      </div>
+      {gauge != null && (
+        <div style={{ height: 2, background: 'rgba(255,255,255,0.05)', width: '100%', borderRadius: 1, overflow: 'hidden' }}>
+          <div style={{ width: `${Math.min(100, gauge)}%`, height: '100%', background: gaugeColor || 'var(--accent)' }} />
+        </div>
       )}
     </div>
   )
