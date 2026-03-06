@@ -323,6 +323,7 @@ Simulator → TradeEvent → executor.handle_event()
     |
     +-- TradeEvent.OPEN :
     |     +-- LiveRiskManager : pre-trade check
+    |     +-- Sécurité Stale Price : refuse si prix > 5 min (Mission 2026-03-06)
     |     +-- _is_grid_strategy() ? dispatch grid : dispatch mono
     |     +-- Grid : SL server-side (place/cancel sur Bitget), TP client-side (SMA dynamique)
     |     +-- Mono : TP + SL server-side
@@ -330,8 +331,16 @@ Simulator → TradeEvent → executor.handle_event()
     |
     +-- TradeEvent.CLOSE :
           +-- ccxt : close_position() sur Bitget
-          +-- Annuler ordres SL/TP pendants
+          +-- Annuler ordres SL/TP pendants via _cancel_all_open_orders()
 ```
+
+### Sécurités et Fiabilité SL
+
+- **Règle #1** : JAMAIS de position ouverte sans Stop Loss (SL) placé sur l'exchange.
+- **Self-Healing SL** : si `fetch_order` retourne une erreur 40109 (OrderNotFound) lors de la réconciliation, le bot reset l'ID local et déclenche une purge exhaustive du symbole.
+- **Annulation Exhaustive** : `_cancel_all_open_orders` balaie systématiquement les ordres normaux, les ordres `stop` et les ordres `plan` (triggers) pour Bitget v2 afin d'éviter l'accumulation d'orphelins.
+- **Idempotence SL** : avant de placer un nouveau SL, le bot vérifie via `_find_existing_sl` si un ordre trigger identique est déjà présent pour le réutiliser au lieu d'en créer un doublon.
+- **Stale Price Guard** : bloque toute ouverture ou modification de SL si les données de prix datent de plus de 5 minutes.
 
 ### AdaptiveSelector
 

@@ -3616,14 +3616,27 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 ## AUDITS TECHNIQUES RÉCENTS
 
-### Audit Self-Healing & Parity (06 Mars 2026) ✅
+### Audit Self-Healing, Parity & SL Fix (06 Mars 2026) ✅
 
-**Objectif** : Sécuriser le trading 1h (H1) contre les micro-coupures réseau et les désynchronisations Exchange.
+**Objectif** : Sécuriser le trading 1h (H1) contre les micro-coupures, les désynchronisations et l'accumulation d'ordres orphelins sur Bitget.
 
-**Réalisations** :
-- **DataEngine Self-Healing** : Détection de gaps WebSocket et récupération REST immédiate (`fetch_ohlcv`). Garantit que les indicateurs techniques ne sont jamais calculés sur des buffers incomplets.
-- **Parity Watchdog** : Réconciliation périodique (15 min) des positions réelles Bitget via le `Watchdog`. Corrige les ordres orphelins ou les fermetures manuelles détectées à chaud.
-- **Tests** : Ajout de `tests/test_dataengine_autoheal.py` et `tests/test_watchdog_parity.py`. Validation de l'intégralité de la suite (2225 tests passés).
+**Réalisations Techniques** :
+- **DataEngine Self-Healing** : Détection de gaps WebSocket et récupération REST immédiate (`fetch_ohlcv`).
+- **Parity Watchdog** : Réconciliation périodique (15 min) via le `Watchdog`. Correction à chaud des écarts Bot/Exchange.
+- **SL Accumulation Fix** :
+    - Gestion de l'erreur 40109 (OrderNotFound) : reset `sl_order_id` local et purge exhaustive via `stop` et `plan` params (Bitget v2).
+    - Idempotence du SL : vérification des ordres existants avant création pour éviter les doublons.
+    - Sécurité "Stale Price" : blocage des modifications SL si les prix ont plus de 5 minutes.
+- **Heartbeat Telegram V2** : Inclusion du PnL réalisé/latent session, détail des positions ouvertes et compte réel des trades live.
+
+**Améliorations UI (Scanner & Charts)** :
+- **GridChart Expert** : Labels de prix alignés à gauche dans des badges, ajout d'un axe Y à droite dans la vue agrandie.
+- **Statut Visuel** : Ajout de jauges d'ATR et de badges de statut (⏳ ATR TROP BAS, ⚡ SPACING ÉLARGI) pour clarifier l'attente du bot.
+- **DIR Column Fix** : Affiche désormais la direction réelle des positions ouvertes ou `--` sinon.
+
+**Validation** :
+- Nouveaux tests : `tests/test_dataengine_autoheal.py`, `tests/test_watchdog_parity.py`, `tests/test_mission_sl_fix.py`.
+- Validation globale : **2228 tests passés**, 0 régression.
 
 ---
 

@@ -22,6 +22,15 @@ Sécuriser le trading en timeframe 1h (H1) contre les instabilités réseau (gap
 - Correction automatique des écarts et notification Telegram détaillée.
 **Validation** : `tests/test_watchdog_parity.py`.
 
+### 3. Executor — Accumulation de SL Orphelins (Critique)
+**Problème** : Des dizaines de SL triggers restaient actifs sur Bitget pour quelques positions réelles. Cause : IDs de SL désynchronisés (40109 OrderNotFound) et nettoyage incomplet des "Plan Orders" sur Bitget v2.
+**Solution** :
+- **Gestion 40109** : Si un SL est introuvable via son ID local, le bot reset l'ID et purge exhaustivement le symbole.
+- **Purge Renforcée** : `_cancel_all_open_orders` balaie désormais les types `stop` et `plan` (Bitget v2) pour ne laisser aucun orphelin.
+- **Idempotence SL** : Vérification `_find_existing_sl` avant création pour réutiliser un ordre trigger identique déjà présent.
+- **Sécurité Stale Price** : Blocage des modifications SL si les prix datent de plus de 5 minutes.
+**Validation** : `tests/test_mission_sl_fix.py`.
+
 ---
 
 ## 📊 Impact sur la Fiabilité
