@@ -489,6 +489,20 @@ async def get_results_async(
         rows = await cursor.fetchall()
 
         results = [dict(row) for row in rows]
+        
+        # Feature: Append historical grades if we are showing latest_only
+        if latest_only and results:
+            for res in results:
+                hist_cursor = await conn.execute(
+                    """SELECT grade FROM optimization_results 
+                       WHERE strategy_name = ? AND asset = ? 
+                       ORDER BY created_at DESC LIMIT 4""",
+                    (res["strategy_name"], res["asset"])
+                )
+                hist_rows = await hist_cursor.fetchall()
+                # Reverse to get oldest to newest [A, A, B, C]
+                res["grade_history"] = [r["grade"] for r in reversed(hist_rows)]
+
         return {"results": results, "total": total}
 
 

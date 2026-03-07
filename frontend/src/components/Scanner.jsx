@@ -112,7 +112,8 @@ export default function Scanner({ wsData }) {
           grade: r.grade, 
           strategy: r.strategy_name, 
           score: r.total_score,
-          created_at: r.created_at
+          created_at: r.created_at,
+          grade_history: r.grade_history // Added this
         }
       }
     }
@@ -292,10 +293,26 @@ export default function Scanner({ wsData }) {
           )}
           <td>
             {gradeInfo ? (
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <span className={`grade-badge grade-${gradeInfo.grade}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
-                  {gradeInfo.grade}
-                </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Tooltip content={
+                  gradeInfo.grade_history && gradeInfo.grade_history.length > 1
+                    ? `Historique WFO : ${gradeInfo.grade_history.join(' → ')}`
+                    : `Grade WFO actuel : ${gradeInfo.grade}`
+                }>
+                  <span className={`grade-badge grade-${gradeInfo.grade}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
+                    {gradeInfo.grade}
+                  </span>
+                </Tooltip>
+                
+                {/* Indicateur de dégradation */}
+                {gradeInfo.grade_history && gradeInfo.grade_history.length >= 2 && (
+                  GRADE_ORDER[gradeInfo.grade] < GRADE_ORDER[gradeInfo.grade_history[gradeInfo.grade_history.length - 2]]
+                ) && (
+                  <Tooltip content={`Dégradation récente : était ${gradeInfo.grade_history[gradeInfo.grade_history.length - 2]}`}>
+                    <span style={{ fontSize: '12px', cursor: 'help' }}>⚠️</span>
+                  </Tooltip>
+                )}
+
                 {isStale && (
                   <span 
                     className="stale-badge" 
