@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useStrategyContext } from '../contexts/StrategyContext'
 import Tooltip from './Tooltip'
+import KillSwitchBar from './KillSwitchBar'
 import { formatPrice } from '../utils/format'
 
 const STORAGE_KEY = 'scalp-radar-collapse-executor-positions'
@@ -73,8 +74,22 @@ export default function ExecutorPanel({ wsData }) {
   const liveStrats = selector?.allowed_strategies || []
   const paperStrats = allStrategyNames.filter(s => !liveStrats.includes(s))
 
+  // Kill Switch Stratégie (Mission 2026-03-07)
+  const stratDD = rm?.drawdown_pct ?? 0
+  const isGrid = strategyFilter?.includes('grid')
+  const stratLimit = isGrid ? 25 : 5
+
   return (
     <>
+      {/* Barre Kill Switch Spécifique */}
+      {strategyFilter && isLive && (
+        <KillSwitchBar 
+          currentDD={stratDD} 
+          limit={stratLimit} 
+          label={`Sécurité ${strategyFilter}`} 
+        />
+      )}
+
       {/* Status global */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: positions.length > 0 || selector ? 12 : 0 }}>
         <div className="flex-between" style={{ marginBottom: 2 }}>
@@ -109,8 +124,11 @@ export default function ExecutorPanel({ wsData }) {
           />
         )}
         {totalPnl != null && (
-          <Tooltip content={firstTradeDate ? `Depuis le ${firstTradeDate}` : 'P&L total depuis le début des trades en DB'}>
-            <div className="flex-between" style={{ fontSize: 12 }}>
+          <Tooltip 
+            content={firstTradeDate ? `Depuis le ${firstTradeDate}` : 'P&L total depuis le début des trades en DB'}
+            inline={false}
+          >
+            <div className="flex-between" style={{ fontSize: 12, width: '100%' }}>
               <span className="muted">P&L Total</span>
               <span className="mono" style={{ 
                 color: totalPnl >= 0 ? 'var(--accent)' : 'var(--red)',

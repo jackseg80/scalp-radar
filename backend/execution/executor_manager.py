@@ -146,6 +146,11 @@ class ExecutorManager:
             "open_positions_count": open_count,
             "total_orders": total_orders,
             "initial_capital": total_capital,
+            "drawdown_pct": (
+                abs(total_pnl) / total_capital * 100
+                if total_capital > 0 and total_pnl < 0
+                else 0.0
+            ),
         }
 
     def get_all_order_history(self, limit: int = 50) -> list[dict]:

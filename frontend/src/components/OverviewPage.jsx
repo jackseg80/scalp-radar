@@ -9,6 +9,7 @@ import ActivePositions from './ActivePositions'
 import CollapsibleCard from './CollapsibleCard'
 import EnhancedEquityCurve from './EnhancedEquityCurve'
 import DrawdownChart from './DrawdownChart'
+import KillSwitchBar from './KillSwitchBar'
 import './OverviewPage.css'
 
 const REGIME_COLORS = {
@@ -134,30 +135,12 @@ export default function OverviewPage({ wsData }) {
 
   return (
     <>
-      {/* Barre Kill Switch Session (Mission 2026-03-07) */}
-      <div className="overview-kill-bar-container">
-        <div className="flex-between" style={{ marginBottom: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="text-xs uppercase bold muted" style={{ letterSpacing: 1 }}>Sécurité Portefeuille</span>
-            {isNearKill && <span className="badge badge-stopped" style={{ fontSize: 9 }}>CRITIQUE</span>}
-          </div>
-          <span className={`text-xs mono ${isNearKill ? 'pnl-neg' : 'muted'}`}>
-            Drawdown Session : <b>{currentDD.toFixed(2)}%</b> / {killSwitchLimit}%
-          </span>
-        </div>
-        <div className="overview-kill-track">
-          <div 
-            className={`overview-kill-fill ${isNearKill ? 'critical' : ''}`} 
-            style={{ width: `${ddRatio}%` }}
-          />
-          {/* Marqueur limite rouge à l'extrémité droite */}
-          <div className="overview-kill-limit" />
-        </div>
-        <div className="flex-between" style={{ marginTop: 4 }}>
-          <span style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase' }}>Session Live</span>
-          <span style={{ fontSize: 9, color: 'var(--red)', fontWeight: 700, textTransform: 'uppercase' }}>Kill Switch (45%)</span>
-        </div>
-      </div>
+      {/* Barre Kill Switch Global (Mission 2026-03-07) */}
+      <KillSwitchBar 
+        currentDD={currentDD} 
+        limit={killSwitchLimit} 
+        label="Sécurité Globale Portefeuille" 
+      />
 
       {/* KPI Cards */}
       <div className="overview-kpi-grid">
