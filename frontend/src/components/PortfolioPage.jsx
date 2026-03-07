@@ -587,13 +587,25 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
           <div className="divider" />
 
           {/* Runs précédents (collapsible) */}
-          <h4
-            className="runs-header"
-            onClick={() => setRunsCollapsed(v => !v)}
-          >
-            <span>Runs précédents ({filteredBacktests.length})</span>
-            <span className="runs-collapse-icon">{runsCollapsed ? '▶' : '▼'}</span>
-          </h4>
+          <div className="pf-runs-header-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 }}>
+            <h4
+              className="runs-header"
+              onClick={() => setRunsCollapsed(v => !v)}
+              style={{ margin: 0, flex: 1 }}
+            >
+              <span>Runs précédents ({filteredBacktests.length})</span>
+              <span className="runs-collapse-icon" style={{ marginLeft: 8 }}>{runsCollapsed ? '▶' : '▼'}</span>
+            </h4>
+            {compareIds.size > 0 && (
+              <button 
+                className="btn-clear-compare"
+                onClick={() => setCompareIds(new Set())}
+                title="Vider la sélection de comparaison"
+              >
+                Vider ({compareIds.size})
+              </button>
+            )}
+          </div>
           {!runsCollapsed && (
             <div className="runs-history">
               {filteredBacktests.map(run => {
