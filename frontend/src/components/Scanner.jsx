@@ -108,7 +108,12 @@ export default function Scanner({ wsData }) {
     for (const r of gradesData.results) {
       const existing = lookup[r.asset]
       if (!existing || (GRADE_ORDER[r.grade] || 0) > (GRADE_ORDER[existing.grade] || 0)) {
-        lookup[r.asset] = { grade: r.grade, strategy: r.strategy_name, score: r.total_score }
+        lookup[r.asset] = { 
+          grade: r.grade, 
+          strategy: r.strategy_name, 
+          score: r.total_score,
+          created_at: r.created_at
+        }
       }
     }
     return lookup
@@ -234,6 +239,15 @@ export default function Scanner({ wsData }) {
     const direction = getDirection(asset.indicators, gridInfo)
     const changePct = asset.change_pct
     const gradeInfo = gradesLookup[asset.symbol]
+    
+    // Détection backtest périmé (> 60 jours)
+    const STALE_THRESHOLD_DAYS = 60
+    let isStale = false
+    let ageDays = 0
+    if (gradeInfo?.created_at) {
+      ageDays = (new Date() - new Date(gradeInfo.created_at)) / (1000 * 60 * 60 * 24)
+      isStale = ageDays > STALE_THRESHOLD_DAYS
+    }
 
     return (
       <Fragment key={asset.symbol}>
@@ -278,9 +292,19 @@ export default function Scanner({ wsData }) {
           )}
           <td>
             {gradeInfo ? (
-              <span className={`grade-badge grade-${gradeInfo.grade}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
-                {gradeInfo.grade}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <span className={`grade-badge grade-${gradeInfo.grade}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
+                  {gradeInfo.grade}
+                </span>
+                {isStale && (
+                  <span 
+                    className="stale-badge" 
+                    title={`Backtest périmé (${Math.floor(ageDays)} jours). Un re-run WFO est conseillé.`}
+                  >
+                    Périmé
+                  </span>
+                )}
+              </div>
             ) : (
               <span className="dim text-xs">--</span>
             )}

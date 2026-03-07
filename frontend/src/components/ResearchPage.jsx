@@ -173,6 +173,17 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
     return [...new Set(results.results.map(r => r.timeframe || '1h'))].sort()
   }, [results])
 
+  // Détection des résultats périmés (> 60 jours)
+  const STALE_THRESHOLD_DAYS = 60
+  const staleResultsCount = useMemo(() => {
+    if (!filteredResults) return 0
+    const now = new Date()
+    return filteredResults.filter(r => {
+      const ageDays = (now - new Date(r.created_at)) / (1000 * 60 * 60 * 24)
+      return ageDays > STALE_THRESHOLD_DAYS
+    }).length
+  }, [filteredResults])
+
   // Apply params
   const [applyResult, setApplyResult] = useState(null)
   const [applying, setApplying] = useState(false)
@@ -380,6 +391,15 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
         />
       )}
 
+      {staleResultsCount > 0 && (
+        <div className="stale-warning-banner">
+          <span>
+            ⚠️ <strong>{staleResultsCount} résultat(s) périmé(s)</strong> ({STALE_THRESHOLD_DAYS} jours+).
+            Le marché dérive, un re-run WFO est recommandé pour ces actifs.
+          </span>
+        </div>
+      )}
+
       {filters.strategy && !loading && filteredResults.length === 0 && (
         <div className="info-banner">
           <span>Aucun resultat pour {filters.strategy} avec les filtres actuels</span>
@@ -466,27 +486,38 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
                 </td>
               </tr>
             ) : (
-              filteredResults.map(r => (
-                <tr key={r.id} onClick={() => fetchDetail(r.id)} className="clickable-row">
-                  <td>{r.strategy_name}</td>
-                  <td>{r.asset}</td>
-                  <td>
-                    <span
-                      className={`timeframe-badge${r.timeframe && r.timeframe !== '1h' ? ' timeframe-badge--warn' : ''}`}
-                      title={r.timeframe && r.timeframe !== '1h'
-                        ? `Optimisé en ${r.timeframe}. Incompatible avec paper/live (1h). Re-testez avec --force-timeframe 1h.`
-                        : `Timeframe : ${r.timeframe || '1h'}`}
-                    >
-                      {r.timeframe || '1h'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={`grade-badge grade-${r.grade}`}>{r.grade}</span>
-                    {r.n_windows != null && r.n_windows < 24 && (
-                      <span className="shallow-badge" title={`Validation partielle (${r.n_windows} fenêtres < 24)`}>⚠</span>
-                    )}
-                  </td>
-                  <td>{r.total_score}</td>
+              filteredResults.map(r => {
+                const ageDays = (new Date() - new Date(r.created_at)) / (1000 * 60 * 60 * 24)
+                const isStale = ageDays > STALE_THRESHOLD_DAYS
+
+                return (
+                  <tr
+                    key={r.id}
+                    onClick={() => fetchDetail(r.id)}
+                    className={`clickable-row ${isStale ? 'stale-row' : ''}`}
+                  >
+                    <td>{r.strategy_name}</td>
+                    <td>{r.asset}</td>
+                    <td>
+                      <span
+                        className={`timeframe-badge${r.timeframe && r.timeframe !== '1h' ? ' timeframe-badge--warn' : ''}`}
+                        title={r.timeframe && r.timeframe !== '1h'
+                          ? `Optimisé en ${r.timeframe}. Incompatible avec paper/live (1h). Re-testez avec --force-timeframe 1h.`
+                          : `Timeframe : ${r.timeframe || '1h'}`}
+                      >
+                        {r.timeframe || '1h'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`grade-badge grade-${r.grade}`}>{r.grade}</span>
+                      {isStale && (
+                        <span className="stale-badge" title={`Résultat périmé (${Math.floor(ageDays)} jours)`}>Périmé</span>
+                      )}
+                      {r.n_windows != null && r.n_windows < 24 && (
+                        <span className="shallow-badge" title={`Validation partielle (${r.n_windows} fenêtres < 24)`}>⚠</span>
+                      )}
+                    </td>
+                    <td>{r.total_score}</td>
                   <td>{r.oos_sharpe?.toFixed(2) ?? 'N/A'}</td>
                   <td>{((r.consistency || 0) * 100).toFixed(0)}%</td>
                   <td>{r.oos_is_ratio?.toFixed(2) ?? 'N/A'}</td>

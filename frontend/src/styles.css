@@ -706,6 +706,24 @@ tr:last-child td { border-bottom: none; }
 .grade-D { background: #ef4444; color: white; }
 .grade-F { background: #6b7280; color: white; }
 
+/* Stale backtest warning (60 days) */
+.stale-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  background: #451a03;
+  color: #f97316;
+  border: 1px solid #7c2d12;
+  margin-left: 5px;
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+.stale-row-warning {
+  color: #f97316 !important;
+}
+
 /* --- Grid cell (Scanner) --- */
 .grid-cell { font-weight: 600; font-size: 13px; font-family: var(--font-mono); }
 .grid-cell--profit { color: var(--accent); }

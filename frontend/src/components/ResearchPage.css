@@ -14,6 +14,19 @@
   border: 1px solid #9a3412;
 }
 
+/* Stale badge */
+.stale-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #451a03;
+  color: #f97316;
+  border: 1px solid #7c2d12;
+  margin-left: 8px;
+}
+
 /* Shallow validation badge */
 .shallow-badge {
   display: inline-block;
@@ -21,6 +34,32 @@
   font-size: 0.75em;
   color: #f59e0b;
   cursor: help;
+}
+
+/* Stale row highlight */
+.stale-row {
+  opacity: 0.8;
+}
+.stale-row td:last-child {
+  color: #f97316 !react-important;
+  font-weight: 600;
+}
+
+/* Warning banner for stale results */
+.stale-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(124, 45, 18, 0.2);
+  border: 1px solid rgba(124, 45, 18, 0.5);
+  border-radius: 6px;
+  color: #fb923c;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+.stale-warning-banner strong {
+  color: #f97316;
 }
 
 /* Modale conflit timeframe */
