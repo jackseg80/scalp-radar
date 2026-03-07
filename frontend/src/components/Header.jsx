@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import Tooltip from './Tooltip'
 import StrategyBar from './StrategyBar'
@@ -16,9 +17,11 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange, unse
         <span className="header-version">v1.0.0</span>
         <StrategyBar wsData={wsData} />
         <div className="header-right">
+          <DataFreshness wsData={wsData} />
+          <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 8px' }} />
           <StatusDot label="Engine" ok={engineOk} tooltip="DataEngine : connexion WebSocket Bitget" />
           <StatusDot label="DB" ok={dbOk} tooltip="Base de données SQLite" />
-          <StatusDot label="WS" ok={wsConnected} tooltip="WebSocket frontend ↔ backend (/ws/live)" />
+          <StatusDot label="WS" ok={wsConnected} tooltip="WebSocket frontend ↔ backend (/api/ws/live)" />
           <Tooltip content="État de santé global du système">
             <span className={`status-badge ${status === 'ok' ? 'status-badge--ok' : 'status-badge--error'}`}>
               {status.toUpperCase()}
@@ -61,6 +64,41 @@ export default function Header({ wsConnected, tabs, activeTab, onTabChange, unse
         ))}
       </div>
     </header>
+  )
+}
+
+function DataFreshness({ wsData }) {
+  const [seconds, setSeconds] = useState(0)
+  const lastUpdateRef = useRef(Date.now())
+
+  useEffect(() => {
+    lastUpdateRef.current = Date.now()
+    setSeconds(0)
+  }, [wsData])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSeconds(Math.floor((Date.now() - lastUpdateRef.current) / 1000))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const isStale = seconds > 10
+  const color = isStale ? 'var(--red)' : 'var(--accent)'
+
+  return (
+    <Tooltip content="Temps depuis la dernière mise à jour WebSocket">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-dim)', padding: '0 4px' }}>
+        <span style={{ 
+          width: 6, height: 6, borderRadius: '50%', background: color, 
+          boxShadow: isStale ? 'none' : `0 0 8px ${color}`,
+          transition: 'all 0.3s'
+        }} />
+        <span className="mono" style={{ color: seconds > 5 ? 'var(--text-primary)' : 'inherit', minWidth: '20px' }}>
+          {seconds}s
+        </span>
+      </div>
+    </Tooltip>
   )
 }
 

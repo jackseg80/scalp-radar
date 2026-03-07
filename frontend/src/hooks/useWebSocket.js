@@ -31,6 +31,14 @@ export function useWebSocket(url) {
       ws.onopen = () => {
         setConnected(true)
         retryRef.current = 0
+        // Récupérer un snapshot immédiat pour synchroniser l'UI
+        // (Sprint Audit-UI : évite les désynchronisations pendant les coupures)
+        fetch('/api/v1/snapshot')
+          .then(res => res.json())
+          .then(data => {
+            if (!unmounted) setLastUpdate(data)
+          })
+          .catch(() => {})
       }
 
       ws.onmessage = (event) => {

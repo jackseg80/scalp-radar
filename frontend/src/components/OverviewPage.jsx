@@ -72,6 +72,13 @@ function KpiCard({ label, value, format, colorize, invert }) {
 export default function OverviewPage({ wsData }) {
   const { setActiveStrategy } = useStrategyContext()
 
+  // Kill Switch Progress (Mission 2026-03-07)
+  const rmStatus = wsData?.executor?.risk_manager
+  const currentDD = rmStatus?.drawdown_pct ?? 0
+  const killSwitchLimit = 45 // global_max_loss_pct dans risk.yaml
+  const ddRatio = Math.min(100, Math.max(0, (currentDD / killSwitchLimit) * 100))
+  const isNearKill = ddRatio > 70
+
   // Hotfix 63d : filtrer les endpoints live aux seules stratégies LIVE
   const allowedLive = wsData?.executor?.selector?.allowed_strategies || []
   const liveStratQ = allowedLive.length === 1
@@ -127,6 +134,31 @@ export default function OverviewPage({ wsData }) {
 
   return (
     <>
+      {/* Barre Kill Switch Session (Mission 2026-03-07) */}
+      <div className="overview-kill-bar-container">
+        <div className="flex-between" style={{ marginBottom: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="text-xs uppercase bold muted" style={{ letterSpacing: 1 }}>Sécurité Portefeuille</span>
+            {isNearKill && <span className="badge badge-stopped" style={{ fontSize: 9 }}>CRITIQUE</span>}
+          </div>
+          <span className={`text-xs mono ${isNearKill ? 'pnl-neg' : 'muted'}`}>
+            Drawdown Session : <b>{currentDD.toFixed(2)}%</b> / {killSwitchLimit}%
+          </span>
+        </div>
+        <div className="overview-kill-track">
+          <div 
+            className={`overview-kill-fill ${isNearKill ? 'critical' : ''}`} 
+            style={{ width: `${ddRatio}%` }}
+          />
+          {/* Marqueur limite rouge à l'extrémité droite */}
+          <div className="overview-kill-limit" />
+        </div>
+        <div className="flex-between" style={{ marginTop: 4 }}>
+          <span style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase' }}>Session Live</span>
+          <span style={{ fontSize: 9, color: 'var(--red)', fontWeight: 700, textTransform: 'uppercase' }}>Kill Switch (45%)</span>
+        </div>
+      </div>
+
       {/* KPI Cards */}
       <div className="overview-kpi-grid">
         <KpiCard label="Capital" value={exchangeBalance} format="$" />

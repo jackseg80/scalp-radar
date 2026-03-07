@@ -822,6 +822,8 @@ class Executor:
                         len(self._grid_states),
                         list(self._grid_states.keys()),
                     )
+                # Mission 2026-03-06 : Surveiller les positions sans SL
+                await self._check_missing_sl()
                 await self._check_all_live_exits()
             except asyncio.CancelledError:
                 break
@@ -1740,7 +1742,29 @@ class Executor:
             context="grid",
         )
 
+    async def _check_missing_sl(self) -> None:
+        """Vérifie si des positions grid actives n'ont pas de SL et les replace."""
+        # On fait une copie des clés pour éviter les mutations pendant l'itération
+        async with self._state_lock:
+            for futures_sym, state in list(self._grid_states.items()):
+                # Si position active sans order_id, on déclenche le replacement
+                if not state.sl_order_id and state.total_quantity > 0:
+                    logger.warning(
+                        "Executor: position grid {} SANS SL détectée ! Replacement auto...",
+                        futures_sym,
+                    )
+                    # _update_grid_sl est idempotent et gère le lock en interne si besoin
+                    # ici on est déjà sous lock, on appelle la logique de replacement
+                    await self._update_grid_sl_unlocked(futures_sym, state)
+
     async def _update_grid_sl(
+        self, futures_sym: str, state: GridLiveState,
+    ) -> None:
+        """Version lock-protected de _update_grid_sl."""
+        async with self._state_lock:
+            await self._update_grid_sl_unlocked(futures_sym, state)
+
+    async def _update_grid_sl_unlocked(
         self, futures_sym: str, state: GridLiveState,
     ) -> None:
         """Annule l'ancien SL et place un nouveau basé sur le prix moyen.
@@ -1749,15 +1773,31 @@ class Executor:
         Quantité du SL = total_quantity (toutes les positions agrégées).
         """
         # 0. Sécurité : Données Stale ? (Mission 2026-03-06)
+        # Si le flux WS est stale, on tente de récupérer un prix REST de secours
         if self._data_engine:
             spot_sym = futures_sym.split(":")[0]
             last_update = self._data_engine.get_last_update(spot_sym)
+            is_stale = False
             if last_update:
                 age = (datetime.now(tz=timezone.utc) - last_update).total_seconds()
                 if age > 300:  # 5 minutes
+                    is_stale = True
+            else:
+                is_stale = True
+
+            if is_stale:
+                logger.warning(
+                    "Executor: prix WS STALE pour {} — récupération prix REST pour sécuriser le SL",
+                    futures_sym
+                )
+                try:
+                    # On fetch juste pour s'assurer que l'exchange est joignable et qu'on a un prix
+                    await self._exchange.fetch_ticker(futures_sym)
+                    # Le calcul du SL se basant sur avg_entry_price, on peut continuer
+                except Exception as e:
                     logger.error(
-                        "Executor: prix STALE ({:.0f}s) pour {} — modification SL interdite par sécurité",
-                        age, futures_sym
+                        "Executor: prix REST inaccessible pour {} : {} — replacement SL suspendu",
+                        futures_sym, e
                     )
                     return
 
@@ -1821,6 +1861,9 @@ class Executor:
 
         state.sl_order_id = sl_order_id
         state.sl_price = new_sl
+
+        # P0-CR-1 Audit : forcer sauvegarde immédiate après succès placement SL
+        await self._save_state_now()
 
     async def _find_existing_sl(
         self, symbol: str, side: str, quantity: float, trigger_price: float

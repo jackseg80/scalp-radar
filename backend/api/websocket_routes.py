@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from backend.core.logging_setup import get_log_buffer, subscribe_logs, unsubscribe_logs
@@ -193,6 +193,16 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 UPDATE_INTERVAL = 3.0  # secondes entre chaque update standard
+
+
+@router.get("/api/v1/snapshot")
+async def get_snapshot(request: Request) -> dict:
+    """Retourne l'état complet actuel (utilisé au boot ou reconnexion)."""
+    simulator = getattr(request.app.state, "simulator", None)
+    arena = getattr(request.app.state, "arena", None)
+    executor = getattr(request.app.state, "executor", None)
+    engine = getattr(request.app.state, "engine", None)
+    return _build_update_data(simulator, arena, executor, engine)
 
 
 @router.websocket("/ws/live")

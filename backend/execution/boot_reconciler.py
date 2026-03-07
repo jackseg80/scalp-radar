@@ -257,15 +257,20 @@ async def _reconcile_grid_symbol(ex: Any, futures_sym: str) -> None:
                 state.leverage, futures_sym, e,
             )
 
-        # Replacer le SL si absent (positions restaurées depuis sync.py au boot)
-        # On ne replace que si on n'est pas déjà en train de tourner (Watchdog)
-        # pour éviter le spam API/Telegram si le placement échoue répétitivement.
-        if not state.sl_order_id and state.total_quantity > 0 and not getattr(ex, "_running", False):
+        # Replacer le SL si absent (positions restaurées depuis sync.py au boot ou purgées juste au-dessus)
+        if not state.sl_order_id and state.total_quantity > 0:
             logger.info(
-                "Executor: SL manquant pour {} (restauré via sync) — replacement en cours",
+                "Executor: SL manquant ou purgé pour {} — replacement CRITIQUE immédiat",
                 futures_sym,
             )
-            await ex._update_grid_sl(futures_sym, state)
+            try:
+                # Appel bloquant pour garantir la protection avant de continuer
+                await ex._update_grid_sl(futures_sym, state)
+            except Exception as e:
+                logger.error(
+                    "Executor: échec replacement SL CRITIQUE pour {}: {}",
+                    futures_sym, e,
+                )
 
         logger.info(
             "Executor: cycle grid restauré {} ({} niveaux, SL={})",
