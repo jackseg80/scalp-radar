@@ -52,21 +52,9 @@ def save_result_sync(
     timeframe: str,
     source: str = "local",
     regime_analysis: dict | None = None,
+    leverage: int | None = None,
 ) -> int:
-    """Sauvegarde un résultat WFO en DB (sync pour optimize.py CLI).
-
-    Args:
-        db_path: Chemin vers la DB SQLite
-        report: FinalReport complet
-        wfo_windows: WindowResult sérialisés (ou None)
-        duration: Durée du run en secondes (ou None)
-        timeframe: Timeframe de la stratégie (ex: "5m", "1h")
-        source: Origine du résultat ("local" ou "server")
-        regime_analysis: Analyse par régime du best combo (Sprint 15b, optionnel)
-
-    Returns:
-        result_id (int) : ID du résultat inséré
-    """
+    """Sauvegarde un résultat WFO en DB (sync pour optimize.py CLI)."""
     conn = sqlite3.connect(db_path, timeout=30)
     try:
         # Sanitize JSON values (NaN/Infinity → None)
@@ -122,8 +110,8 @@ def save_result_sync(
                 param_stability, monte_carlo_pvalue, mc_underpowered, n_windows, n_distinct_combos,
                 best_params, wfo_windows, monte_carlo_summary, validation_summary, warnings,
                 is_latest, source, regime_analysis,
-                win_rate_oos, tail_risk_ratio
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                win_rate_oos, tail_risk_ratio, leverage
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 report.strategy_name,
                 report.symbol,
@@ -151,6 +139,7 @@ def save_result_sync(
                 regime_analysis_json,
                 _sanitize_json_value(getattr(report, "win_rate_oos", None)),
                 _sanitize_json_value(getattr(report, "tail_risk_ratio", None)),
+                leverage,
             ),
         )
         result_id = cursor.lastrowid
@@ -476,7 +465,7 @@ async def get_results_async(
         query = f"""
             SELECT r.id, r.strategy_name, r.asset, r.timeframe, r.created_at, r.grade, r.total_score,
                    r.oos_sharpe, r.consistency, r.oos_is_ratio, r.dsr, r.param_stability,
-                   r.n_windows, r.is_latest, r.n_distinct_combos,
+                   r.n_windows, r.is_latest, r.n_distinct_combos, r.leverage,
                    COUNT(c.id) as combo_count
             FROM optimization_results r
             LEFT JOIN wfo_combo_results c ON c.optimization_result_id = r.id
@@ -488,7 +477,11 @@ async def get_results_async(
         cursor = await conn.execute(query, params + [limit, offset])
         rows = await cursor.fetchall()
 
-        results = [dict(row) for row in rows]
+        results = []
+        for row in rows:
+            d = dict(row)
+            # Ensure leverage is included (it might be None for old runs)
+            results.append(d)
         
         # Feature: Append historical grades if we are showing latest_only
         if latest_only and results:

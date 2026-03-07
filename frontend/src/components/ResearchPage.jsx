@@ -28,6 +28,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
       asset: '',
       timeframe: '',
       minGrade: '',
+      leverage: '',
     },
     sortBy: 'total_score',
     sortDir: 'desc',
@@ -124,6 +125,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
       if (filters.strategy && r.strategy_name !== filters.strategy) return false
       if (filters.asset && r.asset !== filters.asset) return false
       if (filters.timeframe && (r.timeframe || '1h') !== filters.timeframe) return false
+      if (filters.leverage && String(r.leverage) !== filters.leverage) return false
       if (filters.minGrade) {
         const gradeOrder = { A: 4, B: 3, C: 2, D: 1, F: 0 }
         if (gradeOrder[r.grade] < gradeOrder[filters.minGrade]) return false
@@ -171,6 +173,11 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
   const timeframes = useMemo(() => {
     if (!results || !results.results) return []
     return [...new Set(results.results.map(r => r.timeframe || '1h'))].sort()
+  }, [results])
+
+  const leverages = useMemo(() => {
+    if (!results || !results.results) return []
+    return [...new Set(results.results.map(r => r.leverage).filter(l => l != null))].sort((a, b) => a - b)
   }, [results])
 
   // Détection des résultats périmés (> 60 jours)
@@ -287,6 +294,17 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
             <option value="C">C et plus</option>
             <option value="B">B et plus</option>
             <option value="A">A uniquement</option>
+          </select>
+
+          <select
+            value={filters.leverage}
+            onChange={(e) => setFilters({ ...filters, leverage: e.target.value })}
+            className="filter-select"
+          >
+            <option value="">Tous les leviers</option>
+            {leverages.map(lev => (
+              <option key={lev} value={lev}>{lev}x</option>
+            ))}
           </select>
 
           <button
@@ -429,32 +447,35 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
         <table className="results-table">
           <thead>
             <tr>
-              <th style={{ width: '14%' }} onClick={() => !loading ? handleSort('strategy_name') : undefined}>
+              <th style={{ width: '12%' }} onClick={() => !loading ? handleSort('strategy_name') : undefined}>
                 Stratégie {sortBy === 'strategy_name' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '12%' }} onClick={() => !loading ? handleSort('asset') : undefined}>
+              <th style={{ width: '10%' }} onClick={() => !loading ? handleSort('asset') : undefined}>
                 Asset {sortBy === 'asset' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '5%' }}>TF</th>
+              <th style={{ width: '4%' }}>TF</th>
+              <th style={{ width: '5%' }} onClick={() => !loading ? handleSort('leverage') : undefined}>
+                Lev. {sortBy === 'leverage' && (sortDir === 'asc' ? '↑' : '↓')}
+              </th>
               <th style={{ width: '7%' }} onClick={() => !loading ? handleSort('grade') : undefined}>
                 Grade {sortBy === 'grade' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th style={{ width: '8%' }} onClick={() => !loading ? handleSort('total_score') : undefined}>
                 Score <InfoTooltip term="total_score" /> {sortBy === 'total_score' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '11%' }} onClick={() => !loading ? handleSort('oos_sharpe') : undefined}>
+              <th style={{ width: '10%' }} onClick={() => !loading ? handleSort('oos_sharpe') : undefined}>
                 Sharpe <InfoTooltip term="oos_sharpe" /> {sortBy === 'oos_sharpe' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '11%' }} onClick={() => !loading ? handleSort('consistency') : undefined}>
+              <th style={{ width: '10%' }} onClick={() => !loading ? handleSort('consistency') : undefined}>
                 Consist. <InfoTooltip term="consistency" /> {sortBy === 'consistency' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '9%' }} onClick={() => !loading ? handleSort('oos_is_ratio') : undefined}>
+              <th style={{ width: '8%' }} onClick={() => !loading ? handleSort('oos_is_ratio') : undefined}>
                 OOS/IS <InfoTooltip term="oos_is_ratio" /> {sortBy === 'oos_is_ratio' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '7%' }} onClick={() => !loading ? handleSort('dsr') : undefined}>
+              <th style={{ width: '6%' }} onClick={() => !loading ? handleSort('dsr') : undefined}>
                 DSR <InfoTooltip term="dsr" /> {sortBy === 'dsr' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
-              <th style={{ width: '10%' }} onClick={() => !loading ? handleSort('param_stability') : undefined}>
+              <th style={{ width: '9%' }} onClick={() => !loading ? handleSort('param_stability') : undefined}>
                 Stab. <InfoTooltip term="param_stability" /> {sortBy === 'param_stability' && (sortDir === 'asc' ? '↑' : '↓')}
               </th>
               <th style={{ width: '11%' }} onClick={() => !loading ? handleSort('created_at') : undefined}>
@@ -469,6 +490,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
                   <td><div className="skeleton skeleton-cell" style={{ width: '80%' }} /></td>
                   <td><div className="skeleton skeleton-cell" style={{ width: '60%' }} /></td>
                   <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
+                  <td><div className="skeleton skeleton-cell" style={{ width: '30%' }} /></td>
                   <td><div className="skeleton skeleton-cell" style={{ width: '50%' }} /></td>
                   <td><div className="skeleton skeleton-cell" style={{ width: '30%' }} /></td>
                   <td><div className="skeleton skeleton-cell" style={{ width: '40%' }} /></td>
@@ -481,7 +503,7 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
               ))
             ) : filteredResults.length === 0 ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'center', color: '#888', padding: '40px' }}>
+                <td colSpan={12} style={{ textAlign: 'center', color: '#888', padding: '40px' }}>
                   Aucun résultat trouvé
                 </td>
               </tr>
@@ -507,6 +529,9 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
                       >
                         {r.timeframe || '1h'}
                       </span>
+                    </td>
+                    <td style={{ fontWeight: 600, color: 'var(--text-dim)' }}>
+                      {r.leverage ? `${r.leverage}x` : '—'}
                     </td>
                     <td>
                       <span className={`grade-badge grade-${r.grade}`}>{r.grade}</span>

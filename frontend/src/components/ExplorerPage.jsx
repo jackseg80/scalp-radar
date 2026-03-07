@@ -623,7 +623,8 @@ export default function ExplorerPage({ wsData, lastEvent, evalStrategy, setEvalS
                   })
                   const combos = run.combo_count || 0
                   const comboInfo = combos > 0 ? ` ${combos}c` : ''
-                  const label = `${date} ${time} — Grade ${run.grade} (${run.total_score?.toFixed(0) || 0})${comboInfo}${
+                  const levInfo = run.leverage ? ` [${run.leverage}x]` : ''
+                  const label = `${date} ${time}${levInfo} — Grade ${run.grade} (${run.total_score?.toFixed(0) || 0})${comboInfo}${
                     run.is_latest ? ' [latest]' : ''
                   }`
                   return (

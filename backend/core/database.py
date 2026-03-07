@@ -249,6 +249,10 @@ class Database:
                 -- Flags
                 is_latest INTEGER DEFAULT 1,
                 source TEXT DEFAULT 'local',
+                regime_analysis TEXT,
+                win_rate_oos REAL,
+                tail_risk_ratio REAL,
+                leverage INTEGER,
 
                 UNIQUE(strategy_name, asset, timeframe, created_at)
             );
@@ -265,6 +269,7 @@ class Database:
         await self._migrate_optimization_source()
         await self._migrate_regime_analysis()
         await self._migrate_grading_v2()
+        await self._migrate_leverage()
 
     async def _migrate_optimization_source(self) -> None:
         """Migration idempotente : ajoute la colonne source à optimization_results si absente."""
@@ -281,6 +286,22 @@ class Database:
         )
         await self._conn.commit()
         logger.info("Migration optimization_results : colonne source ajoutée")
+
+    async def _migrate_leverage(self) -> None:
+        """Migration idempotente : ajoute la colonne leverage à optimization_results si absente."""
+        assert self._conn is not None
+        cursor = await self._conn.execute("PRAGMA table_info(optimization_results)")
+        columns = await cursor.fetchall()
+        if not columns:
+            return
+        col_names = [col["name"] for col in columns]
+        if "leverage" in col_names:
+            return
+        await self._conn.execute(
+            "ALTER TABLE optimization_results ADD COLUMN leverage INTEGER"
+        )
+        await self._conn.commit()
+        logger.info("Migration optimization_results : colonne leverage ajoutée")
 
     async def _migrate_regime_analysis(self) -> None:
         """Migration idempotente : ajoute regime_analysis à optimization_results (Sprint 15b)."""

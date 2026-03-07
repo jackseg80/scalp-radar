@@ -385,6 +385,10 @@ async def run_optimization(
     # Sauvegarde JSON + DB
     # Utiliser le timeframe du best combo s'il est dans les params optimisés
     saved_tf = report.recommended_params.get("timeframe", main_tf)
+    
+    # Extraire le levier utilisé pour le stockage (Sprint 64)
+    leverage_val = getattr(default_cfg, 'leverage', None)
+    
     filepath, result_id = save_report(
         report,
         wfo_windows=windows_serialized,
@@ -392,6 +396,7 @@ async def run_optimization(
         timeframe=saved_tf,
         combo_results=wfo.combo_results,  # Sprint 14b
         regime_analysis=wfo.regime_analysis,  # Sprint 15b
+        leverage=leverage_val,
     )
 
     if progress_callback:

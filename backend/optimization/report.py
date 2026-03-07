@@ -433,6 +433,7 @@ def save_report(
     db_path: str | None = None,
     combo_results: list[dict] | None = None,
     regime_analysis: dict | None = None,
+    leverage: int | None = None,
 ) -> tuple[Path, int | None]:
     """Sauvegarde le rapport en JSON et en DB.
 
@@ -445,6 +446,7 @@ def save_report(
         db_path: Chemin DB SQLite (None = depuis config)
         combo_results: Combo results du WFO (Sprint 14b, optionnel)
         regime_analysis: Analyse par régime du best combo (Sprint 15b, optionnel)
+        leverage: Levier utilisé pendant le run (Sprint 64, optionnel)
 
     Returns:
         (filepath, result_id) : chemin JSON + ID DB (ou None si pas sauvé en DB)
@@ -458,6 +460,8 @@ def save_report(
     filepath = out / filename
 
     data = _report_to_dict(report)
+    if leverage is not None:
+        data["leverage"] = leverage
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str, ensure_ascii=False)
@@ -482,6 +486,7 @@ def save_report(
         result_id = save_result_sync(
             db_path, report, wfo_windows, duration, timeframe,
             regime_analysis=regime_analysis,
+            leverage=leverage,
         )
 
         # Sauver les combo results si présents (Sprint 14b)
