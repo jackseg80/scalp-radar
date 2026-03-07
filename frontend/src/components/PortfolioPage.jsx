@@ -606,33 +606,44 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
           </h4>
           {!runsCollapsed && (
             <div className="runs-history">
-              {filteredBacktests.map(run => (
-                <div
-                  key={run.id}
-                  className={`run-item ${selectedId === run.id ? 'selected' : ''}`}
-                  onClick={() => setSelectedId(run.id)}
-                >
-                  <input
-                    type="checkbox"
-                    className="run-compare-check"
-                    checked={compareIds.has(run.id)}
-                    onChange={e => toggleCompare(run.id, e)}
-                    title="Comparer"
-                  />
-                  <div>
-                    <div className="run-label">{run.label || `Run #${run.id}`}</div>
-                    <div className="run-meta">
-                      {run.initial_capital.toLocaleString()}$ | {run.n_assets} assets | {run.period_days}j{run.leverage ? ` | ${run.leverage}x` : ''}
+              {filteredBacktests.map(run => {
+                const ageDays = (new Date() - new Date(run.created_at)) / (1000 * 60 * 60 * 24)
+                const isStale = ageDays > 60
+
+                return (
+                  <div
+                    key={run.id}
+                    className={`run-item ${selectedId === run.id ? 'selected' : ''} ${isStale ? 'run-item--stale' : ''}`}
+                    onClick={() => setSelectedId(run.id)}
+                  >
+                    <input
+                      type="checkbox"
+                      className="run-compare-check"
+                      checked={compareIds.has(run.id)}
+                      onChange={e => toggleCompare(run.id, e)}
+                      title="Comparer"
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="run-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{run.label || `Run #${run.id}`}</span>
+                        {isStale && <span className="stale-badge" style={{ fontSize: '8px', padding: '1px 4px' }}>Périmé</span>}
+                      </div>
+                      <div className="run-meta">
+                        {run.initial_capital.toLocaleString()}$ | {run.n_assets} assets | {run.period_days}j{run.leverage ? ` | ${run.leverage}x` : ''}
+                      </div>
+                      <div className="run-date" style={{ fontSize: '10px', color: isStale ? 'var(--orange)' : 'var(--text-dim)', marginTop: 2 }}>
+                        {new Date(run.created_at).toLocaleDateString('fr-FR')} {new Date(run.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                      </div>
                     </div>
+                    <span className={`run-pnl ${run.total_return_pct >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
+                      {run.total_return_pct >= 0 ? '+' : ''}{run.total_return_pct.toFixed(1)}%
+                    </span>
+                    <button className="run-delete" onClick={e => deleteRun(run.id, e)} title="Supprimer">
+                      &times;
+                    </button>
                   </div>
-                  <span className={`run-pnl ${run.total_return_pct >= 0 ? 'pnl-pos' : 'pnl-neg'}`}>
-                    {run.total_return_pct >= 0 ? '+' : ''}{run.total_return_pct.toFixed(1)}%
-                  </span>
-                  <button className="run-delete" onClick={e => deleteRun(run.id, e)} title="Supprimer">
-                    &times;
-                  </button>
-                </div>
-              ))}
+                )
+              })}
               {filteredBacktests.length === 0 && (
                 <div className="muted" style={{ fontSize: 12, textAlign: 'center', padding: 12 }}>
                   Aucun run sauvegardé
