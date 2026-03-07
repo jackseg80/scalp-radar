@@ -35,21 +35,20 @@ function useApi(url) {
   return { data, loading, refetch: fetchData }
 }
 
-// ─── Composants internes ────────────────────────────────────────────────
-
-function MetricsGrid({ run }) {
-  const metrics = [
-    { label: 'Return', value: `${run.total_return_pct >= 0 ? '+' : ''}${run.total_return_pct.toFixed(1)}%`, positive: run.total_return_pct >= 0 },
-    { label: 'Equity finale', value: `${run.final_equity.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} $` },
-    { label: 'Trades', value: run.total_trades },
-    { label: 'Win rate', value: `${run.win_rate.toFixed(1)}%` },
-    { label: 'Max drawdown', value: `${run.max_drawdown_pct.toFixed(1)}%`, negative: run.max_drawdown_pct < -5 },
-    { label: 'Margin peak', value: `${(run.peak_margin_ratio * 100).toFixed(0)}%` },
-    { label: 'Kill switch', value: run.kill_switch_triggers },
-    { label: 'Levier', value: run.leverage ? `${run.leverage}x` : '—' },
-    { label: 'P&L réalisé', value: `${run.realized_pnl >= 0 ? '+' : ''}${run.realized_pnl.toFixed(0)} $`, positive: run.realized_pnl >= 0 },
-  ]
-  return (
+  // MetricsGrid: Affiche les stats d'un run
+  function MetricsGrid({ run }) {
+    const metrics = [
+      { label: 'Return', value: `${run.total_return_pct >= 0 ? '+' : ''}${run.total_return_pct.toFixed(1)}%`, positive: run.total_return_pct >= 0 },
+      { label: 'Equity finale', value: `${run.final_equity.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} $` },
+      { label: 'Trades', value: run.total_trades },
+      { label: 'Win rate', value: `${run.win_rate.toFixed(1)}%` },
+      { label: 'Max drawdown', value: `${run.max_drawdown_pct.toFixed(1)}%`, negative: run.max_drawdown_pct < -5 },
+      { label: 'Margin peak', value: `${(run.peak_margin_ratio * 100).toFixed(0)}%` },
+      { label: 'Kill switch', value: run.kill_switch_triggers },
+      { label: 'Levier réel', value: run.leverage ? `${run.leverage}x` : 'auto' },
+      { label: 'P&L réalisé', value: `${run.realized_pnl >= 0 ? '+' : ''}${run.realized_pnl.toFixed(0)} $`, positive: run.realized_pnl >= 0 },
+    ]
+    return (
     <div className="metrics-grid">
       {metrics.map(m => (
         <div key={m.label} className="metric-card">
@@ -237,20 +236,11 @@ export default function PortfolioPage({ wsData, lastEvent, evalStrategy }) {
     return () => { cancelled = true }
   }, [selectedId])
 
-  // Baseline grid_atr (dernier run, pour comparaison auto)
-  const baselineRun = useMemo(() => {
-    if (!backtests || backtests.length === 0) return null
-    return backtests.find(b => b.strategy_name === 'grid_atr') || null
-  }, [backtests])
+  // Baseline grid_atr (désactivé pour éviter comparaison fantôme automatique)
+  const baselineRun = null
 
-  // IDs compare effectifs (ajouter baseline si nécessaire)
-  const effectiveCompareIds = useMemo(() => {
-    const ids = new Set(compareIds)
-    if (baselineRun && ids.size >= 1 && selectedStrategy !== 'grid_atr' && !ids.has(baselineRun.id)) {
-      ids.add(baselineRun.id)
-    }
-    return ids
-  }, [compareIds, baselineRun, selectedStrategy])
+  // IDs compare effectifs (uniquement ceux sélectionnés par l'utilisateur)
+  const effectiveCompareIds = compareIds
 
   // Charger les détails pour la comparaison
   useEffect(() => {

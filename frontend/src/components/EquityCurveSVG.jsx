@@ -220,9 +220,9 @@ export default function EquityCurveSVG({ curves = [], height = 300 }) {
 
         {/* Legend (si multi-courbes) */}
         {curves.length > 1 && processedCurves.map((c, i) => (
-          <g key={i} transform={`translate(${PAD.left + 10 + i * 120}, ${PAD.top - 6})`}>
-            <rect width={10} height={10} fill={c.color} rx={2} />
-            <text x={14} y={9} fill="#ccc" fontSize={11}>{c.label || `Run ${i + 1}`}</text>
+          <g key={i} transform={`translate(${width - PAD.right - 100}, ${PAD.top + 10 + i * 14})`}>
+            <rect width={8} height={8} y={-8} fill={c.color} rx={2} />
+            <text x={12} y={-1} fill="#ccc" fontSize={10} fontWeight={600}>{c.label || `Run ${i + 1}`}</text>
           </g>
         ))}
       </svg>
