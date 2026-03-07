@@ -530,7 +530,8 @@ export default function ResearchPage({ onTabChange, evalStrategy, setEvalStrateg
                     </span>
                   </td>
                 </tr>
-              ))
+              )
+            })
             )}
           </tbody>
         </table>
