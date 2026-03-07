@@ -55,6 +55,7 @@ def temp_db(tmp_path):
             regime_analysis TEXT,
             win_rate_oos REAL,
             tail_risk_ratio REAL,
+            leverage INTEGER,
             UNIQUE(strategy_name, asset, timeframe, created_at)
         );
         CREATE TABLE IF NOT EXISTS wfo_combo_results (
@@ -875,3 +876,38 @@ async def test_get_results_async_with_grade_history(temp_db):
     # L'historique doit contenir les 4 derniers grades : [D, C, B, A] (le plus ancien à gauche)
     assert "grade_history" in row
     assert row["grade_history"] == ["D", "C", "B", "A"]
+
+
+@pytest.mark.asyncio
+async def test_leverage_storage_and_retrieval(temp_db):
+    """Test que le levier est correctement stocké et retourné par l'API."""
+    from backend.optimization.report import FinalReport, ValidationResult
+    from backend.optimization.optimization_db import save_result_sync, get_results_async, get_result_by_id_async
+    from datetime import datetime
+
+    val = ValidationResult(
+        bitget_sharpe=1.0, bitget_net_return_pct=5.0, bitget_trades=20,
+        bitget_sharpe_ci_low=0.5, bitget_sharpe_ci_high=1.5,
+        binance_oos_avg_sharpe=1.0, transfer_ratio=0.70,
+        transfer_significant=False, volume_warning=False, volume_warning_detail="",
+    )
+    report = FinalReport(
+        strategy_name="grid_atr", symbol="BTC/USDT", timestamp=datetime(2026, 3, 7, 10, 0),
+        grade="B", total_score=75, wfo_avg_is_sharpe=1.5, wfo_avg_oos_sharpe=1.2,
+        wfo_consistency_rate=0.70, wfo_n_windows=15, recommended_params={"p": 1},
+        mc_p_value=0.05, mc_significant=True, mc_underpowered=False, dsr=0.80,
+        dsr_max_expected_sharpe=3.0, stability=0.75, cliff_params=[], convergence=None,
+        divergent_params=[], validation=val, oos_is_ratio=0.75, bitget_transfer=0.70,
+        live_eligible=True, warnings=[], n_distinct_combos=200,
+    )
+
+    # Sauvegarder avec levier 6x
+    result_id = save_result_sync(temp_db, report, wfo_windows=None, duration=60.0, timeframe="1h", leverage=6)
+
+    # 1. Vérifier via get_results_async (liste)
+    results = await get_results_async(temp_db, latest_only=True)
+    assert results["results"][0]["leverage"] == 6
+
+    # 2. Vérifier via get_result_by_id_async (détail)
+    detail = await get_result_by_id_async(temp_db, result_id)
+    assert detail["leverage"] == 6

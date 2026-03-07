@@ -237,3 +237,45 @@ class TestWriteLockConcurrency:
             return_exceptions=True,
         )
         assert not any(isinstance(r, Exception) for r in results)
+
+
+@pytest.mark.asyncio
+async def test_migrate_leverage():
+    """Vérifie que la migration ajoute la colonne leverage si absente."""
+    import aiosqlite
+    db_path = ":memory:"
+    database = Database(db_path=db_path)
+    # On ouvre manuellement pour simuler l'état avant les tables
+    database._conn = await aiosqlite.connect(db_path)
+    database._conn.row_factory = aiosqlite.Row # <--- FIX: indispensable pour col["name"]
+    # On initialise SANS la colonne leverage (simulation ancienne version)
+    await database._conn.execute("""
+        CREATE TABLE optimization_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_name TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            total_score REAL NOT NULL,
+            best_params TEXT NOT NULL,
+            n_windows INTEGER NOT NULL,
+            is_latest INTEGER DEFAULT 1
+        )
+    """)
+    await database._conn.commit()
+
+    # Vérifier que la colonne n'existe pas
+    cursor = await database._conn.execute("PRAGMA table_info(optimization_results)")
+    cols = [c["name"] for c in await cursor.fetchall()]
+    assert "leverage" not in cols
+
+    # Lancer la migration
+    await database._migrate_leverage()
+
+    # Vérifier que la colonne existe maintenant
+    cursor = await database._conn.execute("PRAGMA table_info(optimization_results)")
+    cols = [c["name"] for c in await cursor.fetchall()]
+    assert "leverage" in cols
+
+    await database.close()
