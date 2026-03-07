@@ -257,7 +257,7 @@ export default function Scanner({ wsData }) {
           </td>
           <td>
             {direction ? (
-              <span className={`badge ${direction === 'LONG' ? 'badge-long' : 'badge-short'}`} style={{ opacity: isIgnored ? 0.5 : 1 }}>
+              <span className={`badge ${direction === 'LONG' ? 'badge-long' : 'badge-short'}`} style={{ opacity: isIgnored ? 0.5 : 1, fontSize: '11px', padding: '3px 8px' }}>
                 {direction}
               </span>
             ) : (

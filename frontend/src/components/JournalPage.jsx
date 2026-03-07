@@ -428,7 +428,7 @@ function LiveTradeHistory({ period }) {
   }
 
   if (loading && !data) return <div className="empty-state">Chargement...</div>
-  if (closeTrades.length === 0) return <div className="empty-state">Aucun trade live ferme</div>
+  if (closeTrades.length === 0) return <div className="empty-state" style={{ padding: '4px 0', minHeight: 'auto' }}>Aucun trade live ferme</div>
 
   return (
     <div>
@@ -776,7 +776,7 @@ function OpenPositions({ wsData, filterSource }) {
   const hasPositions = allPositions.length > 0
 
   if (!hasPositions) {
-    return <div className="empty-state">Aucune position ouverte{filterSource ? ` (${filterSource})` : ''}</div>
+    return <div className="empty-state" style={{ padding: '4px 0', minHeight: 'auto' }}>Aucune position{filterSource ? ` (${filterSource})` : ''}</div>
   }
 
   return (

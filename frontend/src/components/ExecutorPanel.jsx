@@ -110,11 +110,16 @@ export default function ExecutorPanel({ wsData }) {
         )}
         {totalPnl != null && (
           <Tooltip content={firstTradeDate ? `Depuis le ${firstTradeDate}` : 'P&L total depuis le début des trades en DB'}>
-            <StatusRow
-              label="P&L Total"
-              value={`${totalPnl >= 0 ? '+' : ''}${Number(totalPnl).toFixed(2)}$`}
-              color={totalPnl >= 0 ? 'var(--accent)' : 'var(--red)'}
-            />
+            <div className="flex-between" style={{ fontSize: 12 }}>
+              <span className="muted">P&L Total</span>
+              <span className="mono" style={{ 
+                color: totalPnl >= 0 ? 'var(--accent)' : 'var(--red)',
+                fontWeight: 600,
+                textAlign: 'right'
+              }}>
+                {totalPnl >= 0 ? '+' : ''}{Number(totalPnl).toFixed(2)}$
+              </span>
+            </div>
           </Tooltip>
         )}
         {rm?.total_orders != null && rm.total_orders > 0 && (
