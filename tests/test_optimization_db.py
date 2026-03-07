@@ -846,3 +846,32 @@ def test_is_latest_payload_sync_newest_wins(temp_db):
 
     assert rows[0] == ("1h", 95.0, 0)  # ancien perd is_latest même avec meilleur score
     assert rows[1] == ("4h", 73.0, 1)  # plus récent → is_latest=1
+
+
+@pytest.mark.asyncio
+async def test_get_results_async_with_grade_history(temp_db):
+    """Test que get_results_async retourne bien l'historique des grades (max 4)."""
+    # Insérer 5 résultats pour le même actif (du plus ancien au plus récent)
+    conn = sqlite3.connect(temp_db)
+    grades = ["F", "D", "C", "B", "A"]
+    for i, g in enumerate(grades):
+        conn.execute("""INSERT INTO optimization_results (
+            strategy_name, asset, timeframe, created_at, duration_seconds,
+            grade, total_score, n_windows, best_params, is_latest
+        ) VALUES (?, ?, ?, ?, 60, ?, ?, 10, '{}', ?)""", (
+            "grid_atr", "BTC/USDT", "1h", f"2026-03-0{i+1}T10:00:00",
+            g, 40 + i*10, 1 if i == 4 else 0
+        ))
+    conn.commit()
+    conn.close()
+
+    # Récupérer le dernier résultat
+    result = await get_results_async(temp_db, strategy="grid_atr", asset="BTC/USDT", latest_only=True)
+
+    assert len(result["results"]) == 1
+    row = result["results"][0]
+    assert row["grade"] == "A"
+    
+    # L'historique doit contenir les 4 derniers grades : [D, C, B, A] (le plus ancien à gauche)
+    assert "grade_history" in row
+    assert row["grade_history"] == ["D", "C", "B", "A"]
