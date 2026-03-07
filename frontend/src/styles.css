@@ -263,9 +263,6 @@ td {
   font-size: 12px;
   height: 48px;
 }
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
 tr:last-child td { border-bottom: none; }
 
 /* ─── BADGES ───────────────────────────────────────────────────────────── */
