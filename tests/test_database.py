@@ -279,3 +279,40 @@ async def test_migrate_leverage():
     assert "leverage" in cols
 
     await database.close()
+
+
+# ── Sprint 66 item E : filtre date_from get_simulation_trades ────────────────
+
+async def _insert_sim_trade(db, symbol: str, exit_time: str) -> None:
+    """Helper : insère un trade minimal dans simulation_trades via SQL direct."""
+    await db._conn.execute(
+        """INSERT INTO simulation_trades
+           (strategy_name, symbol, direction, entry_price, exit_price, quantity,
+            gross_pnl, fee_cost, slippage_cost, net_pnl, exit_reason,
+            market_regime, entry_time, exit_time)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("grid_atr", symbol, "LONG", 100.0, 105.0, 0.01,
+         5.0, 0.1, 0.0, 4.9, "tp", None,
+         "2026-01-01T00:00:00+00:00", exit_time),
+    )
+    await db._conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_trades_date_from(db):
+    """E — date_from filtre correctement les trades de simulation par exit_time."""
+    await _insert_sim_trade(db, "BTC/USDT:USDT", "2026-02-15T12:00:00+00:00")
+    await _insert_sim_trade(db, "ETH/USDT:USDT", "2026-03-10T09:00:00+00:00")
+
+    # Sans filtre : les 2 trades
+    all_trades = await db.get_simulation_trades(limit=100)
+    assert len(all_trades) == 2
+
+    # Avec filtre date_from = 1er mars → seul le trade de mars
+    filtered = await db.get_simulation_trades(date_from="2026-03-01T00:00:00+00:00", limit=100)
+    assert len(filtered) == 1
+    assert filtered[0]["symbol"] == "ETH/USDT:USDT"
+
+    # date_from dans le futur → 0 trades
+    empty = await db.get_simulation_trades(date_from="2027-01-01T00:00:00+00:00", limit=100)
+    assert len(empty) == 0

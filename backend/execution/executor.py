@@ -235,6 +235,7 @@ class Executor:
         self._pending_levels: set[str] = set()  # "{futures_sym}:{level}" anti double-trigger (legacy)
         self._pending_notional: float = 0.0  # Marge engagée pas encore reconciliée
         self._pending_entry_orders: dict[str, dict[int, PendingEntryOrder]] = {}  # futures_sym → {level_idx → order}
+        self._sl_missing_since: dict[str, datetime] = {}  # futures_sym → heure de détection SL absent
         self._balance_bootstrapped: bool = False  # True après 1er fetch_balance réussi
 
         # Phase 2 : cooldown anti-churning
@@ -2184,19 +2185,30 @@ class Executor:
                 self._pending_entry_orders.pop(futures_sym, None)
 
     async def _check_missing_sl(self) -> None:
-        """Vérifie si des positions grid actives n'ont pas de SL et les replace."""
-        # On fait une copie des clés pour éviter les mutations pendant l'itération
+        """Vérifie les SL manquants ; alerte Telegram si >30s persistant."""
         async with self._state_lock:
+            now = datetime.now(tz=timezone.utc)
             for futures_sym, state in list(self._grid_states.items()):
-                # Si position active sans order_id, on déclenche le replacement
                 if not state.sl_order_id and state.total_quantity > 0:
+                    # Tracker depuis quand le SL est absent
+                    if futures_sym not in self._sl_missing_since:
+                        self._sl_missing_since[futures_sym] = now
+                    elapsed = (now - self._sl_missing_since[futures_sym]).total_seconds()
                     logger.warning(
-                        "Executor: position grid {} SANS SL détectée ! Replacement auto...",
-                        futures_sym,
+                        "Executor: grid {} SANS SL depuis {:.0f}s — replacement auto",
+                        futures_sym, elapsed,
                     )
-                    # _update_grid_sl est idempotent et gère le lock en interne si besoin
-                    # ici on est déjà sous lock, on appelle la logique de replacement
+                    # Alerte Telegram si SL manquant depuis >30s
+                    if elapsed > 30:
+                        from backend.alerts.notifier import AnomalyType
+                        await self._notifier.notify_anomaly(
+                            AnomalyType.SL_PLACEMENT_FAILED,
+                            f"{futures_sym} sans SL depuis {elapsed:.0f}s",
+                        )
                     await self._update_grid_sl_unlocked(futures_sym, state)
+                else:
+                    # SL présent → reset tracking
+                    self._sl_missing_since.pop(futures_sym, None)
 
     async def _update_grid_sl(
         self, futures_sym: str, state: GridLiveState,

@@ -948,16 +948,27 @@ class Database:
         self,
         strategy_name: str | None = None,
         limit: int = 50,
+        date_from: str | None = None,
     ) -> list[dict]:
-        """Retourne les trades du simulateur triés par exit_time DESC."""
+        """Retourne les trades du simulateur triés par exit_time DESC.
+
+        date_from : filtre ISO (ex: "2026-03-01T00:00:00") — exclut les trades
+        dont exit_time est antérieur à cette date.
+        """
         assert self._conn is not None
-        query = "SELECT * FROM simulation_trades"
+        wheres: list[str] = []
         params: list[object] = []
 
         if strategy_name is not None:
-            query += " WHERE strategy_name = ?"
+            wheres.append("strategy_name = ?")
             params.append(strategy_name)
+        if date_from is not None:
+            wheres.append("exit_time >= ?")
+            params.append(date_from)
 
+        query = "SELECT * FROM simulation_trades"
+        if wheres:
+            query += " WHERE " + " AND ".join(wheres)
         query += " ORDER BY exit_time DESC LIMIT ?"
         params.append(limit)
 
@@ -1499,16 +1510,16 @@ class Database:
 
     # ─── MAINTENANCE ────────────────────────────────────────────────────────
 
-    async def wal_checkpoint(self) -> dict:
-        """Exécute un PRAGMA wal_checkpoint(PASSIVE) et retourne les métriques.
+    async def wal_checkpoint(self, mode: str = "TRUNCATE") -> dict:
+        """Exécute un PRAGMA wal_checkpoint({mode}) et retourne les métriques.
 
-        PASSIVE = n'attend pas les readers actifs (safe, non-bloquant).
-        Évite que le fichier .db-wal grossisse indéfiniment en production.
+        TRUNCATE (défaut) : checkpoint complet + tronque le fichier WAL à 0 byte.
+        PASSIVE : checkpoint sans attente des readers (mode legacy, ne tronque pas).
         Retourne {busy, log, checkpointed}.
         """
         assert self._conn is not None
         async with self._write_lock:
-            cursor = await self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            cursor = await self._conn.execute(f"PRAGMA wal_checkpoint({mode})")
             row = await cursor.fetchone()
         # row = (busy, log, checkpointed)
         result = {
@@ -1517,8 +1528,8 @@ class Database:
             "checkpointed": row[2],  # nb de frames déplacées vers la DB principale
         }
         logger.info(
-            "WAL checkpoint: log={} checkpointed={} busy={}",
-            result["log"], result["checkpointed"], result["busy"],
+            "WAL checkpoint({}): log={} checkpointed={} busy={}",
+            mode, result["log"], result["checkpointed"], result["busy"],
         )
         return result
 

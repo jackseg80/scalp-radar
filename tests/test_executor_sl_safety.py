@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from backend.execution.executor import Executor, GridLiveState, GridLivePosition
+from backend.execution.order_monitor import watch_orders_loop
 
 
 @pytest.mark.asyncio
@@ -53,22 +54,21 @@ async def test_proactive_missing_sl_replacement():
 
 
 @pytest.mark.asyncio
-async def test_sl_replacement_handles_stale_price_via_rest():
-    """Vérifie que _update_grid_sl utilise fetch_ticker si le flux WS est stale."""
+async def test_sl_replacement_ignores_stale_ws_uses_avg_entry():
+    """Sprint 65b : _update_grid_sl place le SL sur avg_entry_price sans vérification réseau.
+
+    Le stale-check WS a été supprimé (Bug 1 Sprint 65b) — le SL se base sur
+    avg_entry_price (donnée locale fiable), même si le flux WS est stale.
+    """
     config = MagicMock()
     config.secrets.live_trading = True
     strat_cfg = MagicMock()
     strat_cfg.sl_percent = 10.0
     config.strategies.grid_atr = strat_cfg
-    
+
     ex = Executor(config, MagicMock(), MagicMock(), strategy_name="grid_atr")
     ex._exchange = AsyncMock()
-    ex._data_engine = MagicMock()
-    
-    # Simuler un flux STALE (> 5 min)
-    stale_ts = datetime.now(tz=timezone.utc) - timedelta(minutes=10)
-    ex._data_engine.get_last_update.return_value = stale_ts
-    
+
     futures_sym = "BTC/USDT:USDT"
     state = GridLiveState(
         symbol=futures_sym,
@@ -76,20 +76,18 @@ async def test_sl_replacement_handles_stale_price_via_rest():
         strategy_name="grid_atr",
         leverage=6,
         sl_order_id=None,
-        positions=[GridLivePosition(level=0, entry_price=100.0, quantity=1.0, entry_order_id="entry_1")]
+        positions=[GridLivePosition(level=0, entry_price=100.0, quantity=1.0, entry_order_id="entry_1")],
     )
-    
-    # Mocks
-    ex._exchange.fetch_ticker = AsyncMock(return_value={"last": 105.0})
+
     ex._exchange.fetch_open_orders = AsyncMock(return_value=[])
-    ex._exchange.create_order = AsyncMock(return_value={"id": "emergency_sl_id"})
-    
-    # Exécuter
+    ex._exchange.create_order = AsyncMock(return_value={"id": "sl_placed"})
+    ex._state_save_callback = AsyncMock()
+
     await ex._update_grid_sl(futures_sym, state)
-    
-    # Vérifier que fetch_ticker a été appelé pour sécuriser le prix
-    ex._exchange.fetch_ticker.assert_called_once_with(futures_sym)
-    assert state.sl_order_id == "emergency_sl_id"
+
+    # SL placé via avg_entry_price — sans fetch_ticker
+    ex._exchange.fetch_ticker.assert_not_called()
+    assert state.sl_order_id == "sl_placed"
 
 
 @pytest.mark.asyncio
@@ -127,3 +125,131 @@ async def test_boot_reconciler_forces_sl_replacement_post_purge():
     ex._cancel_all_open_orders.assert_called_once()
     # C'est ICI le point critique : _update_grid_sl doit être appelé même si _running=True
     ex._update_grid_sl.assert_called_once_with(futures_sym, state)
+
+
+# ── Sprint 66 : Tests B (WS reconnect) + D (alerte Telegram) ─────────────────
+
+def _make_grid_state_for_sl(symbol: str = "BTC/USDT:USDT", sl_order_id=None) -> GridLiveState:
+    return GridLiveState(
+        symbol=symbol,
+        direction="LONG",
+        strategy_name="grid_atr",
+        leverage=6,
+        sl_order_id=sl_order_id,
+        positions=[GridLivePosition(level=0, entry_price=100.0, quantity=1.0, entry_order_id="e1")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_missing_sl_triggered_after_ws_error():
+    """B — Après une erreur watchOrders, _check_missing_sl est appelé immédiatement."""
+    ex = MagicMock()
+    ex._running = True
+    ex._positions = {}
+    ex._grid_states = {"BTC/USDT:USDT": _make_grid_state_for_sl()}
+    ex._pending_entry_orders = {}
+
+    call_count = 0
+
+    async def fake_watch_orders():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("WS disconnect 1006")
+        # Arrêter après 2 itérations
+        ex._running = False
+        return []
+
+    ex._exchange = AsyncMock()
+    ex._exchange.watch_orders = fake_watch_orders
+    ex._check_missing_sl = AsyncMock()
+
+    await watch_orders_loop(ex)
+
+    # _check_missing_sl doit avoir été appelé au moins une fois (post-reconnect)
+    ex._check_missing_sl.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_sl_missing_telegram_alert_after_30s():
+    """D — Alerte Telegram envoyée si SL manquant depuis >30s."""
+    config = MagicMock()
+    config.secrets.live_trading = True
+    strat_cfg = MagicMock()
+    strat_cfg.sl_percent = 10.0
+    config.strategies.grid_atr = strat_cfg
+
+    notifier = AsyncMock()
+    ex = Executor(config, MagicMock(), notifier, strategy_name="grid_atr")
+    ex._exchange = AsyncMock()
+    ex._exchange.fetch_open_orders = AsyncMock(return_value=[])
+    ex._exchange.create_order = AsyncMock(return_value={"id": "new_sl"})
+    ex._state_save_callback = AsyncMock()
+
+    futures_sym = "BTC/USDT:USDT"
+    state = _make_grid_state_for_sl(futures_sym, sl_order_id=None)
+    ex._grid_states = {futures_sym: state}
+
+    # Simuler SL manquant depuis 35 secondes
+    ex._sl_missing_since[futures_sym] = datetime.now(tz=timezone.utc) - timedelta(seconds=35)
+
+    await ex._check_missing_sl()
+
+    # notify_anomaly doit avoir été appelé
+    notifier.notify_anomaly.assert_called_once()
+    args = notifier.notify_anomaly.call_args[0]
+    assert "SL_PLACEMENT_FAILED" in str(args[0]) or hasattr(args[0], "name")
+
+
+@pytest.mark.asyncio
+async def test_sl_missing_no_alert_before_30s():
+    """D — Pas d'alerte Telegram si SL manquant depuis <30s."""
+    config = MagicMock()
+    config.secrets.live_trading = True
+    strat_cfg = MagicMock()
+    strat_cfg.sl_percent = 10.0
+    config.strategies.grid_atr = strat_cfg
+
+    notifier = AsyncMock()
+    ex = Executor(config, MagicMock(), notifier, strategy_name="grid_atr")
+    ex._exchange = AsyncMock()
+    ex._exchange.fetch_open_orders = AsyncMock(return_value=[])
+    ex._exchange.create_order = AsyncMock(return_value={"id": "new_sl"})
+    ex._state_save_callback = AsyncMock()
+
+    futures_sym = "ETH/USDT:USDT"
+    state = _make_grid_state_for_sl(futures_sym, sl_order_id=None)
+    ex._grid_states = {futures_sym: state}
+
+    # SL manquant depuis seulement 10 secondes → pas d'alerte
+    ex._sl_missing_since[futures_sym] = datetime.now(tz=timezone.utc) - timedelta(seconds=10)
+
+    await ex._check_missing_sl()
+
+    notifier.notify_anomaly.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sl_missing_since_reset_when_sl_present():
+    """D — _sl_missing_since est nettoyé quand sl_order_id est valide."""
+    config = MagicMock()
+    config.secrets.live_trading = True
+    strat_cfg = MagicMock()
+    strat_cfg.sl_percent = 10.0
+    config.strategies.grid_atr = strat_cfg
+
+    notifier = AsyncMock()
+    ex = Executor(config, MagicMock(), notifier, strategy_name="grid_atr")
+    ex._exchange = AsyncMock()
+
+    futures_sym = "SOL/USDT:USDT"
+    state = _make_grid_state_for_sl(futures_sym, sl_order_id="existing_sl")
+    ex._grid_states = {futures_sym: state}
+
+    # Pré-remplir _sl_missing_since (résidu d'un ancien check)
+    ex._sl_missing_since[futures_sym] = datetime.now(tz=timezone.utc) - timedelta(seconds=60)
+
+    await ex._check_missing_sl()
+
+    # Le tracking doit être nettoyé
+    assert futures_sym not in ex._sl_missing_since

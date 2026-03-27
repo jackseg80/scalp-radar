@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from backend.api.executor_routes import verify_executor_key
@@ -96,3 +96,20 @@ async def trigger_backfill(request: Request) -> JSONResponse:
     asyncio.create_task(updater.run_backfill(exchanges=exchanges, timeframes=timeframes))
 
     return JSONResponse({"status": "started"}, status_code=202)
+
+
+@router.post("/database/checkpoint", dependencies=[Depends(verify_executor_key)])
+async def trigger_wal_checkpoint(
+    request: Request,
+    mode: str = Query(default="TRUNCATE", description="Mode WAL checkpoint : TRUNCATE | PASSIVE | FULL | RESTART"),
+) -> dict:
+    """Force un WAL checkpoint SQLite (admin, protégé X-API-Key).
+
+    TRUNCATE (défaut) : checkpoint complet + tronque le fichier WAL à 0 byte.
+    Utile pour réduire la taille du .db-wal après une longue période d'activité.
+    """
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"status": "error", "detail": "DB non initialisée"}
+    result = await db.wal_checkpoint(mode=mode)
+    return {"status": "ok", "mode": mode, **result}

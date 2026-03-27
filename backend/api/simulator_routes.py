@@ -53,12 +53,17 @@ async def simulator_positions(request: Request) -> dict:
 async def simulator_trades(
     request: Request,
     limit: int = Query(default=50, ge=1, le=500),
+    date_from: str | None = Query(default=None, description="Filtre date début ISO (ex: 2026-03-01T00:00:00)"),
 ) -> dict:
-    """Trades récents (paginé) — lit depuis la DB."""
+    """Trades récents (paginé) — lit depuis la DB.
+
+    date_from (optionnel) : exclut les trades antérieurs à cette date ISO.
+    Utile pour isoler une phase de configuration (ex: Phase 3 depuis 01/03/2026).
+    """
     db = getattr(request.app.state, "db", None)
     if db is not None:
         # Lire depuis la DB (source permanente)
-        trades = await db.get_simulation_trades(limit=limit)
+        trades = await db.get_simulation_trades(limit=limit, date_from=date_from)
         return {"trades": trades}
 
     # Fallback : mémoire (backward compat si DB absente)

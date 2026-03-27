@@ -34,6 +34,11 @@ async def watch_orders_loop(ex: Any) -> None:
             break
         except Exception as e:
             logger.warning("Executor: erreur watchOrders: {}", e)
+            # Reconnexion imminente : vérifier immédiatement les SL manquants
+            try:
+                await ex._check_missing_sl()
+            except Exception as sl_err:
+                logger.warning("Executor: check_missing_sl post-reconnect: {}", sl_err)
             await asyncio.sleep(2)
 
 

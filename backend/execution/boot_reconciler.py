@@ -182,6 +182,21 @@ async def _reconcile_symbol(ex: Any, futures_sym: str) -> None:
         ex._reconciliation_pnl += net_pnl
         ex._reconciliation_count += 1
 
+        # Persister dans live_trades (PnL estimé — fees non disponibles au downtime)
+        close_side = "sell" if pos.direction == "LONG" else "buy"
+        leverage = ex._config.risk.position.default_leverage
+        margin = pos.entry_price * pos.quantity / leverage if leverage else 0.0
+        pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
+        await ex._persist_live_trade(
+            "force_close", pos.symbol, close_side, pos.direction,
+            pos.quantity, exit_price,
+            strategy_name=pos.strategy_name,
+            pnl=round(net_pnl, 4),
+            pnl_pct=round(pnl_pct, 2),
+            leverage=leverage,
+            context="closed_during_downtime",
+        )
+
         # Alerte uniquement au boot réel
         if not getattr(ex, "_running", False):
             await ex._notifier.notify_reconciliation(
@@ -295,6 +310,22 @@ async def _reconcile_grid_symbol(ex: Any, futures_sym: str) -> None:
         ))
         ex._reconciliation_pnl += net_pnl
         ex._reconciliation_count += 1
+
+        # Persister dans live_trades (PnL estimé — fees non disponibles au downtime)
+        close_side = "sell" if state.direction == "LONG" else "buy"
+        leverage = ex._config.risk.position.default_leverage
+        margin = state.avg_entry_price * state.total_quantity / leverage if leverage else 0.0
+        pnl_pct = (net_pnl / margin * 100) if margin > 0 else 0.0
+        await ex._persist_live_trade(
+            "force_close", futures_sym, close_side, state.direction,
+            state.total_quantity, exit_price,
+            strategy_name=state.strategy_name,
+            pnl=round(net_pnl, 4),
+            pnl_pct=round(pnl_pct, 2),
+            leverage=leverage,
+            context="closed_during_downtime",
+        )
+
         await ex._notifier.notify_reconciliation(
             f"Cycle grid {futures_sym} fermé pendant downtime. "
             f"P&L estimé: {net_pnl:+.2f}$"
