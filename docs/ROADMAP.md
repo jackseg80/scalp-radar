@@ -3094,10 +3094,28 @@ Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, exec
 
 ---
 
+### Sprint 66 — Robustesse SL & Maintenance (27 mars 2026) ✅
+
+**Objectif** : Corriger les 5 points du backlog post-mortem session 27 mars 2026.
+
+**A — Persistence force-closes downtime** (`boot_reconciler.py`) : Les positions fermées pendant downtime (Cas 3 mono + Cas 4 grid) appelaient seulement `record_trade_result()` (mémoire volatile) sans persister dans `live_trades`. Ajout de `_persist_live_trade()` avec `context="closed_during_downtime"` dans les deux cas. PnL estimé via `_calculate_pnl()` (fees non disponibles au downtime).
+
+**B — _check_missing_sl post-reconnexion WS** (`order_monitor.py`) : `watch_orders_loop` attendait 60s (cycle `_exit_monitor_loop`) avant de détecter les SL manquants après une déconnexion WS. Ajout d'un appel immédiat à `ex._check_missing_sl()` dans le bloc `except Exception` — réduit la fenêtre sans SL à ~2s.
+
+**C — WAL checkpoint TRUNCATE** (`database.py` + `data_routes.py`) : Mode PASSIVE → TRUNCATE par défaut dans `wal_checkpoint()` : tronque le fichier WAL à 0 byte après chaque checkpoint horaire (le mode PASSIVE ne tronquait pas, causant la croissance à 6.6 MB). Ajout endpoint admin `POST /api/data/database/checkpoint` (protégé X-API-Key) pour déclencher manuellement.
+
+**D — Alerte Telegram SL manquant >30s** (`executor.py`) : `_check_missing_sl()` loggait seulement un WARNING sans alerte Telegram. Ajout d'un tracker `_sl_missing_since: dict[str, datetime]`. Après 30s, `notify_anomaly(SL_PLACEMENT_FAILED)` envoyé. Reset automatique quand `sl_order_id` est valide.
+
+**E — Filtre date_from /api/simulator/trades** (`database.py` + `simulator_routes.py`) : `get_simulation_trades()` accepte maintenant `date_from` (ISO) pour filtrer par `exit_time`. Endpoint `/api/simulator/trades?date_from=2026-03-01T00:00:00` permet d'isoler une phase de config.
+
+**Tests** : `test_boot_reconciler.py` (4 nouveaux), `test_executor_sl_safety.py` (+4 nouveaux, 1 mis à jour), `test_database.py` (+1) → **+12 tests**, **2249 collectés, 2242 passants**.
+
+---
+
 ## ÉTAT ACTUEL (27 mars 2026)
 
-- **2237 tests, 2230 passants** (7 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps/is_latest/live_trades)
-- **Phases 1-5 terminées + Sprints 1-65 + 65b + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
+- **2249 tests, 2242 passants** (7 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps/is_latest/live_trades)
+- **Phases 1-5 terminées + Sprints 1-66 + 65b + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **28 assets** (BTC ETH SOL DOGE LINK ADA AVAX CRV DYDX FET GALA ICP NEAR UNI XRP BCH BNB AAVE ARB OP SUI DOT ATOM LTC FIL ETC TRX XLM)
