@@ -3037,10 +3037,39 @@ Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, exec
 
 ---
 
-## ÉTAT ACTUEL (2 mars 2026)
+### Sprint 65 — Grid Entry via Limit Orders (27 mars 2026) ✅
 
-- **2231 tests, 2226 passants** (5 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps)
-- **Phases 1-5 terminées + Sprints 1-63 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
+**Objectif** : Corriger le biais d'anticipation (sim/live divergence) : grid_atr affichait 89.7% win rate en sim vs 16.7% live sur la même période Phase 3 (01-27/03/2026).
+
+**Root cause** : Le Simulator pre-positionne les niveaux de grille et entre au prix théorique (touch via `candle.low`). L'Executor entrait en **market order au prix courant** — souvent 3-4% plus haut après un mouvement favorable. Résultat : positions ouvertes trop tard, souvent au plus haut, sans marge de recovery DCA.
+
+**Solution** : Placer des **limit orders au prix des niveaux de grille**, comme la simulation l'assume implicitement. L'exchange exécute le fill quand le prix atteint le niveau.
+
+**Changements** :
+- `PendingEntryOrder` dataclass : tracking des limit orders en attente de fill
+- `_on_candle` → `_sync_entry_limits` : place limit orders à `level.entry_price` pour tous les niveaux non-remplis / non-en-attente ; cancel/replace si dérive > 0.2%
+- `_place_grid_limit_order` : place l'ordre, gère le fill immédiat
+- `_process_entry_fill` : logique de fill extraite (fill immédiat + watchOrders)
+- `_check_pending_entry_fills` : polling fallback dans `_exit_monitor_loop` (60s)
+- `order_monitor.py` : scan `_pending_entry_orders` dans watchOrders
+- `boot_reconciler.py` : pending entry orders exclus de la purge orphelins
+- Persistance : `pending_entry_orders` sérialisé / restauré au boot
+- `refresh_balance` : guard `_pending_entry_orders` pour reset `_pending_notional`
+
+**Constantes** : `_LIMIT_PRICE_DRIFT_PCT = 0.002` (0.2%), `_LIMIT_ORDER_MAX_AGE_S = 7200` (2h)
+
+**Audits** :
+- `docs/audit/audit-grid-atr-paper-live-20260327.md` : analyse 3 phases, root cause, fix
+- `docs/audit/audit-grid-multi-tf-paper-20260327.md` : 49j paper, NO-GO live (anomalie + régime unique)
+
+**Tests** : `test_executor_entry.py` réécrit (30 tests, sémantique limit orders), `test_sprint56_realism.py` mis à jour (margin guard → `_sync_entry_limits`) → **+6 tests**, **2237 collectés, 2230 passants**, 0 régression.
+
+---
+
+## ÉTAT ACTUEL (27 mars 2026)
+
+- **2237 tests, 2230 passants** (7 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps/is_latest/live_trades)
+- **Phases 1-5 terminées + Sprints 1-65 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **28 assets** (BTC ETH SOL DOGE LINK ADA AVAX CRV DYDX FET GALA ICP NEAR UNI XRP BCH BNB AAVE ARB OP SUI DOT ATOM LTC FIL ETC TRX XLM)
@@ -3648,7 +3677,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 2231 collectés, 2226 passants, 0 régression
+- **Tests** : 2237 collectés, 2230 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

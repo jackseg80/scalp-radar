@@ -14,7 +14,7 @@ and presents results via a real-time dashboard.
 
 ## Documentation
 
-- **[ROADMAP.md](docs/ROADMAP.md)** — Roadmap Phases 1-9, detailed sprints, **2233 tests (authoritative)**
+- **[ROADMAP.md](docs/ROADMAP.md)** — Roadmap Phases 1-9, detailed sprints, **2237 tests (authoritative)**
   - Update after each sprint: results, bugs, test count, next step
 - **[docs/plans/](docs/plans/)** — Archived sprint plans (1 file per sprint)
   - Copy plan to `docs/plans/sprint-{n}-{name}.md` at the end of each sprint
@@ -46,7 +46,7 @@ and presents results via a real-time dashboard.
 | Dev environment    | Windows/VSCode    | No Docker in dev — just uvicorn + vite dev              |
 | Production         | Docker Compose    | On Linux server 192.168.1.200, bot runs 24/7            |
 | Config format      | YAML              | Editable without code changes or redeployment           |
-| Testing            | pytest            | Critical components must have unit tests (2231 tests)   |
+| Testing            | pytest            | Critical components must have unit tests (2237 tests)   |
 
 ## Key Architecture Principles
 
@@ -74,7 +74,7 @@ scalp-radar/
 │   ├── alerts/        # telegram, notifier, heartbeat
 │   └── monitoring/    # watchdog
 ├── frontend/          # React + Vite (48 components)
-├── tests/             # pytest (2231 tests — see ROADMAP.md)
+├── tests/             # pytest (2237 tests — see ROADMAP.md)
 ├── scripts/           # backfill, fetch_history, optimize, portfolio_backtest, stress_test_leverage
 ├── docs/plans/        # Archived sprint plans
 └── docs/audit/        # Audit reports
