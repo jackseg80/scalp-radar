@@ -3066,10 +3066,38 @@ Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, exec
 
 ---
 
+### Sprint 65b — Hotfix SL production (27 mars 2026) ✅
+
+**Contexte** : Déploiement Sprint 65 en production. 4 positions ouvertes (NEAR/ADA/XRP/ETC) sans SL trigger sur Bitget. Diagnostic complet réalisé via logs.
+
+**3 bugs identifiés et corrigés** :
+
+**Bug 1 — `_update_grid_sl_unlocked` stale-check silencieux** : Le bloc de vérification réseau (≈25 lignes) retournait `return` sans placer le SL si le REST échouait momentanément — sans log d'erreur, sans alerte Telegram. Chronologie : SL NEAR placé à 01:09 UTC → rejeté 40109 Bitget → `_check_missing_sl` relance → `_update_grid_sl_unlocked` retourne silencieusement (données stale + REST échoue). Fix : suppression du bloc — le SL se calcule sur `avg_entry_price` local, aucune vérification réseau nécessaire.
+
+**Bug 2 — Deadlock asyncio (critique)** : `_check_pending_entry_fills` et `process_watched_order` (order_monitor) tenaient `_state_lock`, appelaient `_process_entry_fill` → `_update_grid_sl` → tentative de re-acquisition du même lock → deadlock asyncio. Résultat : `_grid_states` créés (niveaux filledés enregistrés) mais `_update_grid_sl` jamais appelé → `sl_price=0.0`, `sl_order_id=None`. Chronologie : déconnexion WS 28 symboles à 02:58 UTC → reconnexion → fills ADA/XRP/ETC détectés mais `_process_entry_fill` deadlocke avant `_update_grid_sl`. Fix : paramètre `_already_locked: bool = False`, dispatch vers `_update_grid_sl_unlocked` quand lock déjà tenu ; `order_monitor.py` passe `_already_locked=True`.
+
+**Bug 3 — `active_grids` double-comptage** : `len(grid_states) + len(pending_entry_orders)` comptait 2× les symboles avec des niveaux filledés ET pending (ex : 7/4 affiché au lieu de 4/4). Fix : set union au lieu d'addition.
+
+**Session live 27 mars** :
+- 4 positions clôturées manuellement (tp_global) : ADA -$18.48, XRP -$9.37, NEAR -$34.59, ETC -$5.29 → **PnL session : -$67.73**
+- ICP grid ouvert post-clôture (3 niveaux GTC placés à 12:58 UTC)
+- Capital estimé : ~$1,500. Kill switch : false.
+
+**Actions dev en cours** (backlog Sprint 66) :
+- [A] Haute : réconciliation force-closes orphelins (41 trades pnl=0 le 5 mars)
+- [B] Haute : robustesse reconnexion WS → SL (détecter positions sans `sl_order_id` au reconnect)
+- [C] Moyenne : checkpoint WAL SQLite (6.6 MB WAL non checkpointé depuis 19 mars)
+- [D] Moyenne : alerte Telegram si `sl_order_id=None` > 30s après entrée
+- [E] Basse : filtre date de début dans `/api/simulator/report` (segmentation par phase config)
+
+**Tests** : 0 nouveaux — 3 bugs fixes sur code existant → **2237 collectés, 2230 passants**.
+
+---
+
 ## ÉTAT ACTUEL (27 mars 2026)
 
 - **2237 tests, 2230 passants** (7 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps/is_latest/live_trades)
-- **Phases 1-5 terminées + Sprints 1-65 + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
+- **Phases 1-5 terminées + Sprints 1-65 + 65b + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **28 assets** (BTC ETH SOL DOGE LINK ADA AVAX CRV DYDX FET GALA ICP NEAR UNI XRP BCH BNB AAVE ARB OP SUI DOT ATOM LTC FIL ETC TRX XLM)
