@@ -249,9 +249,11 @@ class TestPendingNotionalRollback:
 
         await executor._on_candle("BTC/USDT", "1h", candle)
 
-        # Succès : _pending_notional doit rester accumulé (0.25 * 1000/1 = 250)
-        assert executor._pending_notional > 0, (
-            "_pending_notional devrait rester > 0 après succès"
+        # Avec limit orders : si le fill est immédiat, _pending_notional revient à 0
+        # car la marge est transférée dans la position réelle (grid_states).
+        # La marge est désormais trackée via grid_states, pas pending_notional.
+        assert "BTC/USDT:USDT" in executor._grid_states, (
+            "grid_states devrait contenir la position après fill immédiat"
         )
 
 

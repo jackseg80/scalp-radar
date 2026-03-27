@@ -85,7 +85,7 @@ scalp-radar/
 **Scalp/Swing (9)**: bollinger_mr, donchian_breakout, supertrend, boltrend, vwap_rsi, momentum, funding (paper), liquidation (paper), **trend_follow_daily (1d, new)**.
 
 **1h Grid/DCA (9)**:
-- `grid_atr` — Adaptive ATR envelopes (LIVE 7x, 14 assets)
+- `grid_atr` — Adaptive ATR envelopes (LIVE 6x, 14 assets)
 - `grid_multi_tf` — Supertrend 4h + Grid ATR 1h (LIVE 3x, 14 assets)
 - `grid_boltrend` — DCA Bollinger breakout + SMA, inverse TP (paper, 2 assets, paused Sprint 38b)
 - `grid_momentum` — Donchian breakout + DCA pullback (`enabled: false`, ABANDONED)
@@ -94,7 +94,7 @@ scalp-radar/
 - `grid_trend` — EMA cross + ADX + ATR trailing stop (`enabled: false`, ABANDONED)
 - `envelope_dca` / `envelope_dca_short` — (`enabled: false`, replaced by grid_atr)
 
-Full details: see **[STRATEGIES.md](docs/STRATEGIES.md)** | WFO Workflow: see **[WORKFLOW_WFO.md](docs/WORKFLOW_WFO.md)**
+Full details: see **[STRATEGIES.md](docs/STRATEGIES.md)** | WFO Workflow: see **[WORKFLOW_WFO.md (Anti-Bias)](docs/WORKFLOW_WFO.md)**
 
 ## Critical Design Requirements
 

@@ -95,6 +95,27 @@ class GridLivePosition:
 
 
 @dataclass
+class PendingEntryOrder:
+    """Limit order en attente de fill pour un niveau de grille.
+
+    Placé proactivement aux prix des niveaux de grille (au lieu de market
+    orders rétroactifs). Le fill est détecté via watchOrders (temps réel)
+    ou polling fallback (_check_pending_entry_fills).
+    """
+
+    order_id: str
+    futures_sym: str  # "BTC/USDT:USDT"
+    level_index: int
+    entry_price: float  # prix limit
+    quantity: float
+    direction: str  # "LONG" | "SHORT"
+    strategy_name: str
+    side: str  # "buy" | "sell"
+    level_margin: float  # marge engagée pour _pending_notional
+    placed_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+@dataclass
 class GridLiveState:
     """État complet d'un cycle grid live sur un symbole.
 
@@ -152,6 +173,8 @@ _SL_RETRY_DELAY = 0.2  # Délai entre retries SL
 _ORDER_DELAY = 0.1  # Délai entre ordres séquentiels (rate limiting)
 _POLL_INTERVAL = 5  # Polling fallback en secondes
 _ENTRY_TIMEOUT = 30  # Timeout pour le fill de l'ordre d'entrée
+_LIMIT_PRICE_DRIFT_PCT = 0.002  # 0.2% — seuil pour cancel/replace un limit order
+_LIMIT_ORDER_MAX_AGE_S = 7200  # 2h — expiration des limit orders non remplis
 
 
 # ─── EXECUTOR ──────────────────────────────────────────────────────────────
@@ -209,8 +232,9 @@ class Executor:
         self._exit_check_task: asyncio.Task[None] | None = None
 
         # Phase 1 : entrées autonomes
-        self._pending_levels: set[str] = set()  # "{futures_sym}:{level}" anti double-trigger
+        self._pending_levels: set[str] = set()  # "{futures_sym}:{level}" anti double-trigger (legacy)
         self._pending_notional: float = 0.0  # Marge engagée pas encore reconciliée
+        self._pending_entry_orders: dict[str, dict[int, PendingEntryOrder]] = {}  # futures_sym → {level_idx → order}
         self._balance_bootstrapped: bool = False  # True après 1er fetch_balance réussi
 
         # Phase 2 : cooldown anti-churning
@@ -534,7 +558,7 @@ class Executor:
             self._exchange_balance = new_total
             # Phase 1 : reset pending tracking après reconciliation balance
             self._balance_bootstrapped = True
-            if not self._pending_levels:
+            if not self._pending_levels and not self._pending_entry_orders:
                 self._pending_notional = 0.0
             return new_total
         except Exception as e:
@@ -824,6 +848,7 @@ class Executor:
                     )
                 # Mission 2026-03-06 : Surveiller les positions sans SL
                 await self._check_missing_sl()
+                await self._check_pending_entry_fills()
                 await self._check_all_live_exits()
             except asyncio.CancelledError:
                 break
@@ -968,89 +993,302 @@ class Executor:
 
             grid_leverage = self._get_grid_leverage(strategy_name)
 
-            # Vérifier quels niveaux sont touchés par cette candle
-            for level in levels:
-                if level.index in filled_levels:
-                    continue
+            # Synchroniser les limit orders avec les niveaux de grille actuels
+            await self._sync_entry_limits(
+                futures_sym, strategy_name, strategy, levels,
+                filled_levels, grid_leverage,
+                allocated_balance, available_balance,
+            )
 
-                # Anti double-trigger
-                pending_key = f"{futures_sym}:{level.index}"
-                if pending_key in self._pending_levels:
-                    continue
+    # ─── Limit order management ──────────────────────────────────────────
 
-                triggered = False
-                if level.direction == Direction.LONG:
-                    triggered = candle.low <= level.entry_price
+    async def _sync_entry_limits(
+        self,
+        futures_sym: str,
+        strategy_name: str,
+        strategy: Any,
+        levels: list,
+        filled_levels: set[int],
+        grid_leverage: int,
+        allocated_balance: float,
+        available_balance: float,
+    ) -> None:
+        """Synchronise les limit orders d'entrée avec les niveaux de grille.
+
+        Pour chaque niveau :
+        - Si un limit order existe au bon prix : ne rien faire
+        - Si le prix a dérivé > _LIMIT_PRICE_DRIFT_PCT : cancel/replace
+        - Si pas de limit order : en placer un
+        Annule les orders dont le niveau n'existe plus.
+        """
+        desired: dict[int, Any] = {}
+        for level in levels:
+            if level.index not in filled_levels:
+                desired[level.index] = level
+
+        existing = self._pending_entry_orders.get(futures_sym, {})
+
+        # 1. Cancel les orders dont le niveau n'existe plus
+        for level_idx in list(existing.keys()):
+            if level_idx not in desired:
+                await self._cancel_pending_entry(futures_sym, level_idx, "level_removed")
+
+        # 2. Cancel/replace si le prix a dérivé
+        for level_idx, level in desired.items():
+            if level_idx in self._pending_entry_orders.get(futures_sym, {}):
+                old = self._pending_entry_orders[futures_sym][level_idx]
+                drift = abs(old.entry_price - level.entry_price) / level.entry_price
+                if drift > _LIMIT_PRICE_DRIFT_PCT:
+                    await self._cancel_pending_entry(futures_sym, level_idx, "price_drift")
                 else:
-                    triggered = candle.high >= level.entry_price
+                    continue  # Ordre toujours valide
 
-                if not triggered:
-                    continue
+            # 3. Placer un nouveau limit order
+            quantity = (
+                level.size_fraction * allocated_balance * grid_leverage
+            ) / level.entry_price
+            quantity = self._round_quantity(quantity, futures_sym)
+            if quantity <= 0:
+                continue
 
-                # Calculer la quantity sur le capital alloué par asset
-                quantity = (
-                    level.size_fraction * allocated_balance * grid_leverage
-                ) / level.entry_price
-                quantity = self._round_quantity(quantity, futures_sym)
-                if quantity <= 0:
-                    continue
-
-                # Sprint 56 + P2-15 Audit 9 : margin guard — bloquer si marge
-                # totale (grids existantes + pending + nouveau level) dépasse le seuil.
-                level_margin = level.size_fraction * allocated_balance
-                max_margin_ratio = getattr(self._config.risk, "max_margin_ratio", 0.70)
-                if not isinstance(max_margin_ratio, (int, float)):
-                    max_margin_ratio = 0.70
-                if available_balance > 0:
-                    # Marge des grids déjà ouvertes (pas juste le batch courant)
-                    existing_margin = sum(
-                        gs.avg_entry_price * gs.total_quantity / max(gs.leverage, 1)
-                        for gs in self._grid_states.values()
+            # Margin guard (même logique que Sprint 56)
+            level_margin = level.size_fraction * allocated_balance
+            max_margin_ratio = getattr(self._config.risk, "max_margin_ratio", 0.70)
+            if not isinstance(max_margin_ratio, (int, float)):
+                max_margin_ratio = 0.70
+            if available_balance > 0:
+                existing_margin = sum(
+                    gs.avg_entry_price * gs.total_quantity / max(gs.leverage, 1)
+                    for gs in self._grid_states.values()
+                )
+                total_margin_used = existing_margin + self._pending_notional
+                if (total_margin_used + level_margin) / available_balance > max_margin_ratio:
+                    logger.warning(
+                        "Executor: margin guard {:.0f}% ({:.0f}/{:.0f}) — skip {} level {}",
+                        max_margin_ratio * 100,
+                        total_margin_used + level_margin, available_balance,
+                        futures_sym, level.index,
                     )
-                    total_margin_used = existing_margin + self._pending_notional
-                    if (total_margin_used + level_margin) / available_balance > max_margin_ratio:
-                        logger.warning(
-                            "Executor: margin guard {:.0f}% ({:.0f}/{:.0f}) — skip {} level {}",
-                            max_margin_ratio * 100,
-                            total_margin_used + level_margin, available_balance,
-                            futures_sym, level.index,
-                        )
-                        continue
+                    continue
 
-                # Marquer comme pending AVANT l'appel async
-                self._pending_levels.add(pending_key)
-                self._pending_notional += level_margin
-
-                event = TradeEvent(
-                    event_type=TradeEventType.OPEN,
-                    strategy_name=strategy_name,
-                    symbol=symbol,
-                    direction=level.direction,
-                    entry_price=level.entry_price,
-                    quantity=quantity,
-                    tp_price=0,
-                    sl_price=0,
-                    score=0,
-                    timestamp=candle.timestamp,
-                    market_regime=tf_indicators.get("regime", "unknown"),
+            try:
+                await self._place_grid_limit_order(
+                    futures_sym, strategy_name, level,
+                    quantity, grid_leverage, level_margin,
+                )
+            except Exception as e:
+                logger.error(
+                    "Executor entry: erreur limit {} {} level {}: {}",
+                    level.direction, futures_sym, level.index, e,
                 )
 
+    async def _cancel_pending_entry(
+        self, futures_sym: str, level_idx: int, reason: str,
+    ) -> None:
+        """Annule un limit order d'entrée en attente.
+
+        Gère la race condition : si l'ordre a été rempli entre-temps,
+        traite le fill au lieu de cancel.
+        """
+        pending = self._pending_entry_orders.get(futures_sym, {}).get(level_idx)
+        if pending is None:
+            return
+
+        try:
+            order = await self._exchange.fetch_order(pending.order_id, futures_sym)
+            if order.get("status") in ("closed", "filled"):
+                # Rempli entre-temps — traiter le fill
+                avg_price = float(order.get("average") or pending.entry_price)
+                filled_qty = float(order.get("filled") or pending.quantity)
+                fee_info = order.get("fee") or {}
+                fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
+                await self._process_entry_fill(futures_sym, pending, avg_price, filled_qty, fee)
+                return
+
+            # Annuler l'ordre
+            await self._exchange.cancel_order(pending.order_id, futures_sym)
+            logger.info(
+                "Executor: limit entry cancelled {} lv{} ({})",
+                futures_sym, level_idx, reason,
+            )
+        except Exception as e:
+            err_str = str(e)
+            if "40109" in err_str or "OrderNotFound" in err_str:
+                # Peut avoir été rempli — vérifier
                 try:
-                    await self._open_grid_position(event)
+                    order = await self._exchange.fetch_order(pending.order_id, futures_sym)
+                    if order.get("status") in ("closed", "filled"):
+                        avg_price = float(order.get("average") or pending.entry_price)
+                        filled_qty = float(order.get("filled") or pending.quantity)
+                        fee_info = order.get("fee") or {}
+                        fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
+                        await self._process_entry_fill(futures_sym, pending, avg_price, filled_qty, fee)
+                        return
+                except Exception:
+                    pass
+            logger.warning("Executor: cancel pending entry {} lv{}: {}", futures_sym, level_idx, e)
+
+        # Cleanup tracking
+        self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
+        if futures_sym in self._pending_entry_orders and not self._pending_entry_orders[futures_sym]:
+            self._pending_entry_orders.pop(futures_sym, None)
+        self._pending_notional = max(0.0, self._pending_notional - pending.level_margin)
+
+    async def _place_grid_limit_order(
+        self,
+        futures_sym: str,
+        strategy_name: str,
+        level: Any,
+        quantity: float,
+        grid_leverage: int,
+        level_margin: float,
+    ) -> PendingEntryOrder | None:
+        """Place un limit order à un niveau de grille.
+
+        Si l'ordre est rempli immédiatement (prix déjà au niveau),
+        traite le fill directement. Sinon, stocke en pending.
+        """
+        is_first_level = (
+            futures_sym not in self._grid_states
+            and futures_sym not in self._pending_entry_orders
+        )
+
+        # ── Guards 1er niveau (identiques à _open_grid_position_unlocked) ──
+        if is_first_level:
+            # Exchange position guard
+            try:
+                positions = await self._fetch_positions_safe(futures_sym)
+                has_exchange_position = any(
+                    float(p.get("contracts", 0)) > 0 for p in positions
+                )
+                if has_exchange_position:
+                    logger.warning(
+                        "Executor: position {} déjà sur exchange — limit skip",
+                        futures_sym,
+                    )
+                    return None
+            except Exception as e:
+                logger.warning("Executor: check position exchange {}: {}", futures_sym, e)
+
+            # Max live grids guard
+            max_live_grids_raw = getattr(self._config.risk, "max_live_grids", 4)
+            max_live_grids = max_live_grids_raw if isinstance(max_live_grids_raw, int) else 4
+            active_grids = len(self._grid_states) + len(self._pending_entry_orders)
+            if active_grids >= max_live_grids:
+                logger.warning(
+                    "Executor: max grids live atteint ({}/{}), limit {} skip",
+                    active_grids, max_live_grids, futures_sym,
+                )
+                return None
+
+            # Leverage setup
+            if self._leverage_applied.get(futures_sym) != grid_leverage:
+                try:
+                    await self._exchange.set_leverage(grid_leverage, futures_sym)
+                    self._leverage_applied[futures_sym] = grid_leverage
+                    logger.info(
+                        "Executor: leverage grid set a {}x pour {}",
+                        grid_leverage, futures_sym,
+                    )
                 except Exception as e:
-                    logger.error(
-                        "Executor entry: erreur {} {} level {}: {}",
-                        level.direction, futures_sym, level.index, e,
-                    )
-                    # P0-1 Audit 9 : rollback marge pending sur échec.
-                    # Sur succès, _pending_notional reste accumulé pour que
-                    # le margin guard des itérations suivantes soit correct
-                    # (exchange_balance n'est rafraîchi que toutes les 5 min).
-                    self._pending_notional = max(
-                        0.0, self._pending_notional - level_margin,
-                    )
-                finally:
-                    self._pending_levels.discard(pending_key)
+                    logger.warning("Executor: set leverage grid: {}", e)
+
+            # Pre-trade check
+            balance = await self._exchange.fetch_balance({"type": "swap"})
+            free = float(balance.get("free", {}).get("USDT", 0))
+            total = float(balance.get("total", {}).get("USDT", 0))
+
+            ok, reason = self._risk_manager.pre_trade_check(
+                futures_sym, level.direction, quantity,
+                level.entry_price, free, total,
+                leverage_override=grid_leverage,
+            )
+            if not ok:
+                logger.warning("Executor: grid limit rejeté — {}", reason)
+                return None
+        else:
+            # Niveaux 2+ : vérifier kill switch
+            if self._risk_manager.is_kill_switch_triggered:
+                logger.warning(
+                    "Executor: kill switch actif, limit {} lv{} skip",
+                    futures_sym, level.index,
+                )
+                return None
+
+        # ── Placer le limit order ──
+        side = "buy" if level.direction == Direction.LONG else "sell"
+        try:
+            entry_order = await self._exchange.create_order(
+                futures_sym, "limit", side, quantity, level.entry_price,
+            )
+            self._record_order(
+                "entry_limit", futures_sym, side, quantity, entry_order,
+                strategy_name, "grid_limit", paper_price=level.entry_price,
+            )
+        except Exception as e:
+            logger.error("Executor: échec grid limit entry: {}", e)
+            raise
+
+        order_id = entry_order.get("id", "")
+        order_status = entry_order.get("status", "")
+        filled_qty = float(entry_order.get("filled") or 0)
+
+        await asyncio.sleep(_ORDER_DELAY)
+
+        # Rempli immédiatement ?
+        if order_status == "closed" or filled_qty >= quantity * 0.99:
+            avg_price_raw = entry_order.get("average")
+            entry_fee = 0.0
+            if avg_price_raw and float(avg_price_raw) > 0:
+                avg_price = float(avg_price_raw)
+                fee_info = entry_order.get("fee") or {}
+                entry_fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
+            else:
+                avg_price, fetched_fee = await self._fetch_fill_price(
+                    order_id, futures_sym, level.entry_price,
+                )
+                entry_fee = fetched_fee if fetched_fee is not None else 0.0
+
+            # Traiter le fill directement
+            temp_pending = PendingEntryOrder(
+                order_id=order_id,
+                futures_sym=futures_sym,
+                level_index=level.index,
+                entry_price=level.entry_price,
+                quantity=filled_qty if filled_qty > 0 else quantity,
+                direction=level.direction,
+                strategy_name=strategy_name,
+                side=side,
+                level_margin=level_margin,
+            )
+            await self._process_entry_fill(
+                futures_sym, temp_pending, avg_price,
+                filled_qty if filled_qty > 0 else quantity, entry_fee,
+            )
+            return None
+
+        # Non rempli — stocker en pending
+        pending = PendingEntryOrder(
+            order_id=order_id,
+            futures_sym=futures_sym,
+            level_index=level.index,
+            entry_price=level.entry_price,
+            quantity=quantity,
+            direction=level.direction,
+            strategy_name=strategy_name,
+            side=side,
+            level_margin=level_margin,
+        )
+        if futures_sym not in self._pending_entry_orders:
+            self._pending_entry_orders[futures_sym] = {}
+        self._pending_entry_orders[futures_sym][level.index] = pending
+        self._pending_notional += level_margin
+
+        logger.info(
+            "Executor: grid LIMIT {} placed @ {:.4f} for {} lv{} (order={})",
+            level.direction, level.entry_price, futures_sym, level.index, order_id,
+        )
+        return pending
 
     # ─── GridState factory ────────────────────────────────────────────────
 
@@ -1742,6 +1980,178 @@ class Executor:
             context="grid",
         )
 
+    async def _process_entry_fill(
+        self,
+        futures_sym: str,
+        pending: PendingEntryOrder,
+        avg_price: float,
+        filled_qty: float,
+        entry_fee: float,
+    ) -> None:
+        """Traite le fill d'un limit order d'entrée grid.
+
+        Appelé soit immédiatement (fill instantané), soit par watchOrders/polling.
+        Crée/met à jour le GridLiveState, place le SL, notifie.
+        """
+        # 1. Cleanup pending tracking
+        sym_orders = self._pending_entry_orders.get(futures_sym, {})
+        if pending.level_index in sym_orders:
+            sym_orders.pop(pending.level_index)
+            if not sym_orders:
+                self._pending_entry_orders.pop(futures_sym, None)
+        self._pending_notional = max(0.0, self._pending_notional - pending.level_margin)
+
+        # 2. Update order history
+        self._update_order_price(pending.order_id, avg_price, entry_fee if entry_fee > 0 else None)
+
+        if filled_qty <= 0:
+            logger.error("Executor: grid limit entry non remplie {}", futures_sym)
+            return
+
+        # 3. Slippage log (devrait être ~0 avec limit)
+        if avg_price != pending.entry_price and pending.entry_price > 0:
+            slippage = (avg_price - pending.entry_price) / pending.entry_price * 100
+            logger.info(
+                "Executor: grid limit fill slippage {} {:.4f}% (limit={:.6f}, real={:.6f})",
+                futures_sym, slippage, pending.entry_price, avg_price,
+            )
+
+        # 4. Créer ou mettre à jour GridLiveState
+        is_first_level = futures_sym not in self._grid_states
+        if is_first_level:
+            state = GridLiveState(
+                symbol=futures_sym,
+                direction=pending.direction,
+                strategy_name=pending.strategy_name,
+                leverage=self._get_grid_leverage(pending.strategy_name),
+            )
+            self._grid_states[futures_sym] = state
+
+            self._risk_manager.register_position({
+                "symbol": futures_sym,
+                "direction": pending.direction,
+                "entry_price": avg_price,
+                "quantity": filled_qty,
+            })
+        else:
+            state = self._grid_states[futures_sym]
+
+        level_num = len(state.positions)
+        state.positions.append(GridLivePosition(
+            level=level_num,
+            entry_price=avg_price,
+            quantity=filled_qty,
+            entry_order_id=pending.order_id,
+            entry_fee=entry_fee,
+        ))
+
+        # 5. Sauvegarder AVANT le SL (P0-CR-1 Audit)
+        await self._save_state_now()
+
+        await asyncio.sleep(_ORDER_DELAY)
+
+        # 6. Rule #1 : placer le SL global
+        await self._update_grid_sl(futures_sym, state)
+
+        # 7. Telegram
+        spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+        await self._notifier.notify_grid_level_opened(
+            spot_sym, pending.direction, level_num,
+            filled_qty, avg_price,
+            state.avg_entry_price, state.sl_price,
+            pending.strategy_name,
+        )
+
+        logger.info(
+            "Executor: GRID LIMIT FILL {} level {} {} {:.6f} @ {:.2f} (avg={:.2f}, SL={:.2f})",
+            pending.direction, level_num, futures_sym,
+            filled_qty, avg_price, state.avg_entry_price, state.sl_price,
+        )
+
+        # 8. Persist grid entry
+        await self._persist_live_trade(
+            "entry", futures_sym, pending.side, pending.direction,
+            filled_qty, avg_price,
+            strategy_name=pending.strategy_name,
+            order_id=pending.order_id,
+            fee=entry_fee,
+            leverage=state.leverage,
+            grid_level=level_num,
+            context="grid_limit",
+        )
+
+    async def _check_pending_entry_fills(self) -> None:
+        """Polling fallback pour détecter les fills des limit orders d'entrée.
+
+        Appelé toutes les _EXIT_CHECK_INTERVAL secondes depuis _exit_monitor_loop.
+        Le watchOrders détecte les fills en temps réel dans 99% des cas,
+        ceci n'est qu'un filet de sécurité.
+        """
+        if not self._pending_entry_orders:
+            return
+
+        async with self._state_lock:
+            for futures_sym, level_orders in list(self._pending_entry_orders.items()):
+                for level_idx, pending in list(level_orders.items()):
+                    try:
+                        order = await self._exchange.fetch_order(
+                            pending.order_id, futures_sym,
+                        )
+                        status = order.get("status", "")
+
+                        if status in ("closed", "filled"):
+                            avg_price = float(order.get("average") or pending.entry_price)
+                            filled_qty = float(order.get("filled") or pending.quantity)
+                            fee_info = order.get("fee") or {}
+                            fee = (
+                                float(fee_info.get("cost") or 0)
+                                if fee_info.get("cost") is not None
+                                else 0.0
+                            )
+                            logger.info(
+                                "Executor: polling — grid limit FILL {} lv{} @ {:.4f}",
+                                futures_sym, level_idx, avg_price,
+                            )
+                            await self._process_entry_fill(
+                                futures_sym, pending, avg_price, filled_qty, fee,
+                            )
+                        elif status in ("canceled", "cancelled", "expired", "rejected"):
+                            logger.info(
+                                "Executor: pending entry {} lv{} annulé par exchange ({})",
+                                futures_sym, level_idx, status,
+                            )
+                            self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
+                            self._pending_notional = max(
+                                0.0, self._pending_notional - pending.level_margin,
+                            )
+                        elif (
+                            datetime.now(tz=timezone.utc) - pending.placed_at
+                        ).total_seconds() > _LIMIT_ORDER_MAX_AGE_S:
+                            logger.info(
+                                "Executor: pending entry {} lv{} expiré ({}s), cancel",
+                                futures_sym, level_idx, _LIMIT_ORDER_MAX_AGE_S,
+                            )
+                            try:
+                                await self._exchange.cancel_order(
+                                    pending.order_id, futures_sym,
+                                )
+                            except Exception:
+                                pass
+                            self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
+                            self._pending_notional = max(
+                                0.0, self._pending_notional - pending.level_margin,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Executor: check pending fill {} lv{}: {}",
+                            futures_sym, level_idx, e,
+                        )
+                    await asyncio.sleep(_ORDER_DELAY)
+
+                # Cleanup dict vide
+                if futures_sym in self._pending_entry_orders and not self._pending_entry_orders[futures_sym]:
+                    self._pending_entry_orders.pop(futures_sym, None)
+
     async def _check_missing_sl(self) -> None:
         """Vérifie si des positions grid actives n'ont pas de SL et les replace."""
         # On fait une copie des clés pour éviter les mutations pendant l'itération
@@ -1925,6 +2335,12 @@ class Executor:
         self._risk_manager.unregister_position(futures_sym)
         self._record_grid_close(futures_sym)
         self._grid_states.pop(futures_sym, None)
+
+        # Cleanup pending entry limit orders
+        pending_for_sym = self._pending_entry_orders.pop(futures_sym, {})
+        for p in pending_for_sym.values():
+            self._pending_notional = max(0.0, self._pending_notional - p.level_margin)
+
         await self._notifier.notify_live_sl_failed(futures_sym, state.strategy_name)
 
     async def _cancel_all_open_orders(self, futures_sym: str) -> int:
@@ -2004,6 +2420,11 @@ class Executor:
         #    Nettoie les SL orphelins accumulés si des cancels ont échoué
         if event.exit_reason != "sl_global":
             await self._cancel_all_open_orders(futures_sym)
+
+        # 1b. Cleanup pending entry limit orders pour ce symbole
+        pending_for_sym = self._pending_entry_orders.pop(futures_sym, {})
+        for p in pending_for_sym.values():
+            self._pending_notional = max(0.0, self._pending_notional - p.level_margin)
 
         # 2. Market close (sauf si SL déjà exécuté sur exchange)
         close_qty = self._round_quantity(state.total_quantity, futures_sym)
@@ -2194,6 +2615,11 @@ class Executor:
 
         # Nettoyer les éventuels ordres trigger orphelins restants
         await self._cancel_all_open_orders(futures_sym)
+
+        # Cleanup pending entry limit orders
+        pending_for_sym = self._pending_entry_orders.pop(futures_sym, {})
+        for p in pending_for_sym.values():
+            self._pending_notional = max(0.0, self._pending_notional - p.level_margin)
 
         self._record_grid_close(futures_sym)
         self._grid_states.pop(futures_sym, None)
@@ -2782,6 +3208,24 @@ class Executor:
             "risk_manager": self._risk_manager.get_state(),
             "order_history": list(self._order_history),
             "last_close_times": last_close_times_data,
+            "pending_entry_orders": {
+                sym: {
+                    str(idx): {
+                        "order_id": p.order_id,
+                        "futures_sym": p.futures_sym,
+                        "level_index": p.level_index,
+                        "entry_price": p.entry_price,
+                        "quantity": p.quantity,
+                        "direction": p.direction,
+                        "strategy_name": p.strategy_name,
+                        "side": p.side,
+                        "level_margin": p.level_margin,
+                        "placed_at": p.placed_at.isoformat(),
+                    }
+                    for idx, p in level_orders.items()
+                }
+                for sym, level_orders in self._pending_entry_orders.items()
+            },
         }
 
     def restore_positions(self, state: dict[str, Any]) -> None:
@@ -2855,6 +3299,34 @@ class Executor:
                 self._last_close_time[sym] = datetime.fromisoformat(ts_str)
             except (ValueError, TypeError):
                 pass
+
+        # Pending entry orders (Sprint limit orders)
+        for sym, level_orders_data in state.get("pending_entry_orders", {}).items():
+            sym_orders: dict[int, PendingEntryOrder] = {}
+            for idx_str, p_data in level_orders_data.items():
+                try:
+                    sym_orders[int(idx_str)] = PendingEntryOrder(
+                        order_id=p_data["order_id"],
+                        futures_sym=p_data["futures_sym"],
+                        level_index=p_data["level_index"],
+                        entry_price=p_data["entry_price"],
+                        quantity=p_data["quantity"],
+                        direction=p_data["direction"],
+                        strategy_name=p_data["strategy_name"],
+                        side=p_data["side"],
+                        level_margin=p_data.get("level_margin", 0.0),
+                        placed_at=datetime.fromisoformat(p_data["placed_at"]),
+                    )
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning("Executor: skip pending entry restore {}: {}", idx_str, e)
+            if sym_orders:
+                self._pending_entry_orders[sym] = sym_orders
+                total_margin = sum(p.level_margin for p in sym_orders.values())
+                self._pending_notional += total_margin
+                logger.info(
+                    "Executor: {} pending entry orders restaurés pour {}",
+                    len(sym_orders), sym,
+                )
 
     # ─── Grid helpers ───────────────────────────────────────────────────
 

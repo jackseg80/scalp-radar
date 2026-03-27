@@ -478,9 +478,10 @@ class TestPariteExecutorMarginGuard:
         import inspect
         from backend.execution.executor import Executor
 
-        source = inspect.getsource(Executor._on_candle)
+        # Sprint 65 : le margin guard a été déplacé de _on_candle vers _sync_entry_limits
+        source = inspect.getsource(Executor._sync_entry_limits)
         assert "max_margin_ratio" in source, (
-            "Executor._on_candle doit contenir un margin guard (max_margin_ratio)"
+            "Executor._sync_entry_limits doit contenir un margin guard (max_margin_ratio)"
         )
 
 

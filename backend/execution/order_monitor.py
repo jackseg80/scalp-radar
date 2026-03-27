@@ -22,7 +22,7 @@ async def watch_orders_loop(ex: Any) -> None:
     """Mécanisme principal : watchOrders via ccxt Pro."""
     while ex._running:
         try:
-            if not ex._positions and not ex._grid_states:
+            if not ex._positions and not ex._grid_states and not ex._pending_entry_orders:
                 await asyncio.sleep(1)
                 continue
 
@@ -115,6 +115,24 @@ async def _process_watched_order_unlocked(ex: Any, order: dict) -> None:
                 futures_sym, grid_state, exit_price, exit_fee,
             )
             return
+
+    # Scanner les pending entry orders pour fill match
+    for futures_sym, level_orders in list(ex._pending_entry_orders.items()):
+        for level_idx, pending in list(level_orders.items()):
+            if order_id == pending.order_id:
+                fill_price = float(
+                    order.get("average") or order.get("price") or pending.entry_price,
+                )
+                filled_qty = float(order.get("filled") or pending.quantity)
+                fill_fee = exit_fee if exit_fee is not None else 0.0
+                logger.info(
+                    "Executor: watchOrders — grid limit FILL {} lv{} @ {:.4f}",
+                    futures_sym, level_idx, fill_price,
+                )
+                await ex._process_entry_fill(
+                    futures_sym, pending, fill_price, filled_qty, fill_fee,
+                )
+                return
 
     # Ordre non matché — log debug (ordres d'autres systèmes sur le sous-compte)
     logger.debug(

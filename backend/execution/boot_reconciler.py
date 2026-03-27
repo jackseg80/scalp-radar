@@ -335,6 +335,10 @@ async def cancel_orphan_orders(ex: Any) -> None:
         for gp in grid_state.positions:
             if gp.entry_order_id:
                 tracked_ids.add(gp.entry_order_id)
+    for level_orders in getattr(ex, "_pending_entry_orders", {}).values():
+        for p in level_orders.values():
+            if p.order_id:
+                tracked_ids.add(p.order_id)
 
     orphans = [
         o for o in open_orders

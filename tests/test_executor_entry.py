@@ -1,7 +1,9 @@
 """Tests Phase 1 — Entrées autonomes de l'Executor.
 
-Vérifie que _on_candle() évalue les niveaux grid et ouvre des positions
+Vérifie que _on_candle() évalue les niveaux grid et place des limit orders
 indépendamment du Simulator paper.
+
+Mis à jour Sprint 65 : market orders → limit orders (fix biais anticipation).
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from backend.execution.executor import (
     Executor,
     GridLivePosition,
     GridLiveState,
+    PendingEntryOrder,
     TradeEvent,
     TradeEventType,
     to_futures_symbol,
@@ -51,7 +54,7 @@ def _make_config() -> MagicMock:
     return config
 
 
-def _make_exchange() -> AsyncMock:
+def _make_exchange(*, order_status: str = "closed") -> AsyncMock:
     exchange = AsyncMock()
     exchange.fetch_balance = AsyncMock(return_value={
         "free": {"USDT": 900},
@@ -61,14 +64,18 @@ def _make_exchange() -> AsyncMock:
     exchange.fetch_open_orders = AsyncMock(return_value=[])
     exchange.create_order = AsyncMock(return_value={
         "id": "order_1",
-        "filled": 0.01,
-        "average": 50_000.0,
-        "status": "closed",
+        "filled": 0.01 if order_status == "closed" else 0.0,
+        "average": 50_000.0 if order_status == "closed" else 0.0,
+        "status": order_status,
         "fee": {"cost": 0.03},
     })
     exchange.cancel_order = AsyncMock()
     exchange.set_leverage = AsyncMock()
+    exchange.fetch_my_trades = AsyncMock(return_value=[
+        {"price": 50_000.0, "amount": 0.01},
+    ])
     exchange.amount_to_precision = MagicMock(side_effect=lambda _sym, qty: f"{qty:.3f}")
+    exchange.price_to_precision = MagicMock(side_effect=lambda _sym, p: str(p))
     exchange.close = AsyncMock()
     return exchange
 
@@ -125,6 +132,7 @@ def _make_ctx(
 
 def _make_executor(
     *, strategy: MagicMock | None = None, ctx: StrategyContext | None = None,
+    order_status: str = "closed",
 ) -> Executor:
     config = _make_config()
     rm = MagicMock()
@@ -135,7 +143,7 @@ def _make_executor(
     notifier = AsyncMock()
 
     executor = Executor(config, rm, notifier)
-    executor._exchange = _make_exchange()
+    executor._exchange = _make_exchange(order_status=order_status)
     executor._markets = {
         "BTC/USDT:USDT": {
             "limits": {"amount": {"min": 0.001}},
@@ -209,50 +217,55 @@ class TestOnCandle:
 
     @pytest.mark.asyncio
     async def test_long_triggered(self):
-        """candle.low <= entry_price → _open_grid_position appelé."""
+        """Level LONG → limit order placé au prix du niveau (buy)."""
         level = GridLevel(index=0, entry_price=49_600.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
         executor = _make_executor(strategy=strat)
-        # candle.low = 50000*0.99 = 49500 < 49600 → triggered
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            mock_open.assert_called_once()
-            event = mock_open.call_args[0][0]
-            assert isinstance(event, TradeEvent)
-            assert event.direction == "LONG"
-            assert event.quantity > 0
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        # Le premier create_order doit être le limit order d'entrée
+        assert executor._exchange.create_order.called
+        entry_call = executor._exchange.create_order.call_args_list[0]
+        assert entry_call[0][1] == "limit"
+        assert entry_call[0][2] == "buy"
+        assert float(entry_call[0][4]) == pytest.approx(49_600.0)
 
     @pytest.mark.asyncio
-    async def test_long_not_triggered(self):
-        """candle.low > entry_price → pas d'appel."""
+    async def test_limit_order_placed_regardless_of_candle_price(self):
+        """Même si candle.low > entry_price, le limit order est quand même placé
+        (le fill se fera quand le prix atteindra le niveau)."""
         level = GridLevel(index=0, entry_price=48_000.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
         executor = _make_executor(strategy=strat)
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            mock_open.assert_not_called()
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        assert executor._exchange.create_order.called
+        entry_call = executor._exchange.create_order.call_args_list[0]
+        assert entry_call[0][1] == "limit"
+        assert float(entry_call[0][4]) == pytest.approx(48_000.0)
 
     @pytest.mark.asyncio
     async def test_short_triggered(self):
-        """candle.high >= entry_price → _open_grid_position appelé."""
+        """Level SHORT → limit order sell placé au prix du niveau."""
         level = GridLevel(index=0, entry_price=50_400.0, direction=Direction.SHORT, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
         executor = _make_executor(strategy=strat)
         candle = _make_candle(close=50_000.0, high=50_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            mock_open.assert_called_once()
-            event = mock_open.call_args[0][0]
-            assert event.direction == "SHORT"
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        assert executor._exchange.create_order.called
+        entry_call = executor._exchange.create_order.call_args_list[0]
+        assert entry_call[0][1] == "limit"
+        assert entry_call[0][2] == "sell"
 
     @pytest.mark.asyncio
     async def test_skips_filled_level(self):
-        """Level 0 déjà rempli → seul level 1 est évalué."""
+        """Level 0 déjà rempli → seul level 1 reçoit un limit order."""
         levels = [
             GridLevel(index=0, entry_price=49_600.0, direction=Direction.LONG, size_fraction=0.25),
             GridLevel(index=1, entry_price=49_000.0, direction=Direction.LONG, size_fraction=0.25),
@@ -266,27 +279,39 @@ class TestOnCandle:
                 GridLivePosition(level=0, entry_price=49600, quantity=0.01, entry_order_id="e0"),
             ],
         )
-        # candle.low = 48900 → les deux levels sont dans le range, mais level 0 est skip
         candle = _make_candle(close=50_000.0, low=48_900.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            mock_open.assert_called_once()
-            event = mock_open.call_args[0][0]
-            assert event.entry_price == 49_000.0
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        # Un seul entry order — au prix de level 1
+        entry_call = executor._exchange.create_order.call_args_list[0]
+        assert float(entry_call[0][4]) == pytest.approx(49_000.0)
 
     @pytest.mark.asyncio
-    async def test_pending_levels_prevents_double(self):
-        """Pending key dans _pending_levels → skip."""
+    async def test_pending_entry_prevents_double(self):
+        """Level déjà en attente (sans dérive de prix) → pas de nouvel ordre."""
         level = GridLevel(index=0, entry_price=49_600.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
         executor = _make_executor(strategy=strat)
-        executor._pending_levels.add("BTC/USDT:USDT:0")
+        # Simuler un pending order existant à ce même prix
+        existing = PendingEntryOrder(
+            order_id="existing_1",
+            futures_sym="BTC/USDT:USDT",
+            level_index=0,
+            entry_price=49_600.0,
+            quantity=0.001,
+            direction=Direction.LONG,
+            strategy_name="grid_atr",
+            side="buy",
+            level_margin=25.0,
+        )
+        executor._pending_entry_orders["BTC/USDT:USDT"] = {0: existing}
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            mock_open.assert_not_called()
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        # Aucun nouvel ordre (le pending existant est toujours valide)
+        executor._exchange.create_order.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_zero_balance_skips(self):
@@ -297,9 +322,9 @@ class TestOnCandle:
         executor._exchange_balance = 0.0
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            mock_open.assert_not_called()
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        executor._exchange.create_order.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_uses_live_balance_not_paper(self):
@@ -319,8 +344,7 @@ class TestOnCandle:
 
         strat.compute_grid = capture_compute
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock):
-            await executor._on_candle("BTC/USDT", "1h", candle)
+        await executor._on_candle("BTC/USDT", "1h", candle)
 
         assert captured_ctx.get("capital") == 500.0
 
@@ -348,28 +372,26 @@ class TestOnCandle:
 
         strat.compute_grid = capture_compute
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock):
-            await executor._on_candle("BTC/USDT", "1h", candle)
+        await executor._on_candle("BTC/USDT", "1h", candle)
 
         assert len(captured_gs["state"].positions) == 1
         assert captured_gs["state"].positions[0].entry_price == 49_600.0
 
     @pytest.mark.asyncio
-    async def test_pending_levels_cleared_after_open(self):
-        """Pending key nettoyée dans le finally, succès ou échec."""
+    async def test_no_phantom_entry_on_create_order_failure(self):
+        """Si create_order échoue, _pending_entry_orders ne doit pas contenir de fantôme."""
         level = GridLevel(index=0, entry_price=49_600.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
         executor = _make_executor(strategy=strat)
+        executor._exchange.create_order = AsyncMock(
+            side_effect=Exception("Bitget timeout"),
+        )
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(
-            executor, "_open_grid_position",
-            new_callable=AsyncMock, side_effect=RuntimeError("test"),
-        ):
-            await executor._on_candle("BTC/USDT", "1h", candle)
+        await executor._on_candle("BTC/USDT", "1h", candle)
 
-        # Pending key nettoyée malgré l'erreur
-        assert "BTC/USDT:USDT:0" not in executor._pending_levels
+        # Pas de fantôme dans pending_entry_orders
+        assert not executor._pending_entry_orders.get("BTC/USDT:USDT")
 
     @pytest.mark.asyncio
     async def test_quantity_calculated_correctly(self):
@@ -380,11 +402,13 @@ class TestOnCandle:
         executor._exchange_balance = 1000.0
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            event = mock_open.call_args[0][0]
-            # 0.25 * 1000 * 6 / 50000 = 0.03
-            assert event.quantity == pytest.approx(0.03, abs=0.001)
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        # Premier appel create_order = entry limit
+        entry_call = executor._exchange.create_order.call_args_list[0]
+        qty = float(entry_call[0][3])
+        # 0.25 * 1000 * 6 / 50000 = 0.03
+        assert qty == pytest.approx(0.03, abs=0.001)
 
 
 # ── TestBuildGridState ───────────────────────────────────────────────────
@@ -470,34 +494,42 @@ class TestPendingNotional:
     """Tests du mécanisme _pending_notional."""
 
     @pytest.mark.asyncio
-    async def test_increments_on_trigger(self):
+    async def test_increments_on_pending_order(self):
+        """Limit order placé mais non rempli → _pending_notional incrémenté."""
         level = GridLevel(index=0, entry_price=50_000.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
-        executor = _make_executor(strategy=strat)
+        executor = _make_executor(strategy=strat, order_status="open")
         executor._exchange_balance = 1000.0
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock):
-            await executor._on_candle("BTC/USDT", "1h", candle)
+        await executor._on_candle("BTC/USDT", "1h", candle)
 
         assert executor._pending_notional > 0
 
     @pytest.mark.asyncio
     async def test_not_reset_while_orders_pending(self):
         executor = _make_executor()
-        executor._pending_levels = {"BTC/USDT:USDT:0"}
+        executor._pending_entry_orders["BTC/USDT:USDT"] = {
+            0: PendingEntryOrder(
+                order_id="o1", futures_sym="BTC/USDT:USDT",
+                level_index=0, entry_price=50_000.0, quantity=0.001,
+                direction=Direction.LONG, strategy_name="grid_atr",
+                side="buy", level_margin=25.0,
+            )
+        }
         executor._pending_notional = 250.0
         executor._exchange_balance = 1000.0
 
         await executor.refresh_balance()
 
-        # Pas de reset car pending_levels non vide
+        # Pas de reset car pending_entry_orders non vide
         assert executor._pending_notional == 250.0
 
     @pytest.mark.asyncio
     async def test_resets_when_no_pending_orders(self):
         executor = _make_executor()
         executor._pending_levels = set()
+        executor._pending_entry_orders = {}
         executor._pending_notional = 250.0
         executor._exchange_balance = 1000.0
 
@@ -551,8 +583,7 @@ class TestAllocatedBalance:
 
         strat.compute_grid = capture
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock):
-            await executor._on_candle("BTC/USDT", "1h", candle)
+        await executor._on_candle("BTC/USDT", "1h", candle)
 
         assert captured["capital"] == pytest.approx(100.0)  # 900 / 9
 
@@ -566,11 +597,13 @@ class TestAllocatedBalance:
         executor._exchange_balance = 900.0
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock) as mock_open:
-            await executor._on_candle("BTC/USDT", "1h", candle)
-            event = mock_open.call_args[0][0]
-            # 0.25 * (900/9) * 6 / 50000 = 0.25 * 100 * 6 / 50000 = 0.003
-            assert event.quantity == pytest.approx(0.003, abs=0.0001)
+        await executor._on_candle("BTC/USDT", "1h", candle)
+
+        # Premier create_order = entry limit
+        entry_call = executor._exchange.create_order.call_args_list[0]
+        qty = float(entry_call[0][3])
+        # 0.25 * (900/9) * 6 / 50000 = 0.25 * 100 * 6 / 50000 = 0.003
+        assert qty == pytest.approx(0.003, abs=0.0001)
 
     @pytest.mark.asyncio
     async def test_pending_notional_on_allocated_not_total(self):
@@ -578,12 +611,11 @@ class TestAllocatedBalance:
         level = GridLevel(index=0, entry_price=50_000.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
         strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
-        executor = _make_executor(strategy=strat)
+        executor = _make_executor(strategy=strat, order_status="open")
         executor._exchange_balance = 900.0
         candle = _make_candle(close=50_000.0, low=49_500.0)
 
-        with patch.object(executor, "_open_grid_position", new_callable=AsyncMock):
-            await executor._on_candle("BTC/USDT", "1h", candle)
+        await executor._on_candle("BTC/USDT", "1h", candle)
 
         # 0.25 * (900/9) = 0.25 * 100 = 25$, pas 225$ (0.25 * 900)
         assert executor._pending_notional == pytest.approx(25.0)

@@ -526,6 +526,8 @@ def _make_executor_for_state():
     executor._positions = {}
     executor._grid_states = {}
     executor._last_close_time = {}
+    executor._pending_entry_orders = {}
+    executor._pending_notional = 0.0
     executor._risk_manager = MagicMock()
     executor._risk_manager.get_state.return_value = {}
     executor._order_history = deque(maxlen=200)
