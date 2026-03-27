@@ -129,8 +129,11 @@ async def _process_watched_order_unlocked(ex: Any, order: dict) -> None:
                     "Executor: watchOrders — grid limit FILL {} lv{} @ {:.4f}",
                     futures_sym, level_idx, fill_price,
                 )
+                # _already_locked=True : on est déjà sous _state_lock (process_watched_order),
+                # évite le deadlock vers _update_grid_sl (Bug 2)
                 await ex._process_entry_fill(
                     futures_sym, pending, fill_price, filled_qty, fill_fee,
+                    _already_locked=True,
                 )
                 return
 

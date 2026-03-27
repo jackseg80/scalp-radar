@@ -1173,7 +1173,11 @@ class Executor:
             # Max live grids guard
             max_live_grids_raw = getattr(self._config.risk, "max_live_grids", 4)
             max_live_grids = max_live_grids_raw if isinstance(max_live_grids_raw, int) else 4
-            active_grids = len(self._grid_states) + len(self._pending_entry_orders)
+            # Union des symboles : un symbole avec des niveaux remplis ET pending
+            # ne compte qu'une seule grille (Bug 3 fix)
+            active_grids = len(
+                set(self._grid_states.keys()) | set(self._pending_entry_orders.keys())
+            )
             if active_grids >= max_live_grids:
                 logger.warning(
                     "Executor: max grids live atteint ({}/{}), limit {} skip",
@@ -1987,19 +1991,37 @@ class Executor:
         avg_price: float,
         filled_qty: float,
         entry_fee: float,
+        *,
+        _already_locked: bool = False,
     ) -> None:
         """Traite le fill d'un limit order d'entrée grid.
 
         Appelé soit immédiatement (fill instantané), soit par watchOrders/polling.
         Crée/met à jour le GridLiveState, place le SL, notifie.
         """
-        # 1. Cleanup pending tracking
+        # 1. Cleanup pending tracking + guard double-traitement
+        # (watchOrders et polling peuvent détecter le même fill simultanément)
         sym_orders = self._pending_entry_orders.get(futures_sym, {})
         if pending.level_index in sym_orders:
+            # Chemin normal : supprimer du tracking pending
             sym_orders.pop(pending.level_index)
             if not sym_orders:
                 self._pending_entry_orders.pop(futures_sym, None)
-        self._pending_notional = max(0.0, self._pending_notional - pending.level_margin)
+            self._pending_notional = max(0.0, self._pending_notional - pending.level_margin)
+        else:
+            # Level absent de pending_entry_orders :
+            # - Soit fill immédiat (temp_pending, jamais ajouté au tracking) → continuer
+            # - Soit déjà traité par un appel concurrent → skip
+            # Vérifier si l'order_id est déjà dans grid_states (dedup guard)
+            existing_state = self._grid_states.get(futures_sym)
+            if existing_state and any(
+                p.entry_order_id == pending.order_id for p in existing_state.positions
+            ):
+                logger.debug(
+                    "Executor: _process_entry_fill {} lv{} déjà dans grid_states — skip",
+                    futures_sym, pending.level_index,
+                )
+                return
 
         # 2. Update order history
         self._update_order_price(pending.order_id, avg_price, entry_fee if entry_fee > 0 else None)
@@ -2051,7 +2073,12 @@ class Executor:
         await asyncio.sleep(_ORDER_DELAY)
 
         # 6. Rule #1 : placer le SL global
-        await self._update_grid_sl(futures_sym, state)
+        # Si appelé depuis un contexte déjà sous _state_lock (watchOrders, polling),
+        # utiliser la version unlocked pour éviter le deadlock (Bug 2).
+        if _already_locked:
+            await self._update_grid_sl_unlocked(futures_sym, state)
+        else:
+            await self._update_grid_sl(futures_sym, state)
 
         # 7. Telegram
         spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
@@ -2086,71 +2113,75 @@ class Executor:
         Appelé toutes les _EXIT_CHECK_INTERVAL secondes depuis _exit_monitor_loop.
         Le watchOrders détecte les fills en temps réel dans 99% des cas,
         ceci n'est qu'un filet de sécurité.
+
+        NOTE: Pas de lock global pour éviter le deadlock :
+        _process_entry_fill → _update_grid_sl acquiert _state_lock lui-même.
+        Le guard dans _process_entry_fill (vérification level_index dans pending)
+        prévient le double-traitement si watchOrders et polling se croisent.
         """
         if not self._pending_entry_orders:
             return
 
-        async with self._state_lock:
-            for futures_sym, level_orders in list(self._pending_entry_orders.items()):
-                for level_idx, pending in list(level_orders.items()):
-                    try:
-                        order = await self._exchange.fetch_order(
-                            pending.order_id, futures_sym,
-                        )
-                        status = order.get("status", "")
+        for futures_sym, level_orders in list(self._pending_entry_orders.items()):
+            for level_idx, pending in list(level_orders.items()):
+                try:
+                    order = await self._exchange.fetch_order(
+                        pending.order_id, futures_sym,
+                    )
+                    status = order.get("status", "")
 
-                        if status in ("closed", "filled"):
-                            avg_price = float(order.get("average") or pending.entry_price)
-                            filled_qty = float(order.get("filled") or pending.quantity)
-                            fee_info = order.get("fee") or {}
-                            fee = (
-                                float(fee_info.get("cost") or 0)
-                                if fee_info.get("cost") is not None
-                                else 0.0
-                            )
-                            logger.info(
-                                "Executor: polling — grid limit FILL {} lv{} @ {:.4f}",
-                                futures_sym, level_idx, avg_price,
-                            )
-                            await self._process_entry_fill(
-                                futures_sym, pending, avg_price, filled_qty, fee,
-                            )
-                        elif status in ("canceled", "cancelled", "expired", "rejected"):
-                            logger.info(
-                                "Executor: pending entry {} lv{} annulé par exchange ({})",
-                                futures_sym, level_idx, status,
-                            )
-                            self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
-                            self._pending_notional = max(
-                                0.0, self._pending_notional - pending.level_margin,
-                            )
-                        elif (
-                            datetime.now(tz=timezone.utc) - pending.placed_at
-                        ).total_seconds() > _LIMIT_ORDER_MAX_AGE_S:
-                            logger.info(
-                                "Executor: pending entry {} lv{} expiré ({}s), cancel",
-                                futures_sym, level_idx, _LIMIT_ORDER_MAX_AGE_S,
-                            )
-                            try:
-                                await self._exchange.cancel_order(
-                                    pending.order_id, futures_sym,
-                                )
-                            except Exception:
-                                pass
-                            self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
-                            self._pending_notional = max(
-                                0.0, self._pending_notional - pending.level_margin,
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            "Executor: check pending fill {} lv{}: {}",
-                            futures_sym, level_idx, e,
+                    if status in ("closed", "filled"):
+                        avg_price = float(order.get("average") or pending.entry_price)
+                        filled_qty = float(order.get("filled") or pending.quantity)
+                        fee_info = order.get("fee") or {}
+                        fee = (
+                            float(fee_info.get("cost") or 0)
+                            if fee_info.get("cost") is not None
+                            else 0.0
                         )
-                    await asyncio.sleep(_ORDER_DELAY)
+                        logger.info(
+                            "Executor: polling — grid limit FILL {} lv{} @ {:.4f}",
+                            futures_sym, level_idx, avg_price,
+                        )
+                        await self._process_entry_fill(
+                            futures_sym, pending, avg_price, filled_qty, fee,
+                        )
+                    elif status in ("canceled", "cancelled", "expired", "rejected"):
+                        logger.info(
+                            "Executor: pending entry {} lv{} annulé par exchange ({})",
+                            futures_sym, level_idx, status,
+                        )
+                        self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
+                        self._pending_notional = max(
+                            0.0, self._pending_notional - pending.level_margin,
+                        )
+                    elif (
+                        datetime.now(tz=timezone.utc) - pending.placed_at
+                    ).total_seconds() > _LIMIT_ORDER_MAX_AGE_S:
+                        logger.info(
+                            "Executor: pending entry {} lv{} expiré ({}s), cancel",
+                            futures_sym, level_idx, _LIMIT_ORDER_MAX_AGE_S,
+                        )
+                        try:
+                            await self._exchange.cancel_order(
+                                pending.order_id, futures_sym,
+                            )
+                        except Exception:
+                            pass
+                        self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
+                        self._pending_notional = max(
+                            0.0, self._pending_notional - pending.level_margin,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Executor: check pending fill {} lv{}: {}",
+                        futures_sym, level_idx, e,
+                    )
+                await asyncio.sleep(_ORDER_DELAY)
 
-                # Cleanup dict vide
-                if futures_sym in self._pending_entry_orders and not self._pending_entry_orders[futures_sym]:
-                    self._pending_entry_orders.pop(futures_sym, None)
+            # Cleanup dict vide
+            if futures_sym in self._pending_entry_orders and not self._pending_entry_orders[futures_sym]:
+                self._pending_entry_orders.pop(futures_sym, None)
 
     async def _check_missing_sl(self) -> None:
         """Vérifie si des positions grid actives n'ont pas de SL et les replace."""
@@ -2182,34 +2213,9 @@ class Executor:
         Appelée à chaque ouverture de niveau (le prix moyen change → le SL change).
         Quantité du SL = total_quantity (toutes les positions agrégées).
         """
-        # 0. Sécurité : Données Stale ? (Mission 2026-03-06)
-        # Si le flux WS est stale, on tente de récupérer un prix REST de secours
-        if self._data_engine:
-            spot_sym = futures_sym.split(":")[0]
-            last_update = self._data_engine.get_last_update(spot_sym)
-            is_stale = False
-            if last_update:
-                age = (datetime.now(tz=timezone.utc) - last_update).total_seconds()
-                if age > 300:  # 5 minutes
-                    is_stale = True
-            else:
-                is_stale = True
-
-            if is_stale:
-                logger.warning(
-                    "Executor: prix WS STALE pour {} — récupération prix REST pour sécuriser le SL",
-                    futures_sym
-                )
-                try:
-                    # On fetch juste pour s'assurer que l'exchange est joignable et qu'on a un prix
-                    await self._exchange.fetch_ticker(futures_sym)
-                    # Le calcul du SL se basant sur avg_entry_price, on peut continuer
-                except Exception as e:
-                    logger.error(
-                        "Executor: prix REST inaccessible pour {} : {} — replacement SL suspendu",
-                        futures_sym, e
-                    )
-                    return
+        # 0. Note : le SL est calculé sur avg_entry_price (donnée locale fiable),
+        # pas sur le prix courant. La vérification stale WS n'est pas pertinente ici
+        # et causait un return silencieux en cas de problème réseau momentané (Bug 1).
 
         # 1. Annuler l'ancien SL s'il existe
         if state.sl_order_id:
