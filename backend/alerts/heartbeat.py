@@ -6,7 +6,6 @@ Envoie un message périodique avec le statut du Simulator.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from loguru import logger

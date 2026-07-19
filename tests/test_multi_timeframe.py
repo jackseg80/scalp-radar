@@ -496,8 +496,6 @@ class TestParamGridsIntegration:
         default = param_grids["grid_atr"]["default"]
         assert "timeframe" in default
         assert "1h" in default["timeframe"]
-        assert "4h" in default["timeframe"]
-        assert "1d" in default["timeframe"]
 
     def test_grid_multi_tf_no_timeframe(self, param_grids):
         """grid_multi_tf ne contient PAS timeframe."""

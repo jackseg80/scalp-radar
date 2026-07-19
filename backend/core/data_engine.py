@@ -676,7 +676,8 @@ class DataEngine:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if not self._running: break
+                if not self._running:
+                    break
                 err_str = str(e)
                 if "does not have market symbol" in err_str:
                     logger.warning("DataEngine: {} retiré (non dispo)", symbol)
@@ -684,7 +685,8 @@ class DataEngine:
                 logger.error("DataEngine: erreur watch {} : {} (tentative {})", symbol, e, attempt)
                 delay = reconnect_delay * min(2 ** (attempt - 1), 300)
                 await asyncio.sleep(delay)
-                if attempt > 20: attempt = 10
+                if attempt > 20:
+                    attempt = 10
 
     async def _subscribe_klines(
         self, symbol: str, timeframes: list[str]
@@ -695,7 +697,8 @@ class DataEngine:
 
         while self._running:
             for tf in timeframes:
-                if not self._running: return
+                if not self._running:
+                    return
                 try:
                     ohlcv_list = await self._exchange.watch_ohlcv(symbol, tf)
                     consecutive_errors = 0
@@ -710,19 +713,22 @@ class DataEngine:
                         consecutive_errors += 1
                         if consecutive_errors <= 3:
                             await asyncio.sleep(2.0 * consecutive_errors)
-                        else: raise
+                        else:
+                            raise
                     else:
                         consecutive_errors += 1
                         if consecutive_errors <= 3:
                             logger.warning("DataEngine: erreur kline {}/{}: {}", symbol, tf, e)
-                        if "does not have market symbol" in err_str: raise
+                        if "does not have market symbol" in err_str:
+                            raise
                         await asyncio.sleep(1.0)
 
     async def _heal_gap(
         self, symbol: str, timeframe: str, start_dt: datetime, end_dt: datetime
     ) -> None:
         """Récupère les candles manquantes via REST (Bitget) et les insère dans le buffer."""
-        if self._exchange is None: return
+        if self._exchange is None:
+            return
         try:
             since_ms = int(start_dt.timestamp() * 1000) + 1
             tf = TimeFrame.from_string(timeframe)
@@ -730,7 +736,8 @@ class DataEngine:
             actual_delta_ms = (end_dt - start_dt).total_seconds() * 1000
             missing_count = int(actual_delta_ms / expected_delta)
 
-            if missing_count <= 1: return
+            if missing_count <= 1:
+                return
 
             logger.info("DataEngine: guérison {} bougies pour {}/{}", missing_count - 1, symbol, timeframe)
             healed_ohlcv = await self._exchange.fetch_ohlcv(symbol, timeframe, since=since_ms, limit=missing_count)
@@ -739,7 +746,8 @@ class DataEngine:
                 healed_candles = []
                 for o in healed_ohlcv:
                     ts = datetime.fromtimestamp(o[0] / 1000, tz=timezone.utc)
-                    if ts >= end_dt: continue
+                    if ts >= end_dt:
+                        continue
                     c = Candle(timestamp=ts, open=o[1], high=o[2], low=o[3], close=o[4], volume=o[5], symbol=symbol, timeframe=tf)
                     if self.validator.validate_candle(c):
                         healed_candles.append(c)
@@ -762,12 +770,14 @@ class DataEngine:
         """Agrège les bougies du source_tf pour mettre à jour le target_tf."""
         target_tf = TimeFrame.from_string(target_tf_str)
         source_buffer = self._buffers[symbol][source_tf_str]
-        if not source_buffer: return
+        if not source_buffer:
+            return
 
         last_source = source_buffer[-1]
         period_start = target_tf.floor_timestamp(last_source.timestamp)
         constituents = [c for c in source_buffer if period_start <= c.timestamp < period_start + timedelta(minutes=target_tf.to_minutes())]
-        if not constituents: return
+        if not constituents:
+            return
 
         agg_candle = Candle(
             timestamp=period_start,
@@ -802,14 +812,17 @@ class DataEngine:
             buffer[-1] = candle
         else:
             buffer.append(candle)
-            if len(buffer) > MAX_BUFFER_SIZE: del buffer[: len(buffer) - MAX_BUFFER_SIZE]
+            if len(buffer) > MAX_BUFFER_SIZE:
+                del buffer[: len(buffer) - MAX_BUFFER_SIZE]
 
         self._write_buffer.append(candle)
         for callback in self._callbacks:
             try:
                 res = callback(symbol, timeframe_str, candle)
-                if asyncio.iscoroutine(res): await res
-            except Exception as e: logger.error("DataEngine: erreur callback: {}", e)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception as e:
+                logger.error("DataEngine: erreur callback: {}", e)
 
     async def _on_candle_received(
         self, symbol: str, timeframe_str: str, ohlcv: list
@@ -833,7 +846,8 @@ class DataEngine:
             logger.warning("DataEngine: candle malformée: {}", e)
             return
 
-        if not self.validator.validate_candle(candle): return
+        if not self.validator.validate_candle(candle):
+            return
 
         now_dt = datetime.now(tz=timezone.utc)
         self._last_update = now_dt
@@ -841,8 +855,10 @@ class DataEngine:
         self._last_update_per_symbol[symbol] = now_dt
 
         if is_ws:
-            if symbol in self._stale_restart_count: del self._stale_restart_count[symbol]
-            if symbol in self._stale_abandoned: self._stale_abandoned.discard(symbol)
+            if symbol in self._stale_restart_count:
+                del self._stale_restart_count[symbol]
+            if symbol in self._stale_abandoned:
+                self._stale_abandoned.discard(symbol)
 
         buffer = self._buffers[symbol][timeframe_str]
         if buffer and buffer[-1].timestamp == candle.timestamp:
@@ -851,15 +867,20 @@ class DataEngine:
                 await self._aggregate_to_target_tf(symbol, timeframe_str, target_tf)
             return
 
-        if self.validator.is_duplicate(candle, buffer): return
+        if self.validator.is_duplicate(candle, buffer):
+            return
 
         if is_ws and buffer and self.validator.check_gap(buffer[-1], candle, tf):
             self.gap_count += 1
             gap_from, gap_to = buffer[-1].timestamp, candle.timestamp
             logger.warning("DataEngine: gap détecté {}/{} entre {} et {}", symbol, timeframe_str, gap_from, gap_to)
             if self._notifier:
-                try: await self._notifier.notify_anomaly(AnomalyType.DATA_GAP, f"{symbol}/{timeframe_str} gap")
-                except Exception: pass
+                try:
+                    await self._notifier.notify_anomaly(
+                        AnomalyType.DATA_GAP, f"{symbol}/{timeframe_str} gap"
+                    )
+                except Exception:
+                    pass
             await self._heal_gap(symbol, timeframe_str, gap_from, gap_to)
 
         await self._store_and_dispatch(symbol, timeframe_str, candle)
@@ -870,9 +891,11 @@ class DataEngine:
 
     async def _start_polling(self, symbol: str) -> None:
         """Bascule un symbole en mode Polling REST."""
-        if symbol in self._polling_tasks: return
+        if symbol in self._polling_tasks:
+            return
         source_tf = self._source_tfs.get(symbol)
-        if not source_tf: return
+        if not source_tf:
+            return
 
         await self._stop_watch_task(symbol)
         self._polling_modes.add(symbol)
@@ -885,8 +908,10 @@ class DataEngine:
         task = self._polling_tasks.pop(symbol, None)
         if task:
             task.cancel()
-            try: await task
-            except asyncio.CancelledError: pass
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         self._polling_modes.discard(symbol)
 
     async def _stop_watch_task(self, symbol: str) -> None:
@@ -897,9 +922,12 @@ class DataEngine:
             if task.get_name() == task_name:
                 if not task.done():
                     task.cancel()
-                    try: await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
-                    except Exception: pass
-            else: new_tasks.append(task)
+                    try:
+                        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+                    except Exception:
+                        pass
+            else:
+                new_tasks.append(task)
         self._tasks = new_tasks
 
     async def _poll_symbol_rest(self, symbol: str, timeframe: str) -> None:
@@ -914,8 +942,10 @@ class DataEngine:
                 if ohlcv_list:
                     for ohlcv in ohlcv_list:
                         await self._process_ohlcv_item(symbol, timeframe, ohlcv, is_ws=False)
-            except asyncio.CancelledError: break
-            except Exception as e: logger.error("DataEngine: erreur polling REST {}: {}", symbol, e)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("DataEngine: erreur polling REST {}: {}", symbol, e)
             await asyncio.sleep(interval)
 
     # ─── FLUSH BUFFER ──────────────────────────────────────────────────────
@@ -970,45 +1000,60 @@ class DataEngine:
                 if self._write_buffer:
                     try:
                         await self._flush_write_buffer()
-                    except Exception as e: logger.error("DataEngine: erreur flush candles: {}", e)
-            except asyncio.CancelledError: break
+                    except Exception as e:
+                        logger.error("DataEngine: erreur flush candles: {}", e)
+            except asyncio.CancelledError:
+                break
 
     # ─── POLLING FUNDING & OI ──────────────────────────────────────────────
 
     async def _poll_funding_rates(self) -> None:
         """Polling des funding rates toutes les 5 minutes."""
         while self._running:
-            try: await self._fetch_funding_rates()
-            except asyncio.CancelledError: break
-            except Exception as e: logger.warning("DataEngine: erreur polling funding: {}", e)
+            try:
+                await self._fetch_funding_rates()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("DataEngine: erreur polling funding: {}", e)
             await asyncio.sleep(300)
 
     async def _poll_open_interest(self) -> None:
         """Polling de l'open interest toutes les 60 secondes."""
         while self._running:
-            try: await self._fetch_open_interest()
-            except asyncio.CancelledError: break
-            except Exception as e: logger.warning("DataEngine: erreur polling OI: {}", e)
+            try:
+                await self._fetch_open_interest()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("DataEngine: erreur polling OI: {}", e)
             await asyncio.sleep(60)
 
     @staticmethod
     def _to_swap_symbol(spot_symbol: str) -> str:
-        if ":USDT" not in spot_symbol: return f"{spot_symbol}:USDT"
+        if ":USDT" not in spot_symbol:
+            return f"{spot_symbol}:USDT"
         return spot_symbol
 
     async def _fetch_funding_rates(self) -> None:
-        if not self._exchange: return
+        if not self._exchange:
+            return
         for asset in self.config.assets:
             try:
                 swap_sym = self._to_swap_symbol(asset.symbol)
                 result = await self._exchange.fetch_funding_rate(swap_sym)
                 if result and "fundingRate" in result:
                     rate = result["fundingRate"]
-                    if rate is not None: self._funding_rates[asset.symbol] = float(rate) * 100
-            except Exception as e: logger.debug("DataEngine: funding rate non dispo pour {}: {}", asset.symbol, e)
+                    if rate is not None:
+                        self._funding_rates[asset.symbol] = float(rate) * 100
+            except Exception as e:
+                logger.debug(
+                    "DataEngine: funding rate non dispo pour {}: {}", asset.symbol, e
+                )
 
     async def _fetch_open_interest(self) -> None:
-        if not self._exchange: return
+        if not self._exchange:
+            return
         now = datetime.now(tz=timezone.utc)
         for asset in self.config.assets:
             try:
@@ -1020,7 +1065,19 @@ class DataEngine:
                     change_pct = 0.0
                     if snapshots:
                         prev = snapshots[-1].value
-                        if prev > 0: change_pct = (oi_value - prev) / prev * 100
-                    snapshots.append(OISnapshot(timestamp=now, symbol=asset.symbol, value=oi_value, change_pct=change_pct))
-                    if len(snapshots) > self._oi_max_snapshots: self._open_interest[asset.symbol] = snapshots[-self._oi_max_snapshots:]
-            except Exception as e: logger.debug("DataEngine: OI non dispo pour {}: {}", asset.symbol, e)
+                        if prev > 0:
+                            change_pct = (oi_value - prev) / prev * 100
+                    snapshots.append(
+                        OISnapshot(
+                            timestamp=now,
+                            symbol=asset.symbol,
+                            value=oi_value,
+                            change_pct=change_pct,
+                        )
+                    )
+                    if len(snapshots) > self._oi_max_snapshots:
+                        self._open_interest[asset.symbol] = snapshots[
+                            -self._oi_max_snapshots :
+                        ]
+            except Exception as e:
+                logger.debug("DataEngine: OI non dispo pour {}: {}", asset.symbol, e)

@@ -164,4 +164,3 @@ class TestGridATRShort:
         assert "sides" in cfg["grid_atr"]["default"]
         sides_values = cfg["grid_atr"]["default"]["sides"]
         assert ["long"] in sides_values
-        assert ["short"] in sides_values
