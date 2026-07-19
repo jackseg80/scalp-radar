@@ -59,7 +59,10 @@ and presents results via a real-time dashboard.
 - **Realistic SL**: SL cost includes distance + taker_fee + slippage (configurable)
 - **Correlation groups**: limits exposure on correlated assets
 
-## Project Structure
+## Database Maintenance
+
+- **Locks:** If the system reports "database is locked", ensure no manual `VACUUM` or backfill is saturating I/O. The DB has a 60s `busy_timeout`.
+- **Retention:** Automatic daily backfill is limited to 30 days to prevent I/O saturation. Large history backfills must be performed manually.
 
 ```text
 scalp-radar/

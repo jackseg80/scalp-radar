@@ -247,6 +247,13 @@ uv run python -m scripts.optimize --strategy grid_boltrend --all-symbols --excha
 
 ## 3. Données historiques
 
+### Backfill manuel longue période (ex: 2700 jours)
+
+```bash
+# Pour BTC/USDT (à lancer manuellement uniquement)
+uv run python -m scripts.fetch_history --exchange binance --days 2700 --symbol BTC/USDT --timeframe 1h
+```
+
 ### Vérifier les données disponibles
 ```powershell
 uv run python -m scripts.optimize --check-data
