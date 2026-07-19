@@ -23,6 +23,16 @@ from backend.core.models import Candle, Direction, TimeFrame
 from backend.strategies.base_grid import BaseGridStrategy, GridLevel
 
 
+@pytest.fixture(autouse=True)
+def _healthy_disk(monkeypatch):
+    """Les scénarios DataEngine ne doivent pas hériter du disque de la machine."""
+    usage = MagicMock(total=100, used=50, free=50)
+    monkeypatch.setattr(
+        "backend.monitoring.watchdog.shutil.disk_usage",
+        lambda _path: usage,
+    )
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 

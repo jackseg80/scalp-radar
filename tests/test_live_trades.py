@@ -236,7 +236,9 @@ class TestLiveDailyPnl:
             timestamp="2026-02-24T10:00:00+00:00",
         ))
 
-        daily = await db.get_live_daily_pnl(days=30)
+        # Les fixtures utilisent des dates historiques fixes : la fenêtre large
+        # garde ce test indépendant de la date à laquelle la suite est lancée.
+        daily = await db.get_live_daily_pnl(days=10_000)
         assert len(daily) == 2
         # Premier jour : 10 - 3 = 7
         assert daily[0]["pnl"] == 7.0

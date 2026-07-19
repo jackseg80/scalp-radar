@@ -123,8 +123,9 @@ class CandleUpdater:
 
             for exchange_name in exchanges:
                 exchange = create_exchange(exchange_name)
-                # Binance: max historique, Bitget: 90 jours
-                days = 2700 if exchange_name == "binance" else 90
+                # Keep the periodic updater bounded. Full history is handled by
+                # dedicated backfill commands, not by the live maintenance loop.
+                days = 30
                 start_date = datetime.now(tz=timezone.utc) - timedelta(days=days)
                 end_date = datetime.now(tz=timezone.utc)
 

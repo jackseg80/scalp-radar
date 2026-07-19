@@ -53,8 +53,13 @@ class IncrementalIndicatorEngine:
         key = (symbol, timeframe)
         buf = self._buffers[key]
 
-        # Éviter les doublons (même timestamp)
-        if buf and buf[-1].timestamp >= candle.timestamp:
+        # Une candle WebSocket est mise à jour plusieurs fois avant sa clôture.
+        # Remplacer la dernière valeur évite de figer les indicateurs sur le
+        # premier tick de la période. Les candles plus anciennes restent rejetées.
+        if buf and buf[-1].timestamp == candle.timestamp:
+            buf[-1] = candle
+            return
+        if buf and buf[-1].timestamp > candle.timestamp:
             return
 
         buf.append(candle)

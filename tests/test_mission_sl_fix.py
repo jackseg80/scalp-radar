@@ -93,21 +93,40 @@ async def test_update_grid_sl_idempotence():
 
 
 @pytest.mark.asyncio
-async def test_update_grid_sl_blocks_if_stale():
-    """Vérifie que _update_grid_sl refuse de modifier le SL si les prix sont stale."""
+async def test_update_grid_sl_uses_local_entry_if_market_data_is_stale():
+    """Un prix de marché stale ne doit jamais empêcher de restaurer le SL."""
     config = MagicMock()
+    config.strategies.grid_atr.sl_percent = 10.0
     ex = Executor(config, MagicMock(), MagicMock(), strategy_name="grid_atr")
     ex._data_engine = MagicMock()
+    ex._exchange = AsyncMock()
+    ex._exchange.price_to_precision = lambda _symbol, price: str(price)
+    ex._exchange.fetch_open_orders = AsyncMock(return_value=[])
+    ex._place_sl_with_retry = AsyncMock(return_value="new_sl")
     
     # Simuler des données vieilles de 10 minutes
     old_ts = datetime.now(tz=timezone.utc).timestamp() - 600
     ex._data_engine.get_last_update.return_value = datetime.fromtimestamp(old_ts, tz=timezone.utc)
     
     futures_sym = "BTC/USDT:USDT"
-    state = GridLiveState(symbol=futures_sym, direction="LONG", strategy_name="grid_atr", leverage=6)
-    state.sl_order_id = "should_not_change"
-    
+    state = GridLiveState(
+        symbol=futures_sym,
+        direction="LONG",
+        strategy_name="grid_atr",
+        leverage=6,
+        positions=[
+            GridLivePosition(
+                level=0,
+                entry_price=100.0,
+                quantity=1.0,
+                entry_order_id="entry_1",
+            ),
+        ],
+    )
+
     await ex._update_grid_sl(futures_sym, state)
-    
-    # Ne doit pas avoir bougé car stale
-    assert state.sl_order_id == "should_not_change"
+
+    assert state.sl_order_id == "new_sl"
+    ex._place_sl_with_retry.assert_awaited_once_with(
+        futures_sym, "sell", 1.0, 90.0, "grid_atr",
+    )

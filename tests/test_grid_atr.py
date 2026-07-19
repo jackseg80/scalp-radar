@@ -1112,6 +1112,45 @@ class TestGridATRPerAssetChain:
         params = cfg.get_params_for_symbol("BTC/USDT")  # Pas dans per_asset
         assert params["min_grid_spacing_pct"] == 0.8  # Valeur top-level
 
+    def test_strategy_for_symbol_applies_complete_override_without_mutation(self):
+        from backend.core.config import GridATRConfig
+
+        cfg = GridATRConfig(
+            ma_period=14,
+            atr_period=14,
+            atr_multiplier_start=2.0,
+            atr_multiplier_step=1.0,
+            num_levels=3,
+            sides=["long"],
+            sl_percent=20.0,
+            per_asset={
+                "ADA/USDT": {
+                    "ma_period": 10,
+                    "atr_period": 7,
+                    "atr_multiplier_start": 3.0,
+                    "atr_multiplier_step": 1.5,
+                    "num_levels": 4,
+                    "sides": ["short"],
+                    "sl_percent": 12.0,
+                },
+            },
+        )
+        base = GridATRStrategy(cfg)
+
+        effective = base.for_symbol("ADA/USDT")
+
+        assert effective is not base
+        assert effective._config.ma_period == 10
+        assert effective._config.atr_period == 7
+        assert effective._config.atr_multiplier_start == 3.0
+        assert effective._config.atr_multiplier_step == 1.5
+        assert effective._config.num_levels == 4
+        assert effective._config.sides == ["short"]
+        assert effective._config.sl_percent == 12.0
+        assert effective._config.per_asset == {}
+        assert base._config.ma_period == 14
+        assert base._config.sides == ["long"]
+
     def test_get_per_asset_float_helper_simulator(self):
         """GridStrategyRunner._get_per_asset_float() résout les overrides per_asset."""
         from unittest.mock import MagicMock

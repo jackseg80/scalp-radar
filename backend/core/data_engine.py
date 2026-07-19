@@ -124,10 +124,14 @@ class DataEngine:
 
         # Callbacks pour les consommateurs
         self._callbacks: list[Callable] = []
+        self._closed_callbacks: list[Callable] = []
 
         # Buffer d'écriture DB (flush toutes les 5s au lieu de 1 INSERT par candle)
         self._write_buffer: list[Candle] = []
         self._flush_task: asyncio.Task | None = None
+        self._last_flush_at: datetime | None = None
+        self._last_flush_error: str | None = None
+        self._flush_failures: int = 0
 
         # Données additionnelles (funding, OI)
         self._funding_rates: dict[str, float] = {}
@@ -170,6 +174,36 @@ class DataEngine:
     def last_update(self) -> Optional[datetime]:
         return self._last_update
 
+    def get_health_snapshot(self, stale_after_seconds: int = 300) -> dict:
+        """Return actionable feed and persistence health for `/health`."""
+        now = datetime.now(tz=timezone.utc)
+        configured_symbols = [asset.symbol for asset in self.config.assets]
+        stale_symbols: list[str] = []
+        ages: dict[str, int | None] = {}
+        for symbol in configured_symbols:
+            last_update = self._last_update_per_symbol.get(symbol)
+            age = (
+                int((now - last_update).total_seconds())
+                if last_update is not None
+                else None
+            )
+            ages[symbol] = age
+            if age is None or age > stale_after_seconds:
+                stale_symbols.append(symbol)
+
+        return {
+            "stale_symbols": stale_symbols,
+            "symbol_ages_seconds": ages,
+            "polling_symbols": sorted(self._polling_modes),
+            "abandoned_symbols": sorted(self._stale_abandoned),
+            "write_buffer_size": len(self._write_buffer),
+            "last_flush_at": (
+                self._last_flush_at.isoformat() if self._last_flush_at else None
+            ),
+            "last_flush_error": self._last_flush_error,
+            "flush_failures": self._flush_failures,
+        }
+
     def get_data(self, symbol: str) -> MultiTimeframeData:
         """Retourne les données multi-timeframe pour un symbol."""
         candles_dict: dict[str, list[Candle]] = {}
@@ -189,6 +223,10 @@ class DataEngine:
     def on_candle(self, callback: Callable) -> None:
         """Enregistre un callback appelé à chaque nouvelle candle validée."""
         self._callbacks.append(callback)
+
+    def on_closed_candle(self, callback: Callable) -> None:
+        """Enregistre un callback appelé une fois quand une candle est clôturée."""
+        self._closed_callbacks.append(callback)
 
     def get_funding_rate(self, symbol: str) -> float | None:
         """Retourne le dernier funding rate connu pour un symbol."""
@@ -288,13 +326,22 @@ class DataEngine:
                 pass
         self._flush_task = None
 
+        # Annuler les fallbacks REST. Ces tâches ne vivent pas dans _tasks.
+        for task in self._polling_tasks.values():
+            if not task.done():
+                task.cancel()
+        if self._polling_tasks:
+            await asyncio.gather(
+                *self._polling_tasks.values(), return_exceptions=True,
+            )
+        self._polling_tasks.clear()
+        self._polling_modes.clear()
+
         # Flush final des candles en attente avant fermeture DB
         if self._write_buffer:
             try:
-                batch = self._write_buffer.copy()
-                self._write_buffer.clear()
-                await self.db.insert_candles_batch(batch)
-                logger.info("DataEngine: flush final {} candles", len(batch))
+                flushed = await self._flush_write_buffer()
+                logger.info("DataEngine: flush final {} candles", flushed)
             except Exception as e:
                 logger.error("DataEngine: erreur flush final: {}", e)
 
@@ -359,46 +406,43 @@ class DataEngine:
         """Kill et relance la task watch_ d'un symbol spécifique.
 
         Utilisé quand la task est vivante mais ne reçoit plus de données.
+        Recrée aussi la task si elle a été retirée lors d'un fallback polling.
         Retourne True si la task a été relancée.
         """
         task_name = f"watch_{symbol}"
 
-        for i, task in enumerate(self._tasks):
-            if task.get_name() == task_name:
-                # Cancel la task existante
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.shield(task), timeout=5.0
-                        )
-                    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-                        pass
+        asset = next(
+            (a for a in self.config.assets if a.symbol == symbol),
+            None,
+        )
+        if asset is None:
+            logger.error("DataEngine: symbol {} non trouvé dans la config", symbol)
+            return False
 
-                # Trouver les timeframes pour ce symbol
-                asset = next(
-                    (a for a in self.config.assets if a.symbol == symbol),
-                    None,
-                )
-                if asset is None:
-                    logger.error(
-                        "DataEngine: symbol {} non trouvé dans la config", symbol
-                    )
-                    return False
+        old_tasks = [t for t in self._tasks if t.get_name() == task_name]
+        for task in old_tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                    pass
 
-                # Relancer
-                new_task = asyncio.create_task(
-                    self._watch_symbol(symbol, asset.timeframes),
-                    name=task_name,
-                )
-                self._tasks[i] = new_task
-                logger.warning(
-                    "DataEngine: task {} relancée (symbol stale)", task_name
-                )
-                return True
-
-        logger.warning("DataEngine: task {} non trouvée", task_name)
-        return False
+        # Toujours retirer les anciennes références avant de recréer. En mode
+        # polling, _stop_watch_task() les a déjà retirées : c'est précisément
+        # le cas qui restait auparavant sans aucune source de données.
+        self._tasks = [t for t in self._tasks if t.get_name() != task_name]
+        new_task = asyncio.create_task(
+            self._watch_symbol(symbol, asset.timeframes),
+            name=task_name,
+        )
+        self._tasks.append(new_task)
+        logger.warning(
+            "DataEngine: task {} {} (symbol stale)",
+            task_name,
+            "recréée" if not old_tasks else "relancée",
+        )
+        return True
 
     async def full_reconnect(self) -> None:
         """Recrée l'instance exchange et relance toutes les souscriptions.
@@ -406,6 +450,18 @@ class DataEngine:
         À utiliser quand restart_dead_tasks ne suffit pas (exchange cassé).
         """
         logger.warning("DataEngine: full reconnect — recréation exchange")
+
+        # Stopper les pollers REST avant de remplacer l'exchange. Ils ne font
+        # pas partie de _tasks et survivraient sinon au full reconnect.
+        for task in self._polling_tasks.values():
+            if not task.done():
+                task.cancel()
+        if self._polling_tasks:
+            await asyncio.gather(
+                *self._polling_tasks.values(), return_exceptions=True,
+            )
+        self._polling_tasks.clear()
+        self._polling_modes.clear()
 
         # Fermer l'ancien exchange
         if self._exchange:
@@ -730,6 +786,18 @@ class DataEngine:
     ) -> None:
         """Stocke une bougie en mémoire et DB, puis notifie les callbacks."""
         buffer = self._buffers[symbol][timeframe_str]
+        if buffer and buffer[-1].timestamp < candle.timestamp:
+            closed_candle = buffer[-1]
+            for callback in self._closed_callbacks:
+                try:
+                    res = callback(symbol, timeframe_str, closed_candle)
+                    if asyncio.iscoroutine(res):
+                        await res
+                except Exception as e:
+                    logger.error(
+                        "DataEngine: erreur callback candle clôturée: {}", e,
+                    )
+
         if buffer and buffer[-1].timestamp == candle.timestamp:
             buffer[-1] = candle
         else:
@@ -854,14 +922,54 @@ class DataEngine:
 
     _FLUSH_INTERVAL = 30
 
+    @staticmethod
+    def _coalesce_candle_batch(candles: list[Candle]) -> list[Candle]:
+        """Keep only the latest update for each persisted candle key."""
+        latest: dict[tuple[str, str, str, datetime], Candle] = {}
+        for candle in candles:
+            timeframe = (
+                candle.timeframe.value
+                if hasattr(candle.timeframe, "value")
+                else str(candle.timeframe)
+            )
+            key = (
+                candle.exchange,
+                candle.symbol,
+                timeframe,
+                candle.timestamp,
+            )
+            latest[key] = candle
+        return list(latest.values())
+
+    async def _flush_write_buffer(self) -> int:
+        """Flush buffered candles without losing them when SQLite is locked."""
+        if not self._write_buffer:
+            return 0
+
+        batch, self._write_buffer = self._write_buffer, []
+        batch = self._coalesce_candle_batch(batch)
+        try:
+            await self.db.insert_candles_batch(batch)
+        except Exception as exc:
+            # Put the failed batch in front of updates received during the DB
+            # await. The next coalescing pass will retain the newest version.
+            self._write_buffer = batch + self._write_buffer
+            self._last_flush_error = str(exc)
+            self._flush_failures += 1
+            raise
+
+        self._last_flush_at = datetime.now(tz=timezone.utc)
+        self._last_flush_error = None
+        return len(batch)
+
     async def _flush_candle_buffer(self) -> None:
         """Flush périodique du buffer de candles vers la DB."""
         while self._running:
             try:
                 await asyncio.sleep(self._FLUSH_INTERVAL)
                 if self._write_buffer:
-                    batch, self._write_buffer = self._write_buffer.copy(), []
-                    try: await self.db.insert_candles_batch(batch)
+                    try:
+                        await self._flush_write_buffer()
                     except Exception as e: logger.error("DataEngine: erreur flush candles: {}", e)
             except asyncio.CancelledError: break
 

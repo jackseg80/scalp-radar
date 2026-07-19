@@ -170,7 +170,7 @@ class TestBalanceSnapshots:
         snap = _make_snapshot()
         await db.insert_balance_snapshot(snap)
 
-        snapshots = await db.get_balance_snapshots(days=30)
+        snapshots = await db.get_balance_snapshots(days=10_000)
         assert len(snapshots) == 1
         assert snapshots[0]["equity"] == 1000.0
         assert snapshots[0]["strategy_name"] == "grid_atr"
@@ -185,11 +185,13 @@ class TestBalanceSnapshots:
             _make_snapshot(strategy_name="grid_multi_tf", equity=2000.0),
         )
 
-        snaps_atr = await db.get_balance_snapshots(strategy="grid_atr", days=30)
+        snaps_atr = await db.get_balance_snapshots(
+            strategy="grid_atr", days=10_000,
+        )
         assert len(snaps_atr) == 1
         assert snaps_atr[0]["equity"] == 1000.0
 
-        snaps_all = await db.get_balance_snapshots(days=30)
+        snaps_all = await db.get_balance_snapshots(days=10_000)
         assert len(snaps_all) == 2
 
 

@@ -92,6 +92,33 @@ class BaseStrategy(ABC):
 
     name: str = "base"
 
+    def for_symbol(self, symbol: str) -> BaseStrategy:
+        """Return an isolated strategy configured with all per-asset overrides.
+
+        Grid code historically patched two or three fields on a shared config
+        object. That left WFO parameters such as ATR/MA periods, multipliers,
+        sides and SL unapplied in production and introduced cross-symbol races.
+        """
+        config = getattr(self, "_config", None)
+        if config is None:
+            return self
+        per_asset = getattr(config, "per_asset", {})
+        overrides = (
+            per_asset.get(symbol, {})
+            if isinstance(per_asset, dict)
+            else {}
+        )
+        if not isinstance(overrides, dict) or not overrides:
+            return self
+        model_copy = getattr(config, "model_copy", None)
+        if not callable(model_copy):
+            return self
+        effective_config = model_copy(
+            deep=True,
+            update={**overrides, "per_asset": {}},
+        )
+        return self.__class__(effective_config)
+
     def _resolve_param(self, param_name: str, symbol: str) -> Any:
         """Résout un paramètre avec override per_asset (chemin production).
 

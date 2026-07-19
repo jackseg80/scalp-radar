@@ -112,6 +112,7 @@ def temp_db(tmp_path):
             regime_analysis TEXT,
             win_rate_oos REAL,
             tail_risk_ratio REAL,
+            leverage INTEGER,
             UNIQUE(strategy_name, asset, timeframe, created_at)
         );
     """)

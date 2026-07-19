@@ -129,9 +129,18 @@ class GridLiveState:
     strategy_name: str
     leverage: int
     positions: list[GridLivePosition] = field(default_factory=list)
+    processed_entry_order_ids: set[str] = field(default_factory=set)
     sl_order_id: str | None = None
     sl_price: float = 0.0
     opened_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    def __post_init__(self) -> None:
+        """Seed the fill deduplication guard from restored/open positions."""
+        self.processed_entry_order_ids.update(
+            position.entry_order_id
+            for position in self.positions
+            if position.entry_order_id
+        )
 
     @property
     def total_quantity(self) -> float:
@@ -219,6 +228,7 @@ class Executor:
         self._poll_task: asyncio.Task[None] | None = None
         self._balance_task: asyncio.Task[None] | None = None
         self._markets: dict[str, Any] = {}  # Cache load_markets()
+        self._effective_strategies: dict[tuple[str, str], Any] = {}
         self._exchange_balance: float | None = None  # Hotfix 28a
         self._balance_refresh_interval: int = 300  # 5 minutes
         self._order_history: deque[dict] = deque(maxlen=200)  # Sprint 32
@@ -808,6 +818,7 @@ class Executor:
             else strategies
         )
         self._strategies = {}
+        self._effective_strategies.clear()
         for name, strat in source.items():
             strat_copy = copy.copy(strat)  # shallow copy (strategy is stateless)
             if hasattr(strat._config, "model_copy"):
@@ -872,14 +883,17 @@ class Executor:
             return
 
         for strategy_name, strategy in self._strategies.items():
-            strat_tf = getattr(strategy._config, "timeframe", "1h")
+            effective_strategy = self._get_effective_strategy(
+                strategy_name, symbol,
+            )
+            strat_tf = getattr(effective_strategy._config, "timeframe", "1h")
             if timeframe != strat_tf:
                 continue
 
             futures_sym = to_futures_symbol(symbol)
 
             # Phase 2 : cooldown anti-churning
-            raw_cd = getattr(strategy._config, "cooldown_candles", 0)
+            raw_cd = getattr(effective_strategy._config, "cooldown_candles", 0)
             cooldown = raw_cd if isinstance(raw_cd, (int, float)) else 0
             if cooldown > 0 and futures_sym not in self._grid_states:
                 if futures_sym in self._last_close_time:
@@ -898,7 +912,7 @@ class Executor:
             filled_levels: set[int] = set()
             if existing_state:
                 filled_levels = {p.level for p in existing_state.positions}
-                if len(existing_state.positions) >= strategy.max_positions:
+                if len(existing_state.positions) >= effective_strategy.max_positions:
                     continue
 
             # SOURCE UNIQUE : lire les indicateurs depuis le runner paper
@@ -951,34 +965,19 @@ class Executor:
             # Construire GridState depuis les positions LIVE
             grid_state = self._live_state_to_grid_state(futures_sym)
 
-            # Évaluer la grille — patcher min_grid_spacing_pct/min_atr_pct per_asset
-            original_spacing = getattr(strategy._config, "min_grid_spacing_pct", 0.0)
-            original_min_atr = getattr(strategy._config, "min_atr_pct", 0.0)
-            if hasattr(strategy._config, "min_grid_spacing_pct"):
-                strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
-                    strategy, symbol, "min_grid_spacing_pct", original_spacing
-                )
-            if hasattr(strategy._config, "min_atr_pct"):
-                strategy._config.min_atr_pct = self._get_per_asset_float(
-                    strategy, symbol, "min_atr_pct", original_min_atr
-                )
-            
-            # Hotfix: Capture la valeur effective AVANT compute_grid pour le log correct
-            _min_atr_effective = getattr(strategy._config, "min_atr_pct", 0.0)
+            # Evaluate with the complete WFO/per-asset configuration.
+            _min_atr_effective = getattr(
+                effective_strategy._config, "min_atr_pct", 0.0,
+            )
 
             try:
-                levels = strategy.compute_grid(ctx, grid_state)
+                levels = effective_strategy.compute_grid(ctx, grid_state)
             except Exception as e:
                 logger.error(
                     "Executor entry: erreur compute_grid {} {}: {}",
                     strategy_name, symbol, e,
                 )
                 continue
-            finally:
-                if hasattr(strategy._config, "min_grid_spacing_pct"):
-                    strategy._config.min_grid_spacing_pct = original_spacing
-                if hasattr(strategy._config, "min_atr_pct"):
-                    strategy._config.min_atr_pct = original_min_atr
 
             if not levels:
                 _close = tf_indicators.get("close", float("nan"))
@@ -992,11 +991,11 @@ class Executor:
                 )
                 continue
 
-            grid_leverage = self._get_grid_leverage(strategy_name)
+            grid_leverage = self._get_grid_leverage(strategy_name, symbol)
 
             # Synchroniser les limit orders avec les niveaux de grille actuels
             await self._sync_entry_limits(
-                futures_sym, strategy_name, strategy, levels,
+                futures_sym, strategy_name, effective_strategy, levels,
                 filled_levels, grid_leverage,
                 allocated_balance, available_balance,
             )
@@ -1040,7 +1039,13 @@ class Executor:
                 old = self._pending_entry_orders[futures_sym][level_idx]
                 drift = abs(old.entry_price - level.entry_price) / level.entry_price
                 if drift > _LIMIT_PRICE_DRIFT_PCT:
-                    await self._cancel_pending_entry(futures_sym, level_idx, "price_drift")
+                    cancelled = await self._cancel_pending_entry(
+                        futures_sym, level_idx, "price_drift",
+                    )
+                    if not cancelled:
+                        # The exchange state is uncertain (or the old order filled).
+                        # Never place a replacement that could double the exposure.
+                        continue
                 else:
                     continue  # Ordre toujours valide
 
@@ -1085,26 +1090,32 @@ class Executor:
 
     async def _cancel_pending_entry(
         self, futures_sym: str, level_idx: int, reason: str,
-    ) -> None:
+    ) -> bool:
         """Annule un limit order d'entrée en attente.
 
         Gère la race condition : si l'ordre a été rempli entre-temps,
         traite le fill au lieu de cancel.
+
+        Returns True only when it is safe to place a replacement order.
         """
         pending = self._pending_entry_orders.get(futures_sym, {}).get(level_idx)
         if pending is None:
-            return
+            return True
 
         try:
             order = await self._exchange.fetch_order(pending.order_id, futures_sym)
-            if order.get("status") in ("closed", "filled"):
+            status = order.get("status")
+            if status in ("closed", "filled"):
                 # Rempli entre-temps — traiter le fill
                 avg_price = float(order.get("average") or pending.entry_price)
                 filled_qty = float(order.get("filled") or pending.quantity)
                 fee_info = order.get("fee") or {}
                 fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
                 await self._process_entry_fill(futures_sym, pending, avg_price, filled_qty, fee)
-                return
+                return False
+            if status in ("canceled", "cancelled", "expired", "rejected"):
+                self._remove_pending_tracking(futures_sym, pending)
+                return True
 
             # Annuler l'ordre
             await self._exchange.cancel_order(pending.order_id, futures_sym)
@@ -1113,27 +1124,77 @@ class Executor:
                 futures_sym, level_idx, reason,
             )
         except Exception as e:
-            err_str = str(e)
-            if "40109" in err_str or "OrderNotFound" in err_str:
-                # Peut avoir été rempli — vérifier
-                try:
-                    order = await self._exchange.fetch_order(pending.order_id, futures_sym)
-                    if order.get("status") in ("closed", "filled"):
-                        avg_price = float(order.get("average") or pending.entry_price)
-                        filled_qty = float(order.get("filled") or pending.quantity)
-                        fee_info = order.get("fee") or {}
-                        fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
-                        await self._process_entry_fill(futures_sym, pending, avg_price, filled_qty, fee)
-                        return
-                except Exception:
-                    pass
-            logger.warning("Executor: cancel pending entry {} lv{}: {}", futures_sym, level_idx, e)
+            logger.warning(
+                "Executor: cancel pending entry {} lv{} incertain, tracking conservé: {}",
+                futures_sym, level_idx, e,
+            )
+            return False
 
-        # Cleanup tracking
-        self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
-        if futures_sym in self._pending_entry_orders and not self._pending_entry_orders[futures_sym]:
+        self._remove_pending_tracking(futures_sym, pending)
+        return True
+
+    def _remove_pending_tracking(
+        self,
+        futures_sym: str,
+        pending: PendingEntryOrder,
+    ) -> bool:
+        """Remove a pending order only if the tracked order id still matches.
+
+        A cancelled order may fill after a replacement was installed at the
+        same logical level. Matching by order id prevents that late fill from
+        deleting the replacement and corrupting pending margin accounting.
+        """
+        sym_orders = self._pending_entry_orders.get(futures_sym)
+        if not sym_orders:
+            return False
+        current = sym_orders.get(pending.level_index)
+        if current is None or current.order_id != pending.order_id:
+            return False
+
+        sym_orders.pop(pending.level_index, None)
+        if not sym_orders:
             self._pending_entry_orders.pop(futures_sym, None)
-        self._pending_notional = max(0.0, self._pending_notional - pending.level_margin)
+        self._pending_notional = max(
+            0.0, self._pending_notional - pending.level_margin,
+        )
+        return True
+
+    def _get_effective_strategy(
+        self,
+        strategy_name: str,
+        symbol: str,
+    ) -> Any:
+        """Return an isolated strategy with all per-asset parameters applied."""
+        cache_key = (strategy_name, symbol)
+        cached = self._effective_strategies.get(cache_key)
+        if cached is not None:
+            return cached
+
+        strategy = self._strategies.get(strategy_name)
+        if strategy is None:
+            return None
+        config = getattr(strategy, "_config", None)
+        per_asset = getattr(config, "per_asset", {})
+        overrides = (
+            per_asset.get(symbol, {})
+            if isinstance(per_asset, dict)
+            else {}
+        )
+        if not isinstance(overrides, dict) or not overrides:
+            effective = strategy
+        else:
+            model_copy = getattr(config, "model_copy", None)
+            if not callable(model_copy):
+                effective = strategy
+            else:
+                effective_config = model_copy(
+                    deep=True,
+                    update={**overrides, "per_asset": {}},
+                )
+                effective = strategy.__class__(effective_config)
+
+        self._effective_strategies[cache_key] = effective
+        return effective
 
     async def _place_grid_limit_order(
         self,
@@ -1369,12 +1430,11 @@ class Executor:
         if state is None or not state.positions:
             return
 
-        strategy = self._strategies.get(state.strategy_name)
-        if strategy is None:
-            return
-
         # Convertir futures_sym ("BTC/USDT:USDT") → spot_sym ("BTC/USDT")
         spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+        strategy = self._get_effective_strategy(state.strategy_name, spot_sym)
+        if strategy is None:
+            return
 
         # ── SOURCE UNIQUE : lire les indicateurs du runner paper ──
         ctx = None
@@ -1483,17 +1543,7 @@ class Executor:
         # ── FALLBACK : should_close_all() pour les cas spéciaux ──
         # (TP inverse BolTrend : get_tp_price()=NaN, exit géré ici via signal SMA)
         if exit_reason is None:
-            # Patcher min_profit_pct per_asset avant l'appel
-            original_min_profit = getattr(strategy._config, "min_profit_pct", 0.0)
-            if hasattr(strategy._config, "min_profit_pct"):
-                strategy._config.min_profit_pct = self._get_per_asset_float(
-                    strategy, spot_sym, "min_profit_pct", original_min_profit
-                )
-            try:
-                exit_reason = strategy.should_close_all(ctx, grid_state)
-            finally:
-                if hasattr(strategy._config, "min_profit_pct"):
-                    strategy._config.min_profit_pct = original_min_profit
+            exit_reason = strategy.should_close_all(ctx, grid_state)
 
         if exit_reason is None:
             sma_val = tf_indicators.get("sma", 0.0)
@@ -1825,7 +1875,9 @@ class Executor:
 
         # Pre-trade check UNIQUEMENT au 1er niveau (Bug 2 fix)
         if is_first_level:
-            grid_leverage = self._get_grid_leverage(event.strategy_name)
+            grid_leverage = self._get_grid_leverage(
+                event.strategy_name, event.symbol,
+            )
 
             # Setup leverage au 1er trade grid — skip si déjà correct au boot
             if self._leverage_applied.get(futures_sym) == grid_leverage:
@@ -1926,7 +1978,9 @@ class Executor:
                 symbol=futures_sym,
                 direction=event.direction,
                 strategy_name=event.strategy_name,
-                leverage=self._get_grid_leverage(event.strategy_name),
+                leverage=self._get_grid_leverage(
+                    event.strategy_name, event.symbol,
+                ),
             )
             self._grid_states[futures_sym] = state
 
@@ -1956,8 +2010,9 @@ class Executor:
         # Rate limiting (comme _open_position)
         await asyncio.sleep(_ORDER_DELAY)
 
-        # Recalculer et replacer le SL global
-        await self._update_grid_sl(futures_sym, state)
+        # Recalculer et replacer le SL global. Cette méthode est appelée depuis
+        # _open_grid_position(), qui détient déjà _state_lock.
+        await self._update_grid_sl_unlocked(futures_sym, state)
 
         # Telegram
         await self._notifier.notify_grid_level_opened(
@@ -2000,29 +2055,21 @@ class Executor:
         Appelé soit immédiatement (fill instantané), soit par watchOrders/polling.
         Crée/met à jour le GridLiveState, place le SL, notifie.
         """
-        # 1. Cleanup pending tracking + guard double-traitement
-        # (watchOrders et polling peuvent détecter le même fill simultanément)
-        sym_orders = self._pending_entry_orders.get(futures_sym, {})
-        if pending.level_index in sym_orders:
-            # Chemin normal : supprimer du tracking pending
-            sym_orders.pop(pending.level_index)
-            if not sym_orders:
-                self._pending_entry_orders.pop(futures_sym, None)
-            self._pending_notional = max(0.0, self._pending_notional - pending.level_margin)
-        else:
-            # Level absent de pending_entry_orders :
-            # - Soit fill immédiat (temp_pending, jamais ajouté au tracking) → continuer
-            # - Soit déjà traité par un appel concurrent → skip
-            # Vérifier si l'order_id est déjà dans grid_states (dedup guard)
-            existing_state = self._grid_states.get(futures_sym)
-            if existing_state and any(
-                p.entry_order_id == pending.order_id for p in existing_state.positions
-            ):
-                logger.debug(
-                    "Executor: _process_entry_fill {} lv{} déjà dans grid_states — skip",
-                    futures_sym, pending.level_index,
-                )
-                return
+        # 1. Cleanup pending tracking + guard double-traitement.
+        # watchOrders and polling can report the same fill. A late fill from a
+        # cancelled order can also arrive after a replacement exists at the
+        # same logical level, so both guards must use the exchange order id.
+        existing_state = self._grid_states.get(futures_sym)
+        if (
+            existing_state is not None
+            and pending.order_id in existing_state.processed_entry_order_ids
+        ):
+            logger.debug(
+                "Executor: _process_entry_fill {} lv{} order {} déjà traité — skip",
+                futures_sym, pending.level_index, pending.order_id,
+            )
+            return
+        self._remove_pending_tracking(futures_sym, pending)
 
         # 2. Update order history
         self._update_order_price(pending.order_id, avg_price, entry_fee if entry_fee > 0 else None)
@@ -2046,7 +2093,10 @@ class Executor:
                 symbol=futures_sym,
                 direction=pending.direction,
                 strategy_name=pending.strategy_name,
-                leverage=self._get_grid_leverage(pending.strategy_name),
+                leverage=self._get_grid_leverage(
+                    pending.strategy_name,
+                    futures_sym.split(":")[0],
+                ),
             )
             self._grid_states[futures_sym] = state
 
@@ -2059,14 +2109,47 @@ class Executor:
         else:
             state = self._grid_states[futures_sym]
 
-        level_num = len(state.positions)
-        state.positions.append(GridLivePosition(
-            level=level_num,
-            entry_price=avg_price,
-            quantity=filled_qty,
-            entry_order_id=pending.order_id,
-            entry_fee=entry_fee,
-        ))
+        spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
+        max_levels = self._get_grid_num_levels(pending.strategy_name, spot_sym)
+        level_num = min(max(pending.level_index, 0), max_levels - 1)
+        if level_num != pending.level_index:
+            logger.error(
+                "Executor: fill {} niveau {} hors limite (max={}), fusion niveau {}",
+                futures_sym, pending.level_index, max_levels, level_num,
+            )
+
+        # A cancelled/replaced order may still fill. Account for the real
+        # exchange exposure without creating a fifth/sixth logical grid level.
+        target_position = next(
+            (position for position in state.positions if position.level == level_num),
+            None,
+        )
+        if target_position is None and len(state.positions) >= max_levels:
+            target_position = max(state.positions, key=lambda position: position.level)
+            level_num = target_position.level
+            logger.error(
+                "Executor: fill tardif {} fusionné au niveau {} (limite {} atteinte)",
+                pending.order_id, level_num, max_levels,
+            )
+
+        if target_position is None:
+            state.positions.append(GridLivePosition(
+                level=level_num,
+                entry_price=avg_price,
+                quantity=filled_qty,
+                entry_order_id=pending.order_id,
+                entry_fee=entry_fee,
+            ))
+        else:
+            total_quantity = target_position.quantity + filled_qty
+            target_position.entry_price = (
+                target_position.entry_price * target_position.quantity
+                + avg_price * filled_qty
+            ) / total_quantity
+            target_position.quantity = total_quantity
+            target_position.entry_fee += entry_fee
+
+        state.processed_entry_order_ids.add(pending.order_id)
 
         # 5. Sauvegarder AVANT le SL (P0-CR-1 Audit)
         await self._save_state_now()
@@ -2082,7 +2165,6 @@ class Executor:
             await self._update_grid_sl(futures_sym, state)
 
         # 7. Telegram
-        spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
         await self._notifier.notify_grid_level_opened(
             spot_sym, pending.direction, level_num,
             filled_qty, avg_price,
@@ -2125,6 +2207,20 @@ class Executor:
 
         for futures_sym, level_orders in list(self._pending_entry_orders.items()):
             for level_idx, pending in list(level_orders.items()):
+                age_seconds = (
+                    datetime.now(tz=timezone.utc) - pending.placed_at
+                ).total_seconds()
+                if age_seconds > _LIMIT_ORDER_MAX_AGE_S:
+                    logger.info(
+                        "Executor: pending entry {} lv{} expiré ({}s), cancel",
+                        futures_sym, level_idx, _LIMIT_ORDER_MAX_AGE_S,
+                    )
+                    await self._cancel_pending_entry(
+                        futures_sym, level_idx, "max_age",
+                    )
+                    await asyncio.sleep(_ORDER_DELAY)
+                    continue
+
                 try:
                     order = await self._exchange.fetch_order(
                         pending.order_id, futures_sym,
@@ -2152,27 +2248,7 @@ class Executor:
                             "Executor: pending entry {} lv{} annulé par exchange ({})",
                             futures_sym, level_idx, status,
                         )
-                        self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
-                        self._pending_notional = max(
-                            0.0, self._pending_notional - pending.level_margin,
-                        )
-                    elif (
-                        datetime.now(tz=timezone.utc) - pending.placed_at
-                    ).total_seconds() > _LIMIT_ORDER_MAX_AGE_S:
-                        logger.info(
-                            "Executor: pending entry {} lv{} expiré ({}s), cancel",
-                            futures_sym, level_idx, _LIMIT_ORDER_MAX_AGE_S,
-                        )
-                        try:
-                            await self._exchange.cancel_order(
-                                pending.order_id, futures_sym,
-                            )
-                        except Exception:
-                            pass
-                        self._pending_entry_orders.get(futures_sym, {}).pop(level_idx, None)
-                        self._pending_notional = max(
-                            0.0, self._pending_notional - pending.level_margin,
-                        )
+                        self._remove_pending_tracking(futures_sym, pending)
                 except Exception as e:
                     logger.warning(
                         "Executor: check pending fill {} lv{}: {}",
@@ -2252,7 +2328,10 @@ class Executor:
                     await self._cancel_all_open_orders(futures_sym)
 
         # 2. Calculer nouveau SL
-        sl_pct = self._get_grid_sl_percent(state.strategy_name)
+        sl_pct = self._get_grid_sl_percent(
+            state.strategy_name,
+            futures_sym.split(":")[0],
+        )
         if state.direction == "LONG":
             new_sl = state.avg_entry_price * (1 - sl_pct / 100)
         else:
@@ -3140,6 +3219,22 @@ class Executor:
             spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
             executor_grids[f"{gs.strategy_name}:{spot_sym}"] = info
 
+        now = datetime.now(tz=timezone.utc)
+        pending_entries = [
+            {
+                "symbol": futures_sym,
+                "level": pending.level_index,
+                "order_id": pending.order_id,
+                "entry_price": pending.entry_price,
+                "quantity": pending.quantity,
+                "direction": pending.direction,
+                "strategy_name": pending.strategy_name,
+                "age_seconds": int((now - pending.placed_at).total_seconds()),
+            }
+            for futures_sym, level_orders in self._pending_entry_orders.items()
+            for pending in level_orders.values()
+        ]
+
         result: dict[str, Any] = {
             "strategy_name": self._strategy_name,
             "enabled": self.is_enabled,
@@ -3147,6 +3242,9 @@ class Executor:
             "exchange_balance": self._exchange_balance,
             "position": pos_info,
             "positions": positions_list,
+            "pending_entries": pending_entries,
+            "pending_entry_count": len(pending_entries),
+            "pending_margin": round(self._pending_notional, 4),
             "risk_manager": self._risk_manager.get_status(),
         }
 
@@ -3202,6 +3300,7 @@ class Executor:
                 "sl_order_id": gs.sl_order_id,
                 "sl_price": gs.sl_price,
                 "opened_at": gs.opened_at.isoformat(),
+                "processed_entry_order_ids": sorted(gs.processed_entry_order_ids),
                 "positions": [
                     {
                         "level": p.level,
@@ -3264,10 +3363,8 @@ class Executor:
                     symbol,
                     self._positions[symbol].entry_price,
                 )
-            return
-
         # Ancien format : {"position": {...}} (single position)
-        pos_data = state.get("position")
+        pos_data = state.get("position") if not positions_data else None
         if pos_data is not None:
             symbol = pos_data["symbol"]
             self._positions[symbol] = self._restore_single_position(pos_data)
@@ -3288,6 +3385,9 @@ class Executor:
                 sl_order_id=gs_data.get("sl_order_id"),
                 sl_price=gs_data.get("sl_price", 0.0),
                 opened_at=datetime.fromisoformat(gs_data["opened_at"]),
+                processed_entry_order_ids=set(
+                    gs_data.get("processed_entry_order_ids", []),
+                ),
                 positions=[
                     GridLivePosition(
                         level=p["level"],
@@ -3355,11 +3455,19 @@ class Executor:
 
         return is_grid_strategy(strategy_name)
 
-    def _get_grid_sl_percent(self, strategy_name: str) -> float:
-        """Récupère le sl_percent depuis la config stratégie."""
+    def _get_grid_sl_percent(
+        self,
+        strategy_name: str,
+        symbol: str | None = None,
+    ) -> float:
+        """Resolve sl_percent, including the live per-asset override."""
         strat_config = getattr(self._config.strategies, strategy_name, None)
         if strat_config and hasattr(strat_config, "sl_percent"):
-            return strat_config.sl_percent
+            if symbol and hasattr(strat_config, "get_params_for_symbol"):
+                params = strat_config.get_params_for_symbol(symbol)
+                if isinstance(params, dict):
+                    return float(params.get("sl_percent", strat_config.sl_percent))
+            return float(strat_config.sl_percent)
         return 20.0
 
     def _get_leverage_for_symbol(self, symbol: str) -> int:
@@ -3380,11 +3488,19 @@ class Executor:
                 return lev
         return self._config.risk.position.default_leverage
 
-    def _get_grid_leverage(self, strategy_name: str) -> int:
-        """Récupère le leverage depuis la config stratégie."""
+    def _get_grid_leverage(
+        self,
+        strategy_name: str,
+        symbol: str | None = None,
+    ) -> int:
+        """Resolve leverage, including a possible per-asset override."""
         strat_config = getattr(self._config.strategies, strategy_name, None)
         if strat_config and hasattr(strat_config, "leverage"):
-            return strat_config.leverage
+            if symbol and hasattr(strat_config, "get_params_for_symbol"):
+                params = strat_config.get_params_for_symbol(symbol)
+                if isinstance(params, dict):
+                    return int(params.get("leverage", strat_config.leverage))
+            return int(strat_config.leverage)
         return 6
 
     # ─── Enrichissement métriques live (Sprint 39) ───────────────────────
@@ -3401,14 +3517,14 @@ class Executor:
         import math
 
         spot_sym = futures_sym.split(":")[0] if ":" in futures_sym else futures_sym
-        strategy = self._strategies.get(gs.strategy_name)
+        strategy = self._get_effective_strategy(gs.strategy_name, spot_sym)
 
         avg_entry = gs.avg_entry_price
         total_qty = gs.total_quantity
         notional = avg_entry * total_qty
         leverage = gs.leverage if gs.leverage > 0 else 6
         margin = notional / leverage if leverage > 0 else 0.0
-        levels_max = self._get_grid_num_levels(gs.strategy_name)
+        levels_max = self._get_grid_num_levels(gs.strategy_name, spot_sym)
 
         # Durée
         now = datetime.now(tz=timezone.utc)
@@ -3519,11 +3635,19 @@ class Executor:
             "positions": per_level,
         }
 
-    def _get_grid_num_levels(self, strategy_name: str) -> int:
-        """Récupère le num_levels depuis la config stratégie."""
+    def _get_grid_num_levels(
+        self,
+        strategy_name: str,
+        symbol: str | None = None,
+    ) -> int:
+        """Resolve num_levels, including the live per-asset override."""
         strat_config = getattr(self._config.strategies, strategy_name, None)
         if strat_config and hasattr(strat_config, "num_levels"):
-            return strat_config.num_levels
+            if symbol and hasattr(strat_config, "get_params_for_symbol"):
+                params = strat_config.get_params_for_symbol(symbol)
+                if isinstance(params, dict):
+                    return max(1, int(params.get("num_levels", strat_config.num_levels)))
+            return max(1, int(strat_config.num_levels))
         return 4
 
     @staticmethod

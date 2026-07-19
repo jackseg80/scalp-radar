@@ -9,6 +9,16 @@ from backend.alerts.notifier import AnomalyType, Notifier
 from backend.monitoring.watchdog import Watchdog
 
 
+@pytest.fixture(autouse=True)
+def _healthy_disk(monkeypatch):
+    """Les tests watchdog ne dépendent pas du remplissage du disque hôte."""
+    usage = MagicMock(total=100, used=50, free=50)
+    monkeypatch.setattr(
+        "backend.monitoring.watchdog.shutil.disk_usage",
+        lambda _path: usage,
+    )
+
+
 def _make_engine(connected: bool = True, last_update_age_seconds: float = 10.0):
     """Crée un mock DataEngine."""
     engine = MagicMock()

@@ -40,11 +40,11 @@ class Database:
     async def init(self) -> None:
         """Crée la connexion et les tables."""
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(self.db_path, timeout=10)
+        self._conn = await aiosqlite.connect(self.db_path, timeout=60)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
-        await self._conn.execute("PRAGMA busy_timeout=5000")
+        await self._conn.execute("PRAGMA busy_timeout=60000")
         await self._migrate_candles_exchange()
         await self._create_tables()
         logger.info("Database initialisée : {}", self.db_path)
@@ -571,7 +571,12 @@ class Database:
     # ─── CANDLES ────────────────────────────────────────────────────────────
 
     async def insert_candles_batch(self, candles: list[Candle]) -> int:
-        """Insère un batch de candles. Ignore les doublons. Retourne le nombre inséré."""
+        """Insert or refresh a candle batch, retrying transient SQLite locks.
+
+        WebSocket candles are updated several times before they close. The
+        upsert keeps the latest OHLCV instead of persisting only the first tick.
+        Identical duplicates remain no-ops and are not counted.
+        """
         if not candles:
             return 0
         assert self._conn is not None
@@ -591,15 +596,54 @@ class Database:
             )
             for c in candles
         ]
-        async with self._write_lock:
-            cursor = await self._conn.executemany(
-                """INSERT OR IGNORE INTO candles
+        query = """INSERT INTO candles
                    (exchange, symbol, timeframe, timestamp, open, high, low, close, volume, vwap, mark_price)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                data,
-            )
-            await self._conn.commit()
-        return cursor.rowcount
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(exchange, symbol, timeframe, timestamp) DO UPDATE SET
+                       open = excluded.open,
+                       high = excluded.high,
+                       low = excluded.low,
+                       close = excluded.close,
+                       volume = excluded.volume,
+                       vwap = excluded.vwap,
+                       mark_price = excluded.mark_price
+                   WHERE candles.open IS NOT excluded.open
+                      OR candles.high IS NOT excluded.high
+                      OR candles.low IS NOT excluded.low
+                      OR candles.close IS NOT excluded.close
+                      OR candles.volume IS NOT excluded.volume
+                      OR candles.vwap IS NOT excluded.vwap
+                      OR candles.mark_price IS NOT excluded.mark_price"""
+
+        backoff = 0.25
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._write_lock:
+                    try:
+                        cursor = await self._conn.executemany(query, data)
+                        await self._conn.commit()
+                    except Exception:
+                        try:
+                            await self._conn.rollback()
+                        except Exception:
+                            logger.exception(
+                                "Database: rollback failed after candle batch error",
+                            )
+                        raise
+                return cursor.rowcount
+            except Exception as exc:
+                is_locked = "locked" in str(exc).lower()
+                if not is_locked or attempt == max_retries - 1:
+                    raise
+                logger.warning(
+                    "Database: candle batch locked (attempt {}/{}), retry in {}s",
+                    attempt + 1, max_retries, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff *= 2
+
+        return 0
 
     async def get_candles(
         self,
@@ -1400,8 +1444,12 @@ class Database:
         for attempt in range(max_retries):
             try:
                 async with self._write_lock:
-                    await self._conn.execute(query, params)
-                    await self._conn.commit()
+                    try:
+                        await self._conn.execute(query, params)
+                        await self._conn.commit()
+                    except Exception:
+                        await self._conn.rollback()
+                        raise
                 return
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < max_retries - 1:

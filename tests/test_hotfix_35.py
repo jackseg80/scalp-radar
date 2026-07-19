@@ -287,6 +287,9 @@ class TestMaxLiveGrids:
 
         executor._exchange = AsyncMock()
         executor._exchange.amount_to_precision = MagicMock(return_value="0.001")
+        executor._exchange.price_to_precision = MagicMock(
+            side_effect=lambda _symbol, price: str(price),
+        )
         executor._exchange.create_order.return_value = {
             "id": "ord2",
             "filled": 0.001,
@@ -309,7 +312,12 @@ class TestMaxLiveGrids:
             await executor._open_grid_position(event)
 
         # L'exchange a bien été appelé (le guard n'a pas bloqué)
-        executor._exchange.create_order.assert_called_once()
+        # Une entrée puis le SL global : le chemin ne doit pas se bloquer après
+        # l'ordre market et la règle "jamais de position sans SL" reste vérifiée.
+        calls = executor._exchange.create_order.await_args_list
+        assert calls[0].args[:3] == ("BTC/USDT:USDT", "market", "buy")
+        assert calls[1].args[:3] == ("BTC/USDT:USDT", "market", "sell")
+        assert calls[1].kwargs["params"]["reduceOnly"] is True
 
     def test_max_grids_default_from_config(self):
         """max_live_grids est lu depuis config.risk avec fallback à 4."""

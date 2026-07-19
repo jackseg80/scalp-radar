@@ -617,6 +617,49 @@ class TestGridRunnerDashboard:
         assert "close" in indicators_1h
         assert indicators_1h["sma"] > 0
 
+    def test_build_context_recomputes_indicators_with_per_asset_periods(self):
+        from backend.core.config import GridATRConfig
+        from backend.strategies.grid_atr import GridATRStrategy
+
+        strategy = GridATRStrategy(GridATRConfig(
+            ma_period=14,
+            atr_period=14,
+            per_asset={
+                "BTC/USDT": {
+                    "ma_period": 3,
+                    "atr_period": 3,
+                },
+            },
+        ))
+        runner = _make_grid_runner(strategy=strategy)
+        runner._indicator_engine = IncrementalIndicatorEngine([strategy])
+        start = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        closes = []
+        for index in range(20):
+            close = 100.0 + index * index
+            closes.append(close)
+            candle = _make_candle(
+                close=close,
+                high=close + index + 1,
+                low=close - index - 1,
+                ts=start + timedelta(hours=index),
+            )
+            runner._indicator_engine.update("BTC/USDT", "1h", candle)
+            runner._update_close_buffer("BTC/USDT", candle)
+
+        ctx = runner.build_context("BTC/USDT")
+
+        assert ctx is not None
+        effective = strategy.for_symbol("BTC/USDT")
+        expected = effective.compute_indicators({
+            "1h": runner._indicator_engine._buffers[("BTC/USDT", "1h")],
+        })["1h"]
+        latest = expected[next(reversed(expected))]
+        assert ctx.indicators["1h"]["sma"] == pytest.approx(
+            np.mean(closes[-3:]),
+        )
+        assert ctx.indicators["1h"]["atr"] == pytest.approx(latest["atr"])
+
     def test_get_grid_positions_format(self):
         """get_grid_positions retourne le bon format avec symbole."""
         runner = _make_grid_runner()

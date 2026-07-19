@@ -504,6 +504,7 @@ def _make_executor_mock(cooldown_candles: int = 3):
     executor._last_close_time = {}
     executor._pending_levels = set()
     executor._pending_notional = 0.0
+    executor._effective_strategies = {}
     executor._balance_bootstrapped = True
     executor._exchange_balance = 1000.0
 
@@ -511,6 +512,9 @@ def _make_executor_mock(cooldown_candles: int = 3):
     executor._simulator.get_runner_context = MagicMock(return_value=None)
 
     # Bind la vraie méthode
+    executor._get_effective_strategy = Executor._get_effective_strategy.__get__(
+        executor, Executor
+    )
     executor._on_candle = Executor._on_candle.__get__(executor, Executor)
 
     return executor

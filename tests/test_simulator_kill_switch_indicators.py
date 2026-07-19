@@ -162,6 +162,10 @@ class TestRunnerKillSwitchIndicators:
         runner._strategy_tf = "1h"
         runner._ma_period = 20
         runner._close_buffer = {}
+        runner._last_close_timestamp = {}
+        runner._update_close_buffer = GridStrategyRunner._update_close_buffer.__get__(
+            runner, GridStrategyRunner,
+        )
 
         # Redirige vers la vraie implémentation de update_indicators_only
         runner.update_indicators_only = lambda s, tf, c: GridStrategyRunner.update_indicators_only(
@@ -185,6 +189,10 @@ class TestRunnerKillSwitchIndicators:
         runner._strategy_tf = "1h"
         runner._ma_period = 20
         runner._close_buffer = {}
+        runner._last_close_timestamp = {}
+        runner._update_close_buffer = GridStrategyRunner._update_close_buffer.__get__(
+            runner, GridStrategyRunner,
+        )
         runner._trades = []
         runner._positions = {}
 

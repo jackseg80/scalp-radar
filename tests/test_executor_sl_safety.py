@@ -12,6 +12,13 @@ from backend.execution.executor import Executor, GridLiveState, GridLivePosition
 from backend.execution.order_monitor import watch_orders_loop
 
 
+def _set_sync_price_precision(executor: Executor) -> None:
+    """CCXT precision helpers are synchronous even on async exchanges."""
+    executor._exchange.price_to_precision = MagicMock(
+        side_effect=lambda _symbol, price: str(price),
+    )
+
+
 @pytest.mark.asyncio
 async def test_proactive_missing_sl_replacement():
     """Vérifie que _check_missing_sl détecte et replace un SL manquant."""
@@ -24,6 +31,7 @@ async def test_proactive_missing_sl_replacement():
     
     ex = Executor(config, MagicMock(), MagicMock(), strategy_name="grid_atr")
     ex._exchange = AsyncMock()
+    _set_sync_price_precision(ex)
     ex._data_engine = MagicMock()
     ex._data_engine.get_last_update.return_value = datetime.now(tz=timezone.utc)
     
@@ -68,6 +76,7 @@ async def test_sl_replacement_ignores_stale_ws_uses_avg_entry():
 
     ex = Executor(config, MagicMock(), MagicMock(), strategy_name="grid_atr")
     ex._exchange = AsyncMock()
+    _set_sync_price_precision(ex)
 
     futures_sym = "BTC/USDT:USDT"
     state = GridLiveState(
@@ -182,6 +191,7 @@ async def test_sl_missing_telegram_alert_after_30s():
     notifier = AsyncMock()
     ex = Executor(config, MagicMock(), notifier, strategy_name="grid_atr")
     ex._exchange = AsyncMock()
+    _set_sync_price_precision(ex)
     ex._exchange.fetch_open_orders = AsyncMock(return_value=[])
     ex._exchange.create_order = AsyncMock(return_value={"id": "new_sl"})
     ex._state_save_callback = AsyncMock()
@@ -213,6 +223,7 @@ async def test_sl_missing_no_alert_before_30s():
     notifier = AsyncMock()
     ex = Executor(config, MagicMock(), notifier, strategy_name="grid_atr")
     ex._exchange = AsyncMock()
+    _set_sync_price_precision(ex)
     ex._exchange.fetch_open_orders = AsyncMock(return_value=[])
     ex._exchange.create_order = AsyncMock(return_value={"id": "new_sl"})
     ex._state_save_callback = AsyncMock()

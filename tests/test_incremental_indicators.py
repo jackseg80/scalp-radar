@@ -89,16 +89,27 @@ class TestIncrementalIndicatorEngine:
         sizes = engine.get_buffer_sizes()
         assert sizes[("BTC/USDT", "5m")] == 100
 
-    def test_duplicate_candle_ignored(self):
-        """Les bougies avec timestamp <= dernier sont ignorées."""
+    def test_current_candle_update_replaces_last_value(self):
+        """Une mise à jour au même timestamp remplace la candle courante."""
         engine = IncrementalIndicatorEngine([_DummyStrategy()])
         candle = _make_candle(0, TimeFrame.M5, 5)
+        updated = Candle(
+            timestamp=candle.timestamp,
+            open=candle.open,
+            high=candle.high + 5,
+            low=candle.low,
+            close=candle.close + 5,
+            volume=candle.volume + 10,
+            symbol=candle.symbol,
+            timeframe=candle.timeframe,
+        )
 
         engine.update("BTC/USDT", "5m", candle)
-        engine.update("BTC/USDT", "5m", candle)  # Doublon
+        engine.update("BTC/USDT", "5m", updated)
 
         sizes = engine.get_buffer_sizes()
         assert sizes[("BTC/USDT", "5m")] == 1
+        assert engine._buffers[("BTC/USDT", "5m")][-1].close == updated.close
 
     def test_empty_buffer_returns_empty(self):
         """Pas de candles → pas d'indicateurs."""

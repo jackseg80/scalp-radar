@@ -96,6 +96,45 @@ class TestCandleBuffer:
         assert len(batch) == 2
 
     @pytest.mark.asyncio
+    async def test_flush_coalesces_intrabar_updates_to_latest_candle(self):
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock(return_value=1)
+        engine = DataEngine(config=_make_config(), database=db)
+        first = _make_candle()
+        latest = first.model_copy(update={
+            "high": first.high + 50,
+            "close": first.close + 25,
+            "volume": first.volume + 10,
+        })
+        engine._write_buffer.extend([first, latest])
+
+        flushed = await engine._flush_write_buffer()
+
+        assert flushed == 1
+        batch = db.insert_candles_batch.call_args.args[0]
+        assert batch == [latest]
+        assert engine._write_buffer == []
+        assert engine._last_flush_error is None
+
+    @pytest.mark.asyncio
+    async def test_failed_flush_requeues_candles_instead_of_losing_them(self):
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock(
+            side_effect=RuntimeError("database is locked"),
+        )
+        engine = DataEngine(config=_make_config(), database=db)
+        first = _make_candle()
+        latest = first.model_copy(update={"close": first.close + 25})
+        engine._write_buffer.extend([first, latest])
+
+        with pytest.raises(RuntimeError, match="database is locked"):
+            await engine._flush_write_buffer()
+
+        assert engine._write_buffer == [latest]
+        assert engine._last_flush_error == "database is locked"
+        assert engine._flush_failures == 1
+
+    @pytest.mark.asyncio
     async def test_callbacks_still_immediate(self):
         """Vérifie que les callbacks sont appelés immédiatement, pas au flush."""
         db = MagicMock()
@@ -236,6 +275,43 @@ class TestCandleBuffer:
             [base_ts, 49.0, 100.0, 48.0, 99.0, 1.0],
         )
         assert len(engine._buffers["BTC/USDT"]["1m"]) == 3  # pas de 4e
+
+    @pytest.mark.asyncio
+    async def test_closed_callback_fires_once_with_final_candle(self):
+        """Le callback clôturé reçoit la dernière version, une seule fois."""
+        db = MagicMock()
+        db.insert_candles_batch = AsyncMock()
+        engine = DataEngine(config=_make_config(), database=db)
+        closed_calls = []
+
+        async def on_closed(symbol, timeframe, candle):
+            closed_calls.append((symbol, timeframe, candle))
+
+        engine.on_closed_candle(on_closed)
+        base_ts = int(
+            datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc).timestamp()
+        ) * 1000
+
+        await engine._on_candle_received(
+            "BTC/USDT", "1m",
+            [base_ts, 49.0, 51.0, 48.0, 50.0, 1.0],
+        )
+        await engine._on_candle_received(
+            "BTC/USDT", "1m",
+            [base_ts, 49.0, 56.0, 48.0, 55.0, 2.0],
+        )
+        assert closed_calls == []
+
+        await engine._on_candle_received(
+            "BTC/USDT", "1m",
+            [base_ts + 60_000, 55.0, 57.0, 54.0, 56.0, 1.0],
+        )
+
+        assert len(closed_calls) == 1
+        assert closed_calls[0][2].timestamp == datetime.fromtimestamp(
+            base_ts / 1000, tz=timezone.utc,
+        )
+        assert closed_calls[0][2].close == 55.0
 
     @pytest.mark.asyncio
     async def test_empty_buffer_no_flush(self):

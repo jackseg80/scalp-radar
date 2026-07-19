@@ -277,7 +277,10 @@ async def _init_executors(
         )
         await sync_live_to_paper(executor, simulator)
         await executor.start_exit_monitor()
-        engine.on_candle(executor._on_candle)
+        # Les niveaux d'entrée sont ancrés sur les indicateurs de la dernière
+        # candle clôturée. Les updates intra-candle restent réservées au
+        # simulateur, au dashboard et au monitoring des sorties.
+        engine.on_closed_candle(executor._on_candle)
 
     if state_manager is not None:
         state_manager.set_executors(executor_mgr)

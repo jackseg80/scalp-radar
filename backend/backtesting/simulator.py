@@ -601,6 +601,7 @@ class GridStrategyRunner:
         self._strategy_tf = getattr(strategy._config, "timeframe", "1h")
         self._ma_period = getattr(strategy._config, "ma_period", 7)
         self._close_buffer: dict[str, deque] = {}
+        self._last_close_timestamp: dict[str, datetime] = {}
 
         # Nombre d'assets pour diviser le capital proportionnellement
         per_asset = getattr(strategy._config, "per_asset", {})
@@ -780,6 +781,8 @@ class GridStrategyRunner:
         for candle in candles:
             self._close_buffer[symbol].append(candle.close)
             self._indicator_engine.update(symbol, self._strategy_tf, candle)
+        if candles:
+            self._last_close_timestamp[symbol] = candles[-1].timestamp
 
         logger.info(
             "[{}] Warm-up: {} bougies {} chargées pour {}",
@@ -933,12 +936,8 @@ class GridStrategyRunner:
             # Compteur grace period (kill switch runner)
             self._candles_since_warmup += 1
 
-        # Maintenir le buffer de closes
-        if symbol not in self._close_buffer:
-            self._close_buffer[symbol] = deque(
-                maxlen=max(self._ma_period + 20, 50)
-            )
-        self._close_buffer[symbol].append(candle.close)
+        # Maintenir le buffer de closes sans dupliquer la candle en cours.
+        self._update_close_buffer(symbol, candle)
 
         # Calculer SMA
         closes = list(self._close_buffer[symbol])
@@ -1358,14 +1357,20 @@ class GridStrategyRunner:
         if not self._indicator_engine:
             return None
 
-        indicators = self._indicator_engine.get_indicators(symbol)
-        if not indicators:
-            indicators = {}
+        raw_indicators = self._indicator_engine.get_indicators(symbol) or {}
+        indicators = {
+            timeframe: dict(values)
+            for timeframe, values in raw_indicators.items()
+        }
+        effective_strategy = self._strategy.for_symbol(symbol)
+        effective_ma_period = int(
+            getattr(effective_strategy._config, "ma_period", self._ma_period),
+        )
 
         # Merger SMA depuis le buffer interne
         closes = list(self._close_buffer.get(symbol, []))
-        if len(closes) >= self._ma_period:
-            sma_val = float(np.mean(closes[-self._ma_period:]))
+        if len(closes) >= effective_ma_period:
+            sma_val = float(np.mean(closes[-effective_ma_period:]))
             indicators.setdefault(self._strategy_tf, {}).update({
                 "sma": sma_val,
                 "close": closes[-1] if closes else 0.0,
@@ -1378,7 +1383,20 @@ class GridStrategyRunner:
             candle_buf = buffers.get((symbol, self._strategy_tf), [])
             if candle_buf:
                 try:
-                    extra = self._strategy.compute_live_indicators(
+                    # Recompute the latest point with the complete WFO
+                    # configuration (MA/ATR periods and 4h Supertrend included).
+                    computed = effective_strategy.compute_indicators({
+                        self._strategy_tf: list(candle_buf),
+                    })
+                    latest_timestamp = candle_buf[-1].timestamp.isoformat()
+                    for tf_key, timeline in computed.items():
+                        latest_values = timeline.get(latest_timestamp)
+                        if latest_values is None and timeline:
+                            latest_values = timeline[next(reversed(timeline))]
+                        if latest_values:
+                            indicators.setdefault(tf_key, {}).update(latest_values)
+
+                    extra = effective_strategy.compute_live_indicators(
                         list(candle_buf),
                     )
                     for tf_key, tf_data in extra.items():
@@ -1406,11 +1424,26 @@ class GridStrategyRunner:
         """
         if timeframe != self._strategy_tf:
             return
+        self._update_close_buffer(symbol, candle)
+
+    def _update_close_buffer(self, symbol: str, candle: Candle) -> None:
+        """Ajoute une nouvelle candle ou remplace sa mise à jour intra-période."""
+        timestamps = getattr(self, "_last_close_timestamp", None)
+        if not isinstance(timestamps, dict):
+            timestamps = {}
+            self._last_close_timestamp = timestamps
         if symbol not in self._close_buffer:
             self._close_buffer[symbol] = deque(
                 maxlen=max(self._ma_period + 20, 50),
             )
+        last_timestamp = timestamps.get(symbol)
+        if last_timestamp == candle.timestamp and self._close_buffer[symbol]:
+            self._close_buffer[symbol][-1] = candle.close
+            return
+        if last_timestamp is not None and candle.timestamp < last_timestamp:
+            return
         self._close_buffer[symbol].append(candle.close)
+        timestamps[symbol] = candle.timestamp
 
     def get_grid_positions(self) -> list[dict]:
         """Retourne les positions grid ouvertes pour le dashboard."""

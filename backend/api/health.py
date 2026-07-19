@@ -27,6 +27,13 @@ async def health_check(request: Request) -> dict:
             "symbols": [],
         }
     else:
+        health_snapshot = (
+            engine.get_health_snapshot()
+            if callable(getattr(engine, "get_health_snapshot", None))
+            else {}
+        )
+        if not isinstance(health_snapshot, dict):
+            health_snapshot = {}
         engine_status = {
             "enabled": True,
             "connected": engine.is_connected,
@@ -34,6 +41,7 @@ async def health_check(request: Request) -> dict:
                 engine.last_update.isoformat() if engine.last_update else None
             ),
             "symbols": engine.get_all_symbols(),
+            **health_snapshot,
         }
 
     # Statut DB
@@ -53,6 +61,12 @@ async def health_check(request: Request) -> dict:
     if failed_components:
         status = "degraded"
     elif engine and not engine.is_connected:
+        status = "degraded"
+    elif engine_status.get("last_flush_error"):
+        status = "degraded"
+    elif uptime > 300 and engine_status.get("stale_symbols"):
+        status = "degraded"
+    elif engine_status.get("abandoned_symbols"):
         status = "degraded"
     elif not db_connected:
         status = "error"

@@ -82,6 +82,24 @@ class TestCandlesCRUD:
         result = await db.get_candles("BTC/USDT", "5m")
         assert len(result) == 1
 
+    async def test_same_timestamp_refreshes_incomplete_websocket_candle(self, db):
+        first = _make_candle()
+        final = first.model_copy(update={
+            "high": first.high + 25,
+            "close": first.close + 20,
+            "volume": first.volume + 100,
+        })
+
+        await db.insert_candles_batch([first])
+        updated = await db.insert_candles_batch([final])
+
+        assert updated == 1
+        result = await db.get_candles("BTC/USDT", "5m")
+        assert len(result) == 1
+        assert result[0].high == final.high
+        assert result[0].close == final.close
+        assert result[0].volume == final.volume
+
     async def test_large_batch(self, db):
         candles = [_make_candle(ts_offset=i) for i in range(1000)]
         inserted = await db.insert_candles_batch(candles)

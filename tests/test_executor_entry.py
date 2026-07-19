@@ -51,6 +51,10 @@ def _make_config() -> MagicMock:
     config.strategies.grid_atr.leverage = 6
     config.strategies.grid_atr.timeframe = "1h"
     config.strategies.grid_atr.sl_percent = 20.0
+    config.strategies.grid_atr.num_levels = 3
+    config.strategies.grid_atr.get_params_for_symbol = MagicMock(
+        side_effect=lambda _symbol: {"num_levels": 3},
+    )
     return config
 
 
@@ -451,6 +455,183 @@ class TestLiveStateToGridState:
         gs = executor._live_state_to_grid_state("BTC/USDT:USDT")
         assert gs.avg_entry_price == 50_000.0
         assert gs.unrealized_pnl == 0  # Pas de current_price → 0
+
+
+class TestLimitOrderRaceSafety:
+    """Regression tests for cancel/replace and late exchange fills."""
+
+    @staticmethod
+    def _pending(order_id: str, level: int = 0) -> PendingEntryOrder:
+        return PendingEntryOrder(
+            order_id=order_id,
+            futures_sym="BTC/USDT:USDT",
+            level_index=level,
+            entry_price=50_000.0 - level * 500,
+            quantity=0.01,
+            direction=Direction.LONG,
+            strategy_name="grid_atr",
+            side="buy",
+            level_margin=25.0,
+        )
+
+    @staticmethod
+    def _stub_fill_side_effects(executor: Executor) -> None:
+        executor._save_state_now = AsyncMock()
+        executor._update_grid_sl = AsyncMock()
+        executor._persist_live_trade = AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_uncertain_cancel_keeps_tracking_and_skips_replacement(self):
+        executor = _make_executor(order_status="open")
+        old = self._pending("old")
+        executor._pending_entry_orders["BTC/USDT:USDT"] = {0: old}
+        executor._pending_notional = old.level_margin
+        executor._exchange.fetch_order = AsyncMock(
+            side_effect=TimeoutError("exchange timeout"),
+        )
+        level = GridLevel(
+            index=0,
+            entry_price=48_000.0,
+            direction=Direction.LONG,
+            size_fraction=0.25,
+        )
+
+        await executor._sync_entry_limits(
+            "BTC/USDT:USDT", "grid_atr", executor._strategies["grid_atr"],
+            [level], set(), 6, 100.0, 1000.0,
+        )
+
+        assert executor._pending_entry_orders["BTC/USDT:USDT"][0] is old
+        assert executor._pending_notional == old.level_margin
+        executor._exchange.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_already_cancelled_order_can_be_replaced(self):
+        executor = _make_executor(order_status="open")
+        old = self._pending("old")
+        executor._pending_entry_orders["BTC/USDT:USDT"] = {0: old}
+        executor._pending_notional = old.level_margin
+        executor._exchange.fetch_order = AsyncMock(
+            return_value={"id": old.order_id, "status": "canceled"},
+        )
+
+        safe_to_replace = await executor._cancel_pending_entry(
+            "BTC/USDT:USDT", 0, "price_drift",
+        )
+
+        assert safe_to_replace is True
+        assert "BTC/USDT:USDT" not in executor._pending_entry_orders
+        assert executor._pending_notional == 0.0
+        executor._exchange.cancel_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_late_fill_does_not_delete_replacement_tracking(self):
+        executor = _make_executor()
+        self._stub_fill_side_effects(executor)
+        old = self._pending("old")
+        replacement = self._pending("replacement")
+        executor._pending_entry_orders["BTC/USDT:USDT"] = {0: replacement}
+        executor._pending_notional = replacement.level_margin
+
+        with patch("backend.execution.executor.asyncio.sleep", new=AsyncMock()):
+            await executor._process_entry_fill(
+                "BTC/USDT:USDT", old, 49_900.0, 0.01, 0.02,
+            )
+
+        tracked = executor._pending_entry_orders["BTC/USDT:USDT"][0]
+        assert tracked.order_id == "replacement"
+        assert executor._pending_notional == replacement.level_margin
+
+    @pytest.mark.asyncio
+    async def test_replacement_fill_merges_same_level_and_deduplicates(self):
+        executor = _make_executor()
+        self._stub_fill_side_effects(executor)
+        old = self._pending("old")
+        replacement = self._pending("replacement")
+        executor._pending_entry_orders["BTC/USDT:USDT"] = {0: replacement}
+        executor._pending_notional = replacement.level_margin
+
+        with patch("backend.execution.executor.asyncio.sleep", new=AsyncMock()):
+            await executor._process_entry_fill(
+                "BTC/USDT:USDT", old, 50_000.0, 0.01, 0.02,
+            )
+            await executor._process_entry_fill(
+                "BTC/USDT:USDT", replacement, 49_000.0, 0.01, 0.02,
+            )
+            await executor._process_entry_fill(
+                "BTC/USDT:USDT", old, 50_000.0, 0.01, 0.02,
+            )
+
+        state = executor._grid_states["BTC/USDT:USDT"]
+        assert len(state.positions) == 1
+        assert state.positions[0].quantity == pytest.approx(0.02)
+        assert state.positions[0].entry_price == pytest.approx(49_500.0)
+        assert state.processed_entry_order_ids == {"old", "replacement"}
+        assert "BTC/USDT:USDT" not in executor._pending_entry_orders
+        assert executor._pending_notional == 0.0
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_late_fill_never_creates_extra_level(self):
+        executor = _make_executor()
+        self._stub_fill_side_effects(executor)
+        executor._grid_states["BTC/USDT:USDT"] = GridLiveState(
+            symbol="BTC/USDT:USDT",
+            direction="LONG",
+            strategy_name="grid_atr",
+            leverage=6,
+            positions=[
+                GridLivePosition(i, 50_000.0 - i * 500, 0.01, f"entry_{i}")
+                for i in range(3)
+            ],
+        )
+        late = self._pending("late_level_5", level=5)
+
+        with patch("backend.execution.executor.asyncio.sleep", new=AsyncMock()):
+            await executor._process_entry_fill(
+                "BTC/USDT:USDT", late, 47_500.0, 0.01, 0.02,
+            )
+
+        state = executor._grid_states["BTC/USDT:USDT"]
+        assert len(state.positions) == 3
+        assert state.positions[2].quantity == pytest.approx(0.02)
+        assert "late_level_5" in state.processed_entry_order_ids
+
+
+class TestEffectivePerAssetStrategy:
+    def test_executor_uses_isolated_complete_symbol_config(self):
+        from backend.core.config import GridATRConfig
+        from backend.strategies.grid_atr import GridATRStrategy
+
+        executor = _make_executor()
+        base = GridATRStrategy(GridATRConfig(
+            ma_period=14,
+            atr_period=14,
+            num_levels=3,
+            per_asset={
+                "BTC/USDT": {
+                    "ma_period": 7,
+                    "atr_period": 10,
+                    "atr_multiplier_start": 3.0,
+                    "num_levels": 4,
+                    "sl_percent": 12.0,
+                },
+            },
+        ))
+        executor._strategies = {"grid_atr": base}
+
+        effective = executor._get_effective_strategy(
+            "grid_atr", "BTC/USDT",
+        )
+
+        assert effective._config.ma_period == 7
+        assert effective._config.atr_period == 10
+        assert effective._config.atr_multiplier_start == 3.0
+        assert effective._config.num_levels == 4
+        assert effective._config.sl_percent == 12.0
+        assert base._config.ma_period == 14
+        assert executor._get_effective_strategy(
+            "grid_atr", "BTC/USDT",
+        ) is effective
 
 
 # ── TestBalanceBootstrap ─────────────────────────────────────────────────
