@@ -3112,14 +3112,53 @@ Audit complet du projet (5 axes en parallèle : core, stratégies/backtest, exec
 
 ---
 
-## ÉTAT ACTUEL (27 mars 2026)
+### Sprint 67 — Paper Execution Realism (20 juillet 2026) ✅
 
-- **2249 tests, 2242 passants** (7 pré-existants non liés — SUI/XTZ/JUP/param_grids/resample_gaps/is_latest/live_trades)
-- **Phases 1-5 terminées + Sprints 1-66 + 65b + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
+**Objectif** : Corriger le rendement paper irréaliste de `grid_multi_tf`
+(+1,826%, 97% WR) sans modifier le moteur live.
+
+**Diagnostic robot2** : sur 2,553 trades, 2,315 étaient ouverts et fermés sur
+la même bougie H1 et produisaient +$37,700.95. Les 236 trades de durée positive
+produisaient -$3,569.71. Deux trades avaient même une durée négative. La
+performance historique paper est invalidée.
+
+**Corrections** :
+- décisions de trading uniquement sur `on_closed_candle`; les mises à jour
+  intrabougie ne servent plus qu'aux indicateurs et au mark-to-market;
+- niveaux de grille calculés à la clôture actifs uniquement dès la bougie
+  suivante;
+- TP/SL testés uniquement s'ils étaient connus avant la bougie;
+- rejet strict des bougies dupliquées ou hors ordre;
+- persistance des ordres virtuels, seuils, horloge et funding;
+- snapshot legacy `intrabar` ignoré au premier redémarrage du nouveau moteur
+  `closed_bar_v2`, empêchant la restauration des faux +$30k;
+- funding inclus dans le P&L réalisé;
+- equity journal = capital libre + marge + P&L latent;
+- frontend aligné sur `total P&L = equity - capital initial` et
+  `margin ratio = margin / equity`.
+
+**Limite assumée** : OHLC H1 ne permet pas de connaître parfaitement l'ordre
+des événements intrabougie ni de simuler latence, partial fills et profondeur
+du carnet. Un replay tick/order-book serait nécessaire pour aller plus loin.
+
+**Audit** :
+[`audit-grid-multi-tf-paper-realism-20260720.md`](audit/audit-grid-multi-tf-paper-realism-20260720.md).
+Plan :
+[`sprint-67-paper-execution-realism.md`](plans/sprint-67-paper-execution-realism.md).
+
+**Tests** : 9 tests dédiés, build frontend réussi, lint réussi →
+**2269 tests passants**, 0 régression.
+
+---
+
+## ÉTAT ACTUEL (20 juillet 2026)
+
+- **2269 tests, 2269 passants**
+- **Phases 1-5 terminées + Sprints 1-67 + 65b + Sprints 62a/62b/63a/63b + Audit Hardening 2026-03-02**
 - **Phase 6 en cours** — pipeline backtest corrigé, moteur live audité, grading V2 déployé — **WFO à relancer** (kill switch formula corrigée)
 - **18 stratégies** : 4 scalp 5m + 4 swing 1h (bollinger_mr, donchian_breakout, supertrend, boltrend) + 9 grid/DCA 1h (envelope_dca, envelope_dca_short, grid_atr, grid_range_atr, grid_multi_tf, grid_funding, grid_trend, grid_boltrend, **grid_momentum**) + **1 trend daily** (**trend_follow_daily** — fast engine only, WFO à lancer)
 - **28 assets** (BTC ETH SOL DOGE LINK ADA AVAX CRV DYDX FET GALA ICP NEAR UNI XRP BCH BNB AAVE ARB OP SUI DOT ATOM LTC FIL ETC TRX XLM)
-- **Paper trading actif** : **grid_atr Top 9** (BTC, CRV, DOGE, DYDX, FET, GALA, ICP, NEAR, AVAX) + **grid_boltrend 5 assets** (BTC, ETH, DOGE, DYDX, LINK) — ENJ et SAND retirés (volume insuffisant)
+- **Paper trading** : moteur `closed_bar_v2` sans look-ahead prêt au déploiement ; historique `grid_multi_tf` antérieur au 20/07/2026 invalidé
 - **grid_trend non déployé** : échoue en forward test (1/5 runners profitables sur 365j de bear market)
 - **grid_momentum** : **ABANDONNÉ** — WFO terminé (1 Grade B / 21 assets, faux breakouts crypto)
 - **Sécurité** : endpoints executor protégés par API key, async I/O StateManager, buffer candles DataEngine, bypass selector configurable au boot, filtre per_asset strict (assets non validés WFO rejetés)
@@ -3723,7 +3762,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 2237 collectés, 2230 passants, 0 régression
+- **Tests** : 2269 collectés, 2269 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

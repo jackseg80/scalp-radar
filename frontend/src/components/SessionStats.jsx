@@ -8,7 +8,6 @@ import Tooltip from './Tooltip'
 export default function SessionStats({ wsData }) {
   const strategies = wsData?.strategies || {}
 
-  let totalRealizedPnl = 0
   let totalUnrealizedPnl = 0
   let totalTrades = 0
   let totalWins = 0
@@ -21,7 +20,6 @@ export default function SessionStats({ wsData }) {
   let runnerCount = 0
 
   Object.values(strategies).forEach(s => {
-    totalRealizedPnl += s.net_pnl || 0
     totalUnrealizedPnl += s.unrealized_pnl || 0
     totalTrades += s.total_trades || 0
     totalWins += s.wins || 0
@@ -37,9 +35,12 @@ export default function SessionStats({ wsData }) {
   // Fallback initial capital si pas de runners
   if (initialCapital <= 0) initialCapital = 10000
 
-  const totalPnl = totalRealizedPnl + totalUnrealizedPnl
+  // L'equity est la source comptable de vérité : elle inclut aussi le
+  // funding et les ajustements de capital persistés entre les redémarrages.
+  const totalPnl = runnerCount > 0 ? totalEquity - initialCapital : 0
+  const totalRealizedPnl = totalPnl - totalUnrealizedPnl
   const equityPct = ((totalEquity / initialCapital) - 1) * 100
-  const marginPct = initialCapital > 0 ? (totalMarginUsed / initialCapital) * 100 : 0
+  const marginPct = totalEquity > 0 ? (totalMarginUsed / totalEquity) * 100 : 0
   const available = totalEquity - totalMarginUsed
   const winRate = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0
 
@@ -86,7 +87,7 @@ export default function SessionStats({ wsData }) {
         <StatRow
           label="Marge"
           value={`${totalMarginUsed.toLocaleString('fr-FR', { maximumFractionDigits: 0 })}$ (${marginPct.toFixed(1)}%)`}
-          tooltip="Marge utilisée par les positions ouvertes"
+          tooltip="Marge utilisée par les positions ouvertes (% de l'equity actuelle)"
           small
         />
         <StatRow
@@ -125,10 +126,13 @@ export default function SessionStats({ wsData }) {
 // Exposer le summary pour CollapsibleCard — maintenant avec P&L total
 SessionStats.getSummary = function(wsData) {
   const strategies = wsData?.strategies || {}
-  let totalPnl = 0
+  let totalEquity = 0
+  let initialCapital = 0
   Object.values(strategies).forEach(s => {
-    totalPnl += (s.net_pnl || 0) + (s.unrealized_pnl || 0)
+    totalEquity += s.equity || s.capital || 0
+    initialCapital += s.initial_capital || 0
   })
+  const totalPnl = initialCapital > 0 ? totalEquity - initialCapital : 0
   return `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(0)}$`
 }
 

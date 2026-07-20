@@ -315,7 +315,8 @@ class TestSimulatorSnapshot:
         assert result["unrealized_pnl"] == 150.0
         assert result["margin_used"] == 500.0
         assert result["n_positions"] == 3
-        assert result["equity"] == 9950.0  # capital + unrealized
+        # capital est le cash disponible : réintégrer la marge verrouillée.
+        assert result["equity"] == 10450.0  # capital + margin + unrealized
         assert result["realized_pnl"] == -200.0
         assert "timestamp" in result
 
@@ -353,7 +354,7 @@ class TestSimulatorSnapshot:
         assert result["unrealized_pnl"] == 20.0  # 50 + (-30)
         assert result["margin_used"] == 500.0  # 200 + 300
         assert result["n_positions"] == 3  # 2 + 1
-        assert result["equity"] == 10020.0  # 10000 + 20
+        assert result["equity"] == 10520.0  # capital + margin + unrealized
         assert result["realized_pnl"] == 0.0  # 100 + (-100)
 
 

@@ -106,10 +106,21 @@ class StateManager:
                 "position_symbol": runner._position_symbol,
             }
 
+            if getattr(runner, "_chronological_execution", False):
+                # Import local to keep the runtime dependency one-way outside
+                # state serialization.
+                from backend.backtesting.simulator import PAPER_EXECUTION_MODEL
+
+                runner_state["execution_model"] = PAPER_EXECUTION_MODEL
+
             # P&L réalisé pour GridStrategyRunner (kill switch correct)
             realized_pnl = getattr(runner, "_realized_pnl", None)
             if isinstance(realized_pnl, (int, float)):
                 runner_state["realized_pnl"] = realized_pnl
+
+            funding_cost = getattr(runner, "_total_funding_cost", None)
+            if isinstance(funding_cost, (int, float)):
+                runner_state["funding_cost"] = funding_cost
 
             # Positions grid (GridStrategyRunner)
             if hasattr(runner, "_positions") and isinstance(runner._positions, dict):
@@ -127,6 +138,43 @@ class StateManager:
                         })
                 if all_grid_positions:
                     runner_state["grid_positions"] = all_grid_positions
+
+            # Ordres paper calculés à la dernière clôture, actifs uniquement
+            # sur les bougies suivantes (modèle chronologique v2).
+            pending_orders = getattr(runner, "_pending_grid_orders", {})
+            if isinstance(pending_orders, dict):
+                serialized_orders = []
+                for symbol, orders in pending_orders.items():
+                    for order in orders:
+                        level = order.level
+                        serialized_orders.append({
+                            "symbol": symbol,
+                            "level": level.index,
+                            "entry_price": level.entry_price,
+                            "direction": level.direction.value,
+                            "size_fraction": level.size_fraction,
+                            "created_at": order.created_at.isoformat(),
+                        })
+                if serialized_orders:
+                    runner_state["pending_grid_orders"] = serialized_orders
+
+            planned_exits = getattr(runner, "_planned_grid_exits", {})
+            if isinstance(planned_exits, dict) and planned_exits:
+                runner_state["planned_grid_exits"] = {
+                    symbol: {
+                        "tp_price": planned.tp_price,
+                        "sl_price": planned.sl_price,
+                        "created_at": planned.created_at.isoformat(),
+                    }
+                    for symbol, planned in planned_exits.items()
+                }
+
+            processed = getattr(runner, "_last_processed_candle", {})
+            if isinstance(processed, dict) and processed:
+                runner_state["last_processed_candles"] = {
+                    symbol: timestamp.isoformat()
+                    for symbol, timestamp in processed.items()
+                }
 
             # Phase 2 : cooldown anti-churning timestamps
             close_times = getattr(runner, "_last_close_time", {})

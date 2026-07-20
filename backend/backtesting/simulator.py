@@ -40,7 +40,13 @@ from backend.strategies.base import (
     OpenPosition,
     StrategyContext,
 )
-from backend.strategies.base_grid import BaseGridStrategy, GridPosition
+from backend.strategies.base_grid import (
+    TF_SECONDS,
+    BaseGridStrategy,
+    GridLevel,
+    GridPosition,
+    GridState,
+)
 from backend.strategies.factory import get_enabled_strategies
 
 if TYPE_CHECKING:
@@ -54,6 +60,28 @@ REGIME_LIVE_TO_WFO: dict[MarketRegime, str] = {
     MarketRegime.HIGH_VOLATILITY: "crash",
     # LOW_VOLATILITY intentionnellement absent → toujours autorisé
 }
+
+# Paper state written before this model used intrabar updates and could execute
+# levels retroactively on the candle that created them. Never restore that
+# economically invalid capital into the chronological paper engine.
+PAPER_EXECUTION_MODEL = "closed_bar_v2"
+
+
+@dataclass(frozen=True)
+class PendingGridOrder:
+    """Ordre paper créé à une clôture et actif sur les bougies suivantes."""
+
+    level: GridLevel
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class PlannedGridExit:
+    """Seuils TP/SL connus avant le début de la prochaine bougie."""
+
+    tp_price: float
+    sl_price: float
+    created_at: datetime
 
 
 class DiagnosticEncoder(json.JSONEncoder):
@@ -555,6 +583,7 @@ class GridStrategyRunner:
         data_engine: DataEngine,
         db_path: str | None = None,
         regime_profile: dict[str, dict] | None = None,
+        chronological_execution: bool = False,
     ) -> None:
         self._strategy = strategy
         self._config = config
@@ -562,6 +591,13 @@ class GridStrategyRunner:
         self._gpm = grid_position_manager
         self._data_engine = data_engine
         self._db_path = db_path
+        # En production paper, les niveaux calculés à la clôture T ne peuvent
+        # être remplis que sur T+1. Les tests unitaires/anciens appelants gardent
+        # le mode immédiat par défaut pour backward compatibility explicite.
+        self._chronological_execution = chronological_execution
+        self._pending_grid_orders: dict[str, list[PendingGridOrder]] = {}
+        self._planned_grid_exits: dict[str, PlannedGridExit] = {}
+        self._last_processed_candle: dict[str, datetime] = {}
 
         # Sprint 27 : profil WFO par régime, indexé par symbol
         # Format: {"BTC/USDT": {"bull": {"avg_oos_sharpe": 6.88, ...}, ...}}
@@ -705,6 +741,102 @@ class GridStrategyRunner:
                     pass
         return default
 
+    def _bar_close_time(self, candle: Candle) -> datetime:
+        """Retourne l'instant de clôture de la bougie (timestamp = ouverture)."""
+        return candle.timestamp + timedelta(
+            seconds=TF_SECONDS.get(self._strategy_tf, 3600),
+        )
+
+    def _compute_grid_levels(
+        self,
+        symbol: str,
+        ctx: StrategyContext,
+        grid_state: GridState,
+        effective_max: int,
+    ) -> list[GridLevel]:
+        """Calcule les niveaux avec les overrides per-asset, sans les exécuter."""
+        original_num_levels = self._strategy._config.num_levels
+        original_spacing = getattr(
+            self._strategy._config, "min_grid_spacing_pct", 0.0,
+        )
+        original_min_atr = getattr(
+            self._strategy._config, "min_atr_pct", 0.0,
+        )
+        self._strategy._config.num_levels = effective_max
+        if hasattr(self._strategy._config, "min_grid_spacing_pct"):
+            self._strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
+                symbol, "min_grid_spacing_pct", original_spacing,
+            )
+        if hasattr(self._strategy._config, "min_atr_pct"):
+            self._strategy._config.min_atr_pct = self._get_per_asset_float(
+                symbol, "min_atr_pct", original_min_atr,
+            )
+        try:
+            return self._strategy.compute_grid(ctx, grid_state)
+        finally:
+            self._strategy._config.num_levels = original_num_levels
+            if hasattr(self._strategy._config, "min_grid_spacing_pct"):
+                self._strategy._config.min_grid_spacing_pct = original_spacing
+            if hasattr(self._strategy._config, "min_atr_pct"):
+                self._strategy._config.min_atr_pct = original_min_atr
+
+    def _plan_next_bar(
+        self,
+        symbol: str,
+        ctx: StrategyContext,
+        main_ind: dict[str, Any],
+        candle: Candle,
+    ) -> None:
+        """Crée les ordres et seuils actifs après la clôture courante.
+
+        Les niveaux sont calculés avec les informations disponibles à la
+        clôture de ``candle``. Ils ne pourront donc être remplis qu'à partir de
+        la bougie suivante, ce qui reproduit l'ordre réel signal → ordre → fill.
+        """
+        if not self._chronological_execution:
+            return
+
+        positions = self._positions.get(symbol, [])
+        grid_state = self._gpm.compute_grid_state(positions, candle.close)
+        created_at = self._bar_close_time(candle)
+
+        if positions:
+            self._planned_grid_exits[symbol] = PlannedGridExit(
+                tp_price=self._strategy.get_tp_price(grid_state, main_ind),
+                sl_price=self._strategy.get_sl_price(grid_state, main_ind),
+                created_at=created_at,
+            )
+        else:
+            self._planned_grid_exits.pop(symbol, None)
+
+        self._pending_grid_orders.pop(symbol, None)
+        if self._kill_switch_triggered or len(positions) >= self._get_num_levels(symbol):
+            return
+        if not self._should_allow_new_grid(symbol):
+            return
+
+        raw_cd = getattr(self._strategy._config, "cooldown_candles", 0)
+        cooldown = raw_cd if isinstance(raw_cd, (int, float)) else 0
+        if not positions and cooldown > 0 and symbol in self._last_close_time:
+            elapsed = (
+                created_at - self._last_close_time[symbol]
+            ).total_seconds()
+            tf_seconds = TF_SECONDS.get(self._strategy_tf, 3600)
+            if elapsed < cooldown * tf_seconds:
+                return
+
+        levels = self._compute_grid_levels(
+            symbol,
+            ctx,
+            grid_state,
+            self._get_num_levels(symbol),
+        )
+        if levels:
+            self._pending_grid_orders[symbol] = [
+                PendingGridOrder(level=level, created_at=created_at)
+                for level in levels
+            ]
+
     def _should_allow_new_grid(self, symbol: str) -> bool:
         """Sprint 27 : Filtre Darwinien — bloque si régime WFO défavorable.
 
@@ -795,6 +927,9 @@ class GridStrategyRunner:
 
         # Fermer toutes les positions warm-up (pas de record trade)
         self._positions.clear()
+        self._pending_grid_orders.clear()
+        self._planned_grid_exits.clear()
+        self._last_processed_candle.clear()
 
         # Si un état était en attente de restauration (restart avec state)
         pending = getattr(self, "_pending_restore", None)
@@ -853,6 +988,52 @@ class GridStrategyRunner:
             )
             self._positions.setdefault(symbol, []).append(pos)
 
+        # Restaurer les ordres virtuels et seuils actifs (state v2).
+        for raw in state.get("pending_grid_orders", []):
+            try:
+                symbol = raw["symbol"]
+                level = GridLevel(
+                    index=int(raw["level"]),
+                    entry_price=float(raw["entry_price"]),
+                    direction=Direction(raw["direction"]),
+                    size_fraction=float(raw["size_fraction"]),
+                )
+                order = PendingGridOrder(
+                    level=level,
+                    created_at=datetime.fromisoformat(raw["created_at"]),
+                )
+                self._pending_grid_orders.setdefault(symbol, []).append(order)
+            except (KeyError, TypeError, ValueError):
+                logger.warning(
+                    "[{}] Ordre paper sauvegardé invalide ignoré: {}",
+                    self.name, raw,
+                )
+
+        for symbol, raw in state.get("planned_grid_exits", {}).items():
+            try:
+                self._planned_grid_exits[symbol] = PlannedGridExit(
+                    tp_price=float(raw["tp_price"]),
+                    sl_price=float(raw["sl_price"]),
+                    created_at=datetime.fromisoformat(raw["created_at"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                logger.warning(
+                    "[{}] Seuil paper sauvegardé invalide ignoré pour {}",
+                    self.name, symbol,
+                )
+
+        for symbol, timestamp in state.get("last_processed_candles", {}).items():
+            try:
+                self._last_processed_candle[symbol] = datetime.fromisoformat(
+                    timestamp,
+                )
+            except (TypeError, ValueError):
+                pass
+
+        restored_funding = state.get("funding_cost", 0.0)
+        if isinstance(restored_funding, (int, float)):
+            self._total_funding_cost = float(restored_funding)
+
         # Phase 2 : restaurer cooldown anti-churning
         for sym, ts_str in state.get("last_close_times", {}).items():
             try:
@@ -903,6 +1084,18 @@ class GridStrategyRunner:
         if self._per_asset_keys and symbol not in self._per_asset_keys:
             return
 
+        # En mode paper chronologique, chaque bougie clôturée est évaluée une
+        # seule fois et tout retour en arrière est rejeté avant la logique de
+        # trading. C'est volontairement plus strict que le buffer indicateur.
+        if self._chronological_execution and timeframe == self._strategy_tf:
+            last_processed = self._last_processed_candle.get(symbol)
+            if last_processed is not None and candle.timestamp <= last_processed:
+                logger.warning(
+                    "[{}] Bougie ignorée pour {}: {} <= dernière traitée {}",
+                    self.name, symbol, candle.timestamp, last_processed,
+                )
+                return
+
         # Rafraîchir le prix courant pour TOUTES les timeframes
         # (P&L temps réel dans get_status(), mis à jour chaque 1m au lieu de 1h)
         self._last_prices[symbol] = candle.close
@@ -932,6 +1125,12 @@ class GridStrategyRunner:
                     ).total_seconds()
                     if candle_age_s > 7200:
                         return  # Bougie historique, ne pas trader
+
+            if self._chronological_execution:
+                # _end_warmup() clears the historical clock before restoring
+                # state. Record the first genuinely live candle afterwards so
+                # a duplicate callback cannot execute it twice.
+                self._last_processed_candle[symbol] = candle.timestamp
 
             # Compteur grace period (kill switch runner)
             self._candles_since_warmup += 1
@@ -1016,7 +1215,10 @@ class GridStrategyRunner:
                 else:
                     cost = -notional * funding_rate  # SHORT reçoit
                 self._capital -= cost
+                self._realized_pnl -= cost
                 self._total_funding_cost += cost
+            self._stats.net_pnl = self._realized_pnl
+            self._stats.capital = self._capital
 
         # Construire le GridState
         grid_state = self._gpm.compute_grid_state(positions, candle.close)
@@ -1033,8 +1235,20 @@ class GridStrategyRunner:
 
         # 1. Si positions ouvertes → check TP/SL global
         if positions:
-            tp_price = self._strategy.get_tp_price(grid_state, main_ind)
-            sl_price = self._strategy.get_sl_price(grid_state, main_ind)
+            planned_exit = self._planned_grid_exits.get(symbol)
+            if (
+                self._chronological_execution
+                and planned_exit is not None
+                and planned_exit.created_at <= candle.timestamp
+            ):
+                # Seuils connus avant l'ouverture de cette bougie : aucun
+                # extrême intrabar antérieur ne peut influencer leur calcul.
+                tp_price = planned_exit.tp_price
+                sl_price = planned_exit.sl_price
+            else:
+                # Backward compatibility et première bougie après migration.
+                tp_price = self._strategy.get_tp_price(grid_state, main_ind)
+                sl_price = self._strategy.get_sl_price(grid_state, main_ind)
 
             # Check via OHLC heuristic
             exit_reason, exit_price = self._gpm.check_global_tp_sl(
@@ -1069,7 +1283,12 @@ class GridStrategyRunner:
 
                 trade = self._gpm.close_all_positions(
                     positions, exit_price,
-                    candle.timestamp, exit_reason,
+                    (
+                        self._bar_close_time(candle)
+                        if self._chronological_execution
+                        else candle.timestamp
+                    ),
+                    exit_reason,
                     self._current_regime,
                 )
                 if self._is_warming_up:
@@ -1077,9 +1296,11 @@ class GridStrategyRunner:
                     self._trades.append((symbol, trade))
                 else:
                     self._record_trade(trade, symbol)
-                    self._record_close(symbol, candle.timestamp)
+                    self._record_close(symbol, trade.exit_time)
                 self._positions[symbol] = []
                 self._hwm.pop(symbol, None)  # Reset HWM après fermeture
+                self._pending_grid_orders.pop(symbol, None)
+                self._planned_grid_exits.pop(symbol, None)
                 if not self._is_warming_up:
                     self._pending_journal_events.append({
                         "timestamp": trade.exit_time.isoformat(),
@@ -1099,19 +1320,23 @@ class GridStrategyRunner:
                             "fee_cost": round(trade.fee_cost, 2),
                         },
                     })
+                self._plan_next_bar(symbol, ctx, main_ind, candle)
                 return
 
         # Sprint 27 : Filtre Darwinien — bloquer si régime défavorable
         # Uniquement quand aucune position ouverte (ne touche pas les grilles existantes)
-        if not positions and not self._should_allow_new_grid(symbol):
+        if (
+            not self._chronological_execution
+            and not positions
+            and not self._should_allow_new_grid(symbol)
+        ):
             return
 
         # Phase 2 : cooldown anti-churning — bloquer si close récent
-        if not positions:
+        if not self._chronological_execution and not positions:
             raw_cd = getattr(self._strategy._config, "cooldown_candles", 0)
             cooldown = raw_cd if isinstance(raw_cd, (int, float)) else 0
             if cooldown > 0 and symbol in self._last_close_time:
-                from backend.strategies.base_grid import TF_SECONDS
                 tf_seconds = TF_SECONDS.get(self._strategy_tf, 3600)
                 elapsed = (candle.timestamp - self._last_close_time[symbol]).total_seconds()
                 if elapsed < cooldown * tf_seconds:
@@ -1120,27 +1345,17 @@ class GridStrategyRunner:
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
         effective_max = self._get_num_levels(symbol)
         if len(positions) < effective_max:
-            # Patcher temporairement les params per_asset pour ce symbol
-            original_num_levels = self._strategy._config.num_levels
-            original_spacing = getattr(self._strategy._config, "min_grid_spacing_pct", 0.0)
-            original_min_atr = getattr(self._strategy._config, "min_atr_pct", 0.0)
-            self._strategy._config.num_levels = effective_max
-            if hasattr(self._strategy._config, "min_grid_spacing_pct"):
-                self._strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
-                    symbol, "min_grid_spacing_pct", original_spacing
+            if self._chronological_execution:
+                pending = self._pending_grid_orders.pop(symbol, [])
+                levels = [
+                    order.level
+                    for order in pending
+                    if order.created_at <= candle.timestamp
+                ]
+            else:
+                levels = self._compute_grid_levels(
+                    symbol, ctx, grid_state, effective_max,
                 )
-            if hasattr(self._strategy._config, "min_atr_pct"):
-                self._strategy._config.min_atr_pct = self._get_per_asset_float(
-                    symbol, "min_atr_pct", original_min_atr
-                )
-            try:
-                levels = self._strategy.compute_grid(ctx, grid_state)
-            finally:
-                self._strategy._config.num_levels = original_num_levels
-                if hasattr(self._strategy._config, "min_grid_spacing_pct"):
-                    self._strategy._config.min_grid_spacing_pct = original_spacing
-                if hasattr(self._strategy._config, "min_atr_pct"):
-                    self._strategy._config.min_atr_pct = original_min_atr
 
             for level in levels:
                 if level.index in {p.level for p in positions}:
@@ -1233,7 +1448,11 @@ class GridStrategyRunner:
                         self._positions.setdefault(symbol, []).append(position)
                         # Init HWM quand la 1ère position s'ouvre (trailing stop)
                         if symbol not in self._hwm:
-                            if position.direction == Direction.LONG:
+                            if self._chronological_execution:
+                                # L'ordre exact des extrêmes avant/après le fill
+                                # est inconnu en OHLC : partir du prix exécuté.
+                                self._hwm[symbol] = position.entry_price
+                            elif position.direction == Direction.LONG:
                                 self._hwm[symbol] = candle.high
                             else:
                                 self._hwm[symbol] = candle.low
@@ -1272,6 +1491,8 @@ class GridStrategyRunner:
                                     "levels_max": effective_max,
                                 },
                             })
+
+        self._plan_next_bar(symbol, ctx, main_ind, candle)
 
     def _record_trade(self, trade: TradeResult, symbol: str = "") -> None:
         """Enregistre un trade grid (fermeture de toutes les positions)."""
@@ -1340,6 +1561,22 @@ class GridStrategyRunner:
         au démarrage qui doit être traité avec initial_capital (pas le capital
         restauré). _end_warmup() appliquera l'état sauvegardé.
         """
+        if (
+            self._chronological_execution
+            and state.get("execution_model") != PAPER_EXECUTION_MODEL
+        ):
+            logger.warning(
+                "[{}] État paper legacy ignoré: modèle {} attendu, {} reçu. "
+                "Le capital paper repartira à {:.2f}$.",
+                self.name,
+                PAPER_EXECUTION_MODEL,
+                state.get("execution_model", "intrabar_legacy"),
+                self._initial_capital,
+            )
+            self._pending_restore = None
+            self._is_warming_up = True
+            return
+
         # Garder le warm-up actif pour que les candles historiques initiales
         # utilisent initial_capital. L'état sera appliqué à _end_warmup().
         self._pending_restore = state
@@ -1741,9 +1978,10 @@ class Simulator:
                 total_unrealized += status.get("unrealized_pnl", 0.0)
                 total_margin += status.get("margin_used", 0.0)
 
-        equity = total_capital + total_unrealized
-        initial = sum(r._initial_capital for r in self._runners)
-        margin_ratio = total_margin / initial if initial > 0 else 0.0
+        # GridStrategyRunner._capital représente le cash disponible : la marge
+        # ouverte doit donc être réintégrée pour obtenir l'equity réelle.
+        equity = total_capital + total_margin + total_unrealized
+        margin_ratio = total_margin / equity if equity > 0 else 0.0
 
         return {
             "timestamp": now.isoformat(),
@@ -1917,6 +2155,7 @@ class Simulator:
                     grid_position_manager=gpm,
                     data_engine=self._data_engine,
                     db_path=db_path,
+                    chronological_execution=True,
                 )
             else:
                 runner = LiveStrategyRunner(
@@ -2040,8 +2279,12 @@ class Simulator:
         # Snapshot initial du capital (référence pour la fenêtre glissante)
         self._snapshot_capital()
 
-        # Câblage DataEngine → Simulator (APRÈS restauration + warm-up)
-        self._data_engine.on_candle(self._dispatch_candle)
+        # Câblage DataEngine → Simulator (APRÈS restauration + warm-up).
+        # Les updates intra-bougie ne servent qu'au prix/indicateurs temps réel.
+        # Les décisions paper sont prises une seule fois sur bougie clôturée,
+        # comme l'Executor live.
+        self._data_engine.on_candle(self._update_realtime_candle)
+        self._data_engine.on_closed_candle(self._dispatch_candle)
         self._running = True
 
         logger.info(
@@ -2050,10 +2293,26 @@ class Simulator:
             " (état restauré)" if saved_state else "",
         )
 
+    def _update_realtime_candle(
+        self, symbol: str, timeframe: str, candle: Candle,
+    ) -> None:
+        """Met à jour le temps réel sans déclencher de décision paper."""
+        if not self._running or not self._indicator_engine:
+            return
+
+        self._indicator_engine.update(symbol, timeframe, candle)
+        self._conditions_cache = None
+
+        for runner in self._runners:
+            if isinstance(runner, GridStrategyRunner):
+                if runner._per_asset_keys and symbol not in runner._per_asset_keys:
+                    continue
+                runner._last_prices[symbol] = candle.close
+
     async def _dispatch_candle(
         self, symbol: str, timeframe: str, candle: Candle
     ) -> None:
-        """Fan-out vers tous les runners."""
+        """Fan-out d'une bougie clôturée vers tous les runners."""
         if not self._running or not self._indicator_engine:
             return
 
