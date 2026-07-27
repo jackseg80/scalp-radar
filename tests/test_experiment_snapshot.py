@@ -129,6 +129,7 @@ async def test_snapshot_is_cutoff_safe_and_reproducible(tmp_path):
         calendar_start=base,
         primary_leverage=4,
         leverage_scenarios=[6, 2, 4],
+        portfolio_initial_capital=1646.0,
     )
     kwargs = {
         "db_path": db_path,
@@ -155,6 +156,33 @@ async def test_snapshot_is_cutoff_safe_and_reproducible(tmp_path):
     assert "binance:BTC/USDT:open_interest" in first["data_hashes"]
     assert first["metadata"]["universe_selection"]["universe_symbols"] == ["BTC/USDT"]
     assert first["metadata"]["universe_selection"]["leverage_scenarios"] == [2, 4, 6]
+    assert first["metadata"]["universe_selection"]["portfolio_initial_capital"] == 1646.0
+
+
+def test_universe_selection_freezes_capital_and_leverage():
+    selection = UniverseSelectionSpec(
+        strategy_name="grid_multi_tf",
+        universe_symbols=["BTC/USDT"],
+        calendar_start=datetime(2022, 1, 1, tzinfo=timezone.utc),
+        primary_leverage=3,
+        leverage_scenarios=[2, 3, 4],
+        portfolio_initial_capital=1646.0,
+    )
+    assert selection.resolve_portfolio_initial_capital(None) == 1646.0
+    assert selection.resolve_portfolio_initial_capital(1646.0) == 1646.0
+    with pytest.raises(ValueError, match="immutable snapshot"):
+        selection.resolve_portfolio_initial_capital(1000.0)
+    assert selection.primary_leverage == 3
+    assert selection.leverage_scenarios == [2, 3, 4]
+
+
+def test_legacy_universe_selection_can_still_be_read():
+    selection = UniverseSelectionSpec(
+        universe_symbols=["BTC/USDT"],
+        calendar_start=datetime(2022, 1, 1, tzinfo=timezone.utc),
+    )
+    assert selection.portfolio_initial_capital is None
+    assert selection.resolve_portfolio_initial_capital(None) == 1000.0
 
 
 @pytest.mark.asyncio

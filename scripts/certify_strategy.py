@@ -155,6 +155,16 @@ async def main(args: argparse.Namespace) -> int:
     )
     if snapshot_errors:
         raise ValueError("Snapshot non reproductible: " + "; ".join(snapshot_errors))
+    selection_raw = manifest.get("metadata", {}).get("universe_selection")
+    selection = UniverseSelectionSpec.model_validate(selection_raw) if selection_raw else None
+    if selection and selection.strategy_name != args.strategy:
+        raise ValueError(
+            f"Snapshot universe selection targets {selection.strategy_name}, not {args.strategy}"
+        )
+    args.capital = (
+        selection.resolve_portfolio_initial_capital(args.capital)
+        if selection else float(args.capital if args.capital is not None else 1000.0)
+    )
 
     if not args.evaluate_only:
         supported, reason = canonical_certification_capability(args.strategy)
@@ -188,8 +198,6 @@ async def main(args: argparse.Namespace) -> int:
             print(f"[RUN] Parité mesurée pour {len(parity)} assets")
         # Reload rows because parity evidence was attached in place.
         rows = load_wfo_rows(args.db, args.strategy, manifest["manifest_hash"])
-        selection_raw = manifest.get("metadata", {}).get("universe_selection")
-        selection = UniverseSelectionSpec.model_validate(selection_raw) if selection_raw else None
         require_complete_universe_wfo_rows(rows, selection)
         cutoff = datetime.fromisoformat(str(manifest["cutoff"]).replace("Z", "+00:00"))
         plans = build_external_window_plans(rows, selection=selection, cutoff=cutoff)
@@ -292,7 +300,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Certify a strategy from immutable evidence")
     parser.add_argument("--strategy", required=True)
     parser.add_argument("--snapshot", required=True)
-    parser.add_argument("--capital", type=float, default=1000.0)
+    parser.add_argument("--capital", type=float)
     parser.add_argument("--exchange", default="binance", choices=["binance", "bitget"])
     parser.add_argument("--n-simulations", type=int, default=5000)
     parser.add_argument("--block-size", type=int, default=7)

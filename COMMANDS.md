@@ -88,6 +88,56 @@ ces commandes ne modifie `robot2`.
 
 Limitation fail-closed actuelle : le portfolio canonique grid consomme encore les barres 1h. Le gate `intrabar_execution_used` interdit donc `PAPER_READY` tant que l'exécution 1m n'est pas effectivement intégrée au broker simulé.
 
+### grid_multi_tf — certification universelle Sprint 70a (28 actifs, primaire 3x)
+
+Politique immuable : calendrier UTC commun depuis 2022-01-01, signaux 1h,
+IS 180j, embargo 7j, OOS/pas 60j, 1 152 combinaisons exhaustives, Top 8
+IS-only, seed 0, capital 1 646 USDT, sensibilités 2x/4x. Le Supertrend 4h est
+dérivé des seules bougies Binance 1h complètes ; les 4h natives ne sont qu'un
+diagnostic.
+
+```powershell
+# 1. Snapshot universel. Exécuter depuis le commit d'implémentation propre.
+uv run python -m scripts.create_data_snapshot `
+  --strategy grid_multi_tf `
+  --universe-discovery `
+  --calendar-start "2022-01-01T00:00:00+00:00" `
+  --since "2022-01-01T00:00:00+00:00" `
+  --cutoff <ISO_DATE> `
+  --timeframes 1h `
+  --exchange binance `
+  --max-gap-bars 1 `
+  --seed 0 `
+  --top-n 8 `
+  --primary-leverage 3 `
+  --leverage-scenarios 2,3,4 `
+  --portfolio-capital 1646
+
+# 2. WFO exhaustif et reprenable sur les 28 lignes obligatoires.
+uv run --isolated --python 3.12 --frozen python -m scripts.optimize `
+  --strategy grid_multi_tf --all-symbols `
+  --snapshot <SNAPSHOT_ID> --resume -v
+
+# 3. Portefeuille OOS canonique primaire 3x + sensibilités 2x/4x.
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio `
+  --strategy grid_multi_tf `
+  --snapshot <SNAPSHOT_ID> `
+  --capital 1646 `
+  --all-leverages
+
+# 4. Parité, adverse, fresh-capital et résolution des gates.
+uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy `
+  --strategy grid_multi_tf `
+  --snapshot <SNAPSHOT_ID> `
+  --capital 1646
+```
+
+Ne pas modifier l'univers, le Top-N, la grille, le capital ou les leviers après
+observation OOS. Un gate de performance échoué donne `HISTORICAL_FAIL`; une
+performance passante sous blocage 1m/calibration/parité/couverture donne
+`RESEARCH_ONLY`. Le broker 1h actuel rend `PAPER_READY` impossible. Ces
+commandes ne modifient ni ne déploient `robot2`.
+
 ---
 
 ## 🚨 COMMANDES D'URGENCE LIVE

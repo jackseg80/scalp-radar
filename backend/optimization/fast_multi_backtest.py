@@ -159,6 +159,7 @@ def _simulate_grid_common(
     sl_pct: float,
     direction: int,
     directions: np.ndarray | None = None,
+    entry_directions: np.ndarray | None = None,
     trail_mult: float = 0.0,
     trail_atr_arr: np.ndarray | None = None,
     max_hold_candles: int = 0,
@@ -166,6 +167,7 @@ def _simulate_grid_common(
     cooldown_candles: int = 0,
     min_atr_pct: float = 0.0,
     atr_arr_for_filter: np.ndarray | None = None,
+    audit_trace: list[dict[str, Any]] | None = None,
 ) -> tuple[list[float], list[float], float]:
     """Boucle chaude unifiée pour toutes les stratégies grid/DCA.
 
@@ -174,11 +176,17 @@ def _simulate_grid_common(
         sma_arr: SMA pour TP dynamique (retour vers la SMA). Ignoré si trail_mult > 0.
         sl_pct: déjà divisé par 100.
         direction: 1 = LONG, -1 = SHORT (scalar fixe, ou initial pour directions dynamiques).
-        directions: si fourni, array 1D de directions par candle (1/-1/0/NaN).
+        directions: si fourni, array 1D de directions courantes par candle
+            (1/-1/0/NaN), utilisé pour les sorties sur flip.
             Override le scalar `direction` à chaque candle. Force-close au flip.
             0 = zone neutre (pas de nouvelles ouvertures, positions gérées).
+        entry_directions: direction attachée à l'intention d'ordre active sur
+            cette candle. Pour une stratégie dynamique, elle est décalée avec
+            ``entry_prices`` afin que prix et côté proviennent tous deux de T-1.
         trail_mult: multiplicateur ATR pour trailing stop (0 = désactivé → TP SMA classique).
         trail_atr_arr: array ATR pour le calcul du trailing stop distance.
+        audit_trace: optional append-only trace of entry candidates and cycle
+            exits emitted by this same simulation loop.
     """
     capital = bt_config.initial_capital
     initial_capital = capital
@@ -217,6 +225,7 @@ def _simulate_grid_common(
         settlement_mask = (hours % 8 == 0)
 
     for i in range(n):
+        closed_on_direction_flip = False
         # --- Directions dynamiques (grid_multi_tf, grid_trend) ---
         if directions is not None:
             cur_dir = directions[i]
@@ -232,14 +241,29 @@ def _simulate_grid_common(
                 neutral_zone = False
                 # Force-close si direction a flippé
                 if positions and last_dir != 0 and cur_dir_int != last_dir:
+                    exit_direction = last_dir
                     # Restaurer la marge verrouillée
                     margin_to_return = sum(
                         ep * qty / leverage for _l, ep, qty, _f in positions
                     )
                     capital += margin_to_return
                     pnl = _calc_grid_pnl(
-                        positions, cache.closes[i], taker_fee, slippage_pct, last_dir,
+                        positions, cache.closes[i], taker_fee, slippage_pct, exit_direction,
                     )
+                    if audit_trace is not None:
+                        audit_trace.append({
+                            "event": "exit",
+                            "candle_index": i,
+                            "timestamp_ms": (
+                                int(cache.candle_timestamps[i])
+                                if cache.candle_timestamps is not None else None
+                            ),
+                            "entry_candle_index": first_entry_idx,
+                            "direction": exit_direction,
+                            "reason": "direction_flip",
+                            "price": float(cache.closes[i]),
+                            "pnl": float(pnl),
+                        })
                     trade_pnls.append(pnl)
                     if capital > 0:
                         trade_returns.append(pnl / capital)
@@ -249,6 +273,7 @@ def _simulate_grid_common(
                     hwm = 0.0
                     first_entry_idx = -1
                     last_exit_candle_idx = i
+                    closed_on_direction_flip = True
                 last_dir = cur_dir_int
                 direction = cur_dir_int  # Override le scalar pour TP/SL et entry
 
@@ -376,6 +401,20 @@ def _simulate_grid_common(
                 )
                 capital += margin_to_return
                 pnl = _calc_grid_pnl(positions, exit_price, fee, slip, direction)
+                if audit_trace is not None:
+                    audit_trace.append({
+                        "event": "exit",
+                        "candle_index": i,
+                        "timestamp_ms": (
+                            int(cache.candle_timestamps[i])
+                            if cache.candle_timestamps is not None else None
+                        ),
+                        "entry_candle_index": first_entry_idx,
+                        "direction": direction,
+                        "reason": exit_reason,
+                        "price": float(exit_price),
+                        "pnl": float(pnl),
+                    })
                 trade_pnls.append(pnl)
                 if capital > 0:
                     trade_returns.append(pnl / capital)
@@ -416,6 +455,10 @@ def _simulate_grid_common(
         # 4. Zone neutre : pas de nouvelles ouvertures
         if neutral_zone:
             continue
+        if closed_on_direction_flip:
+            # Le runner canonique ferme le cycle, annule ses anciens ordres et
+            # ne crée que les intentions destinées à la bougie suivante.
+            continue
 
         # 4b. Filtre ATR minimum (Sprint 62b) — volatilité trop basse → skip ouverture
         #     Les exits (SL/TP) restent actifs (section 1 déjà traitée au-dessus)
@@ -433,6 +476,14 @@ def _simulate_grid_common(
             and (i - last_exit_candle_idx) < cooldown_candles
         )
         if can_open_new and not kill_switch_triggered and len(positions) < num_levels:
+            order_direction = direction
+            if entry_directions is not None:
+                raw_order_direction = entry_directions[i]
+                if math.isnan(raw_order_direction) or int(raw_order_direction) == 0:
+                    continue
+                order_direction = int(raw_order_direction)
+                if positions and order_direction != direction:
+                    continue
             filled = {p[0] for p in positions}
             candle_capital = capital  # Snapshot: même balance pour tous les levels de cette candle (aligne avec executor)
             for lvl in range(num_levels):
@@ -445,18 +496,36 @@ def _simulate_grid_common(
                 if math.isnan(ep) or ep <= 0:
                     continue
 
-                if direction == 1:
+                if order_direction == 1:
                     triggered = cache.lows[i] <= ep
                 else:
                     triggered = cache.highs[i] >= ep
 
                 if triggered:
+                    candidate_event = None
+                    if audit_trace is not None:
+                        candidate_event = {
+                            "event": "entry_candidate",
+                            "candle_index": i,
+                            "timestamp_ms": (
+                                int(cache.candle_timestamps[i])
+                                if cache.candle_timestamps is not None else None
+                            ),
+                            "source_candle_index": i - 1,
+                            "level": lvl,
+                            "direction": order_direction,
+                            "price": ep,
+                            "selected": False,
+                        }
+                        audit_trace.append(candidate_event)
                     # Sprint 56: margin guard — bloquer si marge utilisée >= max_margin_ratio
                     total_equity = capital + used_margin
                     if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
+                        if candidate_event is not None:
+                            candidate_event["rejection"] = "margin_ratio"
                         break  # Plus de marge disponible pour ce cycle
                     # Sprint 56: slippage à l'entrée (prix d'exécution défavorable)
-                    if direction == 1:
+                    if order_direction == 1:
                         actual_ep = ep * (1 + slippage_pct)  # LONG: prix plus haut
                     else:
                         actual_ep = ep * (1 - slippage_pct)  # SHORT: prix plus bas
@@ -464,15 +533,28 @@ def _simulate_grid_common(
                     notional = candle_capital * (1.0 / num_levels) * leverage
                     qty = notional / actual_ep
                     if qty <= 0:
+                        if candidate_event is not None:
+                            candidate_event["rejection"] = "non_positive_quantity"
                         continue
                     # Margin deduction (cohérent avec GridStrategyRunner)
                     margin = notional / leverage
                     if capital < margin:
+                        if candidate_event is not None:
+                            candidate_event["rejection"] = "insufficient_capital"
                         continue
                     capital -= margin
                     used_margin += margin
                     entry_fee = qty * actual_ep * taker_fee
+                    if not positions:
+                        # A pending order can have been planned before a new
+                        # 4h direction became visible. Preserve its actual side;
+                        # the next candle will observe and close the mismatch.
+                        direction = order_direction
+                        last_dir = order_direction
                     positions.append((lvl, actual_ep, qty, entry_fee))
+                    if candidate_event is not None:
+                        candidate_event["selected"] = True
+                        candidate_event["fill_price"] = float(actual_ep)
                     if len(positions) == 1:
                         first_entry_idx = i
                     # Init HWM à la première ouverture (trailing stop)
@@ -491,6 +573,20 @@ def _simulate_grid_common(
         capital += margin_to_return
         pnl = _calc_grid_pnl(positions, exit_price, taker_fee, slippage_pct, direction)
         capital += pnl
+        if audit_trace is not None:
+            audit_trace.append({
+                "event": "end_of_data_close",
+                "candle_index": n - 1,
+                "timestamp_ms": (
+                    int(cache.candle_timestamps[n - 1])
+                    if cache.candle_timestamps is not None else None
+                ),
+                "entry_candle_index": first_entry_idx,
+                "direction": direction,
+                "price": exit_price,
+                "pnl": float(pnl),
+                "included_in_trade_metrics": False,
+            })
 
     return trade_pnls, trade_returns, capital
 
@@ -2122,6 +2218,7 @@ def _simulate_grid_multi_tf(
     cache: IndicatorCache,
     params: dict[str, Any],
     bt_config: BacktestConfig,
+    audit_trace: list[dict[str, Any]] | None = None,
 ) -> tuple[list[float], list[float], float]:
     """Simulation Grid Multi-TF (direction dynamique Supertrend 4h).
 
@@ -2132,15 +2229,43 @@ def _simulate_grid_multi_tf(
     sma_arr = cache.bb_sma[params["ma_period"]]
     st_key = (params["st_atr_period"], params["st_atr_multiplier"])
     dir_arr = cache.supertrend_dir_4h[st_key]
+    entry_dir_arr = np.full_like(dir_arr, np.nan, dtype=float)
+    entry_dir_arr[1:] = dir_arr[:-1]
     entry_prices = _build_entry_prices("grid_multi_tf", cache, params, num_levels, direction=1)
     return _simulate_grid_common(
         entry_prices, sma_arr, cache, bt_config, num_levels, sl_pct,
         direction=1,
         directions=dir_arr,
+        entry_directions=entry_dir_arr,
         max_hold_candles=params.get("max_hold_candles", 0),
         min_profit_pct=params.get("min_profit_pct", 0.0),
         cooldown_candles=params.get("cooldown_candles", 0),
+        audit_trace=audit_trace,
     )
+
+
+def run_grid_multi_tf_audit_from_cache(
+    params: dict[str, Any],
+    cache: IndicatorCache,
+    bt_config: BacktestConfig,
+) -> tuple[_ISResult, list[dict[str, Any]]]:
+    """Run the production fast loop and retain its selected-candidate trace."""
+    trace: list[dict[str, Any]] = []
+    trade_pnls, trade_returns, final_capital = _simulate_grid_multi_tf(
+        cache,
+        params,
+        bt_config,
+        audit_trace=trace,
+    )
+    metrics = _compute_fast_metrics(
+        params,
+        trade_pnls,
+        trade_returns,
+        final_capital,
+        bt_config.initial_capital,
+        cache.total_days,
+    )
+    return metrics, trace
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────

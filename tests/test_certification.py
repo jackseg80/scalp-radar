@@ -134,8 +134,9 @@ def test_legacy_result_can_never_be_promoted():
         backtest, _passing_robustness(), _passing_snapshot(),
         _passing_fresh_backtests(),
     )
-    assert status == CertificationStatus.HISTORICAL_FAIL
+    assert status == CertificationStatus.RESEARCH_ONLY
     assert "certifiable_result" in details["failed"]
+    assert "certifiable_result" in details["capability_blockers"]
 
 
 def test_intrabar_and_fast_parity_are_mandatory():
@@ -150,7 +151,7 @@ def test_intrabar_and_fast_parity_are_mandatory():
     status, details = evaluate_historical_gates(
         _passing_backtest(), robustness, snapshot, _passing_fresh_backtests(),
     )
-    assert status == CertificationStatus.HISTORICAL_FAIL
+    assert status == CertificationStatus.RESEARCH_ONLY
     assert {"intrabar_coverage", "fast_canonical_parity"} <= set(details["failed"])
 
 
@@ -161,7 +162,7 @@ def test_having_1m_data_without_consuming_it_blocks_certification():
         backtest, _passing_robustness(), _passing_snapshot(),
         _passing_fresh_backtests(),
     )
-    assert status == CertificationStatus.HISTORICAL_FAIL
+    assert status == CertificationStatus.RESEARCH_ONLY
     assert "intrabar_execution_used" in details["failed"]
 
 
@@ -173,7 +174,7 @@ def test_static_or_non_nominal_portfolio_cannot_reach_paper(field):
         backtest, _passing_robustness(), _passing_snapshot(),
         _passing_fresh_backtests(),
     )
-    assert status == CertificationStatus.HISTORICAL_FAIL
+    assert status == CertificationStatus.RESEARCH_ONLY
 
 
 def test_universe_verdict_requires_the_declared_primary_leverage():
@@ -184,7 +185,7 @@ def test_universe_verdict_requires_the_declared_primary_leverage():
     status, details = evaluate_historical_gates(
         backtest, _passing_robustness(), snapshot, _passing_fresh_backtests(),
     )
-    assert status == CertificationStatus.HISTORICAL_FAIL
+    assert status == CertificationStatus.RESEARCH_ONLY
     assert "declared_primary_leverage" in details["failed"]
 
 
@@ -195,8 +196,28 @@ def test_missing_execution_calibration_blocks_paper():
         backtest, _passing_robustness(), _passing_snapshot(),
         _passing_fresh_backtests(),
     )
-    assert status == CertificationStatus.HISTORICAL_FAIL
+    assert status == CertificationStatus.RESEARCH_ONLY
     assert "execution_calibration" in details["failed"]
+
+
+def test_performance_failure_dominates_missing_operational_broker():
+    backtest = _passing_backtest()
+    backtest["max_drawdown_pct"] = -47.5
+    backtest["execution_timeframe_used"] = "1h"
+    snapshot = _passing_snapshot()
+    snapshot["metadata"]["intrabar_missing"] = ["BTC/USDT"]
+    status, details = evaluate_historical_gates(
+        backtest,
+        _passing_robustness(),
+        snapshot,
+        _passing_fresh_backtests(),
+    )
+    assert status == CertificationStatus.HISTORICAL_FAIL
+    assert "nominal_drawdown" in details["performance_failed"]
+    assert {
+        "intrabar_coverage",
+        "intrabar_execution_used",
+    } <= set(details["capability_blockers"])
 
 
 def test_missing_fresh_capital_evidence_blocks_paper():

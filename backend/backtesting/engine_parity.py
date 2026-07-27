@@ -15,6 +15,13 @@ from backend.backtesting.portfolio_engine import PortfolioBacktester, PortfolioR
 from backend.core.database import Database
 from backend.core.models import ExecutionSpec
 from backend.optimization import create_strategy_with_params
+from backend.optimization.fast_multi_backtest import (
+    run_grid_multi_tf_audit_from_cache,
+)
+from backend.optimization.indicator_cache import (
+    build_cache,
+    slice_indicator_cache,
+)
 from backend.backtesting.certification_capabilities import (
     canonical_certification_capability,
 )
@@ -140,6 +147,34 @@ async def _measure_wfo_window_parity(
         extra_data_by_timestamp=extra,
     )
 
+    search_metrics = None
+    search_trace: list[dict[str, Any]] = []
+    if row["strategy_name"] == "grid_multi_tf":
+        grid_values = {
+            key: value if isinstance(value, list) else [value]
+            for key, value in params.items()
+        }
+        full_cache = build_cache(
+            candles_by_tf,
+            grid_values,
+            row["strategy_name"],
+            main_tf="1h",
+        )
+        first_trading_index = next(
+            (
+                index
+                for index, candle in enumerate(full_main)
+                if candle.timestamp >= start
+            ),
+            full_cache.n_candles,
+        )
+        trading_cache = slice_indicator_cache(full_cache, first_trading_index)
+        search_metrics, search_trace = run_grid_multi_tf_audit_from_cache(
+            params,
+            trading_cache,
+            bt_config,
+        )
+
     canonical_config = copy.deepcopy(config)
     getattr(canonical_config.strategies, row["strategy_name"]).per_asset = {
         row["asset"]: copy.deepcopy(params),
@@ -162,7 +197,73 @@ async def _measure_wfo_window_parity(
         start, end, db_path=db_path, warmup_start=warmup_start,
         end_exclusive=True,
     )
-    result = compare_engine_results(fast, canonical)
+    event_result = compare_engine_results(fast, canonical)
+    result = dict(event_result)
+    if search_metrics is not None:
+        search_return = float(search_metrics[2])
+        search_trades = int(search_metrics[4])
+        search_delta = abs(search_return - canonical.total_return_pct)
+        search_exits = [
+            event for event in search_trace if event["event"] == "exit"
+        ]
+        canonical_sequence = [
+            {
+                "entry_timestamp_ms": int(trade.entry_time.timestamp() * 1000),
+                "exit_timestamp_ms": int(trade.exit_time.timestamp() * 1000),
+                "direction": 1 if trade.direction.value == "LONG" else -1,
+                "reason": trade.exit_reason,
+            }
+            for _, trade in canonical.all_trades
+        ]
+        search_sequence = [
+            {
+                "entry_timestamp_ms": (
+                    int(trading_cache.candle_timestamps[event["entry_candle_index"]])
+                    if trading_cache.candle_timestamps is not None
+                    and event["entry_candle_index"] >= 0 else None
+                ),
+                "exit_timestamp_ms": event["timestamp_ms"],
+                "direction": event["direction"],
+                "reason": event["reason"],
+            }
+            for event in search_exits
+        ]
+        trade_count_equal = search_trades == canonical.total_trades
+        sequence_equal = search_sequence == canonical_sequence
+        reasons_equal = (
+            [item["reason"] for item in search_sequence]
+            == [item["reason"] for item in canonical_sequence]
+        )
+        result.update({
+            "within_tolerance": (
+                search_delta <= 0.5
+                and trade_count_equal
+                and sequence_equal
+                and reasons_equal
+                and bool(event_result["within_tolerance"])
+            ),
+            "cumulative_return_delta_pct": round(search_delta, 8),
+            "fast_return_pct": round(search_return, 8),
+            "canonical_return_pct": round(canonical.total_return_pct, 8),
+            "fast_trades": search_trades,
+            "canonical_trades": canonical.total_trades,
+            "trade_count_equal": trade_count_equal,
+            "sequence_equal": sequence_equal,
+            "exit_reasons_equal": reasons_equal,
+            "search_engine": {
+                "return_pct": round(search_return, 8),
+                "trades": search_trades,
+                "selected_candidate_count": sum(
+                    event["event"] == "entry_candidate"
+                    and bool(event.get("selected"))
+                    for event in search_trace
+                ),
+                "trace": search_trace,
+                "trade_sequence": search_sequence,
+            },
+            "event_engine": event_result,
+            "canonical_trade_sequence": canonical_sequence,
+        })
     result.update({
         "asset": row["asset"],
         "window_start": start.isoformat(),

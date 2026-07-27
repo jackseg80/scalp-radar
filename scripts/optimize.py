@@ -1392,7 +1392,7 @@ async def main() -> None:
         if sorted(target_symbols) != universe_selection.universe_symbols:
             parser.error("configured assets differ from the frozen universe snapshot")
         if args.force_timeframe and args.force_timeframe != "1h":
-            parser.error("universe grid_atr snapshot requires --force-timeframe 1h")
+            parser.error("universe snapshot requires --force-timeframe 1h")
 
     # Dry run
     if args.dry_run:

@@ -3770,7 +3770,7 @@ consumes 1m execution data and has calibrated Bitget observations.
 
 ---
 
-### Sprint 70 — Remaining Strategy Backtest Certification Migration (planned)
+### Sprint 70 — Remaining Strategy Backtest Certification Migration (in progress)
 
 **Objective**: migrate every strategy that remains a candidate for paper or
 live trading onto the fail-closed certification workflow proven with
@@ -3808,16 +3808,16 @@ configuration are research evidence only; none may authorize a deployment.
 
 **Mandatory sequencing**:
 
-1. **Canonical 1m execution broker** — consume 1m bars beneath the signal
-   timeframe, including gaps, limit persistence/expiry, partial/missed fills,
-   TP market and server-side SL gaps.  Until this exists, every historical
-   pass remains `RESEARCH_ONLY`; no strategy may advance to paper.
-2. **`grid_multi_tf` (next strategy)** — validate 4h indicator closure and
+1. **`grid_multi_tf` historical migration** — validate 4h indicator closure and
    1h execution chronology, then run a pre-declared universe-discovery WFO
    and external-OOS portfolio.  The 4h filter must never be visible before its
    close.  Use the same common-calendar / IS-only dynamic selection policy as
-   `grid_atr`, unless a strategy-specific documented constraint requires a
-   different frozen policy.
+   `grid_atr`. The 1h canonical engine may reject this policy, but a pass is
+   capped at `RESEARCH_ONLY`.
+2. **Canonical 1m execution broker** — consume 1m bars beneath the signal
+   timeframe, including gaps, limit persistence/expiry, partial/missed fills,
+   TP market and server-side SL gaps. Until this exists, every historical
+   pass remains `RESEARCH_ONLY`; no strategy may advance to paper.
 3. **Other grid candidates** — `grid_boltrend`, then any deliberately
    reactivated `grid_range_atr`, `grid_trend`, `grid_funding`,
    `envelope_dca` or `envelope_dca_short`.  Each needs canonical order-model
@@ -3844,18 +3844,75 @@ for selecting the next strategy and will not be changed by this sprint.
 
 ---
 
+### Sprint 70a — `grid_multi_tf` Certification Migration ✅ code / ⏳ evidence
+
+**Frozen policy**:
+
+- All 28 `assets.yaml` symbols; late admission only after a complete
+  IS/embargo/OOS interval.
+- Common calendar from `2022-01-01T00:00:00Z`: 1h signals, IS 180d,
+  embargo 7d, OOS 60d, step 60d, seed 0.
+- Exhaustive current grid: **1,152 combinations**; existing positive IS
+  eligibility gates; Top 8 selected IS-only per external window.
+- LONG+SHORT, cooldown 3 bars, no time stop. Shared YAML risk:
+  `max_live_grids=4`, margin 70%, simultaneous SL loss 30%, account kill
+  switch 45%.
+- Portfolio capital **1,646 USDT**, primary **3x**, pre-declared
+  sensitivities **2x/4x**. Capital and leverage scenarios are immutable
+  snapshot fields.
+
+**Delivered**:
+
+- One shared core 1h→4h transformation for strategy batch, fast cache and
+  live indicators. It accepts only exact complete UTC buckets, exposes a
+  bucket at its close, rejects partial buckets, segments gaps and restarts
+  Supertrend warmup after each segment.
+- Fast `grid_multi_tf` entry price and direction now move atomically from T
+  to T+1. Current direction remains separate for flip exits; a pending LONG
+  can no longer be interpreted as a SHORT (or conversely), and no
+  retrospective same-candle replacement is created.
+- Existing fast loop gained an audit trace of selected entry candidates and
+  exits. Certification compares that actual WFO search loop with the
+  canonical replay while retaining the legacy top-level
+  `engine_parity_json` fields.
+- `UniverseSelectionSpec` now freezes optional portfolio capital while
+  remaining backward-compatible with old snapshots. New universal snapshots
+  always write capital; replay/certification CLIs reject strategy, universe,
+  capital and leverage divergence from the manifest.
+- Verdict precedence corrected: any failed performance gate yields
+  `HISTORICAL_FAIL`, even with missing 1m capability. Passing performance
+  with missing calibration, 1m execution, parity or coverage yields
+  `RESEARCH_ONLY`. `PAPER_READY` still requires every historical and
+  operational gate.
+- Native Binance 4h rows remain diagnostic only. Canonical Supertrend derives
+  from Binance 1h; the stale native 4h inventory and seven symbols without
+  native 4h do not invalidate the snapshot.
+- No change to `strategies.yaml`, `risk.yaml`, `grid_atr` evidence or robot2.
+
+**Validation**: focused certification suite **135 passed**; complete suite
+**2,372 passed in 123.89s**, 0 failures.
+
+**Evidence status**: snapshot, WFO, external-OOS and certification IDs are
+pending user-run commands. No long optimization or replay was launched during
+implementation. Therefore `grid_multi_tf` has no new performance verdict yet.
+
+**Audit/plan**:
+[audit-grid-multi-tf-certification-20260727.md](audit/audit-grid-multi-tf-certification-20260727.md)
+· [sprint-70a-grid-multi-tf-certification.md](plans/sprint-70a-grid-multi-tf-certification.md)
+
+---
+
 ## PROCHAINES STRATÉGIES
 
 ### Ordre de priorité
 
-1. **Canonical 1m execution broker** — prerequisite to any `PAPER_READY` or
-   live decision.  The current 1h canonical replay is sufficient to reject a
-   strategy but deliberately insufficient to approve one.
+1. **Complete `grid_multi_tf` evidence** — run the frozen 28-asset WFO and
+   canonical external-OOS commands, then resolve `HISTORICAL_FAIL` versus
+   `RESEARCH_ONLY` without post-hoc changes.
 
-2. **`grid_multi_tf` certification migration** — next strategy pilot after
-   `grid_atr`: audit/reuse the existing 4h+1h grid path, add only missing
-   parity and chronology coverage, freeze an all-asset WFO policy and run the
-   IS-only external-OOS portfolio.  No robot2 change during this work.
+2. **Canonical 1m execution broker** — prerequisite to any `PAPER_READY` or
+   live decision. The current 1h canonical replay is sufficient to reject a
+   strategy but deliberately insufficient to approve one.
 
 3. **Other active/research candidates** — process only through the Sprint 70
    shared contract, prioritising `grid_boltrend` after `grid_multi_tf`.  The

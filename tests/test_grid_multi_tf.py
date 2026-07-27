@@ -279,6 +279,97 @@ class TestResampling4h:
         assert len(c) == 0
         assert len(m) == 0
 
+    def test_non_aligned_start_and_final_partial_bucket_are_rejected(self):
+        from backend.optimization.indicator_cache import _resample_1h_to_4h
+
+        candles = _make_candles(8, start_hour=1)  # 01:00 through 08:00
+        closes = np.array([c.close for c in candles])
+        highs = np.array([c.high for c in candles])
+        lows = np.array([c.low for c in candles])
+        h4_h, _h4_l, _h4_c, mapping = _resample_1h_to_4h(
+            candles, closes, highs, lows,
+        )
+
+        # 01/02/03 is not a complete UTC bucket; 04/05/06/07 is.
+        assert len(h4_h) == 1
+        assert np.all(mapping[:-1] == -1)
+        assert mapping[-1] == 0  # visible exactly at the 08:00 bucket open
+
+        aligned = _make_candles(6, start_hour=0)
+        values = np.array([c.close for c in aligned])
+        h4_h, _h4_l, _h4_c, _mapping = _resample_1h_to_4h(
+            aligned,
+            values,
+            np.array([c.high for c in aligned]),
+            np.array([c.low for c in aligned]),
+        )
+        assert len(h4_h) == 1  # trailing 04/05 bucket remains partial
+
+    def test_internal_gap_breaks_mapping_and_supertrend_rewarms(self):
+        from backend.optimization.indicator_cache import (
+            _resample_complete_1h_to_4h,
+            compute_supertrend_4h_mapped_to_1h,
+        )
+
+        candles = _make_candles(36, start_hour=0, step=0.2)
+        candles = [c for c in candles if c.timestamp.hour != 17]
+        closes = np.array([c.close for c in candles])
+        highs = np.array([c.high for c in candles])
+        lows = np.array([c.low for c in candles])
+        _h, _l, _c, mapping, segments = _resample_complete_1h_to_4h(
+            candles, closes, highs, lows,
+        )
+        by_hour = {c.timestamp: index for index, c in enumerate(candles)}
+
+        assert mapping[by_hour[datetime(2024, 1, 1, 20, tzinfo=timezone.utc)]] == -1
+        assert list(segments) == [0, 0, 0, 0, 1, 1, 1, 1]
+
+        direction = compute_supertrend_4h_mapped_to_1h(
+            candles, highs, lows, closes, 2, 2.0,
+        )
+        assert math.isnan(
+            direction[by_hour[datetime(2024, 1, 2, 0, tzinfo=timezone.utc)]]
+        )
+        assert not math.isnan(
+            direction[by_hour[datetime(2024, 1, 2, 8, tzinfo=timezone.utc)]]
+        )
+
+    def test_current_4h_change_is_invisible_before_close(self):
+        from backend.optimization.indicator_cache import (
+            compute_supertrend_4h_mapped_to_1h,
+        )
+
+        original = _make_sinusoidal_candles(n=49)
+        changed = [c.model_copy(deep=True) for c in original]
+        for index in range(44, 48):
+            changed[index] = changed[index].model_copy(update={
+                "high": changed[index].high + 100,
+                "low": max(0.01, changed[index].low - 50),
+                "close": changed[index].close + 25,
+            })
+        # Repair OHLC bounds after the deliberately large close mutation.
+        changed = [
+            c.model_copy(update={
+                "high": max(c.high, c.open, c.close),
+                "low": min(c.low, c.open, c.close),
+            })
+            for c in changed
+        ]
+
+        def mapped(candles):
+            return compute_supertrend_4h_mapped_to_1h(
+                candles,
+                np.array([c.high for c in candles]),
+                np.array([c.low for c in candles]),
+                np.array([c.close for c in candles]),
+                3,
+                2.0,
+            )
+
+        before = mapped(original)
+        after = mapped(changed)
+        np.testing.assert_array_equal(before[:48], after[:48])
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Section 2 : Signaux stratégie
@@ -581,6 +672,66 @@ class TestGridMultiTFFastEngine:
         # Le test vérifie que le code ne crashe pas (force close fin de données)
         assert result[4] >= 0
 
+    def test_pending_direction_and_price_activate_together_at_t_plus_one(
+        self, make_indicator_cache,
+    ):
+        from backend.optimization.fast_multi_backtest import _simulate_grid_common
+
+        timestamps = np.array([
+            int(
+                (datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i))
+                .timestamp() * 1000
+            )
+            for i in range(4)
+        ])
+        cache = make_indicator_cache(
+            n=4,
+            opens=np.full(4, 100.0),
+            highs=np.array([101.0, 101.0, 101.0, 111.0]),
+            lows=np.array([99.0, 89.0, 99.0, 99.0]),
+            closes=np.full(4, 100.0),
+            candle_timestamps=timestamps,
+        )
+        entry_prices = np.array([
+            [np.nan],
+            [90.0],   # LONG intent created at T=0
+            [110.0],  # SHORT intent created at the flip T=1
+            [110.0],
+        ])
+        current_directions = np.array([1.0, -1.0, -1.0, -1.0])
+        entry_directions = np.array([np.nan, 1.0, -1.0, -1.0])
+        trace: list[dict[str, Any]] = []
+
+        _simulate_grid_common(
+            entry_prices,
+            np.full(4, 200.0),
+            cache,
+            _make_bt_config(leverage=3),
+            num_levels=1,
+            sl_pct=0.50,
+            direction=1,
+            directions=current_directions,
+            entry_directions=entry_directions,
+            audit_trace=trace,
+        )
+
+        selected = [
+            event for event in trace
+            if event["event"] == "entry_candidate" and event["selected"]
+        ]
+        exits = [event for event in trace if event["event"] == "exit"]
+        assert selected[0]["candle_index"] == 1
+        assert selected[0]["source_candle_index"] == 0
+        assert selected[0]["direction"] == 1
+        assert exits[0]["candle_index"] == 2
+        assert exits[0]["direction"] == 1
+        assert exits[0]["reason"] == "direction_flip"
+        assert not any(
+            event["event"] == "entry_candidate"
+            and event["candle_index"] == 2
+            for event in trace
+        )
+
     def test_fast_vs_normal_parity(self):
         """Parité fast engine vs MultiPositionEngine (±1 trade, ±2% return)."""
         from backend.backtesting.multi_engine import MultiPositionEngine, run_multi_backtest_single
@@ -657,6 +808,13 @@ class TestGridMultiTFIntegration:
     def test_in_fast_engine_strategies(self):
         from backend.optimization import FAST_ENGINE_STRATEGIES
         assert "grid_multi_tf" in FAST_ENGINE_STRATEGIES
+
+    def test_certification_grid_is_frozen_to_1152_combinations(self):
+        from backend.optimization.walk_forward import _build_grid, _load_param_grids
+
+        grids = _load_param_grids("config/param_grids.yaml")
+        combinations = _build_grid(grids["grid_multi_tf"], "BTC/USDT")
+        assert len(combinations) == 1152
 
     def test_create_with_params(self):
         from backend.optimization import create_strategy_with_params
@@ -900,6 +1058,39 @@ class TestComputeLiveIndicators:
         assert result["4h"]["st_direction"] in (1.0, -1.0) or math.isnan(
             result["4h"]["st_direction"]
         )
+
+    def test_batch_cache_and_live_supertrend_match_each_timestamp(self):
+        from backend.optimization.indicator_cache import build_cache
+
+        strategy = _make_strategy(st_atr_period=3, st_atr_multiplier=2.0)
+        candles = _make_sinusoidal_candles(n=100, amplitude=7.0, period=32)
+        batch = strategy.compute_indicators({"1h": candles})["4h"]
+        cache = build_cache(
+            {"1h": candles},
+            {
+                "st_atr_period": [3],
+                "st_atr_multiplier": [2.0],
+                "ma_period": [14],
+                "atr_period": [14],
+            },
+            "grid_multi_tf",
+            main_tf="1h",
+        )
+        cached = cache.supertrend_dir_4h[(3, 2.0)]
+
+        for index, candle in enumerate(candles):
+            batch_value = batch[candle.timestamp.isoformat()]["st_direction"]
+            if math.isnan(batch_value):
+                assert math.isnan(cached[index])
+            else:
+                assert cached[index] == batch_value
+            if index + 1 >= strategy._config.st_atr_period * 4 + 8:
+                live = strategy.compute_live_indicators(candles[:index + 1])
+                live_value = live["4h"]["st_direction"]
+                if math.isnan(batch_value):
+                    assert math.isnan(live_value)
+                else:
+                    assert live_value == batch_value
 
     def test_compute_live_indicators_empty_when_few_candles(self):
         """Pas assez de candles → retourne {}."""

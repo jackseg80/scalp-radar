@@ -189,7 +189,7 @@ grid_range_atr:
     sides: [["long", "short"], ["long"]]
     tp_mode: ["dynamic_sma", "fixed_center"]
 
-# Grid Multi-TF : 768 combos (2×2×3×2×2×2×2×3×2), ~4 min/asset
+# Grid Multi-TF : 1152 combos (2×2×3×2×2×2×2×3×2), exhaustive certification grid
 grid_multi_tf:
   wfo:
     is_days: 180

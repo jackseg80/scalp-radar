@@ -85,6 +85,40 @@ any historical failure gate.
 Binance outages.  Affected asset windows are excluded from IS and OOS rather
 than interpolated; all other assets retain the same calendar.
 
+### `grid_multi_tf` frozen certification policy (Sprint 70a)
+
+`grid_multi_tf` reuses the same universal snapshot, common-calendar WFO,
+IS-only Top-N selection, external-OOS portfolio, shared `LiveRiskManager` and
+parity evidence. Its 4h Supertrend is derived only from complete UTC Binance
+1h buckets; native 4h rows are diagnostic and are not snapshot inputs.
+
+The immutable policy is: 28 configured assets, calendar start 2022-01-01 UTC,
+IS 180d, embargo 7d, OOS/step 60d, exhaustive 1,152-combination grid, Top 8,
+seed 0, 1,646 USDT, primary 3x and sensitivity 2x/4x. New universal snapshots
+persist the capital. Replay CLIs reject a different strategy, universe,
+capital or leverage scenario.
+
+```powershell
+uv run python -m scripts.create_data_snapshot `
+  --strategy grid_multi_tf `
+  --universe-discovery `
+  --calendar-start "2022-01-01T00:00:00+00:00" `
+  --since "2022-01-01T00:00:00+00:00" `
+  --cutoff <ISO_DATE> `
+  --timeframes 1h `
+  --exchange binance `
+  --max-gap-bars 1 `
+  --seed 0 `
+  --top-n 8 `
+  --primary-leverage 3 `
+  --leverage-scenarios 2,3,4 `
+  --portfolio-capital 1646
+```
+
+The snapshot is valid only from a clean implementation commit. No native 4h
+backfill is required. Late-listed assets retain the global calendar and join
+only once a complete IS/embargo/OOS interval exists.
+
 ## 3. Run or resume snapshot-bound WFO
 
 ```powershell
@@ -99,9 +133,17 @@ uv run python -m scripts.optimize `
 `--resume` skips only assets already completed for the exact manifest hash. Results from another snapshot or legacy run never count. Snapshot mode remains incompatible with `--subprocess`; each asset failure is logged and the remaining assets continue.
 
 For a universe-discovery snapshot this command is strict: it requires
-`grid_atr --all-symbols`, forces the frozen 1h signal timeframe and evaluates
+the declared strategy with `--all-symbols`, forces the frozen 1h signal timeframe and evaluates
 every valid parameter combination in every IS window.  The external replay
 refuses to proceed if any declared asset lacks its snapshot-bound WFO result.
+
+For Sprint 70a:
+
+```powershell
+uv run --isolated --python 3.12 --frozen python -m scripts.optimize `
+  --strategy grid_multi_tf --all-symbols `
+  --snapshot <SNAPSHOT_ID> --resume -v
+```
 
 ## 4. Run or resume historical certification
 
@@ -128,6 +170,22 @@ Only 4x is saved as `external_oos` and can become the primary historical
 verdict.  2x and 6x are named sensitivity evidence; they can never replace
 the declared 4x decision after seeing results.
 
+For `grid_multi_tf`, 3x is the primary `external_oos` scope and 2x/4x are
+pre-declared sensitivity scopes:
+
+```powershell
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio `
+  --strategy grid_multi_tf `
+  --snapshot <SNAPSHOT_ID> `
+  --capital 1646 `
+  --all-leverages
+
+uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy `
+  --strategy grid_multi_tf `
+  --snapshot <SNAPSHOT_ID> `
+  --capital 1646
+```
+
 ```powershell
 uv run python -m scripts.certify_strategy `
   --strategy grid_atr `
@@ -153,6 +211,13 @@ uv run python -m scripts.certify_strategy --strategy grid_atr --snapshot <SNAPSH
 ```
 
 Historical gates for `PAPER_READY` are: positive external-OOS return and bootstrap lower bound, loss probability below 10%, nominal DD at most 30%, adverse DD at most 40%, no 45% kill switch, simultaneous SL loss at most 30%, margin at most 70%, liquidation distance above 50%, positive degraded-cost return, complete funding/intrabar evidence and fast/canonical parity within 0.5%. Both fresh-capital windows must cover at least 95% of 180/365 days, remain profitable, keep DD at most 30% and trigger no kill switch.
+
+Verdict precedence is strict: one failed performance gate is
+`HISTORICAL_FAIL` even if 1m/calibration evidence is absent. If performance is
+complete and passing but calibration, actual 1m consumption, parity or
+coverage is insufficient, the status is `RESEARCH_ONLY`. `PAPER_READY`
+requires all historical and operational gates; the current 1h broker makes it
+unreachable.
 
 On Windows, any certification that runs missing portfolio evidence must use
 the same isolated Python 3.12 runtime as `portfolio_backtest`:

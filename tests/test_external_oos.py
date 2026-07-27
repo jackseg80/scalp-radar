@@ -171,6 +171,16 @@ def test_universe_replay_refuses_partial_wfo_results():
         require_complete_universe_wfo_rows([{"asset": "AAA/USDT"}], selection)
 
 
+def test_universal_snapshot_requires_all_28_wfo_rows():
+    start = datetime(2022, 1, 1, tzinfo=timezone.utc)
+    symbols = [f"A{index:02}/USDT" for index in range(28)]
+    selection = _selection(symbols, calendar_start=start)
+    rows = [{"asset": symbol, "wfo_windows": {"windows": []}} for symbol in symbols]
+    require_complete_universe_wfo_rows(rows, selection)
+    with pytest.raises(ValueError, match="A27/USDT"):
+        require_complete_universe_wfo_rows(rows[:-1], selection)
+
+
 def test_overlapping_external_windows_are_rejected():
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     first = _window(start, is_sharpe=1.0, is_trades=20, oos_return=1.0)

@@ -70,6 +70,11 @@ async def main(args: argparse.Namespace) -> int:
                 int(value.strip()) for value in args.leverage_scenarios.split(",")
                 if value.strip()
             ],
+            portfolio_initial_capital=(
+                args.portfolio_capital
+                if args.portfolio_capital is not None
+                else config.risk.initial_capital
+            ),
         )
     series = [
         (args.exchange, symbol, timeframe)
@@ -143,6 +148,14 @@ if __name__ == "__main__":
     parser.add_argument("--min-is-trades", type=int, default=10)
     parser.add_argument("--primary-leverage", type=int, default=4)
     parser.add_argument("--leverage-scenarios", default="2,4,6")
+    parser.add_argument(
+        "--portfolio-capital",
+        type=float,
+        help=(
+            "Frozen portfolio capital; defaults to risk.initial_capital for "
+            "new universe snapshots"
+        ),
+    )
     parser.add_argument("--timeframes", default="1h,1m")
     parser.add_argument("--execution-timeframe", default="1m", choices=["1m", "5m", "15m"])
     parser.add_argument("--exchange", default="binance", choices=["binance", "bitget"])

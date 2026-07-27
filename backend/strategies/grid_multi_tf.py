@@ -15,8 +15,11 @@ from typing import Any
 import numpy as np
 
 from backend.core.config import GridMultiTFConfig
-from backend.core.indicators import atr, sma, supertrend
+from backend.core.indicators import atr, sma
 from backend.core.models import Candle, Direction
+from backend.core.multi_timeframe import (
+    compute_supertrend_4h_mapped_to_1h,
+)
 from backend.strategies.base import StrategyContext
 from backend.strategies.base_grid import BaseGridStrategy, GridLevel, GridState
 
@@ -47,7 +50,6 @@ class GridMultiTFStrategy(BaseGridStrategy):
         return {
             self._config.timeframe: max(min_needed, 50),
         }
-
     def compute_indicators(
         self, candles_by_tf: dict[str, list[Candle]]
     ) -> dict[str, dict[str, dict[str, Any]]]:
@@ -66,7 +68,7 @@ class GridMultiTFStrategy(BaseGridStrategy):
         atr_arr = atr(highs, lows, closes, self._config.atr_period)
 
         # --- Resampling 1h → 4h + Supertrend (anti-lookahead) ---
-        st_dir_1h = _compute_st_4h_mapped_to_1h(
+        st_dir_1h = compute_supertrend_4h_mapped_to_1h(
             candles, highs, lows, closes,
             self._config.st_atr_period, self._config.st_atr_multiplier,
         )
@@ -282,7 +284,7 @@ class GridMultiTFStrategy(BaseGridStrategy):
         lows = np.array([c.low for c in candles], dtype=float)
         closes = np.array([c.close for c in candles], dtype=float)
 
-        st_dir_1h = _compute_st_4h_mapped_to_1h(
+        st_dir_1h = compute_supertrend_4h_mapped_to_1h(
             candles, highs, lows, closes,
             self._config.st_atr_period, self._config.st_atr_multiplier,
         )
@@ -306,74 +308,3 @@ class GridMultiTFStrategy(BaseGridStrategy):
             "cooldown_candles": self._config.cooldown_candles,
             "min_grid_spacing_pct": self._config.min_grid_spacing_pct,
         }
-
-
-# ─── Helper : Supertrend 4h resampleé sur indices 1h ──────────────────
-
-
-def _compute_st_4h_mapped_to_1h(
-    candles_1h: list[Candle],
-    highs: np.ndarray,
-    lows: np.ndarray,
-    closes: np.ndarray,
-    st_atr_period: int,
-    st_atr_multiplier: float,
-) -> np.ndarray:
-    """Resample 1h → 4h, calcule Supertrend, mappe sur indices 1h.
-
-    Anti-lookahead : chaque candle 1h utilise la direction du bucket 4h
-    PRÉCÉDENT (pas le courant, qui n'est pas encore clôturé).
-
-    Returns:
-        Array (n,) de directions 1/-1/NaN mappées sur les candles 1h.
-    """
-    n = len(candles_1h)
-    if n == 0:
-        return np.array([], dtype=float)
-
-    # Bucket 4h = timestamp // 14400 (frontières UTC 00h/04h/08h/12h/16h/20h)
-    bucket_size = 14400
-    timestamps = np.array([c.timestamp.timestamp() for c in candles_1h])
-    buckets = (timestamps // bucket_size).astype(np.int64)
-
-    # Buckets uniques dans l'ordre
-    unique_buckets: list[int] = []
-    prev_bucket = -1
-    for b in buckets:
-        if b != prev_bucket:
-            unique_buckets.append(int(b))
-            prev_bucket = b
-    unique_buckets_arr = np.array(unique_buckets)
-
-    # OHLC 4h
-    h4_highs_list: list[float] = []
-    h4_lows_list: list[float] = []
-    h4_closes_list: list[float] = []
-
-    for bucket_id in unique_buckets_arr:
-        mask = buckets == bucket_id
-        h4_highs_list.append(float(np.max(highs[mask])))
-        h4_lows_list.append(float(np.min(lows[mask])))
-        indices = np.where(mask)[0]
-        h4_closes_list.append(float(closes[indices[-1]]))
-
-    h4_highs = np.array(h4_highs_list, dtype=float)
-    h4_lows = np.array(h4_lows_list, dtype=float)
-    h4_closes = np.array(h4_closes_list, dtype=float)
-
-    if len(h4_closes) == 0:
-        return np.full(n, np.nan)
-
-    # Supertrend 4h
-    atr_4h = atr(h4_highs, h4_lows, h4_closes, st_atr_period)
-    _, st_dir_4h = supertrend(h4_highs, h4_lows, h4_closes, atr_4h, st_atr_multiplier)
-
-    # Mapping anti-lookahead : candle 1h[i] → bucket PRÉCÉDENT
-    st_dir_1h = np.full(n, np.nan)
-    for i in range(n):
-        current_bucket = buckets[i]
-        idx = np.searchsorted(unique_buckets_arr, current_bucket, side="left") - 1
-        if idx >= 0 and not np.isnan(st_dir_4h[idx]):
-            st_dir_1h[i] = st_dir_4h[idx]
-
-    return st_dir_1h

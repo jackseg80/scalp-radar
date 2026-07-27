@@ -34,6 +34,24 @@ def evaluate_historical_gates(
     external_return = robustness.get("external_oos_return_pct")
     bootstrap_low = robustness.get("bootstrap_ci95_return_low")
     prob_loss = robustness.get("bootstrap_prob_loss")
+    performance_gate_names = {
+        "external_oos_return",
+        "bootstrap_ci95_low",
+        "bootstrap_prob_loss",
+        "nominal_drawdown",
+        "adverse_drawdown",
+        "kill_switch",
+        "simultaneous_sl_loss",
+        "margin",
+        "liquidation_distance",
+        "degraded_cost_return",
+        "fresh_180d_return",
+        "fresh_180d_drawdown",
+        "fresh_180d_kill_switch",
+        "fresh_365d_return",
+        "fresh_365d_drawdown",
+        "fresh_365d_kill_switch",
+    }
 
     gates = [
         _gate("snapshot_valid", snapshot.get("validation_status"),
@@ -72,18 +90,53 @@ def evaluate_historical_gates(
               None if bootstrap_low is None else bootstrap_low > 0, "> 0%"),
         _gate("bootstrap_prob_loss", prob_loss,
               None if prob_loss is None else prob_loss < 0.10, "< 10%"),
-        _gate("nominal_drawdown", backtest.get("max_drawdown_pct"),
-              abs(float(backtest.get("max_drawdown_pct", -999))) <= 30, "<= 30%"),
+        _gate(
+            "nominal_drawdown",
+            backtest.get("max_drawdown_pct"),
+            (
+                None if backtest.get("max_drawdown_pct") is None
+                else abs(float(backtest["max_drawdown_pct"])) <= 30
+            ),
+            "<= 30%",
+        ),
         _gate("adverse_drawdown", adverse_dd,
               None if adverse_dd is None else abs(float(adverse_dd)) <= 40, "<= 40%"),
-        _gate("kill_switch", backtest.get("kill_switch_triggers"),
-              int(backtest.get("kill_switch_triggers", 1)) == 0, "0"),
-        _gate("simultaneous_sl_loss", backtest.get("worst_case_sl_loss_pct"),
-              float(backtest.get("worst_case_sl_loss_pct", 999)) <= 30, "<= 30%"),
-        _gate("margin", backtest.get("peak_margin_ratio"),
-              float(backtest.get("peak_margin_ratio", 999)) <= 0.70, "<= 70%"),
-        _gate("liquidation_distance", backtest.get("min_liquidation_distance_pct"),
-              float(backtest.get("min_liquidation_distance_pct", -999)) > 50, "> 50%"),
+        _gate(
+            "kill_switch",
+            backtest.get("kill_switch_triggers"),
+            (
+                None if backtest.get("kill_switch_triggers") is None
+                else int(backtest["kill_switch_triggers"]) == 0
+            ),
+            "0",
+        ),
+        _gate(
+            "simultaneous_sl_loss",
+            backtest.get("worst_case_sl_loss_pct"),
+            (
+                None if backtest.get("worst_case_sl_loss_pct") is None
+                else float(backtest["worst_case_sl_loss_pct"]) <= 30
+            ),
+            "<= 30%",
+        ),
+        _gate(
+            "margin",
+            backtest.get("peak_margin_ratio"),
+            (
+                None if backtest.get("peak_margin_ratio") is None
+                else float(backtest["peak_margin_ratio"]) <= 0.70
+            ),
+            "<= 70%",
+        ),
+        _gate(
+            "liquidation_distance",
+            backtest.get("min_liquidation_distance_pct"),
+            (
+                None if backtest.get("min_liquidation_distance_pct") is None
+                else float(backtest["min_liquidation_distance_pct"]) > 50
+            ),
+            "> 50%",
+        ),
         _gate("degraded_cost_return", degraded_return,
               None if degraded_return is None else degraded_return > 0, "> 0%"),
         _gate("funding_coverage", backtest.get("missing_funding_events"),
@@ -136,13 +189,27 @@ def evaluate_historical_gates(
         ])
     missing = [gate["name"] for gate in gates if gate["passed"] is None]
     failed = [gate["name"] for gate in gates if gate["passed"] is False]
-    if missing:
-        status = CertificationStatus.RESEARCH_ONLY
-    elif failed:
+    performance_failed = [
+        name for name in failed if name in performance_gate_names
+    ]
+    capability_blockers = [
+        gate["name"]
+        for gate in gates
+        if gate["passed"] is not True and gate["name"] not in performance_gate_names
+    ]
+    if performance_failed:
         status = CertificationStatus.HISTORICAL_FAIL
+    elif missing or capability_blockers:
+        status = CertificationStatus.RESEARCH_ONLY
     else:
         status = CertificationStatus.PAPER_READY
-    return status, {"gates": gates, "missing_evidence": missing, "failed": failed}
+    return status, {
+        "gates": gates,
+        "missing_evidence": missing,
+        "failed": failed,
+        "performance_failed": performance_failed,
+        "capability_blockers": capability_blockers,
+    }
 
 
 def _load_json(value: str | None, fallback: Any) -> Any:
@@ -238,8 +305,9 @@ def evaluate_certification(
                     snapshot_row["manifest_hash"],
                 ))
                 details["failed"].append("manifest_hash")
-                if status != CertificationStatus.RESEARCH_ONLY:
-                    status = CertificationStatus.HISTORICAL_FAIL
+                details.setdefault("capability_blockers", []).append("manifest_hash")
+                if status != CertificationStatus.HISTORICAL_FAIL:
+                    status = CertificationStatus.RESEARCH_ONLY
 
         cert_key = canonical_json({
             "strategy": strategy_name,

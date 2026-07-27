@@ -6,6 +6,7 @@ enums, candles, signaux, ordres, positions, trades, état de session.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
@@ -382,6 +383,7 @@ class UniverseSelectionSpec(BaseModel):
     search_mode: str = "exhaustive"
     primary_leverage: int = Field(default=4, ge=1)
     leverage_scenarios: list[int] = Field(default_factory=lambda: [2, 4, 6])
+    portfolio_initial_capital: Optional[float] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_universe(self) -> "UniverseSelectionSpec":
@@ -391,7 +393,7 @@ class UniverseSelectionSpec(BaseModel):
         if self.search_mode != "exhaustive":
             raise ValueError("universe discovery requires exhaustive search")
         if self.signal_timeframe != "1h":
-            raise ValueError("grid_atr universe discovery requires 1h signals")
+            raise ValueError("universe discovery requires 1h signals")
         if self.primary_leverage not in self.leverage_scenarios:
             raise ValueError("primary_leverage must be included in leverage_scenarios")
         if any(leverage < 1 for leverage in self.leverage_scenarios):
@@ -399,6 +401,28 @@ class UniverseSelectionSpec(BaseModel):
         self.universe_symbols = sorted(symbols)
         self.leverage_scenarios = sorted(set(self.leverage_scenarios))
         return self
+
+    def resolve_portfolio_initial_capital(
+        self,
+        requested: float | None,
+        *,
+        legacy_default: float = 1000.0,
+    ) -> float:
+        """Resolve CLI capital without allowing a frozen snapshot override."""
+        frozen = self.portfolio_initial_capital
+        if frozen is None:
+            return float(requested if requested is not None else legacy_default)
+        if requested is not None and not math.isclose(
+            float(requested),
+            float(frozen),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "Portfolio capital differs from immutable snapshot selection: "
+                f"requested={requested}, snapshot={frozen}"
+            )
+        return float(frozen)
 
 
 class ExperimentManifest(BaseModel):

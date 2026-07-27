@@ -75,6 +75,17 @@ async def run(args: argparse.Namespace) -> int:
         raise ValueError(
             f"Snapshot universe selection targets {selection.strategy_name}, not {args.strategy}"
         )
+    capital = (
+        selection.resolve_portfolio_initial_capital(args.capital)
+        if selection else float(args.capital if args.capital is not None else 1000.0)
+    )
+    if selection and args.leverage is not None:
+        if args.leverage not in selection.leverage_scenarios:
+            raise ValueError(
+                "Leverage differs from immutable snapshot scenarios: "
+                f"requested={args.leverage}, "
+                f"snapshot={selection.leverage_scenarios}"
+            )
     require_complete_universe_wfo_rows(rows, selection)
     cutoff = datetime.fromisoformat(str(manifest["cutoff"]).replace("Z", "+00:00"))
     plans = build_external_window_plans(rows, selection=selection, cutoff=cutoff)
@@ -97,7 +108,7 @@ async def run(args: argparse.Namespace) -> int:
             config=config,
             strategy_name=args.strategy,
             plans=plans,
-            initial_capital=args.capital,
+            initial_capital=capital,
             db_path=args.db,
             exchange=args.exchange,
             execution_spec=execution_spec,
@@ -148,7 +159,7 @@ if __name__ == "__main__":
             "Only accepted when its WFO input fingerprint matches --snapshot."
         ),
     )
-    parser.add_argument("--capital", type=float, default=1000.0)
+    parser.add_argument("--capital", type=float)
     parser.add_argument("--exchange", default="binance", choices=["binance", "bitget"])
     parser.add_argument(
         "--execution-scenario", default="nominal",
