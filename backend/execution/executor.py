@@ -10,8 +10,6 @@ Règle de sécurité #1 : JAMAIS de position sans SL.
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 import asyncio
 import copy
 from collections import deque
@@ -386,13 +384,28 @@ class Executor:
         leverage: int | None = None,
         grid_level: int | None = None,
         context: str = "",
+        intent_timestamp: datetime | None = None,
+        intent_price: float | None = None,
+        requested_quantity: float | None = None,
+        order_status: str = "filled",
     ) -> None:
         """Persiste un trade live en DB (best-effort, pas de crash si DB absente)."""
         if self._db is None:
             return
         try:
+            fill_timestamp = datetime.now(tz=timezone.utc)
+            requested = requested_quantity if requested_quantity is not None else quantity
+            fill_ratio = quantity / requested if requested and requested > 0 else None
+            latency_ms = (
+                (fill_timestamp - intent_timestamp).total_seconds() * 1000
+                if intent_timestamp is not None else None
+            )
+            slippage_pct = (
+                (price - intent_price) / intent_price * 100
+                if intent_price is not None and intent_price > 0 else None
+            )
             await self._db.insert_live_trade({
-                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "timestamp": fill_timestamp.isoformat(),
                 "strategy_name": strategy_name or self._strategy_name or "",
                 "symbol": symbol,
                 "direction": direction,
@@ -407,6 +420,15 @@ class Executor:
                 "leverage": leverage,
                 "grid_level": grid_level,
                 "context": context,
+                "intent_timestamp": intent_timestamp.isoformat() if intent_timestamp else None,
+                "intent_price": intent_price,
+                "requested_quantity": requested,
+                "filled_quantity": quantity,
+                "fill_timestamp": fill_timestamp.isoformat(),
+                "latency_ms": latency_ms,
+                "slippage_pct": slippage_pct,
+                "fill_ratio": fill_ratio,
+                "order_status": order_status,
             })
         except Exception as e:
             logger.warning("Executor: échec persist live trade: {}", e)
@@ -883,6 +905,29 @@ class Executor:
             return
 
         for strategy_name, strategy in self._strategies.items():
+            # An entry must be explicitly authorised by the strategy universe.
+            # ``_get_effective_strategy`` intentionally falls back to the base
+            # configuration when no override exists, but that fallback must not
+            # turn every DataEngine symbol into a live trading candidate.
+            config = getattr(strategy, "_config", None)
+            per_asset = getattr(config, "per_asset", {})
+            if isinstance(per_asset, dict) and per_asset and symbol not in per_asset:
+                logger.debug(
+                    "Executor entry: {} {} outside per_asset universe, skip",
+                    strategy_name, symbol,
+                )
+                continue
+
+            # The AdaptiveSelector is an additional runtime gate.  Do not
+            # evaluate or refresh pending entries for a symbol it rejects.
+            selector = getattr(self, "_selector", None)
+            if selector and not selector.is_allowed(strategy_name, symbol):
+                logger.debug(
+                    "Executor entry: {} {} rejected by selector, skip",
+                    strategy_name, symbol,
+                )
+                continue
+
             effective_strategy = self._get_effective_strategy(
                 strategy_name, symbol,
             )
@@ -1105,20 +1150,37 @@ class Executor:
         try:
             order = await self._exchange.fetch_order(pending.order_id, futures_sym)
             status = order.get("status")
-            if status in ("closed", "filled"):
-                # Rempli entre-temps — traiter le fill
+            filled_qty = float(order.get("filled") or 0)
+            if status in ("closed", "filled") or filled_qty > 0:
+                # Rempli (totalement ou partiellement) entre-temps — traiter
+                # l'exposition réelle avant toute tentative de remplacement.
                 avg_price = float(order.get("average") or pending.entry_price)
-                filled_qty = float(order.get("filled") or pending.quantity)
+                if status in ("closed", "filled") and filled_qty <= 0:
+                    filled_qty = pending.quantity
                 fee_info = order.get("fee") or {}
                 fee = float(fee_info.get("cost") or 0) if fee_info.get("cost") is not None else 0.0
                 await self._process_entry_fill(futures_sym, pending, avg_price, filled_qty, fee)
                 return False
             if status in ("canceled", "cancelled", "expired", "rejected"):
                 self._remove_pending_tracking(futures_sym, pending)
+                await self._persist_unfilled_pending(pending, status, reason)
                 return True
 
             # Annuler l'ordre
-            await self._exchange.cancel_order(pending.order_id, futures_sym)
+            cancelled_order = await self._exchange.cancel_order(
+                pending.order_id, futures_sym,
+            )
+            cancel_filled = float((cancelled_order or {}).get("filled") or 0)
+            if cancel_filled > 0:
+                avg_price = float(
+                    (cancelled_order or {}).get("average") or pending.entry_price
+                )
+                fee_info = (cancelled_order or {}).get("fee") or {}
+                fee = float(fee_info.get("cost") or 0)
+                await self._process_entry_fill(
+                    futures_sym, pending, avg_price, cancel_filled, fee,
+                )
+                return False
             logger.info(
                 "Executor: limit entry cancelled {} lv{} ({})",
                 futures_sym, level_idx, reason,
@@ -1131,7 +1193,32 @@ class Executor:
             return False
 
         self._remove_pending_tracking(futures_sym, pending)
+        await self._persist_unfilled_pending(pending, "cancelled", reason)
         return True
+
+    async def _persist_unfilled_pending(
+        self,
+        pending: PendingEntryOrder,
+        status: str,
+        reason: str,
+    ) -> None:
+        """Persist a confirmed missed limit fill for execution calibration."""
+        await self._persist_live_trade(
+            "entry_unfilled",
+            pending.futures_sym,
+            pending.side,
+            pending.direction,
+            0.0,
+            pending.entry_price,
+            strategy_name=pending.strategy_name,
+            order_id=pending.order_id,
+            grid_level=pending.level_index,
+            context=f"grid_limit_{reason}",
+            intent_timestamp=pending.placed_at,
+            intent_price=pending.entry_price,
+            requested_quantity=pending.quantity,
+            order_status=status,
+        )
 
     def _remove_pending_tracking(
         self,
@@ -1553,6 +1640,20 @@ class Executor:
             )
             return
 
+        # The exchange-side SL is the source of truth.  A local price crossing
+        # is only an observation; it must never be routed through
+        # _close_grid_cycle("sl_global"), which assumes the trigger order is
+        # already filled and would otherwise remove local state without sending
+        # a close order.  watchOrders and the position polling fallback both
+        # confirm the actual Bitget fill through _handle_grid_sl_executed().
+        if exit_reason == "sl_global":
+            logger.info(
+                "Executor: seuil SL observé {} @ {:.6f} (trigger={:.6f}) — "
+                "attente confirmation fill exchange",
+                futures_sym, current_price, sl_price,
+            )
+            return
+
         logger.info(
             "Executor: EXIT AUTONOME {} {} — raison={}, price={:.6f}, tp={:.6f}, sl={:.6f}, avg_entry={:.6f}",
             state.direction, futures_sym, exit_reason,
@@ -1633,6 +1734,7 @@ class Executor:
 
         # 1. Ordre d'entrée (market)
         side = "buy" if event.direction == "LONG" else "sell"
+        submitted_at = datetime.now(tz=timezone.utc)
         try:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
@@ -1684,6 +1786,9 @@ class Executor:
             strategy_name=event.strategy_name,
             order_id=entry_order_id,
             fee=entry_fee,
+            intent_timestamp=submitted_at,
+            intent_price=event.entry_price,
+            requested_quantity=quantity,
         )
 
         await asyncio.sleep(_ORDER_DELAY)
@@ -1933,6 +2038,7 @@ class Executor:
 
         # Market entry
         side = "buy" if event.direction == "LONG" else "sell"
+        submitted_at = datetime.now(tz=timezone.utc)
         try:
             entry_order = await self._exchange.create_order(
                 futures_sym, "market", side, quantity,
@@ -2038,6 +2144,9 @@ class Executor:
             leverage=state.leverage,
             grid_level=level_num,
             context="grid",
+            intent_timestamp=submitted_at,
+            intent_price=event.entry_price,
+            requested_quantity=quantity,
         )
 
     async def _process_entry_fill(
@@ -2188,6 +2297,9 @@ class Executor:
             leverage=state.leverage,
             grid_level=level_num,
             context="grid_limit",
+            intent_timestamp=pending.placed_at,
+            intent_price=pending.entry_price,
+            requested_quantity=pending.quantity,
         )
 
     async def _check_pending_entry_fills(self) -> None:

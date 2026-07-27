@@ -105,6 +105,7 @@ def _make_grid_runner(
     gpm_config = _make_gpm_config(leverage=leverage)
     gpm = GridPositionManager(gpm_config)
     data_engine = MagicMock()
+    data_engine.get_funding_rate.return_value = 0.01
     runner = GridStrategyRunner(
         strategy=strategy,
         config=config,
@@ -423,6 +424,25 @@ class TestFundingCosts:
         await runner.on_candle(symbol, "1h", candle)
 
         assert runner._total_funding_cost == 0.0
+
+    @pytest.mark.asyncio
+    async def test_missing_funding_is_explicit_not_synthetic(self):
+        runner = _make_grid_runner()
+        runner._data_engine.get_funding_rate.return_value = None
+        symbol = "BTC/USDT"
+        runner._positions[symbol] = [
+            _make_position(entry_price=50_000.0, quantity=0.01),
+        ]
+        runner._close_buffer[symbol] = deque([50_000.0] * 20, maxlen=30)
+        capital_before = runner._capital
+
+        await runner.on_candle(
+            symbol, "1h", _make_candle(symbol=symbol, close=50_000.0, hour=8),
+        )
+
+        assert runner._total_funding_cost == 0.0
+        assert runner._capital == capital_before
+        assert runner._missing_funding_events == 1
 
 
 # ===========================================================================

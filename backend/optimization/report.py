@@ -248,6 +248,7 @@ async def validate_on_bitget(
     db: Database | None = None,
     n_bootstrap: int = 1000,
     seed: int | None = 42,
+    data_bounds: dict[str, tuple[datetime, datetime]] | None = None,
 ) -> ValidationResult:
     """Backtest les paramètres optimaux sur Bitget 90j avec bootstrap CI."""
     close_db = False
@@ -268,8 +269,16 @@ async def validate_on_bitget(
 
         candles_by_tf: dict[str, list[Candle]] = {}
         for tf in tfs:
+            bounds = data_bounds.get(tf) if data_bounds else None
+            if data_bounds is not None and bounds is None:
+                continue
             candles = await db.get_candles(
-                symbol, tf, exchange="bitget", limit=1_000_000,
+                symbol,
+                tf,
+                exchange="bitget",
+                start=bounds[0] if bounds else None,
+                end=bounds[1] if bounds else None,
+                limit=1_000_000,
             )
             candles_by_tf[tf] = candles
 
@@ -293,12 +302,26 @@ async def validate_on_bitget(
         if hasattr(default_cfg, 'leverage'):
             bt_config.leverage = default_cfg.leverage
 
-        # Charger extra_data si nécessaire (funding/OI Binance comme proxy)
+        # Charger les extra_data de la même source Bitget. Une certification
+        # ne remplace jamais silencieusement funding/OI par un autre exchange.
         from backend.optimization import STRATEGIES_NEED_EXTRA_DATA, is_grid_strategy
         extra_data_map: dict[str, dict[str, Any]] | None = None
         if strategy_name in STRATEGIES_NEED_EXTRA_DATA:
-            funding_rates = await db.get_funding_rates(symbol, exchange="binance")
-            oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange="binance")
+            funding_rates = await db.get_funding_rates(symbol, exchange="bitget")
+            oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange="bitget")
+            if data_bounds:
+                bounds = data_bounds.get(main_tf)
+                if bounds:
+                    start_ms = int(bounds[0].timestamp() * 1000)
+                    end_ms = int(bounds[1].timestamp() * 1000)
+                    funding_rates = [
+                        item for item in funding_rates
+                        if start_ms <= int(item["timestamp"]) <= end_ms
+                    ]
+                    oi_records = [
+                        item for item in oi_records
+                        if start_ms <= int(item["timestamp"]) <= end_ms
+                    ]
             if funding_rates or oi_records:
                 extra_data_map = build_extra_data_map(
                     main_candles, funding_rates, oi_records,
@@ -434,6 +457,8 @@ def save_report(
     combo_results: list[dict] | None = None,
     regime_analysis: dict | None = None,
     leverage: int | None = None,
+    manifest: dict[str, Any] | None = None,
+    result_status: str = "legacy",
 ) -> tuple[Path, int | None]:
     """Sauvegarde le rapport en JSON et en DB.
 
@@ -487,6 +512,8 @@ def save_report(
             db_path, report, wfo_windows, duration, timeframe,
             regime_analysis=regime_analysis,
             leverage=leverage,
+            manifest=manifest,
+            result_status=result_status,
         )
 
         # Sauver les combo results si présents (Sprint 14b)
@@ -496,7 +523,7 @@ def save_report(
             logger.info("Combo results sauvés : {} combos pour result_id={}", n_saved, result_id)
 
     # 3. Push serveur (best-effort, ne crashe jamais)
-    if timeframe is not None:
+    if timeframe is not None and manifest is None:
         from backend.optimization.optimization_db import push_to_server
         push_to_server(
             report, wfo_windows, duration, timeframe,

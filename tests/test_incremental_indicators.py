@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
+from backend.core.indicators import adx, atr, rsi
 from backend.core.models import Candle, TimeFrame
 from backend.strategies.base import BaseStrategy, OpenPosition, StrategyContext, StrategySignal
 
@@ -122,3 +123,81 @@ class TestIncrementalIndicatorEngine:
         engine = IncrementalIndicatorEngine([_DummyStrategy()])
         assert "5m" in engine.timeframes
         assert "15m" in engine.timeframes
+
+    @pytest.mark.parametrize("period", [7, 10, 14, 20])
+    def test_atr_matches_batch_for_optimizable_periods(self, period):
+        """Every grid ATR candidate uses the exact batch definition."""
+        engine = IncrementalIndicatorEngine([_DummyStrategy()])
+        candles = [_make_candle(i) for i in range(120)]
+        for candle in candles:
+            engine.update("BTC/USDT", "5m", candle)
+
+        actual = engine.get_indicators(
+            "BTC/USDT", parameters={"atr_period": period},
+        )["5m"]["atr"]
+        expected = atr(
+            np.array([c.high for c in candles]),
+            np.array([c.low for c in candles]),
+            np.array([c.close for c in candles]),
+            period,
+        )[-1]
+        assert actual == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+    @pytest.mark.parametrize("period", [7, 14, 20])
+    def test_rsi_and_adx_match_batch_periods(self, period):
+        engine = IncrementalIndicatorEngine([_DummyStrategy()])
+        candles = [_make_candle(i) for i in range(160)]
+        for candle in candles:
+            engine.update("BTC/USDT", "5m", candle)
+        actual = engine.get_indicators(
+            "BTC/USDT",
+            parameters={"rsi_period": period, "adx_period": period},
+        )["5m"]
+        highs = np.array([c.high for c in candles])
+        lows = np.array([c.low for c in candles])
+        closes = np.array([c.close for c in candles])
+        expected_adx, expected_plus, expected_minus = adx(
+            highs, lows, closes, period,
+        )
+        assert actual["rsi"] == pytest.approx(rsi(closes, period)[-1], rel=1e-12)
+        assert actual["adx"] == pytest.approx(expected_adx[-1], rel=1e-12)
+        assert actual["di_plus"] == pytest.approx(expected_plus[-1], rel=1e-12)
+        assert actual["di_minus"] == pytest.approx(expected_minus[-1], rel=1e-12)
+
+    def test_adx_long_running_scalar_path_is_stable(self):
+        """Repeated portfolio-style ADX calls remain deterministic.
+
+        This protects the allocation-free scalar path used for long Windows
+        backtests, where the former per-candle temporary arrays caused severe
+        allocator and logging-queue pressure.
+        """
+        candles = [_make_candle(i) for i in range(500)]
+        expected = IncrementalIndicatorEngine._adx_last(candles, 14)
+
+        for _ in range(1_000):
+            actual = IncrementalIndicatorEngine._adx_last(candles, 14)
+            assert actual == pytest.approx(expected, rel=1e-15, abs=1e-15)
+
+    def test_period_profile_changes_output_without_second_buffer(self):
+        engine = IncrementalIndicatorEngine([_DummyStrategy()])
+        for i in range(100):
+            base = _make_candle(i)
+            variable = Candle(
+                timestamp=base.timestamp,
+                open=base.open,
+                high=base.high + (i % 11) * 0.2,
+                low=base.low - (i % 7) * 0.1,
+                close=base.close,
+                volume=base.volume,
+                symbol=base.symbol,
+                timeframe=base.timeframe,
+            )
+            engine.update("BTC/USDT", "5m", variable)
+        atr_7 = engine.get_indicators(
+            "BTC/USDT", parameters={"atr_period": 7},
+        )["5m"]["atr"]
+        atr_20 = engine.get_indicators(
+            "BTC/USDT", parameters={"atr_period": 20},
+        )["5m"]["atr"]
+        assert atr_7 != pytest.approx(atr_20)
+        assert len(engine._buffers) == 1

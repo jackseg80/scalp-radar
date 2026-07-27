@@ -1,76 +1,213 @@
-# Scalp-Radar — Guide complet Backtest & WFO (Version Anti-Biais)
+# Backtest and Live Certification Workflow
 
-## Architecture du système
+This is the authoritative path from historical research to live trading. Grades and ad-hoc portfolio reports are diagnostics only. They cannot authorize a live configuration.
 
-Le pipeline complet va de la donnée brute à la certification de production :
-```
-Données historiques (Binance 3+ ans)
-  → WFO (Walk-Forward Optimization) par asset
-  → Sanity Check (analyze_wfo_deep) : FILTRE DE COHÉRENCE
-  → Application des paramètres (Grade A/B + Validés)
-  → Portfolio backtest (Validation de diversification)
-  → Robustesse Statistique (Bootstrap & Stress)
-  → Paper trading → Live trading
-```
+## Core rules
 
-## Philosophie Anti-Biais
+- Research may use the existing fast engines; certification must replay the selected candidates through the canonical event-driven engine.
+- A certification is bound to an immutable data snapshot, Git commit, complete config hashes, execution calibration and random seed.
+- Candidate selection uses nested walk-forward. Parameters and the asset universe are selected from inner/IS data only; portfolio results are concatenated from untouched external OOS windows.
+- `max_live_grids=4`, leverage and account risk constraints are fixed before WFO. Changing leverage, sizing, universe, cycle limits or risk limits invalidates the certification.
+- Existing WFO/portfolio rows are `legacy`. They remain readable but can never be promoted.
+- `optimize --apply` is blocked. Only a `LIVE_APPROVED` certification may create a local promotion artifact.
+- No certification command deploys or modifies robot2.
 
-Pour garantir la fiabilité des revenus live, ce workflow impose des barrières strictes :
-1. **Anti-Data Snooping** : Utilisation du DSR (Deflated Sharpe) et de l'Embargo 7j pour éviter de "prédire" les données OOS.
-2. **Anti-Selection Bias** : Interdiction de retirer un actif simplement parce qu'il perd de l'argent en backtest portfolio (on ne "nettoie" pas le passé).
-3. **Anti-Overfitting** : Pénalité `window_factor` pour rejeter les combos "chanceux" sur peu de fenêtres historiques.
-4. **Cohérence Physique** : Rejet immédiat si les paramètres violent les limites de marge ou de corrélation.
+## Current capability status
 
----
+The canonical shared-account replay is available for the nine registered grid strategies. Unsupported mono-position strategies and `trend_follow_daily` fail closed as `RESEARCH_ONLY`; they are never routed through a grid engine.
 
-## 3. Workflow complet — Validation de Production
+The current portfolio replay still executes on 1h signal bars. Even when the snapshot contains 1m data, the `intrabar_execution_used` gate therefore fails. This is intentional: no strategy can reach `PAPER_READY` until the canonical broker actually consumes the configured execution timeframe. Research reports remain available meanwhile.
 
-### Étape 0 — Calcul leverage (AVANT tout WFO)
-Calcul mathématique des limites basées sur le Stop Loss max et le Kill Switch.
-**Règle critique** : Fixer le leverage dans `strategies.yaml` AVANT le WFO. Le changer après invalide tout le travail.
+## 1. Calibrate execution from Bitget observations
 
-### Étape 1 — WFO mono-asset (21 assets)
-Identifie les actifs ayant un "edge" statistique.
-```bash
-uv run python -m scripts.optimize --strategy grid_atr --all-symbols --subprocess -v
+Calibration uses persisted entry outcomes, including confirmed unfilled and partial orders. At least 30 filled observations and at least one confirmed unfilled observation are required by certification.
+
+```powershell
+uv run python -m scripts.calibrate_execution --strategy grid_atr --since <ISO_DATE> --until <ISO_DATE>
 ```
 
-### Étape 2 — Sanity Check (Filtrage de Cohérence)
-**Indispensable AVANT toute application de paramètres.**
-```bash
-uv run python -m scripts.analyze_wfo_deep --strategy grid_atr
-```
-**Critères de REJET AUTOMATIQUE (même si Grade A/B) :**
-- **Risque de Ruine** : `SL % × Leverage > 100%`. L'actif est exclu s'il peut liquider sa propre marge.
-- **Concentration de Régime** : Si > 80% du profit vient d'un seul régime (ex: uniquement les Crashs) avec < 10 trades ailleurs.
-- **Significativité Bitget** : Si l'actif a moins de 5-10 trades réels sur l'historique Bitget récent.
+Keep the returned `calibration_id`.
 
-### Étape 3 — Application des Paramètres (Le "Commit")
-Seuls les actifs ayant passé l'Étape 1 (Grade A/B) **ET** l'Étape 2 (Sanity Check) sont injectés dans la configuration.
-```bash
-# Appliquer avec exclusion des rejetés de l'étape 2
-uv run python -m scripts.optimize --strategy grid_atr --apply --exclude "SYM1,SYM2"
-```
+## 2. Create and validate an immutable snapshot
 
-### Étape 4 — Portfolio backtest (Validation de Diversification)
-Simule l'ensemble des actifs validés avec capital partagé.
-**RÈGLE D'OR** : On ne modifie pas la liste des actifs après avoir vu le résultat. Si le résultat global est mauvais, c'est la **stratégie** ou le **levier** qui est à revoir à l'étape 0.
-```bash
-uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 365 --save --label "strat_V2_levX_DATE"
+The certification snapshot requires a clean worktree. It records exact closed candles, gaps, duplicates, OHLC validity, per-series hashes, funding/OI availability, Git/config hashes and the calibrated execution model. Binance may provide long history; Bitget data is included for transfer and execution calibration. There is no silent exchange fallback.
+
+```powershell
+uv run python -m scripts.create_data_snapshot `
+  --cutoff <ISO_DATE> `
+  --since <ISO_DATE> `
+  --symbols SOL/USDT,ADA/USDT,XRP/USDT `
+  --timeframes 1h,1m `
+  --exchange binance `
+  --execution-timeframe 1m `
+  --calibration-id <CALIBRATION_ID> `
+  --validate
 ```
 
-### Étape 5 — Robustesse Statistique (Le Juge Final)
-Validation par Bootstrap et scénarios de stress.
-```bash
-uv run python -m scripts.portfolio_robustness --label "label_étape_4" --save
+Keep the returned `snapshot_id`. Any later change to code, configuration or frozen market rows makes revalidation fail.
+
+If only the canonical portfolio/execution path changes after a completed WFO,
+create a fresh snapshot and pass the prior WFO snapshot explicitly through
+`external_oos_portfolio --wfo-snapshot <ID>`. This is accepted only when the
+two snapshots have the same WFO input fingerprint (data hashes, YAML hashes,
+calendar, parameter grid, seed and IS-only selection); it never bypasses
+revalidation of the fresh canonical replay.
+
+### `grid_atr` universe discovery (authoritative historical evaluation)
+
+This is distinct from a `candidate_replay`: it evaluates every configured
+asset (currently 28), not the asset list currently running on an exchange.
+The policy is frozen inside the snapshot: 1h signals, a common calendar from
+2022-01-01, IS 180d, embargo 7d, OOS 60d/step 60d, exhaustive valid-grid
+search, and an IS-only Top 8 selected independently for every OOS window.
+Late-listed assets join only once their full IS/embargo/OOS interval exists.
+
+```powershell
+uv run python -m scripts.create_data_snapshot `
+  --strategy grid_atr `
+  --universe-discovery `
+  --calendar-start "2022-01-01T00:00:00+00:00" `
+  --since "2022-01-01T00:00:00+00:00" `
+  --cutoff <ISO_DATE> `
+  --timeframes 1h `
+  --exchange binance `
+  --max-gap-bars 1 `
+  --seed 0
 ```
-**Verdict Final :**
-- **VIABLE** : Prêt pour déploiement.
-- **FAIL** : Échec structurel. Retour à l'étape 0 (réduction levier ou refonte logique).
 
----
+The command intentionally does not use `--symbols`: the universe must match
+`assets.yaml` exactly.  Funding must be backfilled before this snapshot.  The
+first historical result remains `RESEARCH_ONLY` until a real 1m canonical
+broker and Bitget execution calibration are available; this does not weaken
+any historical failure gate.
 
-## 4. Maintenance et Dérive (Drift)
-Les paramètres ont une date de péremption de **60 jours**. 
-- Une alerte visuelle apparaît dans le frontend (`Périmé`) pour signaler les actifs nécessitant un re-run complet.
-- Ne jamais "tuner" les paramètres à la main dans `strategies.yaml`. Tout changement doit repasser par le workflow.
+`--max-gap-bars 1` is permitted only for documented, source-confirmed single
+Binance outages.  Affected asset windows are excluded from IS and OOS rather
+than interpolated; all other assets retain the same calendar.
+
+## 3. Run or resume snapshot-bound WFO
+
+```powershell
+uv run python -m scripts.optimize `
+  --strategy grid_atr `
+  --all-symbols `
+  --snapshot <SNAPSHOT_ID> `
+  --resume `
+  -v
+```
+
+`--resume` skips only assets already completed for the exact manifest hash. Results from another snapshot or legacy run never count. Snapshot mode remains incompatible with `--subprocess`; each asset failure is logged and the remaining assets continue.
+
+For a universe-discovery snapshot this command is strict: it requires
+`grid_atr --all-symbols`, forces the frozen 1h signal timeframe and evaluates
+every valid parameter combination in every IS window.  The external replay
+refuses to proceed if any declared asset lacks its snapshot-bound WFO result.
+
+## 4. Run or resume historical certification
+
+To inspect the three pre-declared leverage scenarios before certification:
+
+```powershell
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio `
+  --strategy grid_atr `
+  --snapshot <SNAPSHOT_ID> `
+  --capital 1502.59 `
+  --all-leverages
+```
+
+For an explicit compatible-WFO reuse after a portfolio-only correction:
+
+```powershell
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio `
+  --strategy grid_atr --snapshot <FRESH_PORTFOLIO_SNAPSHOT> `
+  --wfo-snapshot <COMPATIBLE_WFO_SNAPSHOT> --capital 1502.59 --all-leverages
+```
+
+The dynamic asset choices and parameters are identical for 2x, 4x and 6x.
+Only 4x is saved as `external_oos` and can become the primary historical
+verdict.  2x and 6x are named sensitivity evidence; they can never replace
+the declared 4x decision after seeing results.
+
+```powershell
+uv run python -m scripts.certify_strategy `
+  --strategy grid_atr `
+  --snapshot <SNAPSHOT_ID> `
+  --capital 1000
+```
+
+The orchestrator reuses matching evidence and creates only missing stages:
+
+1. measured fast/canonical parity;
+2. chronological external-OOS nominal portfolio;
+3. adverse execution replay;
+4. nominal fresh-capital replays over the last 180 and 365 days, using the
+   same preselected external-OOS parameters/universe but restarting from the
+   certification capital;
+5. block bootstrap, empirical rolling 30-day CVaR and stress evidence;
+6. strict historical gates.
+
+Rerunning the same command is resumable and idempotent. To evaluate existing evidence without running missing stages:
+
+```powershell
+uv run python -m scripts.certify_strategy --strategy grid_atr --snapshot <SNAPSHOT_ID> --evaluate-only
+```
+
+Historical gates for `PAPER_READY` are: positive external-OOS return and bootstrap lower bound, loss probability below 10%, nominal DD at most 30%, adverse DD at most 40%, no 45% kill switch, simultaneous SL loss at most 30%, margin at most 70%, liquidation distance above 50%, positive degraded-cost return, complete funding/intrabar evidence and fast/canonical parity within 0.5%. Both fresh-capital windows must cover at least 95% of 180/365 days, remain profitable, keep DD at most 30% and trigger no kill switch.
+
+On Windows, any certification that runs missing portfolio evidence must use
+the same isolated Python 3.12 runtime as `portfolio_backtest`:
+
+```powershell
+uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy `
+  --strategy grid_atr `
+  --snapshot <SNAPSHOT_ID> `
+  --capital 1000
+```
+
+`--evaluate-only` is read-only and remains available from the normal runtime.
+
+## 5. Record and review forward evidence
+
+Forward evidence must contain raw per-intent observations, never manually entered aggregate metrics. JSON or JSONL rows are signed and idempotent; a conflicting rewrite of the same intent is rejected.
+
+```powershell
+uv run python -m scripts.record_forward_observations `
+  --certification-id <CERT_ID> `
+  --phase paper `
+  --input <RAW_OBSERVATIONS.jsonl>
+
+uv run python -m scripts.review_forward --certification-id <CERT_ID> --phase paper
+```
+
+Paper requires at least 60 days, 30 completed cycles and 100 entries, with 100% explained orders, sizes within 1%, at least 90% of fills inside the simulated interval, cumulative PnL deviation at most 20%, and no missing SL, orphan order or persistent state divergence.
+
+Canary phases use `canary_1`, `canary_2`, `canary_3`, `canary_4` observations at 10%, 25%, 50% and 100% capital. Review each sequentially:
+
+```powershell
+uv run python -m scripts.review_forward --certification-id <CERT_ID> --phase canary
+```
+
+## 6. Create the local promotion artifact
+
+```powershell
+uv run python -m scripts.promote_strategy --certification-id <CERT_ID>
+```
+
+Promotion requires `LIVE_APPROVED`, unchanged clean code/config, completed paper and all four canary stages. A challenger must improve robust score by at least 15% without degrading adverse DD by more than three points. The command writes `data/promotions/<CERT_ID>.json`; it does not deploy or edit robot2.
+
+## Statuses
+
+- `RESEARCH_ONLY`: incomplete or unsupported canonical evidence.
+- `HISTORICAL_FAIL`: complete historical evidence failed at least one gate.
+- `PAPER_READY`: all historical gates passed.
+- `LIVE_CANARY_READY`: forward paper passed.
+- `LIVE_APPROVED`: all four canary stages passed.
+- `REJECTED`: explicit operational rejection.
+
+## Legacy commands
+
+`portfolio_backtest`, `portfolio_robustness`, grades and `analyze_wfo_deep` remain useful research/diagnostic tools. Their standalone verdicts are not live authorization. Leave-one-out analysis may propose a future pre-registered challenger but may not alter the current external-OOS result after inspection.
+
+`portfolio_backtest --save` is local-only. A legacy research row is sent to
+the configured server only when `--push-server` is supplied explicitly;
+snapshot-bound certification rows can never be pushed by that CLI.

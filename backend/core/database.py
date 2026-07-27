@@ -7,6 +7,7 @@ Gère le stockage des candles, signaux, trades et état de session.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -177,6 +178,7 @@ class Database:
         await self._create_sprint14_tables()
         await self._create_simulator_trades_table()
         await self._create_portfolio_tables()
+        await self._create_certification_tables()
         await self._create_journal_tables()
         await self._create_live_trades_table()
         await self._create_balance_snapshots_table()
@@ -270,6 +272,21 @@ class Database:
         await self._migrate_regime_analysis()
         await self._migrate_grading_v2()
         await self._migrate_leverage()
+        await self._migrate_result_provenance("optimization_results")
+        await self._migrate_optimization_parity()
+
+    async def _migrate_optimization_parity(self) -> None:
+        """Persist measured fast/canonical parity for each WFO asset."""
+        assert self._conn is not None
+        columns = await self._conn.execute_fetchall(
+            "PRAGMA table_info(optimization_results)"
+        )
+        names = {column[1] for column in columns}
+        if "engine_parity_json" not in names:
+            await self._conn.execute(
+                "ALTER TABLE optimization_results ADD COLUMN engine_parity_json TEXT"
+            )
+            await self._conn.commit()
 
     async def _migrate_optimization_source(self) -> None:
         """Migration idempotente : ajoute la colonne source à optimization_results si absente."""
@@ -490,6 +507,319 @@ class Database:
         await self._migrate_portfolio_leverage()
         await self._migrate_portfolio_btc_benchmark()
         await self._migrate_portfolio_regime_analysis()
+        await self._migrate_portfolio_audit_fields()
+        await self._migrate_result_provenance("portfolio_backtests")
+
+    async def _migrate_portfolio_audit_fields(self) -> None:
+        """Persist pre-trade rejections and missing market observations."""
+        assert self._conn is not None
+        columns = await self._conn.execute_fetchall(
+            "PRAGMA table_info(portfolio_backtests)"
+        )
+        names = {column[1] for column in columns}
+        additions = {
+            "order_rejections": "TEXT NOT NULL DEFAULT '{}'",
+            "missing_funding_events": "INTEGER NOT NULL DEFAULT 0",
+            "execution_scenario": "TEXT NOT NULL DEFAULT 'legacy'",
+            "execution_spec_json": "TEXT",
+            "execution_timeframe_used": "TEXT NOT NULL DEFAULT 'unknown'",
+            "was_liquidated": "INTEGER NOT NULL DEFAULT 0",
+            "min_liquidation_distance_pct": "REAL NOT NULL DEFAULT 0",
+            "worst_case_sl_loss_pct": "REAL NOT NULL DEFAULT 0",
+            "funding_paid_total": "REAL NOT NULL DEFAULT 0",
+            "evaluation_scope": "TEXT NOT NULL DEFAULT 'full_history'",
+            "universe_selection_json": "TEXT NOT NULL DEFAULT '[]'",
+        }
+        added = []
+        for column, definition in additions.items():
+            if column not in names:
+                await self._conn.execute(
+                    f"ALTER TABLE portfolio_backtests ADD COLUMN {column} {definition}"
+                )
+                added.append(column)
+        if added:
+            await self._conn.commit()
+            logger.info(
+                "Migration portfolio_backtests : audit ordres/funding ajouté ({})",
+                ", ".join(added),
+            )
+
+    async def _migrate_result_provenance(self, table: str) -> None:
+        """Add certification provenance to an existing result table.
+
+        Existing rows intentionally remain ``legacy`` and therefore cannot be
+        promoted by the certification workflow.  The migration is idempotent
+        both on historical databases and on freshly created ones.
+        """
+        assert self._conn is not None
+        if table not in {"optimization_results", "portfolio_backtests"}:
+            raise ValueError(f"Unsupported result table: {table}")
+        columns = await self._conn.execute_fetchall(f"PRAGMA table_info({table})")
+        if not columns:
+            return
+        names = {column[1] for column in columns}
+        additions = {
+            "result_status": "TEXT NOT NULL DEFAULT 'legacy'",
+            "manifest_json": "TEXT",
+            "manifest_hash": "TEXT",
+            "certification_id": "TEXT",
+        }
+        added: list[str] = []
+        for column, definition in additions.items():
+            if column not in names:
+                await self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                )
+                added.append(column)
+        if added:
+            await self._conn.commit()
+            logger.info(
+                "Migration {} : provenance certification ajoutée ({})",
+                table,
+                ", ".join(added),
+            )
+
+    async def _create_certification_tables(self) -> None:
+        """Store immutable data snapshots and strategy certification state."""
+        assert self._conn is not None
+        await self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS data_snapshots (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                cutoff TEXT NOT NULL,
+                manifest_json TEXT NOT NULL,
+                manifest_hash TEXT NOT NULL UNIQUE,
+                validation_status TEXT NOT NULL,
+                validation_errors TEXT NOT NULL DEFAULT '[]'
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_certifications (
+                id TEXT PRIMARY KEY,
+                strategy_name TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                manifest_json TEXT NOT NULL,
+                manifest_hash TEXT NOT NULL,
+                gates_json TEXT NOT NULL DEFAULT '{}',
+                portfolio_backtest_id INTEGER,
+                paper_started_at TEXT,
+                paper_metrics_json TEXT,
+                canary_stage INTEGER NOT NULL DEFAULT 0,
+                promoted_at TEXT,
+                rejection_reason TEXT,
+                FOREIGN KEY(snapshot_id) REFERENCES data_snapshots(id),
+                FOREIGN KEY(portfolio_backtest_id) REFERENCES portfolio_backtests(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_cert_strategy_status
+                ON strategy_certifications(strategy_name, status);
+            CREATE INDEX IF NOT EXISTS idx_cert_snapshot
+                ON strategy_certifications(snapshot_id);
+
+            CREATE TABLE IF NOT EXISTS portfolio_robustness (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                backtest_id INTEGER REFERENCES portfolio_backtests(id),
+                label TEXT,
+                created_at TEXT,
+                bootstrap_n_sims INTEGER,
+                bootstrap_block_size INTEGER,
+                bootstrap_median_return REAL,
+                bootstrap_ci95_return_low REAL,
+                bootstrap_ci95_return_high REAL,
+                bootstrap_median_dd REAL,
+                bootstrap_ci95_dd_low REAL,
+                bootstrap_ci95_dd_high REAL,
+                bootstrap_prob_loss REAL,
+                bootstrap_prob_dd_30 REAL,
+                bootstrap_prob_dd_ks REAL,
+                regime_stress_results TEXT,
+                historical_stress_results TEXT,
+                var_5_daily REAL,
+                cvar_5_daily REAL,
+                cvar_30d REAL,
+                cvar_5_annualized REAL,
+                cvar_by_regime TEXT,
+                verdict TEXT,
+                verdict_details TEXT,
+                external_oos_return_pct REAL,
+                adverse_max_drawdown_pct REAL,
+                degraded_cost_return_pct REAL,
+                adverse_backtest_id INTEGER REFERENCES portfolio_backtests(id),
+                degraded_backtest_id INTEGER REFERENCES portfolio_backtests(id),
+                manifest_hash TEXT,
+                engine_parity_passed INTEGER,
+                engine_parity_max_delta_pct REAL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_robustness_backtest
+                ON portfolio_robustness(backtest_id);
+
+            CREATE TABLE IF NOT EXISTS execution_calibrations (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                exchange TEXT NOT NULL,
+                strategy_name TEXT,
+                window_start TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                sample_size INTEGER NOT NULL,
+                unfilled_sample_size INTEGER NOT NULL,
+                partial_sample_size INTEGER NOT NULL,
+                observation_hash TEXT NOT NULL,
+                execution_spec_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS certification_forward_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                certification_id TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                intent_id TEXT NOT NULL,
+                observation_type TEXT NOT NULL,
+                explained INTEGER NOT NULL DEFAULT 0,
+                expected_quantity REAL,
+                actual_quantity REAL,
+                fill_in_simulated_interval INTEGER,
+                shadow_pnl REAL,
+                actual_pnl REAL,
+                has_server_sl INTEGER,
+                orphan_order INTEGER NOT NULL DEFAULT 0,
+                state_divergence INTEGER NOT NULL DEFAULT 0,
+                capital_fraction REAL,
+                observation_hash TEXT,
+                metadata_json TEXT,
+                FOREIGN KEY(certification_id) REFERENCES strategy_certifications(id),
+                UNIQUE(certification_id, phase, intent_id, observation_type)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_forward_cert_phase
+                ON certification_forward_observations(certification_id, phase, timestamp);
+        """)
+        await self._migrate_robustness_evidence()
+        await self._migrate_certification_state()
+        await self._migrate_forward_observations()
+
+    async def _migrate_certification_state(self) -> None:
+        assert self._conn is not None
+        columns = await self._conn.execute_fetchall(
+            "PRAGMA table_info(strategy_certifications)"
+        )
+        names = {column[1] for column in columns}
+        additions = {
+            "promotion_artifact": "TEXT",
+            "robust_score": "REAL",
+            "adverse_drawdown_pct": "REAL",
+        }
+        for column, definition in additions.items():
+            if column not in names:
+                await self._conn.execute(
+                    f"ALTER TABLE strategy_certifications ADD COLUMN {column} {definition}"
+                )
+        await self._conn.commit()
+
+    async def _migrate_robustness_evidence(self) -> None:
+        """Make the former script-owned robustness table certifiable."""
+        assert self._conn is not None
+        columns = await self._conn.execute_fetchall(
+            "PRAGMA table_info(portfolio_robustness)"
+        )
+        names = {column[1] for column in columns}
+        additions = {
+            "external_oos_return_pct": "REAL",
+            "adverse_max_drawdown_pct": "REAL",
+            "degraded_cost_return_pct": "REAL",
+            "adverse_backtest_id": "INTEGER",
+            "degraded_backtest_id": "INTEGER",
+            "manifest_hash": "TEXT",
+            "engine_parity_passed": "INTEGER",
+            "engine_parity_max_delta_pct": "REAL",
+        }
+        for column, definition in additions.items():
+            if column not in names:
+                await self._conn.execute(
+                    f"ALTER TABLE portfolio_robustness ADD COLUMN {column} {definition}"
+                )
+        await self._conn.commit()
+
+    async def _migrate_forward_observations(self) -> None:
+        """Add immutable row provenance to databases created by older builds."""
+        assert self._conn is not None
+        columns = await self._conn.execute_fetchall(
+            "PRAGMA table_info(certification_forward_observations)"
+        )
+        names = {column[1] for column in columns}
+        if "observation_hash" not in names:
+            await self._conn.execute(
+                "ALTER TABLE certification_forward_observations "
+                "ADD COLUMN observation_hash TEXT"
+            )
+        await self._conn.commit()
+
+    async def insert_forward_observation(self, observation: dict) -> int:
+        """Persist one raw shadow/paper/canary comparison idempotently."""
+        from backend.core.experiment import canonical_json
+
+        signed = dict(observation)
+        signed.pop("observation_hash", None)
+        observation_hash = hashlib.sha256(
+            canonical_json(signed).encode("utf-8")
+        ).hexdigest()
+        await self._execute_with_retry(
+            """INSERT OR IGNORE INTO certification_forward_observations
+               (certification_id, phase, timestamp, intent_id, observation_type,
+                explained, expected_quantity, actual_quantity,
+                fill_in_simulated_interval, shadow_pnl, actual_pnl,
+                has_server_sl, orphan_order, state_divergence,
+                capital_fraction, observation_hash, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                observation["certification_id"], observation["phase"],
+                observation["timestamp"], observation["intent_id"],
+                observation["observation_type"], int(bool(observation.get("explained"))),
+                observation.get("expected_quantity"), observation.get("actual_quantity"),
+                None if observation.get("fill_in_simulated_interval") is None
+                else int(bool(observation["fill_in_simulated_interval"])),
+                observation.get("shadow_pnl"), observation.get("actual_pnl"),
+                None if observation.get("has_server_sl") is None
+                else int(bool(observation["has_server_sl"])),
+                int(bool(observation.get("orphan_order"))),
+                int(bool(observation.get("state_divergence"))),
+                observation.get("capital_fraction"),
+                observation_hash,
+                json.dumps(observation.get("metadata", {}), sort_keys=True),
+            ),
+        )
+        assert self._conn is not None
+        row = await (
+            await self._conn.execute(
+                """SELECT id, observation_hash
+                   FROM certification_forward_observations
+                   WHERE certification_id=? AND phase=? AND intent_id=?
+                     AND observation_type=?""",
+                (
+                    observation["certification_id"], observation["phase"],
+                    observation["intent_id"], observation["observation_type"],
+                ),
+            )
+        ).fetchone()
+        if row and row[1] != observation_hash:
+            raise ValueError(
+                "Conflicting forward observation for the same certification/phase/intent"
+            )
+        return int(row[0]) if row else 0
+
+    async def get_forward_observations(
+        self, certification_id: str, phase: str,
+    ) -> list[dict]:
+        assert self._conn is not None
+        rows = await self._conn.execute_fetchall(
+            """SELECT * FROM certification_forward_observations
+               WHERE certification_id=? AND phase=?
+               ORDER BY timestamp, id""",
+            (certification_id, phase),
+        )
+        return [dict(row) for row in rows]
 
     async def _migrate_portfolio_strategy_name(self) -> None:
         """Migration idempotente : ajoute strategy_name à portfolio_backtests si absent."""
@@ -1633,6 +1963,24 @@ class Database:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trades_order_unique
                 ON live_trades(order_id) WHERE order_id IS NOT NULL AND order_id != '';
         """)
+        columns = await self._conn.execute_fetchall("PRAGMA table_info(live_trades)")
+        names = {column[1] for column in columns}
+        additions = {
+            "intent_timestamp": "TEXT",
+            "intent_price": "REAL",
+            "requested_quantity": "REAL",
+            "filled_quantity": "REAL",
+            "fill_timestamp": "TEXT",
+            "latency_ms": "REAL",
+            "slippage_pct": "REAL",
+            "fill_ratio": "REAL",
+            "order_status": "TEXT",
+        }
+        for column, definition in additions.items():
+            if column not in names:
+                await self._conn.execute(
+                    f"ALTER TABLE live_trades ADD COLUMN {column} {definition}"
+                )
 
     async def insert_live_trade(self, trade: dict) -> int:
         """Insère un trade live en DB. Retourne l'id."""
@@ -1640,8 +1988,38 @@ class Database:
             """INSERT INTO live_trades
                (timestamp, strategy_name, symbol, direction, trade_type,
                 side, quantity, price, order_id, fee, pnl, pnl_pct,
-                leverage, grid_level, context)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                leverage, grid_level, context,
+                intent_timestamp, intent_price, requested_quantity,
+                filled_quantity, fill_timestamp, latency_ms, slippage_pct,
+                fill_ratio, order_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(order_id)
+               WHERE order_id IS NOT NULL AND order_id != ''
+               DO UPDATE SET
+                   timestamp=excluded.timestamp,
+                   strategy_name=excluded.strategy_name,
+                   symbol=excluded.symbol,
+                   direction=excluded.direction,
+                   trade_type=excluded.trade_type,
+                   side=excluded.side,
+                   quantity=excluded.quantity,
+                   price=excluded.price,
+                   fee=excluded.fee,
+                   pnl=excluded.pnl,
+                   pnl_pct=excluded.pnl_pct,
+                   leverage=excluded.leverage,
+                   grid_level=excluded.grid_level,
+                   context=excluded.context,
+                   intent_timestamp=excluded.intent_timestamp,
+                   intent_price=excluded.intent_price,
+                   requested_quantity=excluded.requested_quantity,
+                   filled_quantity=excluded.filled_quantity,
+                   fill_timestamp=excluded.fill_timestamp,
+                   latency_ms=excluded.latency_ms,
+                   slippage_pct=excluded.slippage_pct,
+                   fill_ratio=excluded.fill_ratio,
+                   order_status=excluded.order_status""",
             (
                 trade["timestamp"],
                 trade["strategy_name"],
@@ -1658,10 +2036,25 @@ class Database:
                 trade.get("leverage"),
                 trade.get("grid_level"),
                 trade.get("context"),
+                trade.get("intent_timestamp"),
+                trade.get("intent_price"),
+                trade.get("requested_quantity"),
+                trade.get("filled_quantity"),
+                trade.get("fill_timestamp"),
+                trade.get("latency_ms"),
+                trade.get("slippage_pct"),
+                trade.get("fill_ratio"),
+                trade.get("order_status"),
             ),
         )
         assert self._conn is not None
-        cursor = await self._conn.execute("SELECT last_insert_rowid()")
+        if trade.get("order_id"):
+            cursor = await self._conn.execute(
+                "SELECT id FROM live_trades WHERE order_id=?",
+                (trade["order_id"],),
+            )
+        else:
+            cursor = await self._conn.execute("SELECT last_insert_rowid()")
         row = await cursor.fetchone()
         return row[0] if row else 0
 

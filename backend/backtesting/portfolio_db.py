@@ -10,6 +10,7 @@ Même pattern que optimization_db.py.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -48,6 +49,17 @@ _LIST_COLUMNS = (
     "btc_benchmark_max_dd_pct",
     "btc_benchmark_sharpe",
     "alpha_vs_btc",
+    "result_status",
+    "manifest_hash",
+    "certification_id",
+    "missing_funding_events",
+    "execution_scenario",
+    "execution_timeframe_used",
+    "evaluation_scope",
+    "was_liquidated",
+    "min_liquidation_distance_pct",
+    "worst_case_sl_loss_pct",
+    "funding_paid_total",
 )
 
 _LIST_SELECT = ", ".join(_LIST_COLUMNS)
@@ -64,10 +76,15 @@ def _result_to_row(
     duration_seconds: float | None,
     label: str | None,
     created_at: str,
+    manifest: dict[str, Any] | None = None,
+    result_status: str = "legacy",
+    certification_id: str | None = None,
+    evaluation_scope: str = "full_history",
 ) -> dict[str, Any]:
     """Convertit un PortfolioResult en dict prêt pour INSERT."""
-    # Sous-échantillonner les snapshots (max 500 points)
-    step = max(1, len(result.snapshots) // 500)
+    # Certification and risk metrics require the complete curve.  API list
+    # endpoints already omit this column, so keeping every point does not make
+    # normal dashboard reads heavier.
     equity_curve = [
         {
             "timestamp": s.timestamp.isoformat(),
@@ -79,8 +96,20 @@ def _result_to_row(
             "positions": s.n_open_positions,
             "assets_active": s.n_assets_with_positions,
         }
-        for s in result.snapshots[::step]
+        for s in result.snapshots
     ]
+
+    if manifest is not None:
+        from backend.core.experiment import (
+            canonical_json,
+            snapshot_manifest_hash,
+            snapshot_manifest_payload,
+        )
+        manifest_json = canonical_json(snapshot_manifest_payload(manifest))
+        manifest_hash = snapshot_manifest_hash(manifest)
+    else:
+        manifest_json = None
+        manifest_hash = None
 
     bm = result.btc_benchmark
     return {
@@ -121,6 +150,23 @@ def _result_to_row(
         "btc_equity_curve": json.dumps(bm["equity_curve"]) if bm else None,
         "alpha_vs_btc": result.alpha_vs_btc if bm else None,
         "regime_analysis": json.dumps(result.regime_analysis) if result.regime_analysis else None,
+        "result_status": result_status,
+        "manifest_json": manifest_json,
+        "manifest_hash": manifest_hash,
+        "certification_id": certification_id,
+        "order_rejections": json.dumps(result.order_rejections, sort_keys=True),
+        "missing_funding_events": result.missing_funding_events,
+        "execution_scenario": result.execution_scenario,
+        "execution_timeframe_used": result.execution_timeframe_used,
+        "evaluation_scope": evaluation_scope,
+        "universe_selection_json": json.dumps(result.universe_selection, sort_keys=True),
+        "was_liquidated": int(result.was_liquidated),
+        "min_liquidation_distance_pct": result.min_liquidation_distance_pct,
+        "worst_case_sl_loss_pct": result.worst_case_sl_loss_pct,
+        "funding_paid_total": result.funding_paid_total,
+        "execution_spec_json": json.dumps(
+            result.execution_spec, sort_keys=True, separators=(",", ":"),
+        ),
     }
 
 
@@ -137,7 +183,12 @@ _INSERT_SQL = """
         created_at, duration_seconds, label,
         btc_benchmark_return_pct, btc_benchmark_max_dd_pct, btc_benchmark_sharpe,
         btc_equity_curve, alpha_vs_btc,
-        regime_analysis
+        regime_analysis, result_status, manifest_json, manifest_hash,
+        certification_id, order_rejections, missing_funding_events,
+        execution_scenario, execution_spec_json, execution_timeframe_used, evaluation_scope,
+        universe_selection_json,
+        was_liquidated, min_liquidation_distance_pct,
+        worst_case_sl_loss_pct, funding_paid_total
     ) VALUES (
         :strategy_name, :initial_capital, :n_assets, :period_days, :assets,
         :exchange, :leverage, :kill_switch_pct, :kill_switch_window_hours,
@@ -150,7 +201,12 @@ _INSERT_SQL = """
         :created_at, :duration_seconds, :label,
         :btc_benchmark_return_pct, :btc_benchmark_max_dd_pct, :btc_benchmark_sharpe,
         :btc_equity_curve, :alpha_vs_btc,
-        :regime_analysis
+        :regime_analysis, :result_status, :manifest_json, :manifest_hash,
+        :certification_id, :order_rejections, :missing_funding_events,
+        :execution_scenario, :execution_spec_json, :execution_timeframe_used, :evaluation_scope,
+        :universe_selection_json,
+        :was_liquidated, :min_liquidation_distance_pct,
+        :worst_case_sl_loss_pct, :funding_paid_total
     )
 """
 
@@ -166,13 +222,18 @@ def save_result_sync(
     kill_switch_window_hours: int = 24,
     duration_seconds: float | None = None,
     label: str | None = None,
+    manifest: dict[str, Any] | None = None,
+    result_status: str = "legacy",
+    certification_id: str | None = None,
+    evaluation_scope: str = "full_history",
 ) -> int:
     """Sauvegarde un PortfolioResult en DB (sync pour le CLI)."""
     created_at = datetime.now(tz=timezone.utc).isoformat()
     row = _result_to_row(
         result, strategy_name, exchange,
         kill_switch_pct, kill_switch_window_hours,
-        duration_seconds, label, created_at,
+        duration_seconds, label, created_at, manifest, result_status,
+        certification_id, evaluation_scope,
     )
     conn = sqlite3.connect(db_path)
     try:
@@ -196,13 +257,18 @@ async def save_result_async(
     kill_switch_window_hours: int = 24,
     duration_seconds: float | None = None,
     label: str | None = None,
+    manifest: dict[str, Any] | None = None,
+    result_status: str = "legacy",
+    certification_id: str | None = None,
+    evaluation_scope: str = "full_history",
 ) -> int:
     """Sauvegarde un PortfolioResult en DB (async pour l'API)."""
     created_at = datetime.now(tz=timezone.utc).isoformat()
     row = _result_to_row(
         result, strategy_name, exchange,
         kill_switch_pct, kill_switch_window_hours,
-        duration_seconds, label, created_at,
+        duration_seconds, label, created_at, manifest, result_status,
+        certification_id, evaluation_scope,
     )
     async with aiosqlite.connect(db_path) as conn:
         cursor = await conn.execute(_INSERT_SQL, row)
@@ -255,6 +321,20 @@ async def get_backtest_by_id_async(
         )
         d["regime_analysis"] = (
             json.loads(d["regime_analysis"]) if d.get("regime_analysis") else None
+        )
+        d["manifest_json"] = (
+            json.loads(d["manifest_json"]) if d.get("manifest_json") else None
+        )
+        d["order_rejections"] = (
+            json.loads(d["order_rejections"]) if d.get("order_rejections") else {}
+        )
+        d["execution_spec_json"] = (
+            json.loads(d["execution_spec_json"])
+            if d.get("execution_spec_json") else None
+        )
+        d["universe_selection"] = (
+            json.loads(d["universe_selection_json"])
+            if d.get("universe_selection_json") else []
         )
         return d
 
@@ -357,6 +437,21 @@ def build_portfolio_payload_from_row(row: dict) -> dict:
         "btc_benchmark_sharpe": row.get("btc_benchmark_sharpe"),
         "btc_equity_curve": row.get("btc_equity_curve"),
         "alpha_vs_btc": row.get("alpha_vs_btc"),
+        "regime_analysis": row.get("regime_analysis"),
+        "result_status": row.get("result_status", "legacy"),
+        "manifest_json": row.get("manifest_json"),
+        "manifest_hash": row.get("manifest_hash"),
+        "certification_id": row.get("certification_id"),
+        "order_rejections": row.get("order_rejections", "{}"),
+        "missing_funding_events": row.get("missing_funding_events", 0),
+        "execution_scenario": row.get("execution_scenario", "legacy"),
+        "execution_spec_json": row.get("execution_spec_json"),
+        "evaluation_scope": row.get("evaluation_scope", "full_history"),
+        "universe_selection_json": row.get("universe_selection_json", "[]"),
+        "was_liquidated": row.get("was_liquidated", 0),
+        "min_liquidation_distance_pct": row.get("min_liquidation_distance_pct", 0),
+        "worst_case_sl_loss_pct": row.get("worst_case_sl_loss_pct", 0),
+        "funding_paid_total": row.get("funding_paid_total", 0),
     }
 
 
@@ -410,6 +505,23 @@ def save_portfolio_from_payload_sync(db_path: str, payload: dict) -> str:
             "btc_equity_curve": payload.get("btc_equity_curve"),
             "alpha_vs_btc": payload.get("alpha_vs_btc"),
             "regime_analysis": payload.get("regime_analysis"),
+            "result_status": payload.get("result_status", "legacy"),
+            "manifest_json": payload.get("manifest_json"),
+            "manifest_hash": payload.get("manifest_hash"),
+            "certification_id": payload.get("certification_id"),
+            "order_rejections": payload.get("order_rejections", "{}"),
+            "missing_funding_events": payload.get("missing_funding_events", 0),
+                "execution_scenario": payload.get("execution_scenario", "legacy"),
+                "execution_spec_json": payload.get("execution_spec_json"),
+                "execution_timeframe_used": payload.get(
+                    "execution_timeframe_used", "unknown",
+                ),
+                "evaluation_scope": payload.get("evaluation_scope", "full_history"),
+                "universe_selection_json": payload.get("universe_selection_json", "[]"),
+            "was_liquidated": payload.get("was_liquidated", 0),
+            "min_liquidation_distance_pct": payload.get("min_liquidation_distance_pct", 0),
+            "worst_case_sl_loss_pct": payload.get("worst_case_sl_loss_pct", 0),
+            "funding_paid_total": payload.get("funding_paid_total", 0),
         }
         conn.execute(_INSERT_SQL, row)
         conn.commit()

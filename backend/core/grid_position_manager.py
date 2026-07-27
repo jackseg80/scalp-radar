@@ -24,8 +24,14 @@ class GridPositionManager:
     - Allocation fixe par niveau (pas risk-based)
     """
 
-    def __init__(self, config: PositionManagerConfig) -> None:
+    def __init__(
+        self,
+        config: PositionManagerConfig,
+        *,
+        sl_gap_fill_fraction: float = 0.5,
+    ) -> None:
         self._config = config
+        self._sl_gap_fill_fraction = min(max(sl_gap_fill_fraction, 0.0), 1.0)
 
     def open_grid_position(
         self,
@@ -33,6 +39,8 @@ class GridPositionManager:
         timestamp: datetime,
         capital: float,
         total_levels: int,
+        *,
+        limit_entry: bool = False,
     ) -> GridPosition | None:
         """Ouvre une position pour un niveau de grille.
 
@@ -43,8 +51,10 @@ class GridPositionManager:
         if level.entry_price <= 0 or capital <= 0:
             return None
 
-        # Sprint 56: slippage à l'entrée (prix d'exécution défavorable)
-        slippage_pct = self._config.slippage_pct
+        # Les anciennes simulations utilisent une entrée market/taker. Le
+        # moteur canonique grid reproduit les ordres limit persistants du live:
+        # prix limite et maker fee, sans slippage défavorable au fill.
+        slippage_pct = 0.0 if limit_entry else self._config.slippage_pct
         if level.direction == Direction.LONG:
             actual_entry = level.entry_price * (1 + slippage_pct)
         else:
@@ -56,7 +66,10 @@ class GridPositionManager:
         if quantity <= 0:
             return None
 
-        entry_fee = quantity * actual_entry * self._config.taker_fee
+        entry_fee_rate = (
+            self._config.maker_fee if limit_entry else self._config.taker_fee
+        )
+        entry_fee = quantity * actual_entry * entry_fee_rate
 
         if entry_fee >= capital:
             return None
@@ -124,19 +137,12 @@ class GridPositionManager:
         else:
             gross_pnl = (avg_entry - exit_price) * total_qty
 
-        # Slippage : flat cost 1 seule fois (exit seulement, sauf TP)
-        slippage_cost = 0.0
-        if exit_reason in ("sl_global", "signal_exit", "end_of_data"):
-            slippage_rate = self._config.slippage_pct
-            if regime == MarketRegime.HIGH_VOLATILITY:
-                slippage_rate *= self._config.high_vol_slippage_mult
-            slippage_cost = total_qty * exit_price * slippage_rate
-
-        # Fee de sortie
-        if exit_reason == "tp_global":
-            exit_fee = total_qty * exit_price * self._config.maker_fee
-        else:
-            exit_fee = total_qty * exit_price * self._config.taker_fee
+        # Live closes every grid cycle with a market order, including TP.
+        slippage_rate = self._config.slippage_pct
+        if regime == MarketRegime.HIGH_VOLATILITY:
+            slippage_rate *= self._config.high_vol_slippage_mult
+        slippage_cost = total_qty * exit_price * slippage_rate
+        exit_fee = total_qty * exit_price * self._config.taker_fee
 
         fee_cost = total_entry_fees + exit_fee
         net_pnl = gross_pnl - fee_cost - slippage_cost
@@ -204,14 +210,23 @@ class GridPositionManager:
         if exit_reason == "tp_global":
             return exit_reason, tp_price
 
-        # Sprint 56: SL gap slippage — fill mi-chemin entre SL et extrême
+        # A server-side stop becomes a market order when the trigger is crossed.
+        # With OHLC data, the candle extreme proves that the trigger was crossed,
+        # but it is not a defensible fill price: using it would make the result
+        # depend on an arbitrary wick observed after the stop had already fired.
+        #
+        # The candle open is the only observable gap boundary.  If it is already
+        # through the stop, interpolate between the trigger and that open:
+        # favorable=trigger, nominal=mid-gap, adverse=open.  If the candle opens
+        # on the safe side and crosses intrabar, fill at the trigger; normal
+        # market slippage is charged separately by close_all_positions().
         actual_sl = sl_price
         if direction == Direction.LONG:
-            gap = max(0.0, sl_price - candle.low)
-            actual_sl = sl_price - 0.5 * gap
+            gap = max(0.0, sl_price - candle.open)
+            actual_sl = sl_price - self._sl_gap_fill_fraction * gap
         else:
-            gap = max(0.0, candle.high - sl_price)
-            actual_sl = sl_price + 0.5 * gap
+            gap = max(0.0, candle.open - sl_price)
+            actual_sl = sl_price + self._sl_gap_fill_fraction * gap
         return exit_reason, actual_sl
 
     def compute_grid_state(

@@ -92,8 +92,8 @@ class TestOpenPosition:
 
 
 class TestClosePosition:
-    def test_tp_long_maker_fee_no_slippage(self):
-        """TP sur LONG : maker fee, pas de slippage."""
+    def test_tp_long_market_fee_and_slippage(self):
+        """TP sur LONG : clôture market Bitget, taker + slippage."""
         pm = PositionManager(_default_config())
         pos = OpenPosition(
             direction=Direction.LONG,
@@ -107,11 +107,11 @@ class TestClosePosition:
         trade = pm.close_position(pos, 100.5, datetime.now(timezone.utc), "tp", MarketRegime.RANGING)
 
         assert trade.exit_reason == "tp"
-        assert trade.slippage_cost == 0.0
+        assert trade.slippage_cost == pytest.approx(100.5 * 0.0005)
         assert trade.exit_price == 100.5
         assert trade.gross_pnl == pytest.approx(0.5)
-        # Fee = entry_fee(0.06) + exit_fee(1.0 * 100.5 * 0.0002)
-        assert trade.fee_cost == pytest.approx(0.06 + 100.5 * 0.0002, rel=0.01)
+        # Fee = entry taker + exit taker.
+        assert trade.fee_cost == pytest.approx(0.06 + 100.5 * 0.0006, rel=0.01)
 
     def test_sl_long_taker_fee_with_slippage(self):
         """SL sur LONG : taker fee + slippage."""

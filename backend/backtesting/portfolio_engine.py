@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import bisect
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
@@ -31,11 +31,12 @@ from backend.core.config import AppConfig
 from backend.core.database import Database
 from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
-from backend.core.models import Candle, MarketRegime
+from backend.core.models import Candle, ExecutionSpec, MarketRegime
 from backend.core.position_manager import PositionManagerConfig, TradeResult
 from pydantic import BaseModel
 
 from backend.optimization import create_strategy_with_params
+from backend.execution.risk_manager import LiveRiskManager, LiveTradeResult
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,59 @@ class PortfolioResult:
     # Format : {"timestamp": ..., "runner": ..., "old": 7, "new": 4, "regime": "defensive"}
     leverage_changes: list[dict] = field(default_factory=list)
 
+    # Every rejected order is retained by reason for auditability.
+    order_rejections: dict[str, int] = field(default_factory=dict)
+
+    # Missing settlements block certification even though ad-hoc research can
+    # still complete with zero cost for the unavailable observation.
+    missing_funding_events: int = 0
+
+    # Exact broker assumptions used for this run.
+    execution_scenario: str = "nominal"
+    execution_spec: dict[str, Any] = field(default_factory=dict)
+
+    # Resolution réellement consommée par le broker simulé.  La présence de
+    # bougies 1m dans le snapshot ne prouve pas qu'elles ont été utilisées.
+    # Le moteur portfolio historique travaille encore sur les barres signal 1h
+    # et doit donc rester non certifiable jusqu'à l'intégration intrabar.
+    execution_timeframe_used: str = "1h"
+
+    # IS-only asset availability, ranks and selections for external OOS
+    # replays.  Persisted separately from the immutable manifest because it is
+    # an observed result of the frozen policy, not an input to that policy.
+    universe_selection: list[dict[str, Any]] = field(default_factory=list)
+
+
+class HistoricalFundingProvider:
+    """Timestamp-aware adapter exposing the DataEngine funding interface."""
+
+    MAX_STALENESS_MS = 12 * 60 * 60 * 1000
+
+    def __init__(self, rates_by_symbol: dict[str, list[dict]]) -> None:
+        self._rates: dict[str, list[tuple[int, float]]] = {}
+        for symbol, records in rates_by_symbol.items():
+            normalized = []
+            for record in records:
+                timestamp = int(record["timestamp"])
+                if timestamp < 10_000_000_000:  # tolerate historical seconds
+                    timestamp *= 1000
+                normalized.append((timestamp, float(record["funding_rate"])))
+            self._rates[symbol] = sorted(normalized)
+        self._timestamp_ms = 0
+
+    def set_timestamp(self, timestamp: datetime) -> None:
+        self._timestamp_ms = int(timestamp.timestamp() * 1000)
+
+    def get_funding_rate(self, symbol: str) -> float | None:
+        rates = self._rates.get(symbol, [])
+        index = bisect.bisect_right(rates, (self._timestamp_ms, float("inf"))) - 1
+        if index < 0:
+            return None
+        timestamp, rate = rates[index]
+        if self._timestamp_ms - timestamp > self.MAX_STALENESS_MS:
+            return None
+        return rate
+
 
 # ---------------------------------------------------------------------------
 # Portfolio Backtester
@@ -167,12 +221,9 @@ class PortfolioBacktester:
     Chaque runner gère 1 seul asset avec les params WFO per_asset.
     Le capital est divisé également entre les runners.
 
-    NOTE — limitation connue (ATR period) :
-    L'IncrementalIndicatorEngine calcule l'ATR avec period=14 fixe.
-    Le atr_period per_asset du WFO n'est PAS utilisé dans le path live.
-    Ceci est le comportement actuel de la prod — pas une régression.
-    Le ma_period est correctement per_asset (le runner calcule sa propre SMA).
-    TODO: Sprint futur — injecter atr_period per_asset dans l'indicator engine.
+    Core indicator periods and the SMA are resolved from each runner's
+    effective per-asset configuration.  The shared indicator engine remains a
+    single cache/buffer system; only the final scalar calculation is profiled.
     """
 
     DEFAULT_WARMUP = 50
@@ -189,6 +240,7 @@ class PortfolioBacktester:
         multi_strategies: list[tuple[str, list[str]]] | None = None,
         leverage: int | None = None,
         regime_signal: RegimeSignal | None = None,
+        execution_spec: ExecutionSpec | None = None,
     ) -> None:
         self._config = config
         self._initial_capital = initial_capital
@@ -198,6 +250,7 @@ class PortfolioBacktester:
         self._kill_switch_window_hours = kill_switch_window_hours
         self._leverage_override = leverage  # None = utilise le leverage de strategies.yaml
         self._regime_signal = regime_signal  # Sprint 50b : leverage dynamique
+        self._execution_spec = execution_spec or ExecutionSpec()
 
         # Multi-stratégie : liste de (strategy_name, [symbols])
         if multi_strategies:
@@ -219,6 +272,17 @@ class PortfolioBacktester:
         self._assets = sorted(all_symbols)
 
         self._kill_freeze_until: datetime | None = None  # Sprint 24a
+        self._order_rejections: dict[str, int] = defaultdict(int)
+        configured_max_grids = getattr(config.risk, "max_live_grids", 4)
+        self._max_live_grids = (
+            configured_max_grids if isinstance(configured_max_grids, int) else 4
+        )
+        self._portfolio_risk_manager = LiveRiskManager(
+            config,
+            global_max_loss_pct=kill_switch_pct,
+            global_window_hours=kill_switch_window_hours,
+        )
+        self._account_kill_events: list[dict[str, Any]] = []
 
         if not self._assets:
             raise ValueError("Aucun asset sélectionné pour le portfolio backtest")
@@ -234,8 +298,29 @@ class PortfolioBacktester:
         end: datetime,
         db_path: str = "data/scalp_radar.db",
         progress_callback: Callable[[float, str], None] | None = None,
+        warmup_start: datetime | None = None,
+        end_exclusive: bool = False,
     ) -> PortfolioResult:
-        """Lance le backtest portfolio complet."""
+        """Lance le backtest portfolio complet.
+
+        ``warmup_start`` may precede ``start``. Candles before ``start`` only
+        initialize indicators; no order, funding event, snapshot or benchmark
+        observation can use them. This is required for unbiased external WFO
+        windows without discarding their first live bars.
+        """
+        # One account-risk state per run.  A PortfolioBacktester is reused by
+        # external WFO windows, but historical windows must never inherit a
+        # prior window's daily P&L or kill-switch state.
+        self._portfolio_risk_manager = LiveRiskManager(
+            self._config,
+            global_max_loss_pct=self._kill_switch_pct,
+            global_window_hours=self._kill_switch_window_hours,
+        )
+        self._portfolio_risk_manager.set_initial_capital(self._initial_capital)
+        self._account_kill_events = []
+        self._order_rejections.clear()
+        self._kill_freeze_until = None
+
         # Compter le nombre total de runners (pas de symbols uniques)
         n_total_runners = sum(len(syms) for _, syms in self._multi_strategies)
         per_runner_capital = self._initial_capital / n_total_runners
@@ -253,7 +338,21 @@ class PortfolioBacktester:
         # 1. Charger candles (symbols uniques)
         db = Database(db_path)
         await db.init()
-        candles_by_symbol = await self._load_candles(db, start, end)
+        load_start = warmup_start or start
+        if load_start > start:
+            raise ValueError("warmup_start must be <= start")
+        query_end = end - timedelta(microseconds=1) if end_exclusive else end
+        candles_by_symbol = await self._load_candles(db, load_start, query_end)
+        funding_records = await asyncio.gather(*[
+            db.get_funding_rates(
+                symbol,
+                exchange=self._exchange,
+                start_ts=int(start.timestamp() * 1000),
+                end_ts=int(query_end.timestamp() * 1000),
+            )
+            for symbol in self._assets
+        ])
+        funding_provider = HistoricalFundingProvider(dict(zip(self._assets, funding_records)))
 
         # Sprint 27 : Charger les profils régime WFO avant fermeture DB
         regime_profiles_by_strategy: dict[str, dict[str, dict]] = {}
@@ -266,7 +365,7 @@ class PortfolioBacktester:
                 pass
 
         # Benchmark BTC buy-hold
-        btc_candles = await self._load_btc_candles(db, start, end)
+        btc_candles = await self._load_btc_candles(db, start, query_end)
         btc_benchmark = self._calc_btc_benchmark(btc_candles, self._initial_capital)
         if btc_benchmark:
             logger.info(
@@ -307,7 +406,8 @@ class PortfolioBacktester:
 
         # 2. Créer les runners
         runners, indicator_engine = self._create_runners(
-            filtered_multi, per_runner_capital, regime_profiles_by_strategy
+            filtered_multi, per_runner_capital, regime_profiles_by_strategy,
+            funding_provider,
         )
 
         # Check cohérence timeframe (portfolio = 1h seulement)
@@ -322,14 +422,16 @@ class PortfolioBacktester:
 
         # 3. Warm-up
         warmup_ends = self._warmup_runners(
-            runners, valid_symbols, indicator_engine, self.DEFAULT_WARMUP
+            runners, valid_symbols, indicator_engine, self.DEFAULT_WARMUP,
+            trade_start=start if warmup_start is not None else None,
         )
 
         # 4. Merge et simulate
         merged = self._merge_candles(valid_symbols)
         snapshots, realized_trades, liquidation_event, leverage_changes = (
             await self._simulate(
-                runners, indicator_engine, merged, warmup_ends, progress_callback
+                runners, indicator_engine, merged, warmup_ends, progress_callback,
+                funding_provider,
             )
         )
 
@@ -585,6 +687,7 @@ class PortfolioBacktester:
         multi_strategies: list[tuple[str, list[str]]],
         per_runner_capital: float,
         regime_profiles: dict[str, dict[str, dict]] | None = None,
+        funding_provider: HistoricalFundingProvider | None = None,
     ) -> tuple[dict[str, GridStrategyRunner], IncrementalIndicatorEngine]:
         """Crée 1 runner par (stratégie, asset) avec params WFO per_asset.
 
@@ -593,6 +696,10 @@ class PortfolioBacktester:
         """
         strategies_list: list = []
         runner_entries: list[tuple[str, str, Any]] = []  # (runner_key, symbol, strategy)
+        strategy_asset_counts = {
+            strategy_name: max(1, len(symbols))
+            for strategy_name, symbols in multi_strategies
+        }
 
         for strat_name, symbols in multi_strategies:
             strat_config = getattr(self._config.strategies, strat_name, None)
@@ -616,17 +723,30 @@ class PortfolioBacktester:
         indicator_engine = IncrementalIndicatorEngine(strategies_list)
 
         runners: dict[str, GridStrategyRunner] = {}
+        execution_spec = getattr(self, "_execution_spec", ExecutionSpec())
         for runner_key, symbol, strategy in runner_entries:
             leverage = self._leverage_override if self._leverage_override is not None else getattr(strategy._config, "leverage", 15)
             gpm_config = PositionManagerConfig(
                 leverage=leverage,
-                maker_fee=self._config.risk.fees.maker_percent / 100,
-                taker_fee=self._config.risk.fees.taker_percent / 100,
-                slippage_pct=self._config.risk.slippage.default_estimate_percent / 100,
+                maker_fee=(
+                    self._config.risk.fees.maker_percent / 100
+                    * execution_spec.fee_multiplier
+                ),
+                taker_fee=(
+                    self._config.risk.fees.taker_percent / 100
+                    * execution_spec.fee_multiplier
+                ),
+                slippage_pct=(
+                    self._config.risk.slippage.default_estimate_percent / 100
+                    * execution_spec.slippage_multiplier
+                ),
                 high_vol_slippage_mult=self._config.risk.slippage.high_volatility_multiplier,
                 max_risk_per_trade=self._config.risk.position.max_risk_per_trade_percent / 100,
             )
-            gpm = GridPositionManager(gpm_config)
+            gpm = GridPositionManager(
+                gpm_config,
+                sl_gap_fill_fraction=execution_spec.sl_gap_fill_fraction,
+            )
 
             # Sprint 27 : profil régime pour cette stratégie
             strat_name = runner_key.split(":", 1)[0] if ":" in runner_key else runner_key
@@ -639,15 +759,27 @@ class PortfolioBacktester:
                 config=self._config,
                 indicator_engine=indicator_engine,
                 grid_position_manager=gpm,
-                data_engine=None,  # type: ignore[arg-type]
+                data_engine=funding_provider,  # type: ignore[arg-type]
                 db_path=None,
                 regime_profile=strat_profiles,
+                chronological_execution=True,
+                execution_spec=execution_spec,
             )
 
-            runner._nb_assets = 1
+            # ``GridStrategyRunner`` initializes its own leverage from the
+            # strategy config.  A portfolio-level scenario override must
+            # therefore update all three consumers (runner accounting, grid
+            # sizing and strategy config), not only the temporary GPM config.
+            # Otherwise a 2x/4x scenario sizes at the override but reports
+            # margin and liquidation risk at the YAML leverage.
+            if self._leverage_override is not None:
+                self._update_runner_leverage(runner_key, runner, leverage)
+
+            runner._nb_assets = strategy_asset_counts.get(strat_name, 1)
             runner._capital = per_runner_capital
             runner._initial_capital = per_runner_capital
             runner._portfolio_mode = True
+            runner._portfolio_managed_risk = True
             runner._stats = RunnerStats(
                 capital=per_runner_capital,
                 initial_capital=per_runner_capital,
@@ -659,6 +791,28 @@ class PortfolioBacktester:
         for runner in runners.values():
             runner._portfolio_runners = runners
             runner._portfolio_initial_capital = self._initial_capital
+            runner._portfolio_account_equity = lambda rs=runners: self._account_equity(rs)
+            runner._portfolio_ensure_cash = lambda target, amount, rs=runners: self._ensure_runner_cash(
+                rs, target, amount,
+            )
+
+        for runner_key, runner in runners.items():
+            runner._can_plan_new_grid = (
+                lambda _symbol, key=runner_key, rs=runners: self._can_plan_new_grid(
+                    key, rs,
+                )
+            )
+            runner._portfolio_pre_trade_risk = (
+                lambda symbol, position, first, key=runner_key, rs=runners: self._pre_trade_risk(
+                    key, symbol, position, first, rs,
+                )
+            )
+            runner._on_skip_local = lambda _symbol, key=runner_key: self._record_rejection(
+                key, "local_margin",
+            )
+            runner._on_skip_global = lambda _symbol, key=runner_key: self._record_rejection(
+                key, "account_margin",
+            )
 
         logger.info(
             "Créé {} runners (capital={:.0f}$/runner)",
@@ -666,6 +820,178 @@ class PortfolioBacktester:
             per_runner_capital,
         )
         return runners, indicator_engine
+
+    def _record_rejection(self, runner_key: str, reason: str) -> None:
+        self._order_rejections[f"{runner_key}:{reason}"] += 1
+
+    def _freeze_account_entries(
+        self,
+        runners: dict[str, GridStrategyRunner],
+    ) -> None:
+        """Stop future account entries while preserving TP/SL management."""
+        for runner in runners.values():
+            runner._account_entries_frozen = True
+            runner._pending_grid_orders.clear()
+            runner._stats.is_active = False
+
+    def _record_account_kill_event(
+        self,
+        runners: dict[str, GridStrategyRunner],
+        timestamp: datetime,
+        trigger_type: str,
+        loss_pct: float,
+        equity: float,
+    ) -> None:
+        self._account_kill_events.append({
+            "timestamp": timestamp.isoformat(),
+            "trigger_type": trigger_type,
+            # Preserve the legacy report field, but make its source explicit.
+            "drawdown_pct": round(loss_pct, 2),
+            "equity": round(equity, 2),
+            "session_pnl": round(self._portfolio_risk_manager._session_pnl, 2),
+            "reason": self._portfolio_risk_manager._kill_switch_reason,
+        })
+        self._freeze_account_entries(runners)
+
+    def _record_closed_trade_for_account(
+        self,
+        runner_key: str,
+        trade: TradeResult,
+        runners: dict[str, GridStrategyRunner],
+    ) -> None:
+        """Feed canonical close events to the account-scoped live risk engine."""
+        if self._portfolio_risk_manager.is_kill_switch_triggered:
+            return
+        self._portfolio_risk_manager.record_trade_result(LiveTradeResult(
+            net_pnl=trade.net_pnl,
+            timestamp=trade.exit_time,
+            symbol=self._symbol_from_key(runner_key),
+            direction=trade.direction.value,
+            exit_reason=trade.exit_reason,
+            strategy_name=runner_key.split(":", 1)[0],
+        ))
+        if self._portfolio_risk_manager.is_kill_switch_triggered:
+            loss_pct = (
+                abs(min(0.0, self._portfolio_risk_manager._session_pnl))
+                / self._initial_capital * 100
+                if self._initial_capital > 0 else 0.0
+            )
+            self._record_account_kill_event(
+                runners, trade.exit_time, "session_loss", loss_pct,
+                self._account_equity(runners),
+            )
+
+    def _active_grid_keys(
+        self, runners: dict[str, GridStrategyRunner],
+    ) -> set[str]:
+        return {
+            key
+            for key, runner in runners.items()
+            if any(runner._positions.values()) or any(runner._pending_grid_orders.values())
+        }
+
+    def _can_plan_new_grid(
+        self, runner_key: str, runners: dict[str, GridStrategyRunner],
+    ) -> bool:
+        active = self._active_grid_keys(runners)
+        if runner_key in active or len(active) < self._max_live_grids:
+            return True
+        self._record_rejection(runner_key, "max_live_grids")
+        return False
+
+    @staticmethod
+    def _account_equity(runners: dict[str, GridStrategyRunner]) -> float:
+        """Current cross-margin account equity used by live-style sizing."""
+        equity = 0.0
+        for runner in runners.values():
+            equity += runner._capital
+            for symbol, positions in runner._positions.items():
+                if not positions:
+                    continue
+                equity += sum(
+                    position.entry_price * position.quantity / runner._leverage
+                    for position in positions
+                )
+                price = runner._last_prices.get(symbol)
+                if price is not None:
+                    equity += runner._gpm.unrealized_pnl(positions, price)
+        return max(equity, 0.0)
+
+    @staticmethod
+    def _ensure_runner_cash(
+        runners: dict[str, GridStrategyRunner],
+        target: GridStrategyRunner,
+        amount: float,
+    ) -> bool:
+        """Rebalance free cash bookkeeping while preserving shared equity."""
+        missing = max(0.0, amount - target._capital)
+        if missing <= 0:
+            return True
+        for donor in runners.values():
+            if donor is target or donor._capital <= 0:
+                continue
+            transfer = min(donor._capital, missing)
+            donor._capital -= transfer
+            target._capital += transfer
+            missing -= transfer
+            if missing <= 1e-12:
+                return True
+        return False
+
+    def _pre_trade_risk(
+        self,
+        runner_key: str,
+        symbol: str,
+        position: Any,
+        first_level: bool,
+        runners: dict[str, GridStrategyRunner],
+    ) -> tuple[bool, str]:
+        """Account-scoped correlation and simultaneous-SL gates."""
+        if first_level:
+            open_positions = [
+                {
+                    "symbol": self._symbol_from_key(key),
+                    "direction": positions[0].direction.value,
+                }
+                for key, runner in runners.items()
+                for positions in runner._positions.values()
+                if positions
+            ]
+            ok, reason = self._portfolio_risk_manager.check_correlation_limit(
+                symbol, position.direction.value, open_positions,
+            )
+            if not ok:
+                self._record_rejection(runner_key, reason)
+                return False, reason
+
+        max_sl_ratio = getattr(
+            self._config.risk, "max_simultaneous_sl_loss_ratio", 0.30,
+        )
+        if not isinstance(max_sl_ratio, (int, float)):
+            max_sl_ratio = 0.30
+        current_loss = 0.0
+        for key, runner in runners.items():
+            asset = self._symbol_from_key(key)
+            sl_ratio = runner._get_sl_percent(asset) / 100
+            for positions in runner._positions.values():
+                current_loss += sum(
+                    item.entry_price * item.quantity * sl_ratio
+                    for item in positions
+                )
+        candidate_loss = (
+            position.entry_price * position.quantity
+            * runners[runner_key]._get_sl_percent(symbol) / 100
+        )
+        # The certification limit is expressed against the capital committed
+        # to this portfolio, not a temporarily inflated equity peak.  Using
+        # current equity here let compounding silently grow a 30% account
+        # limit into (for example) 78.7% of the original account.
+        sl_loss_limit = self._initial_capital * max_sl_ratio
+        if current_loss + candidate_loss > sl_loss_limit:
+            reason = "simultaneous_sl_loss"
+            self._record_rejection(runner_key, reason)
+            return False, reason
+        return True, "ok"
 
     # ------------------------------------------------------------------
     # Warm-up
@@ -677,6 +1003,7 @@ class PortfolioBacktester:
         candles_by_symbol: dict[str, list[Candle]],
         indicator_engine: IncrementalIndicatorEngine,
         warmup_count: int = 50,
+        trade_start: datetime | None = None,
     ) -> dict[str, int]:
         """Alimente les buffers indicateurs, puis désactive le warm-up.
 
@@ -693,7 +1020,18 @@ class PortfolioBacktester:
             if not candles:
                 continue
 
-            n = min(warmup_count, len(candles) - 1)
+            if trade_start is not None:
+                # All loaded pre-window candles are non-trading warmup. The
+                # rolling engines remain bounded, while warmup_ends skips the
+                # complete prefix so simulation begins exactly at trade_start.
+                n = sum(1 for candle in candles if candle.timestamp < trade_start)
+                if n == 0:
+                    raise ValueError(
+                        f"No pre-window warmup candles for {symbol} before {trade_start}"
+                    )
+                n = min(n, len(candles) - 1)
+            else:
+                n = min(warmup_count, len(candles) - 1)
             ma_period = runner._ma_period
 
             runner._close_buffer[symbol] = deque(
@@ -771,6 +1109,7 @@ class PortfolioBacktester:
         merged_candles: list[Candle],
         warmup_ends: dict[str, int],
         progress_callback: Callable[[float, str], None] | None = None,
+        funding_provider: HistoricalFundingProvider | None = None,
     ) -> tuple[list[PortfolioSnapshot], list[tuple[str, TradeResult]], dict | None, list[dict]]:
         """Boucle de simulation principale.
 
@@ -810,6 +1149,9 @@ class PortfolioBacktester:
             if not runner_keys:
                 continue
 
+            if funding_provider is not None:
+                funding_provider.set_timestamp(candle.timestamp)
+
             candle_count_per_symbol[symbol] += 1
 
             # Skip candles de warmup
@@ -832,6 +1174,10 @@ class PortfolioBacktester:
                     for t in runner._trades[trades_before:]:
                         # t est (symbol, TradeResult) — remplacer symbol par runner_key
                         all_trades.append((runner_key, t[1]))
+                        if hasattr(self, "_portfolio_risk_manager"):
+                            self._record_closed_trade_for_account(
+                                runner_key, t[1], runners,
+                            )
 
             last_closes[symbol] = candle.close
 
@@ -883,38 +1229,25 @@ class PortfolioBacktester:
                     }
                     break
 
-                # Kill switch temps réel (Sprint 24a, fix Sprint 56: peak equity)
-                if len(snapshots) >= 2:
-                    window_hours = self._kill_switch_window_hours
-                    current_ts = snap.timestamp
-
-                    # Sprint 56 fix: utiliser le MAX d'equity dans la fenêtre (pas le début)
-                    peak_equity = snap.total_equity
-                    window_secs = window_hours * 3600
-                    for j in range(len(snapshots) - 2, -1, -1):
-                        prev_snap = snapshots[j]
-                        if (current_ts - prev_snap.timestamp).total_seconds() > window_secs:
-                            break
-                        if prev_snap.total_equity > peak_equity:
-                            peak_equity = prev_snap.total_equity
-
-                    if peak_equity > 0:
-                        dd_pct = (1 - snap.total_equity / peak_equity) * 100
-                        if dd_pct >= self._kill_switch_pct:
-                            if not any(r._kill_switch_triggered for r in runners.values()):
-                                logger.warning(
-                                    "KILL SWITCH PORTFOLIO: DD={:.1f}% equity={:.0f}$",
-                                    dd_pct, snap.total_equity,
-                                )
-                            for r in runners.values():
-                                r._kill_switch_triggered = True
-                            self._kill_freeze_until = current_ts + timedelta(hours=24)
-
-                    freeze_until = self._kill_freeze_until
-                    if freeze_until and current_ts >= freeze_until:
-                        for r in runners.values():
-                            r._kill_switch_triggered = False
-                        self._kill_freeze_until = None
+                # Reuse the live account risk engine with historical time.  A
+                # kill is persistent until explicit reset in live, so unlike
+                # the legacy portfolio implementation it is not auto-unfrozen
+                # after 24 hours.
+                if (
+                    hasattr(self, "_portfolio_risk_manager")
+                    and not self._portfolio_risk_manager.is_kill_switch_triggered
+                ):
+                    self._portfolio_risk_manager.record_balance_snapshot(
+                        snap.total_equity, timestamp=snap.timestamp,
+                    )
+                    if self._portfolio_risk_manager.is_kill_switch_triggered:
+                        self._record_account_kill_event(
+                            runners,
+                            snap.timestamp,
+                            "global_drawdown",
+                            self._portfolio_risk_manager._last_global_drawdown_pct,
+                            snap.total_equity,
+                        )
 
             # Log de progression
             if (i + 1) % log_interval == 0:
@@ -1194,7 +1527,9 @@ class PortfolioBacktester:
         )
 
         # Kill switch
-        ks_events = self._check_kill_switch(snapshots)
+        # Actual events emitted during the replay are authoritative.  The
+        # legacy scanner remains available for diagnostics/tests only.
+        ks_events = list(getattr(self, "_account_kill_events", []))
 
         # Per-runner breakdown (clé = runner_key, e.g. "grid_atr:ICP/USDT")
         per_asset: dict[str, dict] = {}
@@ -1242,6 +1577,7 @@ class PortfolioBacktester:
             round(total_return_pct - btc_benchmark["return_pct"], 2)
             if btc_benchmark else 0.0
         )
+        execution_spec = getattr(self, "_execution_spec", ExecutionSpec())
 
         return PortfolioResult(
             initial_capital=self._initial_capital,
@@ -1275,6 +1611,14 @@ class PortfolioBacktester:
             alpha_vs_btc=alpha_vs_btc,
             regime_analysis=regime_analysis,
             leverage_changes=leverage_changes or [],
+            order_rejections=dict(getattr(self, "_order_rejections", {})),
+            missing_funding_events=sum(
+                getattr(runner, "_missing_funding_events", 0)
+                for runner in runners.values()
+            ),
+            execution_scenario=execution_spec.scenario,
+            execution_spec=execution_spec.model_dump(mode="json"),
+            execution_timeframe_used="1h",
         )
 
 
@@ -1302,6 +1646,7 @@ def format_portfolio_report(result: PortfolioResult) -> str:
     lines.append(f"  P&L force-closed    : {result.force_closed_pnl:>+10,.2f} $")
     lines.append(f"  Période             : {result.period_days} jours, {result.n_assets} assets")
     lines.append(f"  Leverage            : {result.leverage}x")
+    lines.append(f"  Exécution           : {result.execution_scenario}")
     lines.append("")
 
     # Trades
@@ -1323,13 +1668,21 @@ def format_portfolio_report(result: PortfolioResult) -> str:
     lines.append(f"  Peak margin ratio   : {result.peak_margin_ratio:.1%}")
     lines.append(f"  Peak positions      : {result.peak_open_positions}")
     lines.append(f"  Peak assets actifs  : {result.peak_concurrent_assets}")
+    if result.order_rejections:
+        lines.append(f"  Ordres refusés      : {sum(result.order_rejections.values())}")
     lines.append("")
 
     # Kill switch
     lines.append("  --- Kill Switch ---")
     lines.append(f"  Déclenchements      : {result.kill_switch_triggers}")
+    lines.append(f"  Funding manquant    : {result.missing_funding_events} settlements")
     for evt in result.kill_switch_events[:5]:
-        lines.append(f"    {evt['timestamp'][:19]}  DD={evt['drawdown_pct']:.1f}%  equity={evt['equity']:.0f}$")
+        event_type = evt.get("trigger_type", "global_drawdown")
+        label = "session" if event_type == "session_loss" else "DD"
+        lines.append(
+            f"    {evt['timestamp'][:19]}  {label}={evt['drawdown_pct']:.1f}%  "
+            f"equity={evt['equity']:.0f}$"
+        )
     lines.append("")
 
     # Cross-Margin Risk

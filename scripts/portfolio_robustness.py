@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import math
 import sqlite3
@@ -27,8 +26,11 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-# ── Windows UTF-8 fix ────────────────────────────────────────────
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+def _configure_utf8_stdout() -> None:
+    """Configure the real Windows console without replacing pytest capture."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
 
 DB_PATH = Path(__file__).parent.parent / "data" / "scalp_radar.db"
 
@@ -72,6 +74,36 @@ def load_backtest(conn: sqlite3.Connection, label: str) -> dict | None:
     for key in ("regime_analysis", "btc_equity_curve"):
         d[key] = json.loads(d[key]) if d.get(key) else None
     return d
+
+
+def load_engine_parity_evidence(
+    conn: sqlite3.Connection,
+    strategy_name: str,
+    manifest_hash: str | None,
+    assets: list[str],
+) -> tuple[bool | None, float | None]:
+    """Aggregate automatically measured parity for the exact WFO snapshot."""
+    if not manifest_hash or not assets:
+        return None, None
+    rows = conn.execute(
+        """SELECT asset, engine_parity_json FROM optimization_results
+           WHERE strategy_name=? AND manifest_hash=?
+             AND engine_parity_json IS NOT NULL ORDER BY id DESC""",
+        (strategy_name, manifest_hash),
+    ).fetchall()
+    newest: dict[str, dict] = {}
+    for row in rows:
+        asset = row["asset"] if isinstance(row, sqlite3.Row) else row[0]
+        raw = row["engine_parity_json"] if isinstance(row, sqlite3.Row) else row[1]
+        newest.setdefault(asset, json.loads(raw))
+    if any(asset not in newest for asset in assets):
+        return None, None
+    evidence = [newest[asset] for asset in assets]
+    max_delta = max(
+        (float(item.get("cumulative_return_delta_pct", float("inf"))) for item in evidence),
+        default=float("inf"),
+    )
+    return all(bool(item.get("within_tolerance")) for item in evidence), max_delta
 
 
 def extract_daily_returns(
@@ -181,7 +213,7 @@ def compute_cvar(
     kill_switch_pct: float,
     regime_pools: dict[str, list[float]] | None = None,
 ) -> dict:
-    """CVaR 5% journalier + compound annualisé."""
+    """Daily CVaR and empirical overlapping 30-day CVaR."""
     arr = np.sort(np.array(daily_returns))
     n = len(arr)
     if n < 20:
@@ -190,8 +222,18 @@ def compute_cvar(
     var_idx = max(1, int(n * 0.05))
     var_5 = float(arr[var_idx])
     cvar_5 = float(arr[:var_idx].mean())
-    # Compound 30j (worst month estimate) — plus actionable que 365j
-    cvar_30d = (1.0 + cvar_5) ** 30 - 1.0
+    # Empirical rolling months preserve volatility clustering and recovery
+    # days. Compounding the mean worst daily loss 30 times creates a scenario
+    # that was never observed and materially overstates/understates risk.
+    rolling_30d = _rolling_compounded_returns(daily_returns, 30)
+    if rolling_30d:
+        sorted_30d = np.sort(np.asarray(rolling_30d, dtype=float))
+        month_tail = max(1, int(len(sorted_30d) * 0.05))
+        cvar_30d = float(sorted_30d[:month_tail].mean())
+        var_30d = float(sorted_30d[month_tail - 1])
+    else:
+        cvar_30d = float("nan")
+        var_30d = float("nan")
     # Compound annualization (informatif — quasi toujours ~-100%)
     cvar_annualized = (1.0 + cvar_5) ** 365 - 1.0
 
@@ -207,9 +249,24 @@ def compute_cvar(
         "var_5_daily": var_5,
         "cvar_5_daily": cvar_5,
         "cvar_30d": cvar_30d,
+        "var_30d": var_30d,
+        "rolling_30d_count": len(rolling_30d),
         "cvar_5_annualized": cvar_annualized,
         "cvar_by_regime": cvar_by_regime,
     }
+
+
+def _rolling_compounded_returns(
+    returns: list[float], window: int,
+) -> list[float]:
+    """Overlapping compounded returns without distributional assumptions."""
+    if window <= 0 or len(returns) < window:
+        return []
+    values = np.asarray(returns, dtype=float)
+    return [
+        float(np.prod(1.0 + values[index - window + 1:index + 1]) - 1.0)
+        for index in range(window - 1, len(values))
+    ]
 
 
 # ── Méthode 3 : Historical Stress ───────────────────────────────
@@ -373,28 +430,17 @@ def regime_stress(
     # Classifier régimes BTC
     btc_regimes = classify_btc_regimes(btc_prices, btc_dates)
 
-    # Aligner portfolio returns sur les dates BTC (nearest-date matching)
-    # Les equity curves sont sous-échantillonnées (~500 pts / 2000j)
-    # donc les dates exactes ne matchent quasiment jamais
+    # Full certification curves are retained, therefore only exact date
+    # alignment is accepted. Nearest-date matching can assign a crash label to
+    # a return from another day and is not certifiable.
     date_to_return = dict(zip(daily_dates, daily_returns))
     regime_pools: dict[str, list[float]] = {
         "RANGE": [], "BULL": [], "BEAR": [], "CRASH": [],
     }
     all_aligned: list[float] = []
-    sorted_port_dates = sorted(daily_dates)
-
     for i, btc_d in enumerate(btc_dates):
-        # Chercher la date portfolio la plus proche
         if btc_d in date_to_return:
             r = date_to_return[btc_d]
-        elif sorted_port_dates:
-            closest_idx = _find_closest_idx(sorted_port_dates, btc_d)
-            closest_d = sorted_port_dates[closest_idx]
-            # Accepter un écart max de 5 jours
-            if abs((closest_d - btc_d).days) <= 5 and closest_d in date_to_return:
-                r = date_to_return[closest_d]
-            else:
-                continue
         else:
             continue
         regime_pools[btc_regimes[i]].append(r)
@@ -414,27 +460,41 @@ def regime_stress(
     regime_names = ["RANGE", "BULL", "BEAR", "CRASH"]
     all_arr = np.array(all_aligned)
 
+    # Preserve empirical clusters: pool contiguous runs for each regime and
+    # sample whole runs instead of independent daily observations.
+    aligned_regimes: list[str] = []
+    aligned_returns: list[float] = []
+    btc_regime_by_date = dict(zip(btc_dates, btc_regimes))
+    for day, value in zip(daily_dates, daily_returns):
+        regime = btc_regime_by_date.get(day)
+        if regime is not None:
+            aligned_regimes.append(regime)
+            aligned_returns.append(value)
+    run_pools: dict[str, list[np.ndarray]] = {name: [] for name in regime_names}
+    if aligned_returns:
+        run_start = 0
+        for index in range(1, len(aligned_returns) + 1):
+            if index == len(aligned_returns) or aligned_regimes[index] != aligned_regimes[run_start]:
+                regime = aligned_regimes[run_start]
+                run_pools[regime].append(
+                    np.asarray(aligned_returns[run_start:index], dtype=float)
+                )
+                run_start = index
+
     scenario_results: dict[str, dict] = {}
     for scenario_name, weights in STRESS_SCENARIOS.items():
         probs = np.array([weights[r] for r in regime_names])
-        # Préparer les pools numpy
-        pools_np = {}
-        for r in regime_names:
-            if regime_pools[r]:
-                pools_np[r] = np.array(regime_pools[r])
-            else:
-                pools_np[r] = all_arr  # fallback
-
         sim_rets = np.empty(n_sims)
         sim_dds = np.empty(n_sims)
 
         for s in range(n_sims):
-            # Tirer les régimes pour chaque jour
-            chosen_regimes = np.random.choice(regime_names, size=sim_days, p=probs)
-            sim = np.empty(sim_days)
-            for day_idx in range(sim_days):
-                pool = pools_np[chosen_regimes[day_idx]]
-                sim[day_idx] = pool[np.random.randint(0, len(pool))]
+            sampled: list[float] = []
+            while len(sampled) < sim_days:
+                regime = str(np.random.choice(regime_names, p=probs))
+                runs = run_pools.get(regime) or [all_arr]
+                run = runs[np.random.randint(0, len(runs))]
+                sampled.extend(run.tolist())
+            sim = np.asarray(sampled[:sim_days], dtype=float)
 
             equity = np.cumprod(1.0 + sim)
             peak = np.maximum.accumulate(equity)
@@ -573,8 +633,8 @@ def print_cvar(cv: dict, kill_switch_pct: float) -> None:
           f"  (1 jour sur 20, perte > {abs(cv['var_5_daily']) * 100:.2f}%)")
     print(f"  CVaR 5% journalier : {cv['cvar_5_daily'] * 100:.2f}%"
           f"  (quand ça va mal, perte moyenne {abs(cv['cvar_5_daily']) * 100:.2f}%)")
-    print(f"  CVaR 5% 30j (compound) : {cv['cvar_30d'] * 100:.1f}%"
-          f"  (pire mois estimé)")
+    print(f"  CVaR 5% 30j (empirique glissant) : {cv['cvar_30d'] * 100:.1f}%"
+          f"  ({cv.get('rolling_30d_count', 0)} fenêtres)")
     print(f"  CVaR 5% 365j (compound) : {cv['cvar_5_annualized'] * 100:.1f}%"
           f"  (informatif)")
     if cv["cvar_by_regime"]:
@@ -677,7 +737,15 @@ CREATE TABLE IF NOT EXISTS portfolio_robustness (
     cvar_5_annualized REAL,
     cvar_by_regime TEXT,
     verdict TEXT,
-    verdict_details TEXT
+    verdict_details TEXT,
+    external_oos_return_pct REAL,
+    adverse_max_drawdown_pct REAL,
+    degraded_cost_return_pct REAL,
+    adverse_backtest_id INTEGER,
+    degraded_backtest_id INTEGER,
+    manifest_hash TEXT,
+    engine_parity_passed INTEGER,
+    engine_parity_max_delta_pct REAL
 )
 """
 
@@ -691,10 +759,12 @@ def save_results(
     hist_stress: dict,
     regime: dict,
     verdict: dict,
+    evidence: dict | None = None,
 ) -> int:
     """Sauvegarde les résultats dans portfolio_robustness. Retourne l'ID."""
     conn.execute(CREATE_TABLE_SQL)
 
+    evidence = evidence or {}
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
         """INSERT INTO portfolio_robustness (
@@ -705,8 +775,13 @@ def save_results(
             bootstrap_prob_loss, bootstrap_prob_dd_30, bootstrap_prob_dd_ks,
             regime_stress_results, historical_stress_results,
             var_5_daily, cvar_5_daily, cvar_30d, cvar_5_annualized, cvar_by_regime,
-            verdict, verdict_details
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            verdict, verdict_details,
+            external_oos_return_pct, adverse_max_drawdown_pct,
+            degraded_cost_return_pct, adverse_backtest_id,
+            degraded_backtest_id, manifest_hash,
+            engine_parity_passed, engine_parity_max_delta_pct
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             backtest_id,
             label,
@@ -731,6 +806,14 @@ def save_results(
             json.dumps(cvar.get("cvar_by_regime", {}), ensure_ascii=False) if cvar else None,
             verdict.get("verdict"),
             json.dumps(verdict, ensure_ascii=False),
+            evidence.get("external_oos_return_pct"),
+            evidence.get("adverse_max_drawdown_pct"),
+            evidence.get("degraded_cost_return_pct"),
+            evidence.get("adverse_backtest_id"),
+            evidence.get("degraded_backtest_id"),
+            evidence.get("manifest_hash"),
+            evidence.get("engine_parity_passed"),
+            evidence.get("engine_parity_max_delta_pct"),
         ),
     )
     conn.commit()
@@ -747,12 +830,53 @@ def analyze_label(
     block_size: int,
     confidence: float,
     save: bool,
+    adverse_label: str | None = None,
+    engine_parity_passed: bool | None = None,
+    engine_parity_max_delta_pct: float | None = None,
 ) -> dict | None:
     """Analyse complète d'un label. Retourne le verdict."""
     backtest = load_backtest(conn, label)
     if backtest is None:
         print(f"\n[ERREUR] Label '{label}' introuvable en DB")
         return None
+
+    evidence: dict = {
+        "manifest_hash": backtest.get("manifest_hash"),
+        "external_oos_return_pct": (
+            backtest.get("total_return_pct")
+            if backtest.get("evaluation_scope") == "external_oos" else None
+        ),
+    }
+    if engine_parity_passed is None:
+        engine_parity_passed, engine_parity_max_delta_pct = load_engine_parity_evidence(
+            conn,
+            backtest.get("strategy_name", ""),
+            backtest.get("manifest_hash"),
+            backtest.get("assets") or [],
+        )
+    evidence["engine_parity_passed"] = (
+        None if engine_parity_passed is None else int(engine_parity_passed)
+    )
+    evidence["engine_parity_max_delta_pct"] = engine_parity_max_delta_pct
+    if adverse_label:
+        adverse = load_backtest(conn, adverse_label)
+        valid_adverse = (
+            adverse is not None
+            and adverse.get("manifest_hash") == backtest.get("manifest_hash")
+            and adverse.get("execution_scenario") == "adverse"
+            and adverse.get("evaluation_scope") == "external_oos"
+            and adverse.get("assets") == backtest.get("assets")
+            and adverse.get("leverage") == backtest.get("leverage")
+        )
+        if valid_adverse:
+            evidence.update({
+                "adverse_max_drawdown_pct": adverse.get("max_drawdown_pct"),
+                "degraded_cost_return_pct": adverse.get("total_return_pct"),
+                "adverse_backtest_id": adverse.get("id"),
+                "degraded_backtest_id": adverse.get("id"),
+            })
+        else:
+            print("  [WARNING] Backtest adverse absent ou non comparable")
 
     kill_switch_pct = backtest.get("kill_switch_pct", 45.0)
     print_header(label, backtest)
@@ -789,7 +913,9 @@ def analyze_label(
 
     # Save
     if save:
-        rid = save_results(conn, backtest["id"], label, bs, cv, hs, rs, verdict)
+        rid = save_results(
+            conn, backtest["id"], label, bs, cv, hs, rs, verdict, evidence,
+        )
         print(f"  [SAVE] Résultats sauvegardés en DB (id={rid})")
         print()
 
@@ -808,6 +934,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="Seed RNG pour reproductibilité (défaut: 42)")
     parser.add_argument("--save", action="store_true", help="Sauvegarder les résultats en DB")
     parser.add_argument("--db", type=str, default=None, help="Chemin DB custom")
+    parser.add_argument(
+        "--adverse-label", type=str,
+        help="Label du replay external_oos avec --execution-scenario adverse",
+    )
     args = parser.parse_args()
 
     # Seed reproductibilité
@@ -834,10 +964,12 @@ def main() -> None:
             analyze_label(
                 conn, label, args.n_simulations, args.block_size,
                 args.confidence, args.save,
+                adverse_label=args.adverse_label,
             )
     finally:
         conn.close()
 
 
 if __name__ == "__main__":
+    _configure_utf8_stdout()
     main()

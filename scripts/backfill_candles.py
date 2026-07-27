@@ -62,6 +62,46 @@ def _tf_to_ms(timeframe: str) -> int:
     return mapping[timeframe]
 
 
+def _internal_gap_windows(
+    timestamps: list[datetime],
+    *,
+    start: datetime,
+    end: datetime,
+    interval_ms: int,
+) -> list[tuple[datetime, datetime]]:
+    """Return exact missing candle windows strictly inside an observed series."""
+    interval = interval_ms / 1000
+    ordered = sorted(ts for ts in timestamps if start <= ts <= end)
+    windows: list[tuple[datetime, datetime]] = []
+    for previous, current in zip(ordered, ordered[1:]):
+        if (current - previous).total_seconds() > interval:
+            windows.append((
+                datetime.fromtimestamp(previous.timestamp() + interval, tz=timezone.utc),
+                current,
+            ))
+    return windows
+
+
+def _candles_from_klines(
+    klines: list[list],
+    *,
+    symbol: str,
+    timeframe: TimeFrame,
+) -> list[Candle]:
+    candles: list[Candle] = []
+    for k in klines:
+        try:
+            candles.append(Candle(
+                timestamp=datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
+                open=float(k[1]), high=float(k[2]), low=float(k[3]),
+                close=float(k[4]), volume=float(k[5]), symbol=symbol,
+                timeframe=timeframe, exchange="binance",
+            ))
+        except (ValueError, IndexError) as exc:
+            logger.warning("Kline ignorée : {}", exc)
+    return candles
+
+
 async def fetch_klines(
     client: httpx.AsyncClient,
     binance_symbol: str,
@@ -142,22 +182,9 @@ async def backfill_symbol(
         if not klines:
             break
 
-        candles: list[Candle] = []
-        for k in klines:
-            try:
-                candles.append(Candle(
-                    timestamp=datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
-                    open=float(k[1]),
-                    high=float(k[2]),
-                    low=float(k[3]),
-                    close=float(k[4]),
-                    volume=float(k[5]),
-                    symbol=symbol,
-                    timeframe=tf,
-                    exchange="binance",
-                ))
-            except (ValueError, IndexError) as exc:
-                logger.warning("Kline ignorée : {}", exc)
+        candles = _candles_from_klines(
+            klines, symbol=symbol, timeframe=tf,
+        )
 
         if candles:
             inserted = await db.insert_candles_batch(candles)
@@ -182,6 +209,69 @@ async def backfill_symbol(
     return total_inserted
 
 
+async def repair_internal_gaps(
+    db: Database,
+    client: httpx.AsyncClient,
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+) -> int:
+    """Fetch and upsert only missing internal candles in the requested range."""
+    tf = TimeFrame.from_string(timeframe)
+    interval_ms = _tf_to_ms(timeframe)
+    existing = await db.get_candles(
+        symbol, timeframe, start=start, end=end,
+        limit=1_000_000, exchange="binance",
+    )
+    windows = _internal_gap_windows(
+        [candle.timestamp for candle in existing],
+        start=start, end=end, interval_ms=interval_ms,
+    )
+    if not windows:
+        logger.info("Aucun gap interne pour {} {}", symbol, timeframe)
+        return 0
+
+    total_inserted = 0
+    for gap_start, gap_end in windows:
+        remaining = int((gap_end - gap_start).total_seconds() * 1000 // interval_ms)
+        current_ms = int(gap_start.timestamp() * 1000)
+        while remaining > 0:
+            klines = await fetch_klines(
+                client, _symbol_to_binance(symbol), _tf_to_binance(timeframe),
+                current_ms, limit=min(remaining, 1000),
+            )
+            if not klines:
+                logger.error(
+                    "Gap non réparé pour {} {} à {}",
+                    symbol, timeframe, gap_start.isoformat(),
+                )
+                break
+            candles = [
+                candle for candle in _candles_from_klines(
+                    klines, symbol=symbol, timeframe=tf,
+                )
+                if gap_start <= candle.timestamp < gap_end
+            ]
+            if not candles:
+                logger.error(
+                    "Gap non réparé pour {} {} à {} : source sans bougie",
+                    symbol, timeframe, gap_start.isoformat(),
+                )
+                break
+            total_inserted += await db.insert_candles_batch(candles)
+            fetched = len(klines)
+            current_ms = int(klines[-1][0]) + interval_ms
+            remaining -= fetched
+            await asyncio.sleep(REQUEST_DELAY_S)
+
+    logger.info(
+        "{} {} : {} bougies de gaps internes réparées",
+        symbol, timeframe, total_inserted,
+    )
+    return total_inserted
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(
         description="Backfill candles depuis l'API publique Binance",
@@ -194,6 +284,10 @@ async def main() -> None:
     parser.add_argument(
         "--timeframe", type=str, default="1h",
         help="Timeframe (défaut: 1h). Ex: 1m, 5m, 15m, 1h, 4h",
+    )
+    parser.add_argument(
+        "--repair-gaps", action="store_true",
+        help="Réparer aussi les trous internes dans la plage --since",
     )
     args = parser.parse_args()
 
@@ -221,6 +315,11 @@ async def main() -> None:
         for symbol in symbols:
             count = await backfill_symbol(db, client, symbol, args.timeframe, since)
             total += count
+            if args.repair_gaps:
+                total += await repair_internal_gaps(
+                    db, client, symbol, args.timeframe, since,
+                    datetime.now(tz=timezone.utc),
+                )
 
     await db.close()
     logger.info("Terminé : {} candles insérées au total (binance)", total)

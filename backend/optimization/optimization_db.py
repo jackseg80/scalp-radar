@@ -7,6 +7,7 @@ Fonctions async (aiosqlite) pour l'API FastAPI.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import sqlite3
 from typing import Any
@@ -53,6 +54,8 @@ def save_result_sync(
     source: str = "local",
     regime_analysis: dict | None = None,
     leverage: int | None = None,
+    manifest: dict[str, Any] | None = None,
+    result_status: str = "legacy",
 ) -> int:
     """Sauvegarde un résultat WFO en DB (sync pour optimize.py CLI)."""
     conn = sqlite3.connect(db_path, timeout=30)
@@ -143,6 +146,21 @@ def save_result_sync(
             ),
         )
         result_id = cursor.lastrowid
+
+        if manifest is not None:
+            from backend.core.experiment import (
+                canonical_json,
+                snapshot_manifest_hash,
+                snapshot_manifest_payload,
+            )
+            manifest_json = canonical_json(snapshot_manifest_payload(manifest))
+            manifest_hash = snapshot_manifest_hash(manifest)
+            conn.execute(
+                """UPDATE optimization_results
+                   SET result_status=?, manifest_json=?, manifest_hash=?
+                   WHERE id=?""",
+                (result_status, manifest_json, manifest_hash, result_id),
+            )
 
         conn.commit()
         logger.info(

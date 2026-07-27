@@ -58,6 +58,24 @@ class TestInsertLiveTrade:
         assert trades[0]["price"] == 95000.0
 
     @pytest.mark.asyncio
+    async def test_same_order_transitions_from_unfilled_to_filled(self, db):
+        unfilled = _make_live_trade(
+            trade_type="entry_unfilled", quantity=0.0, price=0.0,
+            order_status="canceled", filled_quantity=0.0, fill_ratio=0.0,
+        )
+        original_id = await db.insert_live_trade(unfilled)
+        filled = _make_live_trade(
+            trade_type="entry", quantity=0.005, price=95_100.0,
+            order_status="closed", filled_quantity=0.005, fill_ratio=0.5,
+        )
+        assert await db.insert_live_trade(filled) == original_id
+        trades = await db.get_live_trades(limit=10)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "entry"
+        assert trades[0]["filled_quantity"] == 0.005
+        assert trades[0]["order_status"] == "closed"
+
+    @pytest.mark.asyncio
     async def test_insert_close_with_pnl(self, db):
         """Insert un close avec P&L."""
         trade = _make_live_trade(

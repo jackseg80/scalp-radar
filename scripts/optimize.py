@@ -33,12 +33,14 @@ import time
 from collections import Counter
 from datetime import datetime, timezone as _timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from loguru import logger
 
 from backend.core.config import get_config
 from backend.core.database import Database
+from backend.core.experiment import revalidate_snapshot
+from backend.core.models import UniverseSelectionSpec
 from backend.core.logging_setup import setup_logging
 from backend.optimization import STRATEGY_REGISTRY
 from backend.optimization.overfitting import OverfitDetector
@@ -48,7 +50,21 @@ from backend.optimization.report import (
     save_report,
     validate_on_bitget,
 )
-from backend.optimization.walk_forward import WalkForwardOptimizer, _build_grid, _load_param_grids
+from backend.optimization.walk_forward import (
+    WalkForwardOptimizer,
+    _build_grid,
+    _load_param_grids,
+    build_aligned_wfo_windows,
+)
+
+
+def _load_optimization_config(config_dir: str) -> object:
+    """Load explicit evidence YAML without inheriting the developer's .env."""
+    path = Path(config_dir)
+    if not path.is_dir():
+        raise ValueError(f"Configuration directory not found: {path}")
+    env_file = ".env" if path == Path("config") else None
+    return get_config(path, env_file=env_file, force_reload=True)
 
 
 def _parse_ts(ts: object) -> datetime:
@@ -58,9 +74,54 @@ def _parse_ts(ts: object) -> datetime:
     return datetime.fromisoformat(str(ts))
 
 
+def _snapshot_bounds(
+    manifest: dict[str, Any],
+    exchange: str,
+    symbol: str,
+) -> dict[str, tuple[datetime, datetime]]:
+    """Return the immutable candle bounds declared by a snapshot.
+
+    Snapshot series are explicit.  An absent timeframe is deliberately not
+    replaced by another exchange or by unrestricted database history.
+    """
+    bounds: dict[str, tuple[datetime, datetime]] = {}
+    for series in manifest.get("metadata", {}).get("series", []):
+        key = str(series.get("key", ""))
+        parts = key.split(":", 2)
+        if len(parts) != 3 or parts[0] != exchange or parts[1] != symbol:
+            continue
+        first = series.get("first_timestamp")
+        last = series.get("last_timestamp")
+        if not first or not last or int(series.get("row_count", 0)) <= 0:
+            continue
+        bounds[parts[2]] = (_parse_ts(first), _parse_ts(last))
+    return bounds
+
+
+def _universe_selection_spec(
+    manifest: dict[str, Any] | None,
+) -> UniverseSelectionSpec | None:
+    """Return the frozen universe policy, if this is a discovery snapshot."""
+    if not manifest:
+        return None
+    raw = manifest.get("metadata", {}).get("universe_selection")
+    return UniverseSelectionSpec.model_validate(raw) if raw else None
+
+
+def _recap_eligibility_label(
+    grade_eligible: bool,
+    *,
+    snapshot_bound: bool,
+) -> str:
+    """Keep a WFO grade diagnostic distinct from live certification."""
+    if not grade_eligible:
+        return "X"
+    return "RESEARCH ONLY" if snapshot_bound else "GRADE CANDIDATE"
+
+
 async def check_data(config_dir: str = "config") -> None:
     """Vérifie les données disponibles pour l'optimisation."""
-    config = get_config(config_dir)
+    config = _load_optimization_config(config_dir)
     grids = _load_param_grids(f"{config_dir}/param_grids.yaml")
     opt_config = grids.get("optimization", {})
     main_exchange = "binance"
@@ -190,6 +251,7 @@ async def run_optimization(
     cancel_event: threading.Event | None = None,
     params_override: dict | None = None,
     exchange: str | None = None,
+    snapshot_manifest: dict[str, Any] | None = None,
 ) -> tuple[FinalReport, int | None]:
     """Optimise une stratégie sur un asset.
 
@@ -204,13 +266,48 @@ async def run_optimization(
     logger.info("")
     logger.info(">>> PHASE 1/3 : WALK-FORWARD OPTIMIZATION <<<")
     logger.info("")
-    optimizer = WalkForwardOptimizer(config_dir)
+    config = _load_optimization_config(config_dir)
+    optimizer = WalkForwardOptimizer(config_dir, config=config)
+    main_exchange = exchange or "binance"
+    snapshot_bounds = (
+        _snapshot_bounds(snapshot_manifest, main_exchange, symbol)
+        if snapshot_manifest else None
+    )
+    if snapshot_manifest and not snapshot_bounds:
+        raise ValueError(
+            f"Snapshot {snapshot_manifest.get('snapshot_id')} sans série "
+            f"{main_exchange}:{symbol}"
+        )
+    universe_selection = _universe_selection_spec(snapshot_manifest)
+    if universe_selection and universe_selection.strategy_name != strategy_name:
+        raise ValueError(
+            f"Snapshot universe selection targets {universe_selection.strategy_name}, "
+            f"not {strategy_name}"
+        )
+    aligned_windows = (
+        build_aligned_wfo_windows(
+            universe_selection, _parse_ts(snapshot_manifest["cutoff"]),
+        )
+        if universe_selection and snapshot_manifest else None
+    )
+    universe_params_override = params_override
+    if universe_selection:
+        universe_params_override = {
+            **(params_override or {}),
+            "timeframe": [universe_selection.signal_timeframe],
+        }
     wfo = await optimizer.optimize(
         strategy_name, symbol,
         exchange=exchange,  # None = auto-détection (exchange avec le plus de candles)
         progress_callback=progress_callback,
         cancel_event=cancel_event,
-        params_override=params_override,
+        params_override=universe_params_override,
+        data_bounds=snapshot_bounds,
+        window_schedule=aligned_windows,
+        exhaustive=bool(universe_selection),
+        leverage_override=(
+            universe_selection.primary_leverage if universe_selection else None
+        ),
     )
 
     logger.info("")
@@ -252,17 +349,20 @@ async def run_optimization(
     if hasattr(default_cfg, "trend_filter_timeframe"):
         tfs.append(default_cfg.trend_filter_timeframe)
 
-    # Exchange pour la Phase 2 : CLI > binance par défaut
-    main_exchange = exchange or "binance"
-
     # Charger seulement les IS_WINDOW_DAYS derniers jours pour la stabilité
     # (34k bougies au lieu de 207k → ~6x plus rapide)
     from datetime import timedelta
 
     all_candles_by_tf: dict = {}
     for tf in tfs:
+        bounds = snapshot_bounds.get(tf) if snapshot_bounds else None
+        if snapshot_bounds is not None and bounds is None:
+            continue
         all_candles_by_tf[tf] = await db.get_candles(
-            symbol, tf, exchange=main_exchange, limit=1_000_000,
+            symbol, tf, exchange=main_exchange,
+            start=bounds[0] if bounds else None,
+            end=bounds[1] if bounds else None,
+            limit=1_000_000,
         )
 
     # Découper aux derniers is_window_days pour la stabilité
@@ -273,7 +373,7 @@ async def run_optimization(
         stability_start = last_candle.timestamp - timedelta(days=is_window_days)
         for tf in tfs:
             stability_candles_by_tf[tf] = _slice_candles(
-                all_candles_by_tf[tf], stability_start, last_candle.timestamp,
+                all_candles_by_tf.get(tf, []), stability_start, last_candle.timestamp,
             )
         logger.info(
             "Stabilité : {} bougies {} (derniers {} jours)",
@@ -307,6 +407,19 @@ async def run_optimization(
         from backend.backtesting.extra_data_builder import build_extra_data_map
         funding_rates = await db.get_funding_rates(symbol, exchange=main_exchange)
         oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange=main_exchange)
+        if snapshot_bounds:
+            bounds = snapshot_bounds.get(main_tf)
+            if bounds:
+                start_ms = int(bounds[0].timestamp() * 1000)
+                end_ms = int(bounds[1].timestamp() * 1000)
+                funding_rates = [
+                    item for item in funding_rates
+                    if start_ms <= int(item["timestamp"]) <= end_ms
+                ]
+                oi_records = [
+                    item for item in oi_records
+                    if start_ms <= int(item["timestamp"]) <= end_ms
+                ]
         if funding_rates or oi_records:
             stability_extra_data = build_extra_data_map(
                 stab_candles, funding_rates, oi_records,
@@ -343,6 +456,10 @@ async def run_optimization(
     validation = await validate_on_bitget(
         strategy_name, symbol, wfo.recommended_params,
         wfo.avg_oos_sharpe, db=db,
+        data_bounds=(
+            _snapshot_bounds(snapshot_manifest, "bitget", symbol)
+            if snapshot_manifest else None
+        ),
     )
 
     logger.info(
@@ -387,7 +504,10 @@ async def run_optimization(
     saved_tf = report.recommended_params.get("timeframe", main_tf)
     
     # Extraire le levier utilisé pour le stockage (Sprint 64)
-    leverage_val = getattr(default_cfg, 'leverage', None)
+    leverage_val = (
+        universe_selection.primary_leverage
+        if universe_selection else getattr(default_cfg, 'leverage', None)
+    )
     
     filepath, result_id = save_report(
         report,
@@ -397,13 +517,19 @@ async def run_optimization(
         combo_results=wfo.combo_results,  # Sprint 14b
         regime_analysis=wfo.regime_analysis,  # Sprint 15b
         leverage=leverage_val,
+        manifest=snapshot_manifest,
+        result_status="RESEARCH_ONLY" if snapshot_manifest else "legacy",
     )
 
     if progress_callback:
         progress_callback(100.0, "Terminé")
 
     # Affichage console
-    _print_report(report, combo_results=wfo.combo_results)
+    _print_report(
+        report,
+        combo_results=wfo.combo_results,
+        research_only=bool(snapshot_manifest),
+    )
 
     if close_db:
         await db.close()
@@ -414,6 +540,7 @@ async def run_optimization(
 def _print_report(
     report: FinalReport,
     combo_results: list[dict] | None = None,
+    research_only: bool = False,
 ) -> None:
     """Affichage console du rapport."""
     print(f"\n  {'=' * 55}")
@@ -492,7 +619,11 @@ def _print_report(
         print(f"  GRADE : {report.grade}  ⚠ SHALLOW ({report.wfo_n_windows} fenêtres, raw: {report.raw_score}, pénalité: -{penalty})")
     else:
         print(f"  GRADE : {report.grade} (score: {report.total_score})")
-    print(f"  LIVE ELIGIBLE : {'Oui' if report.live_eligible else 'Non'}")
+    if research_only:
+        print(f"  WFO GRADE ELIGIBLE : {'Oui' if report.live_eligible else 'Non'}")
+        print("  LIVE ELIGIBLE      : Non (RESEARCH_ONLY — certification requise)")
+    else:
+        print(f"  LIVE ELIGIBLE : {'Oui' if report.live_eligible else 'Non'}")
     print(f"  {'=' * 25}")
 
     if report.warnings:
@@ -550,7 +681,7 @@ def apply_from_db(
 
     # Résoudre db_path depuis config
     if db_path is None:
-        cfg = get_config(config_dir)
+        cfg = _load_optimization_config(config_dir)
         db_url = cfg.secrets.database_url
         if db_url.startswith("sqlite:///"):
             db_path = db_url[10:]
@@ -815,16 +946,28 @@ def apply_from_db(
     }
 
 
-def _get_done_assets(strategy_name: str, db_path: str = "data/scalp_radar.db") -> set[str]:
-    """Retourne les assets qui ont déjà un résultat is_latest=1 pour cette stratégie."""
+def _get_done_assets(
+    strategy_name: str,
+    db_path: str = "data/scalp_radar.db",
+    manifest_hash: str | None = None,
+) -> set[str]:
+    """Return completed assets, scoped to the exact snapshot when supplied."""
     import sqlite3
     try:
         conn = sqlite3.connect(db_path)
-        cursor = conn.execute(
-            "SELECT DISTINCT asset FROM optimization_results "
-            "WHERE strategy_name = ? AND is_latest = 1",
-            (strategy_name,),
-        )
+        if manifest_hash:
+            cursor = conn.execute(
+                "SELECT DISTINCT asset FROM optimization_results "
+                "WHERE strategy_name = ? AND manifest_hash = ? "
+                "AND result_status != 'legacy'",
+                (strategy_name, manifest_hash),
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT DISTINCT asset FROM optimization_results "
+                "WHERE strategy_name = ? AND is_latest = 1",
+                (strategy_name,),
+            )
         done = {row[0] for row in cursor.fetchall()}
         conn.close()
         return done
@@ -983,7 +1126,7 @@ def _regrade_from_db(strategy_name: str, config_dir: str = "config") -> None:
         compute_win_rate_oos,
     )
 
-    config = get_config(config_dir)
+    config = _load_optimization_config(config_dir)
     db_url = config.secrets.database_url
     db_path = db_url[10:] if db_url.startswith("sqlite:///") else "data/scalp_radar.db"
 
@@ -1104,6 +1247,10 @@ async def main() -> None:
     parser.add_argument("--config-dir", type=str, default="config", help="Répertoire de config")
     parser.add_argument("--exchange", type=str, default=None, help="Exchange source des candles (défaut: binance)")
     parser.add_argument(
+        "--snapshot", type=str,
+        help="ID du snapshot immutable à utiliser (requis pour une certification)",
+    )
+    parser.add_argument(
         "--force-timeframe", type=str, default=None,
         help="Forcer le timeframe WFO (ex: 1h). Override la grid.",
     )
@@ -1138,6 +1285,15 @@ async def main() -> None:
 
     setup_logging(level="INFO")
 
+    if args.apply:
+        parser.error(
+            "--apply est désormais legacy et bloqué : l'optimisation produit "
+            "un candidat RESEARCH_ONLY. Utilisez certify_strategy puis "
+            "promote_strategy pour toute promotion live."
+        )
+    if args.snapshot and args.subprocess:
+        parser.error("--snapshot est incompatible avec --subprocess")
+
     # Mutex : --symbol, --symbols et --all-symbols sont exclusifs
     if sum(bool(x) for x in [args.symbol, args.symbols, args.all_symbols]) > 1:
         parser.error("Utilisez --symbol, --symbols OU --all-symbols (pas plusieurs à la fois)")
@@ -1156,7 +1312,21 @@ async def main() -> None:
         await check_data(args.config_dir)
         return
 
-    config = get_config(args.config_dir)
+    config = _load_optimization_config(args.config_dir)
+    snapshot_manifest: dict[str, Any] | None = None
+    if args.snapshot:
+        db_url = config.secrets.database_url
+        db_path = db_url[10:] if db_url.startswith("sqlite:///") else "data/scalp_radar.db"
+        snapshot_manifest, snapshot_errors = await revalidate_snapshot(
+            db_path,
+            args.snapshot,
+            config_dir=Path(args.config_dir),
+            repo_root=Path.cwd(),
+        )
+        if snapshot_errors:
+            parser.error(
+                "snapshot invalide au moment du WFO : " + "; ".join(snapshot_errors)
+            )
     symbols = [a.symbol for a in config.assets]
     available_strategies = list(STRATEGY_REGISTRY.keys())
     excluded = [
@@ -1213,6 +1383,17 @@ async def main() -> None:
         parser.print_help()
         return
 
+    universe_selection = _universe_selection_spec(snapshot_manifest)
+    if universe_selection:
+        if args.strategy != universe_selection.strategy_name or not args.all_symbols:
+            parser.error(
+                "universe snapshot requires its declared strategy with --all-symbols"
+            )
+        if sorted(target_symbols) != universe_selection.universe_symbols:
+            parser.error("configured assets differ from the frozen universe snapshot")
+        if args.force_timeframe and args.force_timeframe != "1h":
+            parser.error("universe grid_atr snapshot requires --force-timeframe 1h")
+
     # Dry run
     if args.dry_run:
         grids = _load_param_grids(f"{args.config_dir}/param_grids.yaml")
@@ -1225,7 +1406,10 @@ async def main() -> None:
             db_url = config.secrets.database_url
             db_path_resume = db_url[10:] if db_url.startswith("sqlite:///") else "data/scalp_radar.db"
             for strat in strategies:
-                done_by_strat[strat] = _get_done_assets(strat, db_path_resume)
+                done_by_strat[strat] = _get_done_assets(
+                    strat, db_path_resume,
+                    snapshot_manifest.get("manifest_hash") if snapshot_manifest else None,
+                )
 
         total_combos = 0
         n_skipped = 0
@@ -1240,8 +1424,8 @@ async def main() -> None:
                 grid = _build_grid(strat_grids, sym)
                 n = len(grid)
                 total_combos += n
-                coarse = min(n, 500)
-                print(f"  {strat} x {sym} : {n} combos (coarse: {coarse})")
+                mode = "exhaustive" if universe_selection else f"coarse: {min(n, 500)}"
+                print(f"  {strat} x {sym} : {n} combos ({mode})")
         n_total = len(strategies) * len(target_symbols)
         print(f"\n  Total : {total_combos} combinaisons ({n_total - n_skipped} assets à faire, {n_skipped} skippés)")
         print(f"  Workers : {__import__('os').cpu_count()}")
@@ -1266,7 +1450,11 @@ async def main() -> None:
         # --resume : filtrer les assets déjà terminés en DB (is_latest=1)
         run_symbols = target_symbols
         if args.resume:
-            done = _get_done_assets(strat, _db_path_for_resume or "data/scalp_radar.db")
+            done = _get_done_assets(
+                strat,
+                _db_path_for_resume or "data/scalp_radar.db",
+                snapshot_manifest.get("manifest_hash") if snapshot_manifest else None,
+            )
             skipped = [s for s in target_symbols if s in done]
             run_symbols = [s for s in target_symbols if s not in done]
             if skipped:
@@ -1303,6 +1491,7 @@ async def main() -> None:
                         all_symbols_results=symbol_results if len(symbol_results) >= 1 else None,
                         exchange=args.exchange,
                         params_override=force_tf_override,
+                        snapshot_manifest=snapshot_manifest,
                     )
                     all_reports.append(report)
                     symbol_results[sym] = report.recommended_params
@@ -1320,14 +1509,19 @@ async def main() -> None:
     print(f"{'=' * 55}")
     if args.subprocess:
         for r in all_result_dicts:
-            elig = "OK LIVE" if r.get("live_eligible") else "X"
+            elig = _recap_eligibility_label(
+                bool(r.get("live_eligible")), snapshot_bound=False,
+            )
             shallow_mark = " [SHALLOW]" if r.get("shallow") else ""
             print(f"  {r['strategy_name']:<12s} x {r['symbol']:<12s} : Grade {r.get('grade', '?')}{shallow_mark} {elig}")
         if all_failed_pairs:
             print(f"\n  Échecs définitifs ({len(all_failed_pairs)}) : {', '.join(all_failed_pairs)}")
     else:
         for r in all_reports:
-            elig = "OK LIVE" if r.live_eligible else "X"
+            elig = _recap_eligibility_label(
+                r.live_eligible,
+                snapshot_bound=bool(snapshot_manifest),
+            )
             shallow_mark = " [SHALLOW]" if r.shallow else ""
             print(f"  {r.strategy_name:<12s} x {r.symbol:<12s} : Grade {r.grade}{shallow_mark} {elig}")
     print()

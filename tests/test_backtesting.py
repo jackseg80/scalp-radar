@@ -113,7 +113,7 @@ def _default_config() -> BacktestConfig:
 
 class TestBacktestEngine:
     def test_tp_hit(self):
-        """Trade LONG : TP touché → profit avec maker fee."""
+        """Trade LONG : TP touché → profit net d'une clôture market."""
         # Entry à 100, TP à 100.5, les bougies montent
         candles = _make_candles([
             (100, 100.5, 99.5, 100),  # Bougie d'entrée
@@ -128,8 +128,7 @@ class TestBacktestEngine:
         trade = result.trades[0]
         assert trade.exit_reason == "tp"
         assert trade.exit_price == pytest.approx(100.5)
-        # Fee TP = maker
-        assert trade.slippage_cost == 0.0  # Pas de slippage sur TP
+        assert trade.slippage_cost > 0.0
 
     def test_sl_hit(self):
         """Trade LONG : SL touché → perte avec taker fee + slippage."""
@@ -148,8 +147,8 @@ class TestBacktestEngine:
         assert trade.slippage_cost > 0  # Slippage appliqué
         assert trade.net_pnl < 0
 
-    def test_maker_vs_taker_fees(self):
-        """TP = maker fee, SL = taker fee."""
+    def test_tp_and_sl_are_both_taker_fees(self):
+        """TP et SL server-side déclenchent tous deux un ordre market."""
         config = _default_config()
 
         # TP trade
@@ -169,10 +168,12 @@ class TestBacktestEngine:
         result_sl = BacktestEngine(config, strategy_sl).run({"5m": candles_sl}, main_tf="5m")
 
         if result_tp.trades and result_sl.trades:
-            # SL trade devrait avoir des fees plus élevées (taker + taker vs taker + maker)
-            tp_fees = result_tp.trades[0].fee_cost
-            sl_fees = result_sl.trades[0].fee_cost
-            assert sl_fees > tp_fees
+            tp_trade = result_tp.trades[0]
+            sl_trade = result_sl.trades[0]
+            tp_entry_fee = tp_trade.entry_price * tp_trade.quantity * config.taker_fee
+            sl_entry_fee = sl_trade.entry_price * sl_trade.quantity * config.taker_fee
+            assert (tp_trade.fee_cost - tp_entry_fee) / (tp_trade.exit_price * tp_trade.quantity) == pytest.approx(config.taker_fee)
+            assert (sl_trade.fee_cost - sl_entry_fee) / (sl_trade.exit_price * sl_trade.quantity) == pytest.approx(config.taker_fee)
 
     def test_ohlc_heuristic_green_candle_long(self):
         """Bougie verte + LONG : TP/SL les deux touchés → TP d'abord."""

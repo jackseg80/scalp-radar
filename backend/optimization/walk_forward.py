@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import sys
 import itertools
 import json
 import os
@@ -30,8 +31,9 @@ from loguru import logger
 from backend.backtesting.engine import BacktestConfig, run_backtest_single
 from backend.backtesting.extra_data_builder import build_extra_data_map
 from backend.backtesting.metrics import _classify_regime, calculate_metrics
+from backend.core.config import AppConfig, get_config
 from backend.core.database import Database
-from backend.core.models import Candle
+from backend.core.models import Candle, TimeFrame, UniverseSelectionSpec
 from backend.core.position_manager import TradeResult
 
 
@@ -294,6 +296,59 @@ def _slice_candles(
     return [c for c in candles if start <= c.timestamp < end]
 
 
+def build_aligned_wfo_windows(
+    selection: UniverseSelectionSpec,
+    cutoff: datetime,
+) -> list[tuple[datetime, datetime, datetime, datetime]]:
+    """Build one immutable outer calendar shared by every universe asset."""
+    cutoff = cutoff.astimezone(selection.calendar_start.tzinfo)
+    windows: list[tuple[datetime, datetime, datetime, datetime]] = []
+    current_start = selection.calendar_start
+    while True:
+        is_start = current_start
+        is_end = is_start + timedelta(days=selection.is_window_days)
+        oos_start = is_end + timedelta(days=selection.embargo_days)
+        oos_end = oos_start + timedelta(days=selection.oos_window_days)
+        if oos_end > cutoff:
+            break
+        windows.append((is_start, is_end, oos_start, oos_end))
+        current_start += timedelta(days=selection.step_days)
+    return windows
+
+
+def _windows_with_complete_coverage(
+    windows: list[tuple[datetime, datetime, datetime, datetime]],
+    candles: list[Candle],
+    timeframe: str,
+) -> list[tuple[datetime, datetime, datetime, datetime]]:
+    """Retain only global windows with continuous data for this asset.
+
+    A snapshot may explicitly tolerate a small, documented exchange outage.
+    That does not make it valid input for an indicator or an IS/OOS decision:
+    any common window intersecting an internal missing-bar interval is removed
+    for this asset.  Other assets keep the shared calendar unchanged.
+    """
+    if not candles:
+        return []
+    interval = timedelta(milliseconds=TimeFrame.from_string(timeframe).to_milliseconds())
+    first = candles[0].timestamp
+    last_exclusive = candles[-1].timestamp + interval
+    gaps = [
+        (left.timestamp + interval, right.timestamp)
+        for left, right in zip(candles, candles[1:])
+        if right.timestamp - left.timestamp > interval
+    ]
+    return [
+        window for window in windows
+        if first <= window[0]
+        and last_exclusive >= window[3]
+        and not any(
+            gap_start < window[3] and gap_end > window[0]
+            for gap_start, gap_end in gaps
+        )
+    ]
+
+
 
 # ─── Worker pool avec initializer (candles chargées 1 fois par worker) ─────
 
@@ -445,14 +500,34 @@ def _serialize_candles_by_tf(candles_by_tf: dict[str, list[Candle]]) -> dict[str
     return result
 
 
+def _collect_released_working_set() -> None:
+    """Collect cyclic garbage between WFO batches when that is safe.
+
+    The normal reference-counting cleanup is sufficient for the large NumPy
+    caches used by the fast engine.  Explicit ``gc.collect()`` has caused an
+    intermittent access violation on Windows with CPython 3.13 while those
+    arrays are being released.  Keep the useful explicit collection on the
+    supported long-replay runtime (Python 3.12), and let 3.13's normal GC run
+    on its own schedule instead.
+    """
+    if sys.version_info < (3, 13):
+        gc.collect()
+
+
 # ─── WalkForwardOptimizer ──────────────────────────────────────────────────
 
 
 class WalkForwardOptimizer:
     """Optimiseur Walk-Forward avec grid search en 2 passes."""
 
-    def __init__(self, config_dir: str = "config") -> None:
+    def __init__(
+        self,
+        config_dir: str = "config",
+        *,
+        config: AppConfig | None = None,
+    ) -> None:
         self._config_dir = config_dir
+        self._config = config or get_config(config_dir)
         self._grids = _load_param_grids(str(Path(config_dir) / "param_grids.yaml"))
 
     async def optimize(
@@ -468,6 +543,10 @@ class WalkForwardOptimizer:
         progress_callback: Callable[[float, str], None] | None = None,
         cancel_event: threading.Event | None = None,
         params_override: dict | None = None,
+        data_bounds: dict[str, tuple[datetime, datetime]] | None = None,
+        window_schedule: list[tuple[datetime, datetime, datetime, datetime]] | None = None,
+        exhaustive: bool = False,
+        leverage_override: int | None = None,
     ) -> WFOResult:
         """Walk-forward optimization complète.
 
@@ -542,8 +621,17 @@ class WalkForwardOptimizer:
 
         all_candles_by_tf: dict[str, list[Candle]] = {}
         for tf in tfs_needed:
+            bounds = data_bounds.get(tf) if data_bounds else None
+            if data_bounds is not None and bounds is None:
+                logger.info("  {} : absent du snapshot (resample uniquement)", tf)
+                continue
             candles = await db.get_candles(
-                symbol, tf, exchange=exchange, limit=1_000_000
+                symbol,
+                tf,
+                exchange=exchange,
+                start=bounds[0] if bounds else None,
+                end=bounds[1] if bounds else None,
+                limit=1_000_000,
             )
             if candles:
                 all_candles_by_tf[tf] = candles
@@ -561,6 +649,19 @@ class WalkForwardOptimizer:
             logger.info("Chargement données extra (funding/OI) depuis {} ...", exchange)
             all_funding_rates = await db.get_funding_rates(symbol, exchange=exchange)
             all_oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange=exchange)
+            if data_bounds:
+                main_bounds = data_bounds.get(main_tf)
+                if main_bounds:
+                    start_ms = int(main_bounds[0].timestamp() * 1000)
+                    end_ms = int(main_bounds[1].timestamp() * 1000)
+                    all_funding_rates = [
+                        item for item in all_funding_rates
+                        if start_ms <= int(item["timestamp"]) <= end_ms
+                    ]
+                    all_oi_records = [
+                        item for item in all_oi_records
+                        if start_ms <= int(item["timestamp"]) <= end_ms
+                    ]
             logger.info(
                 "  funding: {} rates, OI: {} records",
                 len(all_funding_rates), len(all_oi_records),
@@ -592,10 +693,15 @@ class WalkForwardOptimizer:
         data_end = main_candles[-1].timestamp
 
         # Construire les fenêtres
-        windows = self._build_windows(
-            data_start, data_end, is_window_days, oos_window_days, step_days,
-            embargo_days=embargo_days,
-        )
+        if window_schedule is None:
+            windows = self._build_windows(
+                data_start, data_end, is_window_days, oos_window_days, step_days,
+                embargo_days=embargo_days,
+            )
+        else:
+            windows = _windows_with_complete_coverage(
+                window_schedule, main_candles, main_tf,
+            )
         logger.info("{} fenêtres WFO", len(windows))
 
         if not windows:
@@ -620,17 +726,22 @@ class WalkForwardOptimizer:
             end_date=data_end,
         )
         # Override leverage depuis strategies.yaml (la valeur réelle, pas le default Pydantic)
-        if hasattr(default_cfg, 'leverage'):
-            from backend.core.config import get_config
-            _yaml_strat = getattr(get_config().strategies, strategy_name, None)
+        if leverage_override is not None:
+            bt_config.leverage = leverage_override
+        elif hasattr(default_cfg, 'leverage'):
+            _yaml_strat = getattr(self._config.strategies, strategy_name, None)
             bt_config.leverage = getattr(_yaml_strat, 'leverage', default_cfg.leverage)
 
         # Sprint 53 : filtrer SL × leverage > 150% AVANT le sampling coarse
         full_grid = _filter_sl_leverage(full_grid, bt_config.leverage)
 
-        # Grid search en 2 passes
+        # Grid search en 2 passes by default.  Universe certification freezes
+        # exhaustive=True so every surviving combination is evaluated on IS.
         coarse_max = 200
-        if len(full_grid) > coarse_max:
+        if exhaustive:
+            coarse_grid = full_grid
+            logger.info("Recherche exhaustive : {} combinaisons par fenêtre", len(full_grid))
+        elif len(full_grid) > coarse_max:
             coarse_grid = _latin_hypercube_sample(full_grid, coarse_max)
             logger.info("Coarse pass : {} combinaisons (LHS)", len(coarse_grid))
         else:
@@ -662,7 +773,7 @@ class WalkForwardOptimizer:
         # Accumulateur combo results cross-fenêtre (Sprint 14b)
         # Skip si stratégie sans fast engine (trop lent)
         from backend.optimization import FAST_ENGINE_STRATEGIES
-        collect_combo_results = strategy_name in FAST_ENGINE_STRATEGIES
+        collect_combo_results = strategy_name in FAST_ENGINE_STRATEGIES and not exhaustive
         combo_accumulator: dict[str, list[dict]] = {}
         window_regimes: list[dict[str, Any]] = []
 
@@ -706,28 +817,31 @@ class WalkForwardOptimizer:
                     cancel_event=cancel_event,
                 )
 
-                # Top 20
-                coarse_results.sort(key=lambda r: r[1], reverse=True)
-                top_20 = coarse_results[:20]
-
-                # --- Fine pass ---
-                top_20_params = [r[0] for r in top_20]
-                fine_grid = _fine_grid_around_top(top_20_params, grid_values)
-                # Sprint 53 : filtrer aussi le fine_grid (±1 step peut créer des combos invalides)
-                fine_grid = _filter_sl_leverage(fine_grid, bt_config.leverage)
-                n_distinct_combos = max(n_distinct_combos, len(coarse_grid) + len(fine_grid))
-
-                if fine_grid:
-                    fine_results = self._parallel_backtest(
-                        fine_grid, is_candles_by_tf, strategy_name, symbol,
-                        bt_config_dict, main_tf, n_workers, metric,
-                        extra_data_map=is_extra_data_map,
-                        db_path=db_path, exchange=exchange,
-                        cancel_event=cancel_event,
-                    )
-                    all_is_results = coarse_results + fine_results
-                else:
+                if exhaustive:
                     all_is_results = coarse_results
+                else:
+                    # Top 20
+                    coarse_results.sort(key=lambda r: r[1], reverse=True)
+                    top_20 = coarse_results[:20]
+
+                    # --- Fine pass ---
+                    top_20_params = [r[0] for r in top_20]
+                    fine_grid = _fine_grid_around_top(top_20_params, grid_values)
+                    # Sprint 53 : filtrer aussi le fine_grid (±1 step peut créer des combos invalides)
+                    fine_grid = _filter_sl_leverage(fine_grid, bt_config.leverage)
+                    n_distinct_combos = max(n_distinct_combos, len(coarse_grid) + len(fine_grid))
+
+                    if fine_grid:
+                        fine_results = self._parallel_backtest(
+                            fine_grid, is_candles_by_tf, strategy_name, symbol,
+                            bt_config_dict, main_tf, n_workers, metric,
+                            extra_data_map=is_extra_data_map,
+                            db_path=db_path, exchange=exchange,
+                            cancel_event=cancel_event,
+                        )
+                        all_is_results = coarse_results + fine_results
+                    else:
+                        all_is_results = coarse_results
 
                 # Meilleur IS
                 all_is_results.sort(key=lambda r: r[1], reverse=True)
@@ -888,7 +1002,7 @@ class WalkForwardOptimizer:
                 continue
             finally:
                 # Libérer mémoire entre fenêtres
-                gc.collect()
+                _collect_released_working_set()
 
                 # Progress callback (WFO = 80% du total)
                 if progress_callback:
@@ -952,7 +1066,10 @@ class WalkForwardOptimizer:
                     "per_window_sharpes": [round(d["oos_sharpe"], 4) for d in window_data if d["oos_sharpe"] is not None],
                 })
 
-            # Sélection du best combo par score composite (consistance + volume)
+            # Diagnostic OOS only.  Never use this ranking to choose the
+            # candidate: every combo has already seen the external windows.
+            # The deployable recommendation remains the median of parameters
+            # selected independently inside each IS window above.
             if combo_results:
                 max_win = max(c["n_windows_evaluated"] for c in combo_results)
                 best_combo = max(
@@ -963,20 +1080,13 @@ class WalkForwardOptimizer:
                     ),
                 )
                 best_combo["is_best"] = True
-                recommended = best_combo["params"]
-
-                # Mettre à jour les métriques WFO-level pour refléter le best combo
-                # (ces valeurs alimentent compute_grade via build_final_report)
-                avg_oos = best_combo["oos_sharpe"]
-                consistency = best_combo["consistency"]
-                oos_is_ratio = best_combo["oos_is_ratio"]
 
                 logger.info(
-                    "Best combo par score composite : sharpe={}, consistency={}, trades={}, "
-                    "oos_is_ratio={}, params={}",
+                    "Diagnostic OOS combo (NON PROMOUVABLE) : sharpe={}, consistency={}, "
+                    "trades={}, oos_is_ratio={}, params={}; recommandation nested={}",
                     best_combo["oos_sharpe"], best_combo["consistency"],
                     best_combo["oos_trades"], best_combo["oos_is_ratio"],
-                    recommended,
+                    best_combo["params"], recommended,
                 )
 
             # Retirer params_key des résultats (champ interne)
@@ -1133,7 +1243,7 @@ class WalkForwardOptimizer:
             )
             # Libérer les candles sérialisées dès que le pool est fini
             del candles_serialized
-            gc.collect()
+            _collect_released_working_set()
             if remaining_grid:
                 logger.info(
                     "  Continuation séquentielle : {} combos restantes...",
@@ -1251,7 +1361,7 @@ class WalkForwardOptimizer:
 
             # Libérer le cache numpy explicitement
             del cache
-            gc.collect()
+            _collect_released_working_set()
 
         return results
 
@@ -1433,7 +1543,7 @@ class WalkForwardOptimizer:
 
             # Libérer mémoire entre groupes
             del precomputed
-            gc.collect()
+            _collect_released_working_set()
 
         for lg, lvl in zip(_quiet_loggers, _prev_levels):
             lg.setLevel(lvl)

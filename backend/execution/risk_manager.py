@@ -47,13 +47,22 @@ class LiveRiskManager:
     Il ne touche pas au kill switch du Simulator (virtuel, par runner).
     """
 
-    def __init__(self, config: AppConfig, notifier: Notifier | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        notifier: Notifier | None = None,
+        global_max_loss_pct: float | None = None,
+        global_window_hours: int | None = None,
+    ) -> None:
         self._config = config
         self._notifier = notifier  # P1 : alerte Telegram
+        self._global_max_loss_pct_override = global_max_loss_pct
+        self._global_window_hours_override = global_window_hours
         self._initial_capital: float = 0.0
         self._session_pnl: float = 0.0
         self._kill_switch_triggered: bool = False
         self._kill_switch_reason: str = ""  # P1-ME-3 Audit : raison pour propagation
+        self._last_global_drawdown_pct: float = 0.0
         self._open_positions: list[dict[str, Any]] = []
         self._trade_history: list[LiveTradeResult] = []
         self._total_orders: int = 0
@@ -116,16 +125,11 @@ class LiveRiskManager:
             return False, "max_concurrent_positions"
 
         # 4. Limite direction dans le groupe de corrélation (assets.yaml)
-        group = self._get_correlation_group(symbol)
-        if group:
-            max_same_dir = self._get_max_same_direction(group)
-            same_dir_count = sum(
-                1 for pos in self._open_positions
-                if pos["direction"] == direction
-                and self._get_correlation_group(pos["symbol"]) == group
-            )
-            if same_dir_count >= max_same_dir:
-                return False, f"correlation_group_limit ({group})"
+        correlation_ok, correlation_reason = self.check_correlation_limit(
+            symbol, direction, self._open_positions,
+        )
+        if not correlation_ok:
+            return False, correlation_reason
 
         # 5. Marge disponible suffisante ?
         leverage = leverage_override or self._config.risk.position.default_leverage
@@ -141,6 +145,27 @@ class LiveRiskManager:
             )
             return False, "insufficient_margin"
 
+        return True, "ok"
+
+    def check_correlation_limit(
+        self,
+        symbol: str,
+        direction: str,
+        open_positions: list[dict[str, Any]] | None = None,
+    ) -> tuple[bool, str]:
+        """Apply the same correlation rule to live and simulated brokers."""
+        positions = self._open_positions if open_positions is None else open_positions
+        group = self._get_correlation_group(symbol)
+        if not group:
+            return True, "ok"
+        max_same_dir = self._get_max_same_direction(group)
+        same_dir_count = sum(
+            1 for position in positions
+            if position.get("direction") == direction
+            and self._get_correlation_group(position.get("symbol", "")) == group
+        )
+        if same_dir_count >= max_same_dir:
+            return False, f"correlation_group_limit ({group})"
         return True, "ok"
 
     # ─── Position tracking ─────────────────────────────────────────────
@@ -170,8 +195,12 @@ class LiveRiskManager:
         P1 fix : reset quotidien à minuit UTC.
         P1 fix : alerte Telegram si kill switch déclenché.
         """
-        # P1 : auto-reset quotidien (minuit UTC)
-        today = datetime.now(tz=timezone.utc).date()
+        # Use the event timestamp rather than wall-clock time so historical
+        # replay follows the same UTC session boundaries as a live account.
+        event_time = result.timestamp
+        if event_time.tzinfo is None:
+            event_time = event_time.replace(tzinfo=timezone.utc)
+        today = event_time.astimezone(timezone.utc).date()
         if today != self._session_start_date:
             logger.info(
                 "RiskManager: reset session_pnl quotidien ({:+.2f} → 0.0)",
@@ -229,15 +258,28 @@ class LiveRiskManager:
 
     # ─── Kill switch global live (P1 — drawdown fenêtre glissante) ────
 
-    def record_balance_snapshot(self, balance: float) -> None:
+    def record_balance_snapshot(
+        self,
+        balance: float,
+        timestamp: datetime | None = None,
+    ) -> None:
         """Enregistre un snapshot de balance et vérifie le drawdown global.
 
         Appelé par Executor._balance_refresh_loop() après chaque fetch (5 min).
         """
-        self._balance_snapshots.append((datetime.now(tz=timezone.utc), balance))
-        self._check_global_kill_switch(balance)
+        observed_at = timestamp or datetime.now(tz=timezone.utc)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=timezone.utc)
+        else:
+            observed_at = observed_at.astimezone(timezone.utc)
+        self._balance_snapshots.append((observed_at, balance))
+        self._check_global_kill_switch(balance, observed_at)
 
-    def _check_global_kill_switch(self, current_balance: float) -> None:
+    def _check_global_kill_switch(
+        self,
+        current_balance: float,
+        observed_at: datetime | None = None,
+    ) -> None:
         """Vérifie le drawdown global sur la fenêtre glissante (parité paper)."""
         if self._kill_switch_triggered:
             return
@@ -245,12 +287,21 @@ class LiveRiskManager:
             return
 
         ks = self._config.risk.kill_switch
-        threshold = getattr(ks, "global_max_loss_pct", None)
-        window_hours = getattr(ks, "global_window_hours", None)
+        threshold = (
+            self._global_max_loss_pct_override
+            if self._global_max_loss_pct_override is not None
+            else getattr(ks, "global_max_loss_pct", None)
+        )
+        window_hours = (
+            self._global_window_hours_override
+            if self._global_window_hours_override is not None
+            else getattr(ks, "global_window_hours", None)
+        )
         if not isinstance(threshold, (int, float)) or not isinstance(window_hours, (int, float)):
             return
 
-        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=window_hours)
+        now = observed_at or datetime.now(tz=timezone.utc)
+        cutoff = now - timedelta(hours=window_hours)
         recent = [b for ts, b in self._balance_snapshots if ts >= cutoff]
         if not recent:
             return
@@ -260,6 +311,7 @@ class LiveRiskManager:
             return
 
         drawdown_pct = (peak - current_balance) / peak * 100
+        self._last_global_drawdown_pct = drawdown_pct
         if drawdown_pct >= threshold:
             self._kill_switch_triggered = True
             self._kill_switch_reason = (

@@ -18,7 +18,7 @@ import yaml
 from backend.backtesting.engine import BacktestConfig, BacktestResult, run_backtest_single
 from backend.backtesting.metrics import calculate_metrics
 from backend.core.config import MomentumConfig, VwapRsiConfig
-from backend.core.models import Candle, Direction, MarketRegime, TimeFrame
+from backend.core.models import Candle, Direction, MarketRegime, TimeFrame, UniverseSelectionSpec
 from backend.core.position_manager import TradeResult
 from backend.optimization.overfitting import (
     ConvergenceResult,
@@ -36,7 +36,11 @@ from backend.optimization.report import (
     save_report,
     _bootstrap_sharpe_ci,
 )
-from scripts.optimize import apply_from_db
+from scripts.optimize import (
+    _load_optimization_config,
+    _recap_eligibility_label,
+    apply_from_db,
+)
 from backend.optimization.walk_forward import (
     WFOResult,
     WindowResult,
@@ -45,10 +49,35 @@ from backend.optimization.walk_forward import (
     _latin_hypercube_sample,
     _median_params,
     _slice_candles,
+    _windows_with_complete_coverage,
+    build_aligned_wfo_windows,
 )
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
+
+
+def test_explicit_wfo_config_directory_ignores_local_env(tmp_path, monkeypatch):
+    """A snapshot-bound WFO must use only its frozen YAML directory."""
+    captured: dict = {}
+
+    def fake_get_config(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("scripts.optimize.get_config", fake_get_config)
+
+    _load_optimization_config(str(tmp_path))
+
+    assert captured["args"] == (tmp_path,)
+    assert captured["kwargs"] == {"env_file": None, "force_reload": True}
+
+
+def test_snapshot_wfo_recap_cannot_claim_live_eligibility():
+    assert _recap_eligibility_label(True, snapshot_bound=True) == "RESEARCH ONLY"
+    assert _recap_eligibility_label(True, snapshot_bound=False) == "GRADE CANDIDATE"
+    assert _recap_eligibility_label(False, snapshot_bound=True) == "X"
 
 
 def _make_candle(
@@ -287,6 +316,36 @@ class TestDSR:
     def test_expected_max_sharpe(self):
         ems = OverfitDetector._expected_max_sharpe(700)
         assert ems > 2.0  # sqrt(2*log(700)) ≈ 3.6
+        scaled = OverfitDetector._expected_max_sharpe(700, 100)
+        assert scaled == pytest.approx(ems / np.sqrt(99))
+        assert scaled < 1.0
+
+    def test_full_analysis_uses_trade_scale_not_annualized_headline(self, monkeypatch):
+        trades = [_make_trade((-1) ** i * 5.0 + 1.0, i) for i in range(40)]
+        detector = OverfitDetector()
+        monkeypatch.setattr(
+            detector, "parameter_stability",
+            lambda *args, **kwargs: StabilityResult(
+                stability_map={}, overall_stability=1.0, cliff_params=[],
+            ),
+        )
+        report = detector.full_analysis(
+            trades=trades,
+            observed_sharpe=99.0,
+            n_distinct_combos=50,
+            strategy_name="grid_atr",
+            symbol="BTC/USDT",
+            optimal_params={},
+            candles_by_tf={},
+            bt_config=BacktestConfig(
+                symbol="BTC/USDT",
+                start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end_date=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            ),
+        )
+        raw = detector._sharpe_from_returns(detector._trade_returns(trades))
+        assert report.dsr.observed_sharpe == pytest.approx(raw)
+        assert report.monte_carlo.real_sharpe == pytest.approx(raw)
 
     def test_dsr_oos_sharpe_not_inflated_by_is(self):
         """Quand OOS > IS, le DSR avec OOS Sharpe ne doit pas être artificiellement bas.
@@ -984,3 +1043,68 @@ class TestApplyFromDb:
         # Pas de clés assets_added/assets_removed dans le résultat
         assert "assets_added" not in result
         assert "assets_removed" not in result
+from scripts.optimize import _get_done_assets
+
+
+def test_resume_is_scoped_to_exact_snapshot(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "resume.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """CREATE TABLE optimization_results (
+               strategy_name TEXT, asset TEXT, is_latest INTEGER,
+               manifest_hash TEXT, result_status TEXT
+        )"""
+    )
+    conn.executemany(
+        "INSERT INTO optimization_results VALUES (?, ?, ?, ?, ?)",
+        [
+            ("grid_atr", "SOL/USDT", 0, "snapshot-a", "RESEARCH_ONLY"),
+            ("grid_atr", "ADA/USDT", 1, "snapshot-b", "RESEARCH_ONLY"),
+            ("grid_atr", "XRP/USDT", 1, None, "legacy"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    assert _get_done_assets("grid_atr", db_path, "snapshot-a") == {"SOL/USDT"}
+    assert _get_done_assets("grid_atr", db_path, "snapshot-b") == {"ADA/USDT"}
+
+
+def test_aligned_universe_schedule_is_deterministic_and_non_overlapping():
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    selection = UniverseSelectionSpec(
+        universe_symbols=["BBB/USDT", "AAA/USDT"],
+        calendar_start=start,
+        is_window_days=10,
+        embargo_days=2,
+        oos_window_days=10,
+        step_days=10,
+    )
+    first = build_aligned_wfo_windows(selection, start + timedelta(days=42))
+    second = build_aligned_wfo_windows(selection, start + timedelta(days=42))
+
+    assert first == second
+    assert first == [
+        (start, start + timedelta(days=10), start + timedelta(days=12), start + timedelta(days=22)),
+        (start + timedelta(days=10), start + timedelta(days=20), start + timedelta(days=22), start + timedelta(days=32)),
+        (start + timedelta(days=20), start + timedelta(days=30), start + timedelta(days=32), start + timedelta(days=42)),
+    ]
+    assert all(current[2] >= previous[3] for previous, current in zip(first, first[1:]))
+
+
+def test_gap_excludes_only_the_intersecting_global_wfo_window():
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    windows = [
+        (start, start + timedelta(hours=10), start + timedelta(hours=10), start + timedelta(hours=20)),
+        (start + timedelta(hours=20), start + timedelta(hours=30), start + timedelta(hours=30), start + timedelta(hours=40)),
+    ]
+    candles = [
+        _make_candle(100, start + timedelta(hours=index), tf=TimeFrame.H1)
+        for index in range(41)
+        if index != 13
+    ]
+
+    available = _windows_with_complete_coverage(windows, candles, "1h")
+
+    assert available == [windows[1]]

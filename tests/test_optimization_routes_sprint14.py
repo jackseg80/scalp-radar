@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import asynccontextmanager
 
 import pytest
-import pytest_asyncio
 from fastapi.testclient import TestClient
 
 
@@ -94,8 +94,8 @@ def temp_db(tmp_path):
     return db_path
 
 
-@pytest_asyncio.fixture
-async def client(temp_db, monkeypatch):
+@pytest.fixture
+def client(temp_db, monkeypatch):
     """TestClient FastAPI avec JobManager mocké (sans lifespan complet)."""
     from backend.optimization.job_manager import JobManager
     from fastapi import FastAPI
@@ -105,8 +105,20 @@ async def client(temp_db, monkeypatch):
     import backend.api.optimization_routes as opt_routes
     monkeypatch.setattr(opt_routes, "_get_db_path", lambda: temp_db)
 
-    # App test minimaliste (pas de lifespan complet)
-    test_app = FastAPI()
+    # JobManager, routes et cleanup doivent vivre sur la même event loop que
+    # TestClient. Ces tests couvrent la couche API/queue, pas l'exécution WFO :
+    # le worker n'est donc pas démarré, ce qui garde aussi la limite de queue
+    # déterministe et évite tout subprocess d'optimisation parasite.
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        mgr = JobManager(db_path=temp_db, ws_broadcast=None)
+        app.state.job_manager = mgr
+        try:
+            yield
+        finally:
+            await mgr.stop()
+
+    test_app = FastAPI(lifespan=lifespan)
 
     # Désactiver l'auth pour les tests
     from backend.api.executor_routes import verify_executor_key
@@ -114,17 +126,8 @@ async def client(temp_db, monkeypatch):
 
     test_app.include_router(router)
 
-    # Créer et démarrer un JobManager
-    mgr = JobManager(db_path=temp_db, ws_broadcast=None)
-    await mgr.start()
-    test_app.state.job_manager = mgr
-
-    # TestClient synchrone
     with TestClient(test_app) as test_client:
         yield test_client
-
-    # Cleanup
-    await mgr.stop()
 
 
 # ─── Tests POST /api/optimization/run ─────────────────────────────────────

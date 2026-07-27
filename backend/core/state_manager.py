@@ -154,6 +154,12 @@ class StateManager:
                             "direction": level.direction.value,
                             "size_fraction": level.size_fraction,
                             "created_at": order.created_at.isoformat(),
+                            "expires_at": (
+                                order.expires_at.isoformat()
+                                if order.expires_at else None
+                            ),
+                            "remaining_fraction": order.remaining_fraction,
+                            "intent_id": order.intent_id,
                         })
                 if serialized_orders:
                     runner_state["pending_grid_orders"] = serialized_orders

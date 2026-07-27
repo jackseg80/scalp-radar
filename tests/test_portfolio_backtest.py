@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -31,12 +32,56 @@ from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.core.models import Candle, Direction, MarketRegime, TimeFrame
 from backend.core.position_manager import PositionManagerConfig
+from backend.core.position_manager import TradeResult
 from backend.optimization import create_strategy_with_params
 from backend.strategies.base_grid import GridPosition
 from backend.strategies.grid_atr import GridATRStrategy
+from scripts.portfolio_backtest import _load_backtest_config, _should_push_server
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
+
+
+def test_portfolio_server_push_is_explicit_and_never_certification():
+    assert _should_push_server(requested=False, snapshot_manifest=None) is False
+    assert _should_push_server(requested=True, snapshot_manifest=None) is True
+    assert _should_push_server(
+        requested=True, snapshot_manifest={"snapshot_id": "snap-1"},
+    ) is False
+
+
+def test_isolated_config_directory_ignores_local_env(tmp_path, monkeypatch):
+    """A frozen configuration replay must not inherit the developer's .env."""
+    captured: dict = {}
+
+    def fake_get_config(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr("scripts.portfolio_backtest.get_config", fake_get_config)
+
+    _load_backtest_config(str(tmp_path))
+
+    assert captured["args"] == (tmp_path,)
+    assert captured["kwargs"] == {"env_file": None, "force_reload": True}
+
+
+def test_default_config_directory_keeps_existing_dotenv_behaviour(monkeypatch):
+    """The normal developer workflow retains its historical .env loading."""
+    captured: dict = {}
+
+    def fake_get_config(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr("scripts.portfolio_backtest.get_config", fake_get_config)
+
+    _load_backtest_config("config")
+
+    assert captured["args"] == (Path("config"),)
+    assert captured["kwargs"] == {"env_file": ".env", "force_reload": True}
 
 
 def _make_candle(
@@ -118,6 +163,7 @@ def _make_mock_config(n_assets: int = 2) -> MagicMock:
     config.risk.position.default_leverage = 15
     config.risk.position.max_leverage = 30
     config.risk.kill_switch.max_session_loss_percent = 5.0
+    config.risk.kill_switch.grid_max_session_loss_percent = 25.0
     config.risk.kill_switch.max_daily_loss_percent = 10.0
     config.risk.kill_switch.global_max_loss_pct = 30.0
     config.risk.kill_switch.global_window_hours = 24
@@ -468,6 +514,43 @@ class TestKillSwitch:
         events = backtester._check_kill_switch(snaps)
         assert len(events) >= 1
         assert events[0]["drawdown_pct"] >= 30.0
+
+    def test_shared_grid_session_kill_uses_account_capital(self):
+        """A 25% grid stop is account-scoped, never one threshold per asset."""
+        config = _make_mock_config(n_assets=1)
+        engine = PortfolioBacktester(
+            config, initial_capital=1_000.0, assets=["AAA/USDT"],
+        )
+        engine._portfolio_risk_manager.set_initial_capital(1_000.0)
+        runner, _ = _make_runner_with_indicator_engine("AAA/USDT", config, 1_000.0)
+        runner._pending_grid_orders["AAA/USDT"] = [MagicMock()]
+        runners = {"grid_atr:AAA/USDT": runner}
+        ts = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        trade = TradeResult(
+            direction=Direction.LONG,
+            entry_price=100.0,
+            exit_price=75.0,
+            quantity=10.0,
+            entry_time=ts - timedelta(hours=1),
+            exit_time=ts,
+            gross_pnl=-250.0,
+            fee_cost=10.0,
+            slippage_cost=0.0,
+            net_pnl=-260.0,
+            exit_reason="sl_global",
+            market_regime=MarketRegime.RANGING,
+        )
+
+        engine._record_closed_trade_for_account("grid_atr:AAA/USDT", trade, runners)
+
+        assert engine._portfolio_risk_manager.is_kill_switch_triggered is True
+        assert engine._account_kill_events[0]["trigger_type"] == "session_loss"
+        assert engine._account_kill_events[0]["drawdown_pct"] == pytest.approx(26.0)
+        assert runner._account_entries_frozen is True
+        assert runner._pending_grid_orders == {}
+        # The runner's local 25% rule is deliberately not used here: its
+        # initial allocation is not the account capital used by live risk.
+        assert runner._kill_switch_triggered is False
 
 
 # ─── Tests Force Close ─────────────────────────────────────────────────────
@@ -1029,6 +1112,7 @@ class TestMultiStrategyCreatesRunners:
             assert r._capital == 5000.0
             assert r._initial_capital == 5000.0
             assert r._portfolio_mode is True
+            assert r._chronological_execution is True
 
 
 class TestMultiStrategySameSymbolDispatched:
@@ -1109,6 +1193,96 @@ class TestMultiStrategyCapitalSplit:
         for r in runners.values():
             assert r._capital == 2500.0
             assert r._initial_capital == 2500.0
+            assert r._nb_assets == 2
+
+
+class TestAccountScopedPortfolioRisk:
+    def _five_runner_backtester(self):
+        config = _make_mock_config(n_assets=5)
+        config.risk.max_live_grids = 4
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            multi_strategies=[(
+                "grid_atr",
+                [f"ASSET{i}/USDT" for i in range(5)],
+            )],
+        )
+        runners, _ = backtester._create_runners(
+            backtester._multi_strategies, 2_000.0,
+        )
+        return backtester, runners
+
+    def test_max_live_grids_counts_pending_and_records_rejection(self):
+        from backend.backtesting.simulator import PendingGridOrder
+        from backend.strategies.base_grid import GridLevel
+
+        backtester, runners = self._five_runner_backtester()
+        timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for key in list(runners)[:4]:
+            symbol = key.split(":", 1)[1]
+            runners[key]._pending_grid_orders[symbol] = [
+                PendingGridOrder(
+                    level=GridLevel(
+                        index=0, entry_price=100.0,
+                        direction=Direction.LONG, size_fraction=1 / 3,
+                    ),
+                    created_at=timestamp,
+                )
+            ]
+
+        fifth_key = list(runners)[4]
+        assert backtester._can_plan_new_grid(fifth_key, runners) is False
+        assert backtester._order_rejections[f"{fifth_key}:max_live_grids"] == 1
+
+        first_key = list(runners)[0]
+        runners[first_key]._pending_grid_orders.clear()
+        assert backtester._can_plan_new_grid(fifth_key, runners) is True
+
+    def test_shared_cash_rebalances_without_changing_account_equity(self):
+        backtester, runners = self._five_runner_backtester()
+        target = list(runners.values())[0]
+        donor = list(runners.values())[1]
+        target._capital = 10.0
+        before = backtester._account_equity(runners)
+
+        assert backtester._ensure_runner_cash(runners, target, 500.0) is True
+        assert target._capital == pytest.approx(500.0)
+        assert donor._capital < donor._initial_capital
+        assert backtester._account_equity(runners) == pytest.approx(before)
+
+    def test_account_equity_compounds_sizing_callback(self):
+        backtester, runners = self._five_runner_backtester()
+        runner = next(iter(runners.values()))
+        assert runner._portfolio_account_equity() == pytest.approx(10_000.0)
+        runner._capital += 1_000.0
+        assert runner._portfolio_account_equity() == pytest.approx(11_000.0)
+
+    def test_simultaneous_sl_cap_does_not_expand_after_compounding(self):
+        backtester, runners = self._five_runner_backtester()
+        runner_key = next(iter(runners))
+        runner = runners[runner_key]
+        symbol = runner_key.split(":", 1)[1]
+        runner._capital += 20_000.0  # Equity is now much larger than the account at start.
+        runner._positions[symbol] = [
+            GridPosition(
+                level=0, direction=Direction.LONG, entry_price=100.0,
+                quantity=147.5, entry_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                entry_fee=0.0,
+            )
+        ]
+        candidate = GridPosition(
+            level=1, direction=Direction.LONG, entry_price=100.0,
+            quantity=5.0, entry_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_fee=0.0,
+        )
+        # Existing loss = 2,950$ (20% SL); candidate would cross the fixed
+        # 3,000$ limit even though current equity is 30,000$.
+        allowed, reason = backtester._pre_trade_risk(
+            runner_key, symbol, candidate, False, runners,
+        )
+        assert allowed is False
+        assert reason == "simultaneous_sl_loss"
 
 
 class TestLeverageFromTopLevelConfig:
@@ -1175,6 +1349,33 @@ class TestLeverageFromTopLevelConfig:
         runner = runners["grid_atr:AAA/USDT"]
         # per_asset leverage=5 override top-level leverage=3
         assert runner._strategy._config.leverage == 5
+
+    def test_portfolio_leverage_override_updates_runner_risk_and_sizing(self):
+        """A declared scenario leverage must govern every runner component."""
+        config = _make_mock_config(n_assets=1)
+        config.strategies.grid_atr = GridATRConfig(
+            leverage=6,
+            ma_period=14,
+            atr_period=14,
+            atr_multiplier_start=2.0,
+            atr_multiplier_step=1.0,
+            num_levels=3,
+            sl_percent=20.0,
+            per_asset={},
+        )
+        backtester = PortfolioBacktester(
+            config=config,
+            initial_capital=10_000.0,
+            multi_strategies=[("grid_atr", ["AAA/USDT"])],
+            leverage=2,
+        )
+
+        runners, _ = backtester._create_runners(backtester._multi_strategies, 5000.0)
+        runner = runners["grid_atr:AAA/USDT"]
+
+        assert runner._leverage == 2
+        assert runner._gpm._config.leverage == 2
+        assert runner._strategy._config.leverage == 2
 
 
 class TestSingleStrategyBackwardCompatible:
@@ -1330,8 +1531,8 @@ class TestDetectMaxDays:
         assert 290 <= days <= 300
 
     @pytest.mark.asyncio
-    async def test_detect_fallback_exchange(self, tmp_path):
-        """Si binance n'a pas l'asset, tombe sur bitget."""
+    async def test_detect_does_not_fallback_exchange(self, tmp_path):
+        """Une source absente reste absente au lieu de changer silencieusement."""
         import aiosqlite
 
         db_path = str(tmp_path / "test.db")
@@ -1366,9 +1567,8 @@ class TestDetectMaxDays:
             config, "grid_atr", "binance", db_path
         )
 
-        # Trouvé via fallback bitget
-        assert detail["AAA/USDT"] >= 399
-        assert days >= 390
+        assert detail["AAA/USDT"] == 0
+        assert days == 90
 
     @pytest.mark.asyncio
     async def test_detect_missing_asset_zero_days(self, tmp_path):
@@ -1587,6 +1787,19 @@ class TestKillSwitchFromConfig:
 
         assert ks_pct == 45.0, f"attendu 45.0, got {ks_pct}"
         assert ks_hours == 48, f"attendu 48, got {ks_hours}"
+
+
+class TestPortfolioRuntimeGuard:
+    def test_windows_python_313_is_blocked_but_312_is_supported(self):
+        from scripts.portfolio_backtest import _long_replay_runtime_error
+
+        error = _long_replay_runtime_error("win32", (3, 13, 13))
+        assert error is not None
+        assert "python313.dll" in error
+        assert "--python 3.12" in error
+
+        assert _long_replay_runtime_error("win32", (3, 12, 13)) is None
+        assert _long_replay_runtime_error("linux", (3, 13, 13)) is None
 
     def test_ks_cli_overrides_yaml(self):
         """Avec --kill-switch CLI, la valeur CLI prend priorité sur risk.yaml."""

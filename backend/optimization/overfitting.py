@@ -115,11 +115,16 @@ class OverfitDetector:
         main_tf: str | None = None,
     ) -> OverfitReport:
         """Analyse complète : Monte Carlo + DSR + stabilité + convergence."""
+        # DSR/Monte-Carlo operate on per-trade returns.  The WFO headline
+        # Sharpe is annualized on a different clock and cannot be compared to
+        # their null distribution.  Recompute one coherent, non-annualized SR
+        # from the exact external-OOS trades used by both tests.
+        raw_oos_sharpe = self._sharpe_from_returns(self._trade_returns(trades))
         mc = self.monte_carlo_block_bootstrap(
-            trades, seed=seed, observed_sharpe=observed_sharpe,
+            trades, seed=seed, observed_sharpe=raw_oos_sharpe,
         )
         dsr = self.deflated_sharpe_ratio(
-            observed_sharpe, n_distinct_combos, len(trades),
+            raw_oos_sharpe, n_distinct_combos, len(trades),
             trades,
         )
         stability = self.parameter_stability(
@@ -245,8 +250,8 @@ class OverfitDetector:
         skewness = float(self._skewness(returns))
         kurtosis = float(self._kurtosis(returns))
 
-        # Expected max Sharpe under null (i.i.d. trials)
-        e_max_sr = self._expected_max_sharpe(n_trials)
+        # Expected maximum on the same non-annualized per-observation scale.
+        e_max_sr = self._expected_max_sharpe(n_trials, n_trades)
 
         # PSR avec correction skew/kurtosis
         # Sprint 56 fix: _kurtosis() retourne le raw kurtosis (4e moment), pas excess.
@@ -465,15 +470,25 @@ class OverfitDetector:
         return float(np.mean(((arr - mean) / std) ** 4))
 
     @staticmethod
-    def _expected_max_sharpe(n_trials: int) -> float:
-        """E[max(SR)] sous H0 (approximation Euler-Mascheroni)."""
+    def _expected_max_sharpe(
+        n_trials: int, n_observations: int | None = None,
+    ) -> float:
+        """E[max(SR)] under H0 on a coherent observation scale.
+
+        Without ``n_observations`` this returns the historical maximum-Z
+        helper for compatibility.  DSR scales it by the standard error of a
+        non-annualized Sharpe, ``1/sqrt(n-1)``.
+        """
         if n_trials <= 1:
             return 0.0
         gamma = 0.5772156649  # Constante d'Euler-Mascheroni
-        return float(
+        expected_z = float(
             np.sqrt(2 * np.log(n_trials))
             - (np.log(np.pi) + gamma) / (2 * np.sqrt(2 * np.log(n_trials)))
         )
+        if n_observations is None:
+            return expected_z
+        return expected_z / np.sqrt(max(1, n_observations - 1))
 
 
 def _norm_cdf(x: float) -> float:

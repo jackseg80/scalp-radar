@@ -16,7 +16,7 @@ from backend.backtesting.simulator import (
 )
 from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
-from backend.core.models import Candle, Direction, TimeFrame
+from backend.core.models import Candle, Direction, ExecutionSpec, OrderStatus, TimeFrame
 from backend.core.position_manager import PositionManagerConfig
 from backend.core.state_manager import StateManager
 from backend.strategies.base_grid import GridLevel, GridPosition
@@ -308,6 +308,7 @@ def test_legacy_intrabar_state_is_not_restored_into_chronological_runner():
 @pytest.mark.asyncio
 async def test_funding_is_included_in_realized_pnl():
     runner = _runner()
+    runner._data_engine.get_funding_rate.return_value = 0.01
     runner._positions["BTC/USDT"] = [
         GridPosition(
             level=0,
@@ -330,7 +331,111 @@ async def test_funding_is_included_in_realized_pnl():
         _candle(settlement, high=101.0, low=99.0),
     )
 
-    # Fallback funding = 0.01% de 1000$ = 0.10$.
+    # Funding Bitget explicite = 0.01% de 1000$ = 0.10$.
     assert runner._total_funding_cost == pytest.approx(0.10)
     assert runner._realized_pnl == pytest.approx(-0.10)
     assert runner.get_status()["net_pnl"] == pytest.approx(-0.10)
+
+
+@pytest.mark.asyncio
+async def test_missing_funding_is_explicit_and_never_invented():
+    runner = _runner()
+    runner._positions["BTC/USDT"] = [
+        GridPosition(
+            level=0,
+            direction=Direction.LONG,
+            entry_price=100.0,
+            quantity=10.0,
+            entry_time=BASE_TS - timedelta(hours=1),
+            entry_fee=0.6,
+        ),
+    ]
+    runner._planned_grid_exits["BTC/USDT"] = PlannedGridExit(
+        tp_price=150.0,
+        sl_price=50.0,
+        created_at=BASE_TS,
+    )
+
+    await runner.on_candle(
+        "BTC/USDT", "1h",
+        _candle(BASE_TS.replace(hour=16), high=101.0, low=99.0),
+    )
+
+    assert runner._total_funding_cost == 0.0
+    assert runner._missing_funding_events == 1
+
+
+@pytest.mark.asyncio
+async def test_limit_order_persists_within_drift_and_replaces_above_threshold():
+    runner = _runner()
+    await runner.on_candle("BTC/USDT", "1h", _candle(BASE_TS))
+    original = runner._pending_grid_orders["BTC/USDT"][0]
+
+    runner._strategy.compute_grid.return_value = [GridLevel(
+        index=0,
+        entry_price=95.15,  # +0.158%: sous le seuil de 0.2%
+        direction=Direction.LONG,
+        size_fraction=0.5,
+    )]
+    await runner.on_candle(
+        "BTC/USDT", "1h", _candle(BASE_TS + timedelta(hours=1), low=99.0),
+    )
+    retained = runner._pending_grid_orders["BTC/USDT"][0]
+    assert retained.intent_id == original.intent_id
+    assert retained.created_at == original.created_at
+
+    runner._strategy.compute_grid.return_value = [GridLevel(
+        index=0,
+        entry_price=96.0,
+        direction=Direction.LONG,
+        size_fraction=0.5,
+    )]
+    await runner.on_candle(
+        "BTC/USDT", "1h", _candle(BASE_TS + timedelta(hours=2), low=99.0),
+    )
+    replacement = runner._pending_grid_orders["BTC/USDT"][0]
+    assert replacement.intent_id != original.intent_id
+    assert any(
+        event.status == OrderStatus.CANCELLED and event.reason == "price_drift"
+        for event in runner._fill_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_fill_keeps_remainder_and_does_not_recreate_filled_level():
+    runner = _runner()
+    runner._execution_spec = ExecutionSpec(
+        partial_fill_probability=1.0,
+        grid_order_expiry_minutes=180,
+    )
+    await runner.on_candle("BTC/USDT", "1h", _candle(BASE_TS))
+
+    await runner.on_candle(
+        "BTC/USDT", "1h", _candle(BASE_TS + timedelta(hours=1), low=94.0),
+    )
+    first_qty = runner._positions["BTC/USDT"][0].quantity
+    pending = runner._pending_grid_orders["BTC/USDT"]
+    assert len(pending) == 1
+    assert pending[0].remaining_fraction == pytest.approx(0.5)
+    assert runner._fill_events[-1].status == OrderStatus.PARTIALLY_FILLED
+
+    await runner.on_candle(
+        "BTC/USDT", "1h", _candle(BASE_TS + timedelta(hours=2), low=94.0),
+    )
+    assert len(runner._positions["BTC/USDT"]) == 1
+    assert runner._positions["BTC/USDT"][0].quantity > first_qty
+    assert runner._pending_grid_orders["BTC/USDT"][0].remaining_fraction == pytest.approx(0.25)
+
+
+@pytest.mark.asyncio
+async def test_latency_does_not_drop_unactivated_order():
+    runner = _runner()
+    runner._execution_spec = ExecutionSpec(latency_ms=90 * 60 * 1000)
+    await runner.on_candle("BTC/USDT", "1h", _candle(BASE_TS))
+    intent_id = runner._pending_grid_orders["BTC/USDT"][0].intent_id
+
+    await runner.on_candle(
+        "BTC/USDT", "1h", _candle(BASE_TS + timedelta(hours=1), low=94.0),
+    )
+    assert runner._positions.get("BTC/USDT", []) == []
+    assert runner._pending_grid_orders["BTC/USDT"][0].intent_id == intent_id

@@ -218,8 +218,9 @@ class TestGridPositionManager:
         reason, price = gpm.check_global_tp_sl(positions, candle, tp_price=110.0, sl_price=90.0)
 
         assert reason == "sl_global"
-        # SL gap slippage (sprint 56) : gap = 90 - 89 = 1, exit = 90 - 0.5*1 = 89.5
-        assert abs(price - 89.5) < 1e-6
+        # L'open est au-dessus du stop : le low confirme le trigger, mais le
+        # wick post-déclenchement n'est pas utilisé comme prix de fill.
+        assert abs(price - 90.0) < 1e-6
 
     def test_compute_grid_state(self):
         """Calcul de l'état agrégé."""
@@ -477,8 +478,8 @@ class TestMultiPositionEngine:
         assert result.strategy_name == "envelope_dca"
         assert result.final_capital > 0
 
-    def test_slippage_on_sl(self):
-        """Le slippage est appliqué sur SL (taker) mais pas sur TP (maker)."""
+    def test_slippage_on_all_market_exits(self):
+        """TP et SL globaux ferment tous deux au market en live."""
         from backend.core.grid_position_manager import GridPositionManager
         from backend.strategies.base_grid import GridPosition
 
@@ -488,18 +489,19 @@ class TestMultiPositionEngine:
 
         positions = [GridPosition(0, Direction.LONG, 100.0, 10.0, ts, 0.06)]
 
-        # TP : pas de slippage
+        # TP market
         trade_tp = gpm.close_all_positions(
             positions, 110.0, ts, "tp_global", MarketRegime.RANGING,
         )
 
-        # SL : avec slippage
+        # SL market
         trade_sl = gpm.close_all_positions(
             positions, 110.0, ts, "sl_global", MarketRegime.RANGING,
         )
 
-        # SL a plus de coûts (slippage + taker fee)
-        assert trade_sl.net_pnl < trade_tp.net_pnl
+        assert trade_sl.net_pnl == pytest.approx(trade_tp.net_pnl)
+        assert trade_tp.slippage_cost > 0
+        assert trade_sl.slippage_cost > 0
 
     def test_engine_respects_strategy_leverage(self):
         """Le BacktestConfig utilise le leverage de la stratégie."""

@@ -354,8 +354,8 @@ class TestEntrySlippage:
 class TestSLGapSlippage:
     """SL fill doit être ajusté proportionnellement au gap."""
 
-    def test_sl_gap_worsens_exit_price_long(self):
-        """LONG: si low << sl_price, exit_price doit être pire que sl_price."""
+    def test_intrabar_wick_fills_server_stop_at_trigger(self):
+        """Un extrême après déclenchement ne devient jamais le prix de fill."""
         from backend.core.grid_position_manager import GridPositionManager
         from backend.core.position_manager import PositionManagerConfig
         from backend.core.models import Candle
@@ -375,7 +375,8 @@ class TestSLGapSlippage:
             entry_fee=0.06,
         )]
 
-        # SL à 95, mais low = 90 (gap de 5)
+        # Open au-dessus du SL puis flash-crash intrabar : le stop server-side
+        # est déclenché à 95, pas au milieu du wick à 90.
         candle = Candle(
             timestamp=datetime(2023, 1, 2, tzinfo=timezone.utc),
             open=96.0, high=97.0, low=90.0, close=91.0,
@@ -386,8 +387,38 @@ class TestSLGapSlippage:
             positions, candle, tp_price=float("nan"), sl_price=95.0,
         )
         assert reason == "sl_global"
-        # Exit price = 95 - 0.5 * (95 - 90) = 92.5 (pire que SL)
-        assert exit_price < 95.0, f"Gap slippage devrait empirer le fill, got {exit_price}"
+        assert abs(exit_price - 95.0) < 1e-6
+
+    def test_opening_gap_worsens_exit_price_long(self):
+        """LONG: un open déjà sous le SL utilise le gap observable."""
+        from backend.core.grid_position_manager import GridPositionManager
+        from backend.core.position_manager import PositionManagerConfig
+        from backend.core.models import Candle
+        from backend.strategies.base_grid import GridPosition
+
+        config = PositionManagerConfig(
+            leverage=5, maker_fee=0.0002, taker_fee=0.0006,
+            slippage_pct=0.0005, high_vol_slippage_mult=2.0,
+            max_risk_per_trade=0.02,
+        )
+        mgr = GridPositionManager(config)
+        positions = [GridPosition(
+            level=0, direction=Direction.LONG,
+            entry_price=100.0, quantity=10.0,
+            entry_time=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            entry_fee=0.06,
+        )]
+        candle = Candle(
+            timestamp=datetime(2023, 1, 2, tzinfo=timezone.utc),
+            open=90.0, high=97.0, low=89.0, close=91.0,
+            volume=1000.0, symbol="BTC/USDT", timeframe="1h",
+        )
+
+        reason, exit_price = mgr.check_global_tp_sl(
+            positions, candle, tp_price=float("nan"), sl_price=95.0,
+        )
+
+        assert reason == "sl_global"
         assert abs(exit_price - 92.5) < 1e-6
 
     def test_sl_no_gap_exact_fill(self):
