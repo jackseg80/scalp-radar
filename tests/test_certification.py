@@ -30,6 +30,8 @@ def _passing_backtest() -> dict:
         "evaluation_scope": "external_oos",
         "execution_scenario": "nominal",
         "execution_timeframe_used": "1m",
+        "execution_candles_processed": 1000,
+        "intrabar_max_gap_bars": 0,
         "execution_spec_json": json.dumps({
             "calibration_id": "bitget-observations-1",
             "calibration_sample_size": 100,
@@ -57,6 +59,7 @@ def _passing_snapshot() -> dict:
         "metadata": {
             "intrabar_missing": [],
             "execution_timeframe": "1m",
+            "max_gap_bars": 1,
         },
     }
 
@@ -164,6 +167,28 @@ def test_having_1m_data_without_consuming_it_blocks_certification():
     )
     assert status == CertificationStatus.RESEARCH_ONLY
     assert "intrabar_execution_used" in details["failed"]
+
+
+def test_intrabar_label_without_broker_events_blocks_certification():
+    backtest = _passing_backtest()
+    backtest["execution_candles_processed"] = 0
+    status, details = evaluate_historical_gates(
+        backtest, _passing_robustness(), _passing_snapshot(),
+        _passing_fresh_backtests(),
+    )
+    assert status == CertificationStatus.RESEARCH_ONLY
+    assert "intrabar_broker_events" in details["failed"]
+
+
+def test_intrabar_gap_above_snapshot_bound_blocks_certification():
+    backtest = _passing_backtest()
+    backtest["intrabar_max_gap_bars"] = 2
+    status, details = evaluate_historical_gates(
+        backtest, _passing_robustness(), _passing_snapshot(),
+        _passing_fresh_backtests(),
+    )
+    assert status == CertificationStatus.RESEARCH_ONLY
+    assert "intrabar_gap_bound" in details["failed"]
 
 
 @pytest.mark.parametrize("field", ["evaluation_scope", "execution_scenario"])

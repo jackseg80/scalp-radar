@@ -169,9 +169,9 @@ class PortfolioResult:
 
     # Resolution réellement consommée par le broker simulé.  La présence de
     # bougies 1m dans le snapshot ne prouve pas qu'elles ont été utilisées.
-    # Le moteur portfolio historique travaille encore sur les barres signal 1h
-    # et doit donc rester non certifiable jusqu'à l'intégration intrabar.
     execution_timeframe_used: str = "1h"
+    execution_candles_processed: int = 0
+    intrabar_max_gap_bars: int = 0
 
     # IS-only asset availability, ranks and selections for external OOS
     # replays.  Persisted separately from the immutable manifest because it is
@@ -251,6 +251,9 @@ class PortfolioBacktester:
         self._leverage_override = leverage  # None = utilise le leverage de strategies.yaml
         self._regime_signal = regime_signal  # Sprint 50b : leverage dynamique
         self._execution_spec = execution_spec or ExecutionSpec()
+        self._execution_timeframe_used = "1h"
+        self._execution_candles_processed = 0
+        self._intrabar_max_gap_bars = 0
 
         # Multi-stratégie : liste de (strategy_name, [symbols])
         if multi_strategies:
@@ -320,6 +323,9 @@ class PortfolioBacktester:
         self._account_kill_events = []
         self._order_rejections.clear()
         self._kill_freeze_until = None
+        self._execution_timeframe_used = "1h"
+        self._execution_candles_processed = 0
+        self._intrabar_max_gap_bars = 0
 
         # Compter le nombre total de runners (pas de symbols uniques)
         n_total_runners = sum(len(syms) for _, syms in self._multi_strategies)
@@ -343,10 +349,13 @@ class PortfolioBacktester:
             raise ValueError("warmup_start must be <= start")
         query_end = end - timedelta(microseconds=1) if end_exclusive else end
         candles_by_symbol = await self._load_candles(db, load_start, query_end)
+        execution_candles_by_symbol = await self._load_execution_candles(
+            db, start, query_end,
+        )
         funding_records = await asyncio.gather(*[
             db.get_funding_rates(
                 symbol,
-                exchange=self._exchange,
+                exchange=self._execution_spec.exchange,
                 start_ts=int(start.timestamp() * 1000),
                 end_ts=int(query_end.timestamp() * 1000),
             )
@@ -431,7 +440,7 @@ class PortfolioBacktester:
         snapshots, realized_trades, liquidation_event, leverage_changes = (
             await self._simulate(
                 runners, indicator_engine, merged, warmup_ends, progress_callback,
-                funding_provider,
+                funding_provider, execution_candles_by_symbol,
             )
         )
 
@@ -489,6 +498,77 @@ class PortfolioBacktester:
                 )
             else:
                 logger.warning("  {} : aucune candle", symbol)
+        return result
+
+    async def _load_execution_candles(
+        self,
+        db: Database,
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, list[Candle]]:
+        """Load and fail-closed validate the frozen broker timeframe."""
+        timeframe = self._execution_spec.execution_timeframe
+        timeframe_value = timeframe.value
+        all_candles = await asyncio.gather(*[
+            db.get_candles(
+                symbol,
+                timeframe_value,
+                start,
+                end,
+                limit=10_000_000,
+                exchange=self._execution_spec.exchange,
+            )
+            for symbol in self._assets
+        ])
+        result: dict[str, list[Candle]] = {}
+        missing: list[str] = []
+        coverage_errors: list[str] = []
+        step = timedelta(milliseconds=timeframe.to_milliseconds())
+        expected_first = timeframe.floor_timestamp(start)
+        expected_last = timeframe.floor_timestamp(end)
+        max_gap_bars = 0
+        for symbol, candles in zip(self._assets, all_candles):
+            if not candles:
+                missing.append(symbol)
+                continue
+            if candles[0].timestamp > expected_first:
+                coverage_errors.append(
+                    f"{symbol}: starts {candles[0].timestamp.isoformat()} "
+                    f"after {expected_first.isoformat()}"
+                )
+            if candles[-1].timestamp < expected_last:
+                coverage_errors.append(
+                    f"{symbol}: ends {candles[-1].timestamp.isoformat()} "
+                    f"before {expected_last.isoformat()}"
+                )
+            symbol_max_gap = 0
+            for previous, current in zip(candles, candles[1:]):
+                delta = current.timestamp - previous.timestamp
+                if delta <= timedelta(0):
+                    coverage_errors.append(
+                        f"{symbol}: non-monotonic {timeframe_value} timestamps"
+                    )
+                    break
+                gap_bars = max(0, int(delta / step) - 1)
+                symbol_max_gap = max(symbol_max_gap, gap_bars)
+            max_gap_bars = max(max_gap_bars, symbol_max_gap)
+            if symbol_max_gap > 1:
+                coverage_errors.append(
+                    f"{symbol}: max {timeframe_value} gap "
+                    f"{symbol_max_gap} bars > 1"
+                )
+            result[symbol] = candles
+        if missing:
+            coverage_errors.append(
+                f"missing {self._execution_spec.exchange} "
+                f"{timeframe_value}: {', '.join(sorted(missing))}"
+            )
+        if coverage_errors:
+            raise ValueError(
+                "Canonical intrabar execution coverage invalid: "
+                + "; ".join(coverage_errors)
+            )
+        self._intrabar_max_gap_bars = max_gap_bars
         return result
 
     async def _load_btc_candles(
@@ -1110,8 +1190,9 @@ class PortfolioBacktester:
         warmup_ends: dict[str, int],
         progress_callback: Callable[[float, str], None] | None = None,
         funding_provider: HistoricalFundingProvider | None = None,
+        execution_candles_by_symbol: dict[str, list[Candle]] | None = None,
     ) -> tuple[list[PortfolioSnapshot], list[tuple[str, TradeResult]], dict | None, list[dict]]:
-        """Boucle de simulation principale.
+        """Run signal closes and broker candles on one deterministic clock.
 
         Returns:
             (snapshots, trades, liquidation_event or None, leverage_changes)
@@ -1132,42 +1213,75 @@ class PortfolioBacktester:
         candle_count_per_symbol: dict[str, int] = {s: 0 for s in all_symbols}
         last_closes: dict[str, float] = {}
 
-        total = len(merged_candles)
+        intrabar = execution_candles_by_symbol is not None
+        for runner in runners.values():
+            runner._intrabar_execution = intrabar
+        events: list[tuple[datetime, int, str, Candle]] = []
+        if intrabar:
+            for candle in merged_candles:
+                events.append((
+                    candle.timestamp + timedelta(hours=1),
+                    0,
+                    "signal",
+                    candle,
+                ))
+            for candles in execution_candles_by_symbol.values():
+                for candle in candles:
+                    events.append((
+                        candle.timestamp,
+                        1,
+                        "execution",
+                        candle,
+                    ))
+            events.sort(
+                key=lambda event: (
+                    event[0], event[1], event[3].symbol,
+                )
+            )
+        else:
+            events = [
+                (candle.timestamp, 0, "signal", candle)
+                for candle in merged_candles
+            ]
+
+        total = len(events)
         log_interval = max(total // 20, 1)
 
         # --- Init leverage au démarrage (Sprint 50b) ---
-        if self._regime_signal is not None and merged_candles:
-            first_ts = merged_candles[0].timestamp
+        if self._regime_signal is not None and events:
+            first_ts = events[0][0]
             init_lev = self._regime_signal.get_leverage(first_ts)
             for rk, r in runners.items():
                 if r._leverage != init_lev:
                     self._update_runner_leverage(rk, r, init_lev)
 
-        for i, candle in enumerate(merged_candles):
+        for i, (event_time, _priority, event_kind, candle) in enumerate(events):
             symbol = candle.symbol
             runner_keys = symbol_to_runners.get(symbol)
             if not runner_keys:
                 continue
 
             if funding_provider is not None:
-                funding_provider.set_timestamp(candle.timestamp)
+                funding_provider.set_timestamp(event_time)
 
-            candle_count_per_symbol[symbol] += 1
+            if event_kind == "signal":
+                candle_count_per_symbol[symbol] += 1
+                warmup_end = warmup_ends.get(symbol, 0)
+                if candle_count_per_symbol[symbol] <= warmup_end:
+                    continue
+                indicator_engine.update(symbol, "1h", candle)
 
-            # Skip candles de warmup
-            warmup_end = warmup_ends.get(symbol, 0)
-            if candle_count_per_symbol[symbol] <= warmup_end:
-                continue
-
-            # Mettre à jour l'indicator engine AVANT les runners (une seule fois par symbol)
-            indicator_engine.update(symbol, "1h", candle)
-
-            # Dispatcher à TOUS les runners de ce symbol
             for runner_key in runner_keys:
                 runner = runners[runner_key]
                 trades_before = len(runner._trades)
-
-                await runner.on_candle(symbol, "1h", candle)
+                if event_kind == "signal":
+                    await runner.on_candle(symbol, "1h", candle)
+                else:
+                    await runner.on_execution_candle(
+                        symbol,
+                        self._execution_spec.execution_timeframe.value,
+                        candle,
+                    )
 
                 # Collecter les nouveaux trades, re-keyed avec runner_key
                 if len(runner._trades) > trades_before:
@@ -1179,11 +1293,17 @@ class PortfolioBacktester:
                                 runner_key, t[1], runners,
                             )
 
-            last_closes[symbol] = candle.close
+            if event_kind == "execution" or not intrabar:
+                last_closes[symbol] = candle.close
+            if event_kind == "execution":
+                self._execution_candles_processed += 1
+                self._execution_timeframe_used = (
+                    self._execution_spec.execution_timeframe.value
+                )
 
             # --- Leverage dynamique (Sprint 50b) ---
-            if self._regime_signal is not None:
-                target_lev = self._regime_signal.get_leverage(candle.timestamp)
+            if self._regime_signal is not None and event_kind == "signal":
+                target_lev = self._regime_signal.get_leverage(event_time)
                 for rk in runner_keys:
                     r = runners[rk]
                     if r._leverage != target_lev:
@@ -1194,26 +1314,26 @@ class PortfolioBacktester:
                             old_lev = r._leverage
                             self._update_runner_leverage(rk, r, target_lev)
                             leverage_changes.append({
-                                "timestamp": candle.timestamp.isoformat(),
+                                "timestamp": event_time.isoformat(),
                                 "runner": rk,
                                 "old": old_lev,
                                 "new": target_lev,
                                 "regime": self._regime_signal.get_regime_at(
-                                    candle.timestamp
+                                    event_time
                                 ),
                             })
 
             # Snapshot à chaque changement de timestamp
-            next_ts = merged_candles[i + 1].timestamp if i + 1 < total else None
-            if next_ts != candle.timestamp and last_closes:
-                snap = self._take_snapshot(runners, candle.timestamp, last_closes)
+            next_ts = events[i + 1][0] if i + 1 < total else None
+            if next_ts != event_time and last_closes:
+                snap = self._take_snapshot(runners, event_time, last_closes)
                 snapshots.append(snap)
 
                 # Cross-margin liquidation check
                 if snap.is_liquidated:
                     logger.critical(
                         "LIQUIDATION à {} — equity={:.2f}, maintenance={:.2f}, notional={:.2f}",
-                        candle.timestamp, snap.total_equity,
+                        event_time, snap.total_equity,
                         snap.maintenance_margin, snap.total_notional,
                     )
                     for r in runners.values():
@@ -1221,7 +1341,7 @@ class PortfolioBacktester:
                         r._positions = {}
                         r._kill_switch_triggered = True
                     liquidation_event = {
-                        "timestamp": candle.timestamp.isoformat(),
+                        "timestamp": event_time.isoformat(),
                         "equity": snap.total_equity,
                         "maintenance_margin": snap.maintenance_margin,
                         "notional": snap.total_notional,
@@ -1618,7 +1738,15 @@ class PortfolioBacktester:
             ),
             execution_scenario=execution_spec.scenario,
             execution_spec=execution_spec.model_dump(mode="json"),
-            execution_timeframe_used="1h",
+            execution_timeframe_used=getattr(
+                self, "_execution_timeframe_used", "1h",
+            ),
+            execution_candles_processed=getattr(
+                self, "_execution_candles_processed", 0,
+            ),
+            intrabar_max_gap_bars=getattr(
+                self, "_intrabar_max_gap_bars", 0,
+            ),
         )
 
 

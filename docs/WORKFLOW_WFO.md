@@ -16,7 +16,18 @@ This is the authoritative path from historical research to live trading. Grades 
 
 The canonical shared-account replay is available for the nine registered grid strategies. Unsupported mono-position strategies and `trend_follow_daily` fail closed as `RESEARCH_ONLY`; they are never routed through a grid engine.
 
-The current portfolio replay still executes on 1h signal bars. Even when the snapshot contains 1m data, the `intrabar_execution_used` gate therefore fails. This is intentional: no strategy can reach `PAPER_READY` until the canonical broker actually consumes the configured execution timeframe. Research reports remain available meanwhile.
+The canonical grid portfolio now evaluates strategies only on closed 1h
+Binance bars and executes their resulting intents on the frozen Bitget
+intrabar series (normally 1m). The shared event clock processes an hourly
+close before the new minute at the same timestamp. It rejects missing or
+non-monotonic execution data and gaps above the snapshot allowance instead of
+falling back to 1h.
+
+This removes the former infrastructure-wide 1h blocker. It does not make a
+strategy `PAPER_READY` by itself: the snapshot must freeze the consumed 1m
+rows, the replay must persist a positive broker event count within the gap
+bound, and Bitget calibration, parity, coverage and all performance gates must
+still pass.
 
 ## 1. Calibrate execution from Bitget observations
 
@@ -45,6 +56,12 @@ uv run python -m scripts.create_data_snapshot `
 ```
 
 Keep the returned `snapshot_id`. Any later change to code, configuration or frozen market rows makes revalidation fail.
+
+The canonical replay consumes Binance signal rows from `--exchange` and
+Bitget broker rows from the calibrated `ExecutionSpec`. A new certifiable
+snapshot must therefore use `--validate`; an older snapshot containing only
+Binance 1h rows is intentionally rejected rather than supplemented from the
+mutable local database.
 
 If only the canonical portfolio/execution path changes after a completed WFO,
 create a fresh snapshot and pass the prior WFO snapshot explicitly through
@@ -75,11 +92,11 @@ uv run python -m scripts.create_data_snapshot `
   --seed 0
 ```
 
-The command intentionally does not use `--symbols`: the universe must match
+This historical research command intentionally does not use `--symbols`: the universe must match
 `assets.yaml` exactly.  Funding must be backfilled before this snapshot.  The
-first historical result remains `RESEARCH_ONLY` until a real 1m canonical
-broker and Bitget execution calibration are available; this does not weaken
-any historical failure gate.
+closed `grid_atr` result remains `HISTORICAL_FAIL` and must not be rerun or
+retrofitted with new intrabar evidence. Future candidate snapshots must add
+`--calibration-id <CALIBRATION_ID> --execution-timeframe 1m --validate`.
 
 `--max-gap-bars 1` is permitted only for documented, source-confirmed single
 Binance outages.  Affected asset windows are excluded from IS and OOS rather
@@ -216,8 +233,9 @@ Verdict precedence is strict: one failed performance gate is
 `HISTORICAL_FAIL` even if 1m/calibration evidence is absent. If performance is
 complete and passing but calibration, actual 1m consumption, parity or
 coverage is insufficient, the status is `RESEARCH_ONLY`. `PAPER_READY`
-requires all historical and operational gates; the current 1h broker makes it
-unreachable.
+requires all historical and operational gates. The canonical broker can now
+satisfy the consumption gate, but only a qualifying frozen Bitget dataset and
+calibration can provide the remaining operational evidence.
 
 On Windows, any certification that runs missing portfolio evidence must use
 the same isolated Python 3.12 runtime as `portfolio_backtest`:

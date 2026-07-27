@@ -27,7 +27,11 @@ from backend.backtesting.portfolio_db import save_result_sync
 from backend.core.certification import evaluate_certification
 from backend.core.config import get_config
 from backend.core.database import Database
-from backend.core.experiment import canonical_json, revalidate_snapshot
+from backend.core.experiment import (
+    canonical_json,
+    require_snapshot_execution_series,
+    revalidate_snapshot,
+)
 from backend.core.models import ExecutionSpec, UniverseSelectionSpec
 from scripts.portfolio_robustness import analyze_label
 from scripts.portfolio_backtest import _long_replay_runtime_error
@@ -161,6 +165,10 @@ async def main(args: argparse.Namespace) -> int:
         raise ValueError(
             f"Snapshot universe selection targets {selection.strategy_name}, not {args.strategy}"
         )
+    if selection:
+        require_snapshot_execution_series(
+            manifest, set(selection.universe_symbols),
+        )
     args.capital = (
         selection.resolve_portfolio_initial_capital(args.capital)
         if selection else float(args.capital if args.capital is not None else 1000.0)
@@ -201,6 +209,15 @@ async def main(args: argparse.Namespace) -> int:
         require_complete_universe_wfo_rows(rows, selection)
         cutoff = datetime.fromisoformat(str(manifest["cutoff"]).replace("Z", "+00:00"))
         plans = build_external_window_plans(rows, selection=selection, cutoff=cutoff)
+        if not selection:
+            require_snapshot_execution_series(
+                manifest,
+                {
+                    symbol
+                    for plan in plans
+                    for symbol in plan.params_by_asset
+                },
+            )
         primary_leverage = selection.primary_leverage if selection else None
         base_spec = ExecutionSpec.model_validate(manifest["metadata"]["execution_spec"])
         ks_config = getattr(config.risk, "kill_switch", None)

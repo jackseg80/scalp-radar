@@ -150,6 +150,27 @@ def evaluate_historical_gates(
             and backtest.get("execution_timeframe_used") == metadata.get("execution_timeframe"),
             str(metadata.get("execution_timeframe") or "snapshot execution timeframe"),
         ),
+        _gate(
+            "intrabar_broker_events",
+            backtest.get("execution_candles_processed"),
+            (
+                None
+                if backtest.get("execution_candles_processed") is None
+                else int(backtest["execution_candles_processed"]) > 0
+            ),
+            "> 0 broker candles consumed",
+        ),
+        _gate(
+            "intrabar_gap_bound",
+            backtest.get("intrabar_max_gap_bars"),
+            (
+                None
+                if backtest.get("intrabar_max_gap_bars") is None
+                else int(backtest["intrabar_max_gap_bars"])
+                <= int(metadata.get("max_gap_bars", 0))
+            ),
+            f"<= {int(metadata.get('max_gap_bars', 0))} bars",
+        ),
         _gate("fast_canonical_parity", robustness.get("engine_parity_max_delta_pct"),
               None if robustness.get("engine_parity_passed") is None
               else bool(robustness.get("engine_parity_passed")),

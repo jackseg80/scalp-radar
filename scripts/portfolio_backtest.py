@@ -31,7 +31,10 @@ from backend.backtesting.portfolio_engine import (
 from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
-from backend.core.experiment import revalidate_snapshot
+from backend.core.experiment import (
+    require_snapshot_execution_series,
+    revalidate_snapshot,
+)
 from backend.core.models import ExecutionSpec
 
 
@@ -292,6 +295,9 @@ async def main(args: argparse.Namespace) -> None:
             raise ValueError(
                 f"Snapshot {args.snapshot} sans série {args.exchange} 1h pour {missing}"
             )
+        require_snapshot_execution_series(
+            snapshot_manifest, set(assets or []),
+        )
 
     # --regime override --leverage (leverage piloté par le signal)
     if getattr(args, "regime", False) and args.leverage is not None:
@@ -409,13 +415,13 @@ async def main(args: argparse.Namespace) -> None:
     try:
         result = await backtester.run(start, end, db_path=args.db)
     except TimeframeConflictError as e:
-        print(f"\n  ❌  TIMEFRAME CONFLICT — portfolio backtest ANNULÉ\n")
+        print("\n  ❌  TIMEFRAME CONFLICT — portfolio backtest ANNULÉ\n")
         print(f"  {len(e.mismatched)} runner(s) incompatible(s) "
               f"(portfolio = {e.expected_tf}) :\n")
         for key, tf in e.mismatched:
             print(f"    {key} (WFO timeframe = {tf})")
         bad_strats = sorted({key.split(":", 1)[0] for key, _ in e.mismatched})
-        print(f"\n  💡 Corrigez avec --force-timeframe :")
+        print("\n  💡 Corrigez avec --force-timeframe :")
         for strat in bad_strats:
             strat_bads = sorted({
                 key.split(":", 1)[1] for key, _ in e.mismatched
@@ -429,7 +435,7 @@ async def main(args: argparse.Namespace) -> None:
                 k.split(":", 1)[1] if ":" in k else k
                 for k in e.valid_keys
             })
-            print(f"\n  Ou relancez sans les assets conflictuels :")
+            print("\n  Ou relancez sans les assets conflictuels :")
             print(f"     --assets {','.join(valid_assets)}")
         print()
         sys.exit(1)

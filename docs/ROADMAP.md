@@ -3715,7 +3715,7 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 - Portfolio replays accept an isolated YAML directory. This permits a local, immutable copy of the deployed configuration to be replayed without overwriting developer YAML files or inheriting the local `.env`.
 - Candle backfill can inspect and repair internal gaps, but fails closed when the exchange has no candle for a missing timestamp; certification must then bound the snapshot after the gap instead of imputing market data.
 
-**Deliberate limit**: the canonical portfolio still consumes 1h bars. `execution_timeframe_used=1h` fails the required 1m `intrabar_execution_used` gate, so no current result can be mislabeled `PAPER_READY`. True 1m broker integration is the next reliability lot.
+**Deliberate Sprint 68 limit**: the canonical portfolio still consumed 1h bars. `execution_timeframe_used=1h` failed the required 1m `intrabar_execution_used` gate, so no result from that lot could be mislabeled `PAPER_READY`. True 1m broker integration was deferred to Sprint 70b.
 
 **Audit/plan**: [audit-backtest-certification-20260722.md](audit/audit-backtest-certification-20260722.md) · [sprint-68-backtest-live-certification.md](plans/sprint-68-backtest-live-certification.md)
 
@@ -3904,7 +3904,7 @@ required WFO rows completed; certification `cert-e3d40ad40dd768a6`.
 
 The primary nominal DD gate is 30%; `grid_multi_tf` is therefore
 **HISTORICAL_FAIL**. Its 641.96% fast/canonical parity delta, missing Bitget
-calibration and current 1h broker are additional blockers, not a reason to
+calibration and then-current 1h broker are additional blockers, not a reason to
 tune after observing OOS. No universe, Top-N, parameter, capital or leverage
 change is allowed, and no robot2 change was made.
 
@@ -3912,18 +3912,55 @@ change is allowed, and no robot2 change was made.
 [audit-grid-multi-tf-certification-20260727.md](audit/audit-grid-multi-tf-certification-20260727.md)
 · [sprint-70a-grid-multi-tf-certification.md](plans/sprint-70a-grid-multi-tf-certification.md)
 
+### Sprint 70b — Canonical 1m Execution Broker ✅
+
+The canonical grid portfolio now separates closed 1h signal evaluation from
+historical broker execution. Binance 1h candles create immutable
+`OrderIntent` objects at their close; Bitget candles from the snapshot's
+`ExecutionSpec.execution_timeframe` execute persistent limits, partial fills,
+expiry, market exits, TP and server-side SL. At an hourly boundary the closed
+signal is processed before the new 1m candle, so no minute before the close can
+fill a newly created order.
+
+The implementation reuses `GridStrategyRunner`, `PendingGridOrder`,
+`PlannedGridExit`, `OrderIntent`, `FillEvent`, `GridPositionManager`,
+`ExecutionSpec` and `LiveRiskManager`. No second strategy or portfolio engine
+was introduced. Funding is applied on the exact 00:00/08:00/16:00 UTC broker
+minute. A newly filled level receives protection from the latest closed signal
+without applying an earlier extreme from its fill minute.
+
+Certification is fail-closed:
+
+- the snapshot must freeze every required Bitget execution series;
+- missing series, incomplete boundaries, non-monotonic timestamps or gaps over
+  the frozen one-bar allowance abort the replay;
+- results persist the execution timeframe actually consumed, broker candle
+  count and maximum observed gap;
+- `PAPER_READY` additionally requires a positive broker event count and a gap
+  no larger than the immutable snapshot bound.
+
+**Validation**: 152 focused broker/portfolio/snapshot/certification tests and
+168 wider realism/parity/risk tests passed. The complete suite is
+**2384 passed in 149.51s**. No WFO, external-OOS or long portfolio replay was
+run. Existing `grid_atr` and `grid_multi_tf` verdicts remain
+**HISTORICAL_FAIL** and were not reopened.
+
+**Audit/plan**:
+[audit-canonical-1m-broker-20260727.md](audit/audit-canonical-1m-broker-20260727.md)
+· [sprint-70b-canonical-1m-broker.md](plans/sprint-70b-canonical-1m-broker.md)
+
 ---
 
 ## PROCHAINES STRATÉGIES
 
 ### Ordre de priorité
 
-1. **Canonical 1m execution broker** — prerequisite to any `PAPER_READY` or
-   live decision. The current 1h canonical replay is sufficient to reject a
-   strategy but deliberately insufficient to approve one.
-
-2. **Select the next research candidate** — start a new frozen certification
+1. **Select the next research candidate** — start a new frozen certification
    cycle rather than revisiting `grid_atr` or `grid_multi_tf`.
+
+2. **Bitget evidence for that candidate** — backfill and freeze the required
+   1m coverage, then attach a qualifying execution calibration. Broker
+   implementation alone is not calibration evidence.
 
 3. **Other active/research candidates** — process only through the Sprint 70
    shared contract, prioritising `grid_boltrend` after `grid_multi_tf`.  The

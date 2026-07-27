@@ -605,3 +605,31 @@ async def revalidate_snapshot(
         return manifest, errors
     finally:
         await db.close()
+
+
+def require_snapshot_execution_series(
+    manifest: dict[str, Any],
+    symbols: list[str] | set[str],
+) -> None:
+    """Reject a replay whose broker candles are outside immutable provenance."""
+    metadata = manifest.get("metadata", {})
+    execution_spec = ExecutionSpec.model_validate(
+        metadata.get("execution_spec", {}),
+    )
+    timeframe = execution_spec.execution_timeframe.value
+    exchange = execution_spec.exchange
+    available = {
+        entry.get("key")
+        for entry in metadata.get("series", [])
+        if int(entry.get("row_count", 0)) > 0
+    }
+    missing = sorted(
+        symbol
+        for symbol in symbols
+        if f"{exchange}:{symbol}:{timeframe}" not in available
+    )
+    if missing:
+        raise ValueError(
+            "Snapshot does not freeze canonical broker series "
+            f"{exchange} {timeframe} for: {', '.join(missing)}"
+        )

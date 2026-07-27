@@ -54,6 +54,8 @@ _LIST_COLUMNS = (
     "missing_funding_events",
     "execution_scenario",
     "execution_timeframe_used",
+    "execution_candles_processed",
+    "intrabar_max_gap_bars",
     "evaluation_scope",
     "was_liquidated",
     "min_liquidation_distance_pct",
@@ -157,6 +159,8 @@ def _result_to_row(
         "missing_funding_events": result.missing_funding_events,
         "execution_scenario": result.execution_scenario,
         "execution_timeframe_used": result.execution_timeframe_used,
+        "execution_candles_processed": result.execution_candles_processed,
+        "intrabar_max_gap_bars": result.intrabar_max_gap_bars,
         "evaluation_scope": evaluation_scope,
         "universe_selection_json": json.dumps(result.universe_selection, sort_keys=True),
         "was_liquidated": int(result.was_liquidated),
@@ -184,7 +188,8 @@ _INSERT_SQL = """
         btc_equity_curve, alpha_vs_btc,
         regime_analysis, result_status, manifest_json, manifest_hash,
         certification_id, order_rejections, missing_funding_events,
-        execution_scenario, execution_spec_json, execution_timeframe_used, evaluation_scope,
+        execution_scenario, execution_spec_json, execution_timeframe_used,
+        execution_candles_processed, intrabar_max_gap_bars, evaluation_scope,
         universe_selection_json,
         was_liquidated, min_liquidation_distance_pct,
         worst_case_sl_loss_pct, funding_paid_total
@@ -202,7 +207,8 @@ _INSERT_SQL = """
         :btc_equity_curve, :alpha_vs_btc,
         :regime_analysis, :result_status, :manifest_json, :manifest_hash,
         :certification_id, :order_rejections, :missing_funding_events,
-        :execution_scenario, :execution_spec_json, :execution_timeframe_used, :evaluation_scope,
+        :execution_scenario, :execution_spec_json, :execution_timeframe_used,
+        :execution_candles_processed, :intrabar_max_gap_bars, :evaluation_scope,
         :universe_selection_json,
         :was_liquidated, :min_liquidation_distance_pct,
         :worst_case_sl_loss_pct, :funding_paid_total
@@ -445,6 +451,13 @@ def build_portfolio_payload_from_row(row: dict) -> dict:
         "missing_funding_events": row.get("missing_funding_events", 0),
         "execution_scenario": row.get("execution_scenario", "legacy"),
         "execution_spec_json": row.get("execution_spec_json"),
+        "execution_timeframe_used": row.get(
+            "execution_timeframe_used", "unknown",
+        ),
+        "execution_candles_processed": row.get(
+            "execution_candles_processed", 0,
+        ),
+        "intrabar_max_gap_bars": row.get("intrabar_max_gap_bars", 0),
         "evaluation_scope": row.get("evaluation_scope", "full_history"),
         "universe_selection_json": row.get("universe_selection_json", "[]"),
         "was_liquidated": row.get("was_liquidated", 0),
@@ -514,6 +527,12 @@ def save_portfolio_from_payload_sync(db_path: str, payload: dict) -> str:
                 "execution_spec_json": payload.get("execution_spec_json"),
                 "execution_timeframe_used": payload.get(
                     "execution_timeframe_used", "unknown",
+                ),
+                "execution_candles_processed": payload.get(
+                    "execution_candles_processed", 0,
+                ),
+                "intrabar_max_gap_bars": payload.get(
+                    "intrabar_max_gap_bars", 0,
                 ),
                 "evaluation_scope": payload.get("evaluation_scope", "full_history"),
                 "universe_selection_json": payload.get("universe_selection_json", "[]"),

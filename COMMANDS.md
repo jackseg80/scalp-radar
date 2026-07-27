@@ -18,21 +18,22 @@ Les commandes WFO/portfolio/robustesse historiques restent disponibles pour la r
 
 ```powershell
 # 1. Calibrer l'exécution Bitget depuis les observations live persistées
-uv run python -m scripts.calibrate_execution --strategy grid_atr --since <ISO_DATE> --until <ISO_DATE>
+uv run python -m scripts.calibrate_execution --strategy <STRATEGY> --since <ISO_DATE> --until <ISO_DATE>
 
-# 2. Geler données + code + configs (worktree propre obligatoire avec --validate)
-uv run python -m scripts.create_data_snapshot --cutoff <ISO_DATE> --since <ISO_DATE> --symbols <CSV> --timeframes 1h,1m --execution-timeframe 1m --calibration-id <CALIBRATION_ID> --config-dir <YAML_SNAPSHOT_DIR> --validate
+# 2. Geler Binance 1h + Bitget 1m, code et configs.
+# --validate exige un worktree propre et interdit tout fallback 1h.
+uv run python -m scripts.create_data_snapshot --strategy <STRATEGY> --cutoff <ISO_DATE> --since <ISO_DATE> --symbols <CSV> --timeframes 1h --exchange binance --execution-timeframe 1m --calibration-id <CALIBRATION_ID> --config-dir <YAML_SNAPSHOT_DIR> --max-gap-bars 1 --validate
 
 # 3. WFO lié au snapshot ; reprise sûre sur le hash exact
-uv run --isolated --python 3.12 --frozen python -m scripts.optimize --strategy grid_atr --symbols <CSV> --config-dir <YAML_SNAPSHOT_DIR> --snapshot <SNAPSHOT_ID> --resume -v
+uv run --isolated --python 3.12 --frozen python -m scripts.optimize --strategy <STRATEGY> --symbols <CSV> --config-dir <YAML_SNAPSHOT_DIR> --snapshot <SNAPSHOT_ID> --resume -v
 
 # 4. Vrai filtre portefeuille : paramètres et univers choisis par fenêtre IS,
 # puis rejoués chronologiquement sur son OOS externe (sans sélection post-hoc).
-uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio --strategy grid_atr --snapshot <SNAPSHOT_ID> --config-dir <YAML_SNAPSHOT_DIR> --capital 1000 --execution-scenario nominal
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio --strategy <STRATEGY> --snapshot <SNAPSHOT_ID> --config-dir <YAML_SNAPSHOT_DIR> --capital <FROZEN_CAPITAL> --execution-scenario nominal
 
 # 5. Parité + fresh-capital 180/365j + robustesse + gates
 # Windows : Python 3.12 isolé obligatoire pour les replays longs
-uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy --strategy grid_atr --snapshot <SNAPSHOT_ID> --capital 1000
+uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy --strategy <STRATEGY> --snapshot <SNAPSHOT_ID> --capital <FROZEN_CAPITAL>
 
 # 6. Ingestion/revue des observations brutes forward
 uv run python -m scripts.record_forward_observations --certification-id <CERT_ID> --phase paper --input <OBSERVATIONS.jsonl>
@@ -86,7 +87,11 @@ Un snapshot universel incomplet, un funding manquant, une parité fast/canonique
 en échec ou un replay 4x hors seuil donne un résultat fail-closed. Aucune de
 ces commandes ne modifie `robot2`.
 
-Limitation fail-closed actuelle : le portfolio canonique grid consomme encore les barres 1h. Le gate `intrabar_execution_used` interdit donc `PAPER_READY` tant que l'exécution 1m n'est pas effectivement intégrée au broker simulé.
+Le broker canonique consomme maintenant réellement les Bitget 1m sous les
+signaux Binance 1h. Il refuse un snapshot qui ne fige pas ces séries et
+persiste le nombre de minutes consommées ainsi que le gap maximal. Les
+certifications historiques `grid_atr` et `grid_multi_tf` restent closes :
+ne pas les relancer pour profiter rétroactivement de ce nouveau moteur.
 
 ### grid_multi_tf — certification universelle Sprint 70a (28 actifs, primaire 3x)
 
@@ -134,9 +139,10 @@ uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy `
 
 Ne pas modifier l'univers, le Top-N, la grille, le capital ou les leviers après
 observation OOS. Un gate de performance échoué donne `HISTORICAL_FAIL`; une
-performance passante sous blocage 1m/calibration/parité/couverture donne
-`RESEARCH_ONLY`. Le broker 1h actuel rend `PAPER_READY` impossible. Ces
-commandes ne modifient ni ne déploient `robot2`.
+performance passante sous blocage calibration/parité/couverture donne
+`RESEARCH_ONLY`. Le résultat 70a a été observé avec le broker 1h de l'époque
+et reste définitivement `HISTORICAL_FAIL`. Ces commandes ne modifient ni ne
+déploient `robot2`.
 
 ---
 

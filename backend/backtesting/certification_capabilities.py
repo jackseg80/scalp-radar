@@ -20,7 +20,7 @@ def canonical_certification_capability(strategy_name: str) -> tuple[bool, str]:
         return False, "strategy has no live/canonical runner"
     if not issubclass(strategy_class, BaseGridStrategy):
         return False, "canonical shared-account replay for mono-position strategies is pending"
-    return True, "canonical grid replay available; intrabar gate still applies"
+    return True, "canonical grid replay with frozen intrabar broker available"
 
 
 def certification_capability_matrix() -> dict[str, dict[str, str | bool]]:

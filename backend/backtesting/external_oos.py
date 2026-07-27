@@ -377,5 +377,11 @@ def combine_external_results(
         execution_scenario=results[0].execution_scenario,
         execution_spec=copy.deepcopy(results[0].execution_spec),
         execution_timeframe_used=results[0].execution_timeframe_used,
+        execution_candles_processed=sum(
+            result.execution_candles_processed for result in results
+        ),
+        intrabar_max_gap_bars=max(
+            result.intrabar_max_gap_bars for result in results
+        ),
         universe_selection=universe_selection or [],
     )

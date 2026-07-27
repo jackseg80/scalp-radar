@@ -98,6 +98,15 @@ class PlannedGridExit:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class PendingGridExit:
+    """Market close requested by a closed signal bar."""
+
+    created_at: datetime
+    reason: str
+    intent_id: str
+
+
 class DiagnosticEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (np.integer, np.int64)):
@@ -599,6 +608,7 @@ class GridStrategyRunner:
         regime_profile: dict[str, dict] | None = None,
         chronological_execution: bool = False,
         execution_spec: ExecutionSpec | None = None,
+        intrabar_execution: bool = False,
     ) -> None:
         self._strategy = strategy
         self._config = config
@@ -610,6 +620,7 @@ class GridStrategyRunner:
         # être remplis que sur T+1. Les tests unitaires/anciens appelants gardent
         # le mode immédiat par défaut pour backward compatibility explicite.
         self._chronological_execution = chronological_execution
+        self._intrabar_execution = intrabar_execution
         self._execution_spec = execution_spec or ExecutionSpec(
             maker_fee_pct=config.risk.fees.maker_percent,
             taker_fee_pct=config.risk.fees.taker_percent,
@@ -619,7 +630,11 @@ class GridStrategyRunner:
         self._order_intents: list[OrderIntent] = []
         self._fill_events: list[FillEvent] = []
         self._planned_grid_exits: dict[str, PlannedGridExit] = {}
+        self._pending_grid_exits: dict[str, PendingGridExit] = {}
         self._last_processed_candle: dict[str, datetime] = {}
+        self._last_execution_candle: dict[str, datetime] = {}
+        self._last_funding_settlement: dict[str, datetime] = {}
+        self._last_signal_indicators: dict[str, dict[str, Any]] = {}
 
         # Sprint 27 : profil WFO par régime, indexé par symbol
         # Format: {"BTC/USDT": {"bull": {"avg_oos_sharpe": 6.88, ...}, ...}}
@@ -878,6 +893,12 @@ class GridStrategyRunner:
         else:
             self._planned_grid_exits.pop(symbol, None)
 
+        if symbol in self._pending_grid_exits:
+            self._cancel_entry_orders(
+                symbol, created_at, "market_exit_pending",
+            )
+            return
+
         existing = {
             order.level.index: order
             for order in self._pending_grid_orders.get(symbol, [])
@@ -926,6 +947,27 @@ class GridStrategyRunner:
             # partially filled level keeps its original pending remainder.
             if level.index in position_levels and old is None:
                 continue
+            if (
+                old is not None
+                and old.level.direction != level.direction
+                and old.intent_id
+            ):
+                self._fill_events.append(FillEvent(
+                    event_id=(
+                        f"cancel-{old.intent_id}-"
+                        f"{int(created_at.timestamp())}"
+                    ),
+                    order_intent_id=old.intent_id,
+                    symbol=symbol,
+                    side=(
+                        OrderSide.BUY
+                        if old.level.direction == Direction.LONG
+                        else OrderSide.SELL
+                    ),
+                    status=OrderStatus.CANCELLED,
+                    timestamp=created_at,
+                    reason="direction_changed",
+                ))
             if old is not None and old.level.direction == level.direction:
                 drift = abs(old.level.entry_price - level.entry_price) / level.entry_price
                 if drift <= drift_limit and (
@@ -998,6 +1040,471 @@ class GridStrategyRunner:
             f"{candle.timestamp.isoformat()}:{salt}"
         ).encode("utf-8")
         return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") / 2**64
+
+    def _apply_funding_if_due(self, symbol: str, candle: Candle) -> None:
+        """Apply one funding settlement at the exact UTC boundary."""
+        positions = self._positions.get(symbol, [])
+        timestamp = candle.timestamp
+        if (
+            self._is_warming_up
+            or not positions
+            or timestamp.hour not in (0, 8, 16)
+            or timestamp.minute != 0
+            or timestamp.second != 0
+            or self._last_funding_settlement.get(symbol) == timestamp
+        ):
+            return
+        raw_rate = (
+            self._data_engine.get_funding_rate(symbol)
+            if self._data_engine else None
+        )
+        if isinstance(raw_rate, (int, float)):
+            funding_rate = (
+                raw_rate / 100 * self._execution_spec.funding_multiplier
+            )
+        else:
+            funding_rate = 0.0
+            self._missing_funding_events += 1
+        for position in positions:
+            notional = position.entry_price * position.quantity
+            cost = (
+                notional * funding_rate
+                if position.direction == Direction.LONG
+                else -notional * funding_rate
+            )
+            self._capital -= cost
+            self._realized_pnl -= cost
+            self._total_funding_cost += cost
+        self._last_funding_settlement[symbol] = timestamp
+        self._stats.net_pnl = self._realized_pnl
+        self._stats.capital = self._capital
+
+    def _cancel_entry_orders(
+        self,
+        symbol: str,
+        timestamp: datetime,
+        reason: str,
+    ) -> None:
+        for order in self._pending_grid_orders.pop(symbol, []):
+            if not order.intent_id:
+                continue
+            self._fill_events.append(FillEvent(
+                event_id=(
+                    f"cancel-{order.intent_id}-{int(timestamp.timestamp())}"
+                ),
+                order_intent_id=order.intent_id,
+                symbol=symbol,
+                side=(
+                    OrderSide.BUY
+                    if order.level.direction == Direction.LONG
+                    else OrderSide.SELL
+                ),
+                status=OrderStatus.CANCELLED,
+                timestamp=timestamp,
+                reason=reason,
+            ))
+
+    def _close_grid_from_broker(
+        self,
+        symbol: str,
+        candle: Candle,
+        *,
+        exit_reason: str,
+        exit_price: float,
+        intent: PendingGridExit | None = None,
+    ) -> bool:
+        """Close a grid cycle from one broker-observed execution candle."""
+        positions = self._positions.get(symbol, [])
+        if not positions:
+            self._pending_grid_exits.pop(symbol, None)
+            return False
+        total_notional = sum(
+            position.entry_price * position.quantity for position in positions
+        )
+        if not self._is_warming_up:
+            self._capital += total_notional / self._leverage
+        trade = self._gpm.close_all_positions(
+            positions,
+            exit_price,
+            candle.timestamp,
+            exit_reason,
+            self._current_regime,
+        )
+        if self._is_warming_up:
+            self._trades.append((symbol, trade))
+        else:
+            self._record_trade(trade, symbol)
+            self._record_close(symbol, trade.exit_time)
+        if intent is not None:
+            self._fill_events.append(FillEvent(
+                event_id=(
+                    f"fill-{intent.intent_id}-"
+                    f"{int(candle.timestamp.timestamp())}"
+                ),
+                order_intent_id=intent.intent_id,
+                symbol=symbol,
+                side=(
+                    OrderSide.SELL
+                    if positions[0].direction == Direction.LONG
+                    else OrderSide.BUY
+                ),
+                status=OrderStatus.FILLED,
+                timestamp=candle.timestamp,
+                fill_price=exit_price,
+                fill_quantity=sum(position.quantity for position in positions),
+                cumulative_quantity=sum(
+                    position.quantity for position in positions
+                ),
+                fee=(
+                    sum(position.quantity for position in positions)
+                    * exit_price
+                    * self._gpm._config.taker_fee
+                ),
+                reason=exit_reason,
+            ))
+        self._positions[symbol] = []
+        self._hwm.pop(symbol, None)
+        self._cancel_entry_orders(symbol, candle.timestamp, "grid_closed")
+        self._planned_grid_exits.pop(symbol, None)
+        self._pending_grid_exits.pop(symbol, None)
+        if not self._is_warming_up:
+            self._pending_journal_events.append({
+                "timestamp": trade.exit_time.isoformat(),
+                "strategy_name": self.name,
+                "symbol": symbol,
+                "event_type": "CLOSE",
+                "level": None,
+                "direction": trade.direction.value,
+                "price": trade.exit_price,
+                "quantity": trade.quantity,
+                "unrealized_pnl": round(trade.net_pnl, 2),
+                "metadata": {
+                    "exit_reason": trade.exit_reason,
+                    "entry_price": trade.entry_price,
+                    "gross_pnl": round(trade.gross_pnl, 2),
+                    "net_pnl": round(trade.net_pnl, 2),
+                    "fee_cost": round(trade.fee_cost, 2),
+                },
+            })
+        return True
+
+    def _execute_pending_grid_orders(
+        self,
+        symbol: str,
+        candle: Candle,
+    ) -> None:
+        """Execute pre-existing limit intents against one broker candle."""
+        positions = self._positions.get(symbol, [])
+        effective_max = self._get_num_levels(symbol)
+        pending = self._pending_grid_orders.get(symbol, [])
+        retained_orders: list[PendingGridOrder] = []
+        active_orders: list[PendingGridOrder] = []
+        for order in pending:
+            if (
+                order.expires_at is not None
+                and candle.timestamp >= order.expires_at
+            ):
+                if order.intent_id:
+                    self._fill_events.append(FillEvent(
+                        event_id=(
+                            f"expire-{order.intent_id}-"
+                            f"{int(candle.timestamp.timestamp())}"
+                        ),
+                        order_intent_id=order.intent_id,
+                        symbol=symbol,
+                        side=(
+                            OrderSide.BUY
+                            if order.level.direction == Direction.LONG
+                            else OrderSide.SELL
+                        ),
+                        status=OrderStatus.EXPIRED,
+                        timestamp=candle.timestamp,
+                        reason="time_in_force",
+                    ))
+                continue
+            retained_orders.append(order)
+            activation = order.created_at + timedelta(
+                milliseconds=self._execution_spec.latency_ms,
+            )
+            if activation <= candle.timestamp:
+                active_orders.append(order)
+        if retained_orders:
+            self._pending_grid_orders[symbol] = retained_orders
+        else:
+            self._pending_grid_orders.pop(symbol, None)
+
+        account_equity = getattr(self, "_portfolio_account_equity", None)
+        for pending_order in active_orders:
+            level = pending_order.level
+            if level.direction == Direction.LONG:
+                touched = candle.low <= level.entry_price
+            else:
+                touched = candle.high >= level.entry_price
+            if not touched:
+                continue
+            if self._execution_draw(
+                pending_order, candle, "missed",
+            ) < self._execution_spec.missed_fill_probability:
+                continue
+            fill_fraction = pending_order.remaining_fraction
+            if (
+                fill_fraction > 1e-9
+                and self._execution_draw(pending_order, candle, "partial")
+                < self._execution_spec.partial_fill_probability
+            ):
+                fill_fraction *= 0.5
+
+            if getattr(self, "_portfolio_mode", False) and callable(account_equity):
+                account_capital = float(account_equity())
+            elif self._is_warming_up:
+                account_capital = self._initial_capital
+            else:
+                account_capital = self._current_account_equity()
+            margin_per_level = (
+                account_capital / self._nb_assets * level.size_fraction
+            )
+            prospective_margin = margin_per_level * fill_fraction
+            max_margin_ratio = getattr(
+                self._config.risk, "max_margin_ratio", 0.70,
+            )
+            if not isinstance(max_margin_ratio, (int, float)):
+                max_margin_ratio = 0.70
+            total_margin_used = sum(
+                position.entry_price * position.quantity / self._leverage
+                for symbol_positions in self._positions.values()
+                for position in symbol_positions
+            )
+            if (
+                total_margin_used + prospective_margin
+                > account_capital * max_margin_ratio
+            ):
+                callback = getattr(self, "_on_skip_local", None)
+                if callable(callback):
+                    callback(symbol)
+                continue
+            portfolio_runners = getattr(self, "_portfolio_runners", None)
+            if portfolio_runners is not None:
+                portfolio_capital = (
+                    float(account_equity())
+                    if callable(account_equity)
+                    else getattr(self, "_portfolio_initial_capital", None)
+                )
+                global_margin = sum(
+                    position.entry_price * position.quantity / runner._leverage
+                    for runner in portfolio_runners.values()
+                    for symbol_positions in runner._positions.values()
+                    for position in symbol_positions
+                )
+                if (
+                    portfolio_capital is not None
+                    and global_margin + prospective_margin
+                    > portfolio_capital * max_margin_ratio
+                ):
+                    callback = getattr(self, "_on_skip_global", None)
+                    if callable(callback):
+                        callback(symbol)
+                    continue
+
+            position = self._gpm.open_grid_position(
+                level,
+                candle.timestamp,
+                margin_per_level * effective_max * fill_fraction,
+                effective_max,
+                limit_entry=True,
+            )
+            if position is None:
+                continue
+            risk_check = getattr(self, "_portfolio_pre_trade_risk", None)
+            if callable(risk_check):
+                allowed, _reason = risk_check(
+                    symbol, position, not positions,
+                )
+                if not allowed:
+                    continue
+            margin_used = (
+                position.entry_price * position.quantity / self._leverage
+            )
+            if not self._is_warming_up:
+                ensure_cash = getattr(self, "_portfolio_ensure_cash", None)
+                if callable(ensure_cash):
+                    ensure_cash(self, margin_used)
+                if self._capital < margin_used:
+                    continue
+                self._capital -= margin_used
+
+            existing_position = next(
+                (
+                    item for item in positions
+                    if item.level == position.level
+                ),
+                None,
+            )
+            if existing_position is None:
+                self._positions.setdefault(symbol, []).append(position)
+                positions = self._positions[symbol]
+                cumulative_quantity = position.quantity
+            else:
+                combined_quantity = (
+                    existing_position.quantity + position.quantity
+                )
+                existing_position.entry_price = (
+                    existing_position.entry_price * existing_position.quantity
+                    + position.entry_price * position.quantity
+                ) / combined_quantity
+                existing_position.quantity = combined_quantity
+                existing_position.entry_fee += position.entry_fee
+                cumulative_quantity = combined_quantity
+
+            remaining = pending_order.remaining_fraction - fill_fraction
+            current = self._pending_grid_orders.get(symbol, [])
+            self._pending_grid_orders[symbol] = [
+                order for order in current
+                if order.level.index != level.index
+            ]
+            if remaining > 1e-9:
+                self._pending_grid_orders[symbol].append(PendingGridOrder(
+                    level=pending_order.level,
+                    created_at=pending_order.created_at,
+                    expires_at=pending_order.expires_at,
+                    remaining_fraction=remaining,
+                    intent_id=pending_order.intent_id,
+                ))
+            if not self._pending_grid_orders[symbol]:
+                self._pending_grid_orders.pop(symbol, None)
+            if pending_order.intent_id:
+                self._fill_events.append(FillEvent(
+                    event_id=(
+                        f"fill-{pending_order.intent_id}-"
+                        f"{int(candle.timestamp.timestamp())}"
+                    ),
+                    order_intent_id=pending_order.intent_id,
+                    symbol=symbol,
+                    side=(
+                        OrderSide.BUY
+                        if position.direction == Direction.LONG
+                        else OrderSide.SELL
+                    ),
+                    status=(
+                        OrderStatus.PARTIALLY_FILLED
+                        if remaining > 1e-9 else OrderStatus.FILLED
+                    ),
+                    timestamp=candle.timestamp,
+                    fill_price=position.entry_price,
+                    fill_quantity=position.quantity,
+                    cumulative_quantity=cumulative_quantity,
+                    fee=position.entry_fee,
+                ))
+            if symbol not in self._hwm:
+                self._hwm[symbol] = position.entry_price
+            signal_indicators = self._last_signal_indicators.get(symbol)
+            if signal_indicators is not None:
+                protected_positions = self._positions.get(symbol, [])
+                protected_state = self._gpm.compute_grid_state(
+                    protected_positions, position.entry_price,
+                )
+                self._planned_grid_exits[symbol] = PlannedGridExit(
+                    tp_price=self._strategy.get_tp_price(
+                        protected_state, signal_indicators,
+                    ),
+                    sl_price=self._strategy.get_sl_price(
+                        protected_state, signal_indicators,
+                    ),
+                    created_at=candle.timestamp,
+                )
+            callback = getattr(self, "_on_position_opened", None)
+            if callable(callback):
+                callback(symbol)
+            if not self._is_warming_up:
+                self._pending_journal_events.append({
+                    "timestamp": position.entry_time.isoformat(),
+                    "strategy_name": self.name,
+                    "symbol": symbol,
+                    "event_type": "OPEN",
+                    "level": level.index,
+                    "direction": position.direction.value,
+                    "price": position.entry_price,
+                    "quantity": position.quantity,
+                    "margin_used": round(margin_used, 2),
+                    "metadata": {
+                        "levels_open": len(
+                            self._positions.get(symbol, []),
+                        ),
+                        "levels_max": effective_max,
+                    },
+                })
+
+    async def on_execution_candle(
+        self,
+        symbol: str,
+        timeframe: str,
+        candle: Candle,
+    ) -> None:
+        """Consume one broker candle without recalculating the 1h signal."""
+        if (
+            not self._intrabar_execution
+            or timeframe != self._execution_spec.execution_timeframe.value
+            or self._circuit_breaker_open
+        ):
+            return
+        last_timestamp = self._last_execution_candle.get(symbol)
+        if last_timestamp is not None and candle.timestamp <= last_timestamp:
+            raise ValueError(
+                f"Non-monotonic {timeframe} broker candle for {symbol}: "
+                f"{candle.timestamp.isoformat()} <= "
+                f"{last_timestamp.isoformat()}"
+            )
+        self._last_execution_candle[symbol] = candle.timestamp
+        self._last_prices[symbol] = candle.close
+        self._apply_funding_if_due(symbol, candle)
+
+        positions = self._positions.get(symbol, [])
+        planned_exit = self._planned_grid_exits.get(symbol)
+        if (
+            positions
+            and planned_exit is not None
+            and planned_exit.created_at <= candle.timestamp
+        ):
+            exit_reason, exit_price = self._gpm.check_global_tp_sl(
+                positions,
+                candle,
+                planned_exit.tp_price,
+                planned_exit.sl_price,
+            )
+            if exit_reason:
+                self._close_grid_from_broker(
+                    symbol,
+                    candle,
+                    exit_reason=exit_reason,
+                    exit_price=exit_price,
+                )
+                return
+
+        positions = self._positions.get(symbol, [])
+        pending_exit = self._pending_grid_exits.get(symbol)
+        if not positions:
+            self._pending_grid_exits.pop(symbol, None)
+        elif pending_exit is not None:
+            activation = pending_exit.created_at + timedelta(
+                milliseconds=self._execution_spec.latency_ms,
+            )
+            if activation <= candle.timestamp:
+                self._close_grid_from_broker(
+                    symbol,
+                    candle,
+                    exit_reason=pending_exit.reason,
+                    exit_price=candle.open,
+                    intent=pending_exit,
+                )
+                return
+
+        positions = self._positions.get(symbol, [])
+        if positions and symbol in self._hwm:
+            if positions[0].direction == Direction.LONG:
+                self._hwm[symbol] = max(self._hwm[symbol], candle.high)
+            else:
+                self._hwm[symbol] = min(self._hwm[symbol], candle.low)
+        if not self._kill_switch_triggered and not self._account_entries_frozen:
+            self._execute_pending_grid_orders(symbol, candle)
 
     def _should_allow_new_grid(self, symbol: str) -> bool:
         """Sprint 27 : Filtre Darwinien — bloque si régime WFO défavorable.
@@ -1091,7 +1598,11 @@ class GridStrategyRunner:
         self._positions.clear()
         self._pending_grid_orders.clear()
         self._planned_grid_exits.clear()
+        self._pending_grid_exits.clear()
         self._last_processed_candle.clear()
+        self._last_execution_candle.clear()
+        self._last_funding_settlement.clear()
+        self._last_signal_indicators.clear()
 
         # Si un état était en attente de restauration (restart avec state)
         pending = getattr(self, "_pending_restore", None)
@@ -1349,6 +1860,7 @@ class GridStrategyRunner:
 
         # Détecter le régime (si ADX/ATR disponibles)
         main_ind = indicators.get(self._strategy_tf, {})
+        self._last_signal_indicators[symbol] = dict(main_ind)
         self._current_regime = detect_market_regime(
             main_ind.get("adx", float("nan")),
             main_ind.get("di_plus", float("nan")),
@@ -1387,37 +1899,16 @@ class GridStrategyRunner:
         # Récupérer les positions de ce symbol uniquement
         positions = self._positions.get(symbol, [])
 
-        # Funding cost (settlement toutes les 8h : 00:00, 08:00, 16:00 UTC)
-        # Appliqué AVANT TP/SL : si position ouverte au settlement, on paie le funding
-        if not self._is_warming_up and positions and candle.timestamp.hour in (0, 8, 16):
-            # Lire le funding rate réel depuis la source de marché (en %, ex:
-            # 0.01 = 0.01%). Missing data is explicit: a silent synthetic rate
-            # would make certification results irreproducible.
-            raw_fr = self._data_engine.get_funding_rate(symbol) if self._data_engine else None
-            if isinstance(raw_fr, (int, float)):
-                funding_rate = (
-                    raw_fr / 100 * self._execution_spec.funding_multiplier
-                )
-            else:
-                funding_rate = 0.0
-                self._missing_funding_events += 1
-            for pos in positions:
-                notional = pos.entry_price * pos.quantity
-                if pos.direction == Direction.LONG:
-                    cost = notional * funding_rate   # LONG paie
-                else:
-                    cost = -notional * funding_rate  # SHORT reçoit
-                self._capital -= cost
-                self._realized_pnl -= cost
-                self._total_funding_cost += cost
-            self._stats.net_pnl = self._realized_pnl
-            self._stats.capital = self._capital
+        # The intrabar broker applies funding on the exact 1m settlement
+        # boundary. The legacy closed-bar path keeps the same helper on 1h.
+        if not self._intrabar_execution:
+            self._apply_funding_if_due(symbol, candle)
 
         # Construire le GridState
         grid_state = self._gpm.compute_grid_state(positions, candle.close)
 
         # HWM tracking : update + injection dans indicators pour trailing stop
-        if positions and symbol in self._hwm:
+        if not self._intrabar_execution and positions and symbol in self._hwm:
             direction = positions[0].direction
             if direction == Direction.LONG:
                 self._hwm[symbol] = max(self._hwm[symbol], candle.high)
@@ -1427,7 +1918,7 @@ class GridStrategyRunner:
             ctx.indicators[self._strategy_tf]["hwm"] = self._hwm.get(symbol, float("nan"))
 
         # 1. Si positions ouvertes → check TP/SL global
-        if positions:
+        if positions and not self._intrabar_execution:
             planned_exit = self._planned_grid_exits.get(symbol)
             if (
                 self._chronological_execution
@@ -1516,6 +2007,64 @@ class GridStrategyRunner:
                 self._plan_next_bar(symbol, ctx, main_ind, candle)
                 return
 
+        if positions and self._intrabar_execution:
+            original_min_profit = getattr(
+                self._strategy._config, "min_profit_pct", 0.0,
+            )
+            if hasattr(self._strategy._config, "min_profit_pct"):
+                self._strategy._config.min_profit_pct = self._get_per_asset_float(
+                    symbol, "min_profit_pct", original_min_profit,
+                )
+            try:
+                close_reason = self._strategy.should_close_all(ctx, grid_state)
+            finally:
+                if hasattr(self._strategy._config, "min_profit_pct"):
+                    self._strategy._config.min_profit_pct = original_min_profit
+            if close_reason and symbol not in self._pending_grid_exits:
+                created_at = self._bar_close_time(candle)
+                intent_id = (
+                    f"{self.name}:{symbol}:close:"
+                    f"{int(created_at.timestamp())}"
+                )
+                quantity = sum(position.quantity for position in positions)
+                self._order_intents.append(OrderIntent(
+                    id=intent_id,
+                    account_scope=getattr(
+                        self, "_account_scope", self.name,
+                    ),
+                    strategy_name=self.name,
+                    symbol=symbol,
+                    side=(
+                        OrderSide.SELL
+                        if positions[0].direction == Direction.LONG
+                        else OrderSide.BUY
+                    ),
+                    order_type=OrderType.MARKET,
+                    quantity=quantity,
+                    leverage=self._leverage,
+                    reduce_only=True,
+                    created_at=created_at,
+                    metadata={"reason": close_reason},
+                ))
+                self._fill_events.append(FillEvent(
+                    event_id=f"accept-{intent_id}",
+                    order_intent_id=intent_id,
+                    symbol=symbol,
+                    side=(
+                        OrderSide.SELL
+                        if positions[0].direction == Direction.LONG
+                        else OrderSide.BUY
+                    ),
+                    status=OrderStatus.OPEN,
+                    timestamp=created_at,
+                    reason="simulated_broker_accepted",
+                ))
+                self._pending_grid_exits[symbol] = PendingGridExit(
+                    created_at=created_at,
+                    reason=close_reason,
+                    intent_id=intent_id,
+                )
+
         # Sprint 27 : Filtre Darwinien — bloquer si régime défavorable
         # Uniquement quand aucune position ouverte (ne touche pas les grilles existantes)
         if (
@@ -1537,8 +2086,10 @@ class GridStrategyRunner:
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
         effective_max = self._get_num_levels(symbol)
-        if len(positions) < effective_max or (
+        if not self._intrabar_execution and (
+            len(positions) < effective_max or (
             self._chronological_execution and self._pending_grid_orders.get(symbol)
+            )
         ):
             if self._chronological_execution:
                 pending = self._pending_grid_orders.get(symbol, [])

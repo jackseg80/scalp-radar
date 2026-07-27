@@ -19,6 +19,7 @@ from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.experiment import (
     load_snapshot,
+    require_snapshot_execution_series,
     revalidate_snapshot,
     snapshot_manifest_hash,
     wfo_reuse_fingerprint,
@@ -94,6 +95,14 @@ async def run(args: argparse.Namespace) -> int:
             "Aucune fenêtre WFO liée au snapshot. Exécutez optimize --snapshot "
             "pour les assets de l'univers préenregistré."
         )
+    require_snapshot_execution_series(
+        manifest,
+        {
+            symbol
+            for plan in plans
+            for symbol in plan.params_by_asset
+        },
+    )
     config = _load_external_oos_config(args.config_dir)
     base_spec = ExecutionSpec.model_validate(manifest["metadata"]["execution_spec"])
     execution_spec = base_spec.with_scenario(args.execution_scenario)

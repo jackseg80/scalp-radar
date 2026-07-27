@@ -523,6 +523,8 @@ class Database:
             "execution_scenario": "TEXT NOT NULL DEFAULT 'legacy'",
             "execution_spec_json": "TEXT",
             "execution_timeframe_used": "TEXT NOT NULL DEFAULT 'unknown'",
+            "execution_candles_processed": "INTEGER NOT NULL DEFAULT 0",
+            "intrabar_max_gap_bars": "INTEGER NOT NULL DEFAULT 0",
             "was_liquidated": "INTEGER NOT NULL DEFAULT 0",
             "min_liquidation_distance_pct": "REAL NOT NULL DEFAULT 0",
             "worst_case_sl_loss_pct": "REAL NOT NULL DEFAULT 0",

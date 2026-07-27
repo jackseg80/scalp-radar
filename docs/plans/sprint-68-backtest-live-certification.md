@@ -18,7 +18,11 @@ Build one reusable certification foundation for all registered strategies and va
 
 ## Important outcome
 
-The infrastructure is fail-closed. Grid research can run end to end, but the current canonical portfolio consumes 1h execution bars. The explicit 1m-use gate prevents `PAPER_READY`; true intrabar execution is the next implementation lot. Mono-position and fast-only strategies are classified rather than routed through an incompatible engine.
+The infrastructure was fail-closed at Sprint 68. Grid research could run end
+to end, but the canonical portfolio then consumed 1h execution bars. The
+explicit 1m-use gate prevented `PAPER_READY`; true intrabar execution was
+delivered later in Sprint 70b. Mono-position and fast-only strategies are
+classified rather than routed through an incompatible engine.
 
 ## Operational safety
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,11 +10,17 @@ from backend.core.database import Database
 from backend.core.experiment import (
     CONFIG_FILES,
     create_snapshot,
+    require_snapshot_execution_series,
     revalidate_snapshot,
     validate_candle_rows,
     wfo_reuse_fingerprint,
 )
-from backend.core.models import Candle, TimeFrame, UniverseSelectionSpec
+from backend.core.models import (
+    Candle,
+    ExecutionSpec,
+    TimeFrame,
+    UniverseSelectionSpec,
+)
 from scripts.create_data_snapshot import _load_snapshot_config
 
 
@@ -33,6 +38,26 @@ def test_snapshot_explicit_config_directory_ignores_local_env(tmp_path, monkeypa
 
     assert captured["args"] == (tmp_path,)
     assert captured["kwargs"] == {"env_file": None, "force_reload": True}
+
+
+def test_snapshot_replay_requires_frozen_execution_series():
+    manifest = {
+        "metadata": {
+            "execution_spec": ExecutionSpec().model_dump(mode="json"),
+            "series": [{
+                "key": "binance:BTC/USDT:1h",
+                "row_count": 100,
+            }],
+        },
+    }
+    with pytest.raises(ValueError, match="bitget 1m"):
+        require_snapshot_execution_series(manifest, {"BTC/USDT"})
+
+    manifest["metadata"]["series"].append({
+        "key": "bitget:BTC/USDT:1m",
+        "row_count": 1000,
+    })
+    require_snapshot_execution_series(manifest, {"BTC/USDT"})
 
 
 def test_wfo_reuse_fingerprint_ignores_portfolio_only_provenance():
