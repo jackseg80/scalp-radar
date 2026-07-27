@@ -3844,7 +3844,7 @@ for selecting the next strategy and will not be changed by this sprint.
 
 ---
 
-### Sprint 70a — `grid_multi_tf` Certification Migration ✅ code / ⏳ evidence
+### Sprint 70a — `grid_multi_tf` Certification Migration ✅ HISTORICAL_FAIL
 
 **Frozen policy**:
 
@@ -3892,9 +3892,21 @@ for selecting the next strategy and will not be changed by this sprint.
 **Validation**: focused certification suite **135 passed**; complete suite
 **2,372 passed in 123.89s**, 0 failures.
 
-**Evidence status**: snapshot, WFO, external-OOS and certification IDs are
-pending user-run commands. No long optimization or replay was launched during
-implementation. Therefore `grid_multi_tf` has no new performance verdict yet.
+**Historical evidence**: valid snapshot `snapshot-2b7082795d127834`; all 28
+required WFO rows completed; certification `cert-e3d40ad40dd768a6`.
+
+- 2x sensitivity: -27.33% return / -45.70% DD.
+- **3x primary**: -37.00% return / -58.81% DD (portfolio id 108).
+- 4x sensitivity: -52.30% return / -71.07% DD.
+- 3x adverse: -55.10% return / -56.98% DD (portfolio id 110).
+- Bootstrap CI95 [-82.7%, +121.9%], loss probability 73.4%; fresh-capital
+  180d/365d returns -37.46%/-48.96% and DD -49.63%/-54.36%.
+
+The primary nominal DD gate is 30%; `grid_multi_tf` is therefore
+**HISTORICAL_FAIL**. Its 641.96% fast/canonical parity delta, missing Bitget
+calibration and current 1h broker are additional blockers, not a reason to
+tune after observing OOS. No universe, Top-N, parameter, capital or leverage
+change is allowed, and no robot2 change was made.
 
 **Audit/plan**:
 [audit-grid-multi-tf-certification-20260727.md](audit/audit-grid-multi-tf-certification-20260727.md)
@@ -3906,13 +3918,12 @@ implementation. Therefore `grid_multi_tf` has no new performance verdict yet.
 
 ### Ordre de priorité
 
-1. **Complete `grid_multi_tf` evidence** — run the frozen 28-asset WFO and
-   canonical external-OOS commands, then resolve `HISTORICAL_FAIL` versus
-   `RESEARCH_ONLY` without post-hoc changes.
-
-2. **Canonical 1m execution broker** — prerequisite to any `PAPER_READY` or
+1. **Canonical 1m execution broker** — prerequisite to any `PAPER_READY` or
    live decision. The current 1h canonical replay is sufficient to reject a
    strategy but deliberately insufficient to approve one.
+
+2. **Select the next research candidate** — start a new frozen certification
+   cycle rather than revisiting `grid_atr` or `grid_multi_tf`.
 
 3. **Other active/research candidates** — process only through the Sprint 70
    shared contract, prioritising `grid_boltrend` after `grid_multi_tf`.  The

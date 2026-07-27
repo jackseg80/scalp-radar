@@ -2,8 +2,9 @@
 
 ## Status
 
-Implementation is complete; long-run evidence is pending user execution.
-There is no new historical verdict yet.
+Implementation and the frozen long-run evidence are complete. The primary
+historical verdict is **HISTORICAL_FAIL**; `grid_multi_tf` is not viable under
+this policy.
 
 ## Frozen research question
 
@@ -86,18 +87,36 @@ The focused suite passes **135 tests**, covering:
 The complete `uv run python -m pytest --tb=short -q` suite passes
 **2,372 tests in 123.89s**, with 0 failures.
 
-## Pending immutable evidence
+## Immutable evidence and verdict
 
 | Evidence | ID / metric |
 |---|---|
-| Snapshot | PENDING |
-| 28 WFO rows | PENDING |
-| Primary 3x external OOS | PENDING |
-| 2x sensitivity | PENDING |
-| 4x sensitivity | PENDING |
-| Canonical parity | PENDING |
-| Adverse/fresh-capital/bootstrap | PENDING |
-| Final status | PENDING |
+| Snapshot | `snapshot-2b7082795d127834` (VALID) |
+| WFO | 28 required rows completed; per-window Top 8 IS-only |
+| 2x sensitivity | portfolio id 107, return -27.33%, DD -45.70% |
+| Primary 3x nominal external OOS | portfolio id 108, return -37.00%, DD -58.81% |
+| 4x sensitivity | portfolio id 109, return -52.30%, DD -71.07% |
+| Primary 3x adverse | portfolio id 110, return -55.10%, DD -56.98% |
+| Fresh capital 180d / 365d | ids 111 / 112; return -37.46% / -48.96%; DD -49.63% / -54.36% |
+| Robustness | id 19; bootstrap CI95 [-82.7%, +121.9%], loss probability 73.4% |
+| Certification | `cert-e3d40ad40dd768a6` — `HISTORICAL_FAIL` |
 
-Run only the commands recorded in `COMMANDS.md`. Analyze their outputs without
-changing universe, Top-N, parameters, capital or leverage.
+### Gate analysis
+
+The primary 3x run fails return, bootstrap lower bound, loss probability,
+nominal DD, adverse DD, degraded-cost return and both fresh-capital return/DD
+gates. The historical failure is therefore independent of the missing Bitget
+calibration and 1h capability ceiling.
+
+Shared-account risk controls themselves held: 0 kill switches, peak margin
+64.04% (<70%), simultaneous SL loss 29.8% (<=30%), minimum liquidation
+distance 99.16%, and no missing funding settlements. They cannot offset the
+large negative performance and drawdown.
+
+Actual fast/canonical parity also failed (cumulative delta 641.95954766%). It
+is retained as a separate reliability finding, not post-hoc tuning input. The
+performance gates already settle the historical verdict.
+
+No universe, Top-N, parameter, capital or leverage change is permitted after
+this observation. Do not reoptimize `grid_multi_tf`, modify `grid_atr`, or
+change robot2 as a response to this result.
