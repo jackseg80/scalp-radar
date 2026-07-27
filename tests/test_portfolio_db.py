@@ -5,7 +5,7 @@ Couvre :
 - Liste sans equity_curve
 - Parsing JSON des blobs
 - Suppression
-- Sous-échantillonnage equity_curve (max 500 points)
+- Conservation de la courbe equity complète pour les métriques de risque
 """
 
 from __future__ import annotations
@@ -172,8 +172,8 @@ def test_delete_backtest(db_path):
     assert deleted2 is False
 
 
-def test_subsample_equity_curve():
-    """L'equity_curve est limitée à ~500 points même avec 2000 snapshots."""
+def test_full_equity_curve_is_persisted():
+    """La certification conserve chaque point de l'equity curve."""
     result = _make_result(n_snapshots=2000)
     row = _result_to_row(
         result, "grid_atr", "binance", 30.0, 24, None, None,
@@ -181,9 +181,55 @@ def test_subsample_equity_curve():
     )
     import json
     curve = json.loads(row["equity_curve"])
-    # step = max(1, 2000//500) = 4, donc ~500 points
-    assert len(curve) <= 501
-    assert len(curve) >= 400
+    assert len(curve) == 2000
+    assert curve[0]["equity"] == 10000.0
+    assert curve[-1]["equity"] == 29990.0
+
+
+def test_result_without_manifest_is_legacy(db_path):
+    """Un backtest ad hoc ne peut pas devenir une certification live."""
+    result_id = save_result_sync(db_path, _make_result())
+    detail = asyncio.run(get_backtest_by_id_async(db_path, result_id))
+    assert detail["result_status"] == "legacy"
+    assert detail["manifest_hash"] is None
+
+
+def test_manifest_hash_is_deterministic(db_path):
+    manifest = {"snapshot_id": "snap-1", "seed": 42, "data_hashes": {"b": "2", "a": "1"}}
+    first = save_result_sync(
+        db_path, _make_result(), manifest=manifest, result_status="RESEARCH_ONLY",
+    )
+    reordered = {"data_hashes": {"a": "1", "b": "2"}, "seed": 42, "snapshot_id": "snap-1"}
+    second = save_result_sync(
+        db_path, _make_result(), manifest=reordered, result_status="RESEARCH_ONLY",
+    )
+    first_row = asyncio.run(get_backtest_by_id_async(db_path, first))
+    second_row = asyncio.run(get_backtest_by_id_async(db_path, second))
+    assert first_row["manifest_hash"] == second_row["manifest_hash"]
+    assert first_row["manifest_json"] == reordered
+
+
+def test_order_rejections_and_missing_funding_round_trip(db_path):
+    result = _make_result()
+    result.order_rejections = {"grid_atr:BTC/USDT:max_live_grids": 7}
+    result.missing_funding_events = 3
+    result_id = save_result_sync(db_path, result)
+    detail = asyncio.run(get_backtest_by_id_async(db_path, result_id))
+    assert detail["order_rejections"] == result.order_rejections
+    assert detail["missing_funding_events"] == 3
+
+
+def test_universe_selection_audit_round_trip(db_path):
+    result = _make_result()
+    result.universe_selection = [{
+        "start": "2025-01-01T00:00:00+00:00",
+        "selected_assets": ["AAA/USDT"],
+        "assets": {"AAA/USDT": {"is_rank": 1, "selection": "selected"}},
+        "order_rejections": {"grid_atr:AAA/USDT:max_live_grids": 2},
+    }]
+    result_id = save_result_sync(db_path, result)
+    detail = asyncio.run(get_backtest_by_id_async(db_path, result_id))
+    assert detail["universe_selection"] == result.universe_selection
 
 
 def test_save_and_get_btc_benchmark(db_path):

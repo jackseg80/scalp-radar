@@ -69,7 +69,11 @@ class IncrementalIndicatorEngine:
         if len(buf) > max_size:
             self._buffers[key] = buf[-max_size:]
 
-    def get_indicators(self, symbol: str) -> dict[str, dict[str, Any]]:
+    def get_indicators(
+        self,
+        symbol: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, dict[str, Any]]:
         """Recalcule et retourne les indicateurs pour tous les TF d'un symbol.
 
         Retourne {"5m": {"rsi": 23.5, "vwap": 98500, ...}, "15m": {"rsi": 45, ...}}
@@ -83,7 +87,7 @@ class IncrementalIndicatorEngine:
             if not buf or len(buf) < 2:
                 continue
 
-            indicators = self._compute_latest(buf, tf)
+            indicators = self._compute_latest(buf, tf, parameters=parameters)
             if indicators:
                 result[tf] = indicators
 
@@ -98,6 +102,7 @@ class IncrementalIndicatorEngine:
         candles: list[Candle],
         timeframe: str = "",
         _key: tuple[str, str] | None = None,
+        parameters: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Calcule les indicateurs sur le buffer complet, retourne le dernier point.
 
@@ -108,11 +113,19 @@ class IncrementalIndicatorEngine:
         if n < 2:
             return None
 
-        rsi_val = self._rsi_last(candles)
-        adx_val, di_plus_val, di_minus_val = self._adx_last(candles)
-        atr_val, atr_sma_val = self._atr_last(candles)
-        vwap_val = self._vwap_last(candles)
-        vol_sma_val = self._vol_sma_last(candles)
+        params = parameters or {}
+        rsi_period = int(params.get("rsi_period", 14))
+        adx_period = int(params.get("adx_period", 14))
+        atr_period = int(params.get("atr_period", 14))
+        atr_sma_period = int(params.get("atr_sma_period", 20))
+        vwap_window = int(params.get("vwap_window", 288))
+        volume_sma_period = int(params.get("volume_sma_period", 20))
+
+        rsi_val = self._rsi_last(candles, rsi_period)
+        adx_val, di_plus_val, di_minus_val = self._adx_last(candles, adx_period)
+        atr_val, atr_sma_val = self._atr_last(candles, atr_period, atr_sma_period)
+        vwap_val = self._vwap_last(candles, vwap_window)
+        vol_sma_val = self._vol_sma_last(candles, volume_sma_period)
 
         regime = _detect_regime(
             adx_val, di_plus_val, di_minus_val, atr_val, atr_sma_val
@@ -160,7 +173,10 @@ class IncrementalIndicatorEngine:
             avg_loss = (avg_loss * (period - 1) + max(-delta, 0.0)) / period
 
         if avg_loss == 0.0:
-            return 100.0 if avg_gain > 0 else 50.0
+            # Match backend.core.indicators.rsi exactly, including a flat
+            # series.  A shared definition is more important than the usual
+            # alternative convention returning 50 for the flat case.
+            return 100.0
         rs = avg_gain / avg_loss
         return 100.0 - 100.0 / (1.0 + rs)
 
@@ -208,17 +224,23 @@ class IncrementalIndicatorEngine:
 
     @staticmethod
     def _adx_last(candles: list[Candle], period: int = 14) -> tuple[float, float, float]:
-        """ADX + DI+/DI- Wilder — retourne (adx, di_plus, di_minus)."""
+        """ADX + DI+/DI- Wilder — retourne (adx, di_plus, di_minus).
+
+        The portfolio engine calls this function once per closed candle and
+        asset.  Keep the calculation scalar: allocating four 500-element
+        lists on every call creates avoidable allocator pressure during
+        multi-year Windows backtests.
+        """
         n = len(candles)
         if n < 2 * period + 2:
             return float("nan"), float("nan"), float("nan")
 
-        # DM+, DM-, TR (index 0 = placeholder)
-        dm_plus: list[float] = [0.0]
-        dm_minus: list[float] = [0.0]
-        tr_list: list[float] = [candles[0].high - candles[0].low]
-
-        for i in range(1, n):
+        # Wilder seeds over indices 1..period.  Compute each movement once
+        # instead of materialising full DM/TR series.
+        sm_tr = 0.0
+        sm_plus = 0.0
+        sm_minus = 0.0
+        for i in range(1, period + 1):
             h = candles[i].high
             l_val = candles[i].low
             ph = candles[i - 1].high
@@ -227,48 +249,55 @@ class IncrementalIndicatorEngine:
 
             up = h - ph
             down = pl - l_val
-
-            dm_plus.append(up if (up > down and up > 0) else 0.0)
-            dm_minus.append(down if (down > up and down > 0) else 0.0)
-            tr_list.append(max(h - l_val, abs(h - pc), abs(l_val - pc)))
-
-        # Seeds : somme des period premières valeurs (indices 1..period)
-        sm_tr = 0.0
-        sm_plus = 0.0
-        sm_minus = 0.0
-        for j in range(1, period + 1):
-            sm_tr += tr_list[j]
-            sm_plus += dm_plus[j]
-            sm_minus += dm_minus[j]
+            sm_tr += max(h - l_val, abs(h - pc), abs(l_val - pc))
+            if up > down and up > 0:
+                sm_plus += up
+            elif down > up and down > 0:
+                sm_minus += down
 
         # DI+/DI- au premier index
         di_plus = 100.0 * sm_plus / sm_tr if sm_tr > 0 else 0.0
         di_minus = 100.0 * sm_minus / sm_tr if sm_tr > 0 else 0.0
         di_sum = di_plus + di_minus
-        dx_values: list[float] = [
+        first_dx = (
             100.0 * abs(di_plus - di_minus) / di_sum if di_sum > 0 else 0.0
-        ]
+        )
+        dx_seed_sum = first_dx
+        dx_count = 1
+        adx_val = float("nan")
 
-        # Wilder smoothing DI+/DI- et accumulation DX
+        # Smooth DI+/DI- and build the ADX seed in scalar accumulators.  Once
+        # the seed is complete, continue the normal Wilder recursion.
         for i in range(period + 1, n):
-            sm_tr = sm_tr - sm_tr / period + tr_list[i]
-            sm_plus = sm_plus - sm_plus / period + dm_plus[i]
-            sm_minus = sm_minus - sm_minus / period + dm_minus[i]
+            h = candles[i].high
+            l_val = candles[i].low
+            previous = candles[i - 1]
+            up = h - previous.high
+            down = previous.low - l_val
+            tr = max(
+                h - l_val,
+                abs(h - previous.close),
+                abs(l_val - previous.close),
+            )
+            plus_dm = up if (up > down and up > 0) else 0.0
+            minus_dm = down if (down > up and down > 0) else 0.0
+
+            sm_tr = sm_tr - sm_tr / period + tr
+            sm_plus = sm_plus - sm_plus / period + plus_dm
+            sm_minus = sm_minus - sm_minus / period + minus_dm
 
             di_plus = 100.0 * sm_plus / sm_tr if sm_tr > 0 else 0.0
             di_minus = 100.0 * sm_minus / sm_tr if sm_tr > 0 else 0.0
 
             di_sum = di_plus + di_minus
             dx = 100.0 * abs(di_plus - di_minus) / di_sum if di_sum > 0 else 0.0
-            dx_values.append(dx)
-
-        # ADX = Wilder smoothed DX
-        if len(dx_values) < period:
-            return float("nan"), di_plus, di_minus
-
-        adx_val = sum(dx_values[:period]) / period
-        for i in range(period, len(dx_values)):
-            adx_val = (adx_val * (period - 1) + dx_values[i]) / period
+            if dx_count < period:
+                dx_seed_sum += dx
+                dx_count += 1
+                if dx_count == period:
+                    adx_val = dx_seed_sum / period
+            else:
+                adx_val = (adx_val * (period - 1) + dx) / period
 
         return adx_val, di_plus, di_minus
 

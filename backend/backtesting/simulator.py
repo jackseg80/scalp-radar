@@ -9,6 +9,7 @@ Sprint 11 : GridStrategyRunner pour les stratégies grid/DCA (envelope_dca).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import sqlite3
@@ -25,7 +26,17 @@ from backend.core.data_engine import DataEngine
 from backend.core.grid_position_manager import GridPositionManager
 from backend.core.incremental_indicators import IncrementalIndicatorEngine
 from backend.core.indicators import detect_market_regime
-from backend.core.models import Candle, Direction, MarketRegime
+from backend.core.models import (
+    Candle,
+    Direction,
+    ExecutionSpec,
+    FillEvent,
+    MarketRegime,
+    OrderIntent,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
 from backend.core.position_manager import (
     PositionManager,
     PositionManagerConfig,
@@ -64,7 +75,7 @@ REGIME_LIVE_TO_WFO: dict[MarketRegime, str] = {
 # Paper state written before this model used intrabar updates and could execute
 # levels retroactively on the candle that created them. Never restore that
 # economically invalid capital into the chronological paper engine.
-PAPER_EXECUTION_MODEL = "closed_bar_v2"
+PAPER_EXECUTION_MODEL = "closed_bar_v3"
 
 
 @dataclass(frozen=True)
@@ -73,6 +84,9 @@ class PendingGridOrder:
 
     level: GridLevel
     created_at: datetime
+    expires_at: datetime | None = None
+    remaining_fraction: float = 1.0
+    intent_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -584,6 +598,7 @@ class GridStrategyRunner:
         db_path: str | None = None,
         regime_profile: dict[str, dict] | None = None,
         chronological_execution: bool = False,
+        execution_spec: ExecutionSpec | None = None,
     ) -> None:
         self._strategy = strategy
         self._config = config
@@ -595,7 +610,14 @@ class GridStrategyRunner:
         # être remplis que sur T+1. Les tests unitaires/anciens appelants gardent
         # le mode immédiat par défaut pour backward compatibility explicite.
         self._chronological_execution = chronological_execution
+        self._execution_spec = execution_spec or ExecutionSpec(
+            maker_fee_pct=config.risk.fees.maker_percent,
+            taker_fee_pct=config.risk.fees.taker_percent,
+            slippage_pct=config.risk.slippage.default_estimate_percent,
+        )
         self._pending_grid_orders: dict[str, list[PendingGridOrder]] = {}
+        self._order_intents: list[OrderIntent] = []
+        self._fill_events: list[FillEvent] = []
         self._planned_grid_exits: dict[str, PlannedGridExit] = {}
         self._last_processed_candle: dict[str, datetime] = {}
 
@@ -611,6 +633,11 @@ class GridStrategyRunner:
         self._trades: list[tuple[str, TradeResult]] = []
         self._current_regime = MarketRegime.RANGING
         self._kill_switch_triggered = False
+        # Account-scoped portfolio stops block future entries only. Existing
+        # positions must keep their TP/SL lifecycle, just as server-side
+        # protection does in live trading.
+        self._account_entries_frozen = False
+        self._portfolio_managed_risk = False
         self._stats = RunnerStats(
             capital=self._capital,
             initial_capital=self._initial_capital,
@@ -669,6 +696,7 @@ class GridStrategyRunner:
 
         # Funding costs tracking (approximation 0.01% par settlement)
         self._total_funding_cost: float = 0.0
+        self._missing_funding_events: int = 0
 
         # Circuit breaker — désactive le runner après trop de crashes
         self._crash_times: list[float] = []
@@ -741,6 +769,47 @@ class GridStrategyRunner:
                     pass
         return default
 
+    def _indicator_parameters(self, symbol: str) -> dict[str, int]:
+        """Resolve core indicator periods from the effective asset config."""
+        effective = self._strategy.for_symbol(symbol)
+        config = effective._config
+        return {
+            "atr_period": int(getattr(config, "atr_period", 14)),
+            "atr_sma_period": int(getattr(config, "atr_sma_period", 20)),
+            "rsi_period": int(getattr(config, "rsi_period", 14)),
+            "adx_period": int(getattr(config, "adx_period", 14)),
+            "vwap_window": int(getattr(config, "vwap_window", 288)),
+            "volume_sma_period": int(getattr(config, "volume_sma_period", 20)),
+        }
+
+    def _current_account_equity(self) -> float:
+        """Return cash + reserved margin + mark-to-market P&L.
+
+        ``_capital`` is available cash because margin is deducted on entry.
+        Using it directly for subsequent levels would shrink a grid merely
+        because its first limit filled, unlike the exchange account equity used
+        by live sizing.
+        """
+        margin_used = 0.0
+        unrealized_pnl = 0.0
+        for symbol, positions in self._positions.items():
+            current_price = self._last_prices.get(symbol)
+            for position in positions:
+                margin_used += (
+                    position.entry_price * position.quantity / self._leverage
+                )
+                if current_price is None or current_price <= 0:
+                    continue
+                if position.direction == Direction.LONG:
+                    unrealized_pnl += (
+                        current_price - position.entry_price
+                    ) * position.quantity
+                else:
+                    unrealized_pnl += (
+                        position.entry_price - current_price
+                    ) * position.quantity
+        return self._capital + margin_used + unrealized_pnl
+
     def _bar_close_time(self, candle: Candle) -> datetime:
         """Retourne l'instant de clôture de la bougie (timestamp = ouverture)."""
         return candle.timestamp + timedelta(
@@ -809,8 +878,21 @@ class GridStrategyRunner:
         else:
             self._planned_grid_exits.pop(symbol, None)
 
-        self._pending_grid_orders.pop(symbol, None)
-        if self._kill_switch_triggered or len(positions) >= self._get_num_levels(symbol):
+        existing = {
+            order.level.index: order
+            for order in self._pending_grid_orders.get(symbol, [])
+        }
+        position_levels = {position.level for position in positions}
+        partial_pending = {
+            order.level.index
+            for order in existing.values()
+            if order.remaining_fraction < 1.0
+            and order.level.index in position_levels
+        }
+        if self._kill_switch_triggered or self._account_entries_frozen or (
+            len(positions) >= self._get_num_levels(symbol) and not partial_pending
+        ):
+            self._pending_grid_orders.pop(symbol, None)
             return
         if not self._should_allow_new_grid(symbol):
             return
@@ -825,17 +907,97 @@ class GridStrategyRunner:
             if elapsed < cooldown * tf_seconds:
                 return
 
+        if not positions:
+            account_guard = getattr(self, "_can_plan_new_grid", None)
+            if callable(account_guard) and not account_guard(symbol):
+                return
+
         levels = self._compute_grid_levels(
             symbol,
             ctx,
             grid_state,
             self._get_num_levels(symbol),
         )
-        if levels:
-            self._pending_grid_orders[symbol] = [
-                PendingGridOrder(level=level, created_at=created_at)
-                for level in levels
-            ]
+        reconciled: list[PendingGridOrder] = []
+        drift_limit = self._execution_spec.grid_replace_drift_pct / 100
+        for level in levels:
+            old = existing.get(level.index)
+            # A fully filled level must not be recreated on every close. A
+            # partially filled level keeps its original pending remainder.
+            if level.index in position_levels and old is None:
+                continue
+            if old is not None and old.level.direction == level.direction:
+                drift = abs(old.level.entry_price - level.entry_price) / level.entry_price
+                if drift <= drift_limit and (
+                    old.expires_at is None or old.expires_at > created_at
+                ):
+                    reconciled.append(old)
+                    continue
+                if old.intent_id:
+                    self._fill_events.append(FillEvent(
+                        event_id=f"cancel-{old.intent_id}-{int(created_at.timestamp())}",
+                        order_intent_id=old.intent_id,
+                        symbol=symbol,
+                        side=(OrderSide.BUY if old.level.direction == Direction.LONG else OrderSide.SELL),
+                        status=OrderStatus.CANCELLED,
+                        timestamp=created_at,
+                        reason="price_drift" if drift > drift_limit else "expired",
+                    ))
+            intent_id = (
+                f"{self.name}:{symbol}:{level.index}:"
+                f"{int(created_at.timestamp())}"
+            )
+            quantity = (
+                max(ctx.capital, 0.0) * level.size_fraction * self._leverage
+                / level.entry_price
+            )
+            if quantity <= 0:
+                continue
+            expires_at = created_at + timedelta(
+                minutes=self._execution_spec.grid_order_expiry_minutes,
+            )
+            self._order_intents.append(OrderIntent(
+                id=intent_id,
+                account_scope=getattr(self, "_account_scope", self.name),
+                strategy_name=self.name,
+                symbol=symbol,
+                side=(OrderSide.BUY if level.direction == Direction.LONG else OrderSide.SELL),
+                order_type=OrderType.LIMIT,
+                price=level.entry_price,
+                quantity=quantity,
+                leverage=self._leverage,
+                created_at=created_at,
+                expires_at=expires_at,
+                metadata={"level": level.index},
+            ))
+            self._fill_events.append(FillEvent(
+                event_id=f"accept-{intent_id}",
+                order_intent_id=intent_id,
+                symbol=symbol,
+                side=(OrderSide.BUY if level.direction == Direction.LONG else OrderSide.SELL),
+                status=OrderStatus.OPEN,
+                timestamp=created_at,
+                reason="simulated_broker_accepted",
+            ))
+            reconciled.append(PendingGridOrder(
+                level=level,
+                created_at=created_at,
+                expires_at=expires_at,
+                intent_id=intent_id,
+            ))
+        if reconciled:
+            self._pending_grid_orders[symbol] = reconciled
+        else:
+            self._pending_grid_orders.pop(symbol, None)
+
+    def _execution_draw(
+        self, order: PendingGridOrder, candle: Candle, salt: str,
+    ) -> float:
+        payload = (
+            f"{self._execution_spec.random_seed}:{order.intent_id}:"
+            f"{candle.timestamp.isoformat()}:{salt}"
+        ).encode("utf-8")
+        return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") / 2**64
 
     def _should_allow_new_grid(self, symbol: str) -> bool:
         """Sprint 27 : Filtre Darwinien — bloque si régime WFO défavorable.
@@ -1001,6 +1163,12 @@ class GridStrategyRunner:
                 order = PendingGridOrder(
                     level=level,
                     created_at=datetime.fromisoformat(raw["created_at"]),
+                    expires_at=(
+                        datetime.fromisoformat(raw["expires_at"])
+                        if raw.get("expires_at") else None
+                    ),
+                    remaining_fraction=float(raw.get("remaining_fraction", 1.0)),
+                    intent_id=raw.get("intent_id"),
                 )
                 self._pending_grid_orders.setdefault(symbol, []).append(order)
             except (KeyError, TypeError, ValueError):
@@ -1139,14 +1307,20 @@ class GridStrategyRunner:
         self._update_close_buffer(symbol, candle)
 
         # Calculer SMA
+        effective_strategy = self._strategy.for_symbol(symbol)
+        effective_ma_period = int(
+            getattr(effective_strategy._config, "ma_period", self._ma_period),
+        )
         closes = list(self._close_buffer[symbol])
-        if len(closes) < self._ma_period:
+        if len(closes) < effective_ma_period:
             return
 
-        sma_val = float(np.mean(closes[-self._ma_period:]))
+        sma_val = float(np.mean(closes[-effective_ma_period:]))
 
         # Récupérer les indicateurs de l'engine et merger SMA
-        indicators = self._indicator_engine.get_indicators(symbol)
+        indicators = self._indicator_engine.get_indicators(
+            symbol, parameters=self._indicator_parameters(symbol),
+        )
         if not indicators:
             indicators = {}
         indicators.setdefault(self._strategy_tf, {}).update({
@@ -1184,7 +1358,19 @@ class GridStrategyRunner:
         )
 
         # Capital utilisé pour le sizing : fixe pendant warm-up, réel en live
-        raw_capital = self._initial_capital if self._is_warming_up else self._capital
+        account_equity = getattr(self, "_portfolio_account_equity", None)
+        if getattr(self, "_portfolio_mode", False) and callable(account_equity):
+            raw_capital = float(account_equity())
+        else:
+            raw_capital = (
+                self._initial_capital
+                if self._is_warming_up
+                else (
+                    self._current_account_equity()
+                    if self._chronological_execution
+                    else self._capital
+                )
+            )
         sizing_capital = raw_capital / self._nb_assets
 
         # Construire le contexte
@@ -1204,10 +1390,17 @@ class GridStrategyRunner:
         # Funding cost (settlement toutes les 8h : 00:00, 08:00, 16:00 UTC)
         # Appliqué AVANT TP/SL : si position ouverte au settlement, on paie le funding
         if not self._is_warming_up and positions and candle.timestamp.hour in (0, 8, 16):
-            # Lire le funding rate réel depuis DataEngine (en %, ex: 0.01 = 0.01%)
-            # Fallback sur 0.01% si non disponible (approximation conservative)
+            # Lire le funding rate réel depuis la source de marché (en %, ex:
+            # 0.01 = 0.01%). Missing data is explicit: a silent synthetic rate
+            # would make certification results irreproducible.
             raw_fr = self._data_engine.get_funding_rate(symbol) if self._data_engine else None
-            funding_rate = (raw_fr / 100) if isinstance(raw_fr, (int, float)) else 0.0001
+            if isinstance(raw_fr, (int, float)):
+                funding_rate = (
+                    raw_fr / 100 * self._execution_spec.funding_multiplier
+                )
+            else:
+                funding_rate = 0.0
+                self._missing_funding_events += 1
             for pos in positions:
                 notional = pos.entry_price * pos.quantity
                 if pos.direction == Direction.LONG:
@@ -1344,21 +1537,45 @@ class GridStrategyRunner:
 
         # 2. Ouvrir de nouveaux niveaux si grille pas pleine
         effective_max = self._get_num_levels(symbol)
-        if len(positions) < effective_max:
+        if len(positions) < effective_max or (
+            self._chronological_execution and self._pending_grid_orders.get(symbol)
+        ):
             if self._chronological_execution:
-                pending = self._pending_grid_orders.pop(symbol, [])
-                levels = [
-                    order.level
-                    for order in pending
-                    if order.created_at <= candle.timestamp
-                ]
+                pending = self._pending_grid_orders.get(symbol, [])
+                retained_orders: list[PendingGridOrder] = []
+                active_orders: list[PendingGridOrder] = []
+                for order in pending:
+                    if order.expires_at is not None and candle.timestamp >= order.expires_at:
+                        if order.intent_id:
+                            self._fill_events.append(FillEvent(
+                                event_id=f"expire-{order.intent_id}-{int(candle.timestamp.timestamp())}",
+                                order_intent_id=order.intent_id,
+                                symbol=symbol,
+                                side=(OrderSide.BUY if order.level.direction == Direction.LONG else OrderSide.SELL),
+                                status=OrderStatus.EXPIRED,
+                                timestamp=candle.timestamp,
+                                reason="time_in_force",
+                            ))
+                        continue
+                    retained_orders.append(order)
+                    activation = order.created_at + timedelta(
+                        milliseconds=self._execution_spec.latency_ms,
+                    )
+                    if activation <= candle.timestamp:
+                        active_orders.append(order)
+                # Latency can exceed the bar duration. Such an order is still
+                # pending and must survive until it activates or expires.
+                self._pending_grid_orders[symbol] = retained_orders
+                levels = [order.level for order in active_orders]
+                orders_by_level = {order.level.index: order for order in active_orders}
             else:
                 levels = self._compute_grid_levels(
                     symbol, ctx, grid_state, effective_max,
                 )
+                orders_by_level = {}
 
             for level in levels:
-                if level.index in {p.level for p in positions}:
+                if not self._chronological_execution and level.index in {p.level for p in positions}:
                     continue
 
                 touched = False
@@ -1368,13 +1585,35 @@ class GridStrategyRunner:
                     touched = candle.high >= level.entry_price
 
                 if touched:
-                    # Sizing : fixe en portfolio mode, fixe pendant warm-up, compound en live
-                    if getattr(self, "_portfolio_mode", False):
-                        pos_raw = self._initial_capital
+                    pending_order = orders_by_level.get(level.index)
+                    if pending_order is not None and self._execution_draw(
+                        pending_order, candle, "missed",
+                    ) < self._execution_spec.missed_fill_probability:
+                        continue
+                    fill_fraction = (
+                        pending_order.remaining_fraction
+                        if pending_order is not None else 1.0
+                    )
+                    is_partial = (
+                        pending_order is not None
+                        and fill_fraction > 1e-9
+                        and self._execution_draw(pending_order, candle, "partial")
+                        < self._execution_spec.partial_fill_probability
+                    )
+                    if is_partial:
+                        fill_fraction *= 0.5
+                    # Shared-account portfolio uses the same compounding account
+                    # equity as the live Executor.  Paper warm-up remains fixed.
+                    if getattr(self, "_portfolio_mode", False) and callable(account_equity):
+                        pos_raw = float(account_equity())
                     elif self._is_warming_up:
                         pos_raw = self._initial_capital
                     else:
-                        pos_raw = self._capital
+                        pos_raw = (
+                            self._current_account_equity()
+                            if self._chronological_execution
+                            else self._capital
+                        )
                     pos_per_asset = pos_raw / self._nb_assets
 
                     # Equal allocation sizing (Sprint 20a)
@@ -1385,11 +1624,19 @@ class GridStrategyRunner:
                     # Marge fixe par niveau = capital / nb_assets / num_levels
                     # Le SL contrôle le risque en $, PAS la taille de position
                     num_levels = effective_max
-                    margin_per_level = pos_per_asset / num_levels
-
-                    # Cap de sécurité : jamais plus de 25% du capital sur un seul asset
-                    max_margin_per_asset = pos_raw * 0.25
-                    margin_per_level = min(margin_per_level, max_margin_per_asset / num_levels)
+                    margin_per_level = (
+                        pos_per_asset * level.size_fraction
+                        if self._chronological_execution
+                        else pos_per_asset / num_levels
+                    )
+                    # Backward-compatible immediate paper model. The canonical
+                    # closed-bar model follows the live Executor, which has no
+                    # hidden per-asset 25% cap and relies on account risk limits.
+                    if not self._chronological_execution:
+                        margin_per_level = min(
+                            margin_per_level,
+                            pos_raw * 0.25 / num_levels,
+                        )
 
                     # Margin guard (Sprint 20a) — skip si marge totale dépasse le seuil
                     max_margin_ratio = getattr(self._config.risk, "max_margin_ratio", 0.70)
@@ -1400,7 +1647,8 @@ class GridStrategyRunner:
                         for positions_list in self._positions.values()
                         for p in positions_list
                     )
-                    if total_margin_used + margin_per_level > pos_raw * max_margin_ratio:
+                    prospective_margin = margin_per_level * fill_fraction
+                    if total_margin_used + prospective_margin > pos_raw * max_margin_ratio:
                         _h = getattr(self, "_on_skip_local", None)
                         if callable(_h):
                             _h(symbol)
@@ -1409,7 +1657,11 @@ class GridStrategyRunner:
 
                     # Global margin guard (Sprint 24a) — portfolio backtest seulement
                     portfolio_runners = getattr(self, "_portfolio_runners", None)
-                    portfolio_cap = getattr(self, "_portfolio_initial_capital", None)
+                    portfolio_cap = (
+                        float(account_equity())
+                        if callable(account_equity)
+                        else getattr(self, "_portfolio_initial_capital", None)
+                    )
                     if portfolio_runners is not None and portfolio_cap is not None:
                         global_margin = sum(
                             p.entry_price * p.quantity / r._leverage
@@ -1417,25 +1669,36 @@ class GridStrategyRunner:
                             for positions_list in r._positions.values()
                             for p in positions_list
                         )
-                        if global_margin + margin_per_level > portfolio_cap * max_margin_ratio:
+                        if global_margin + prospective_margin > portfolio_cap * max_margin_ratio:
                             _h = getattr(self, "_on_skip_global", None)
                             if callable(_h):
                                 _h(symbol)
 
                             continue  # Skip — marge globale dépasserait le seuil
 
-                    pos_capital = margin_per_level * num_levels
+                    pos_capital = margin_per_level * num_levels * fill_fraction
 
                     position = self._gpm.open_grid_position(
                         level, candle.timestamp,
                         pos_capital,
                         effective_max,
+                        limit_entry=self._chronological_execution,
                     )
                     if position:
+                        account_risk = getattr(self, "_portfolio_pre_trade_risk", None)
+                        if callable(account_risk):
+                            allowed, _reason = account_risk(
+                                symbol, position, not positions,
+                            )
+                            if not allowed:
+                                continue
                         # Réserver la marge (les fees sont dans net_pnl à la fermeture)
                         notional = position.entry_price * position.quantity
                         margin_used = notional / self._leverage
                         if not self._is_warming_up:
+                            ensure_cash = getattr(self, "_portfolio_ensure_cash", None)
+                            if callable(ensure_cash):
+                                ensure_cash(self, margin_used)
                             if self._capital < margin_used:
                                 logger.warning(
                                     "[{}] Capital insuffisant pour level {} "
@@ -1445,7 +1708,54 @@ class GridStrategyRunner:
                                 )
                                 continue
                             self._capital -= margin_used
-                        self._positions.setdefault(symbol, []).append(position)
+                        existing_position = next(
+                            (item for item in positions if item.level == position.level),
+                            None,
+                        )
+                        if existing_position is None:
+                            self._positions.setdefault(symbol, []).append(position)
+                        else:
+                            combined_qty = existing_position.quantity + position.quantity
+                            existing_position.entry_price = (
+                                existing_position.entry_price * existing_position.quantity
+                                + position.entry_price * position.quantity
+                            ) / combined_qty
+                            existing_position.quantity = combined_qty
+                            existing_position.entry_fee += position.entry_fee
+                        if pending_order is not None:
+                            remaining = pending_order.remaining_fraction - fill_fraction
+                            current = self._pending_grid_orders.get(symbol, [])
+                            self._pending_grid_orders[symbol] = [
+                                order for order in current
+                                if order.level.index != level.index
+                            ]
+                            if remaining > 1e-9:
+                                self._pending_grid_orders[symbol].append(PendingGridOrder(
+                                    level=pending_order.level,
+                                    created_at=pending_order.created_at,
+                                    expires_at=pending_order.expires_at,
+                                    remaining_fraction=remaining,
+                                    intent_id=pending_order.intent_id,
+                                ))
+                            if pending_order.intent_id:
+                                self._fill_events.append(FillEvent(
+                                    event_id=(
+                                        f"fill-{pending_order.intent_id}-"
+                                        f"{int(candle.timestamp.timestamp())}"
+                                    ),
+                                    order_intent_id=pending_order.intent_id,
+                                    symbol=symbol,
+                                    side=(OrderSide.BUY if position.direction == Direction.LONG else OrderSide.SELL),
+                                    status=(
+                                        OrderStatus.PARTIALLY_FILLED
+                                        if remaining > 1e-9 else OrderStatus.FILLED
+                                    ),
+                                    timestamp=candle.timestamp,
+                                    fill_price=position.entry_price,
+                                    fill_quantity=position.quantity,
+                                    cumulative_quantity=combined_qty if existing_position else position.quantity,
+                                    fee=position.entry_fee,
+                                ))
                         # Init HWM quand la 1ère position s'ouvre (trailing stop)
                         if symbol not in self._hwm:
                             if self._chronological_execution:
@@ -1532,6 +1842,11 @@ class GridStrategyRunner:
 
         # Kill switch grid : seuils plus larges (drawdown structurel normal)
         # Grace period : pas de kill switch pendant les N premières bougies post-warmup
+        if self._portfolio_managed_risk:
+            # The portfolio feeds closed trades to its shared LiveRiskManager.
+            # Applying this threshold per runner would treat each allocation as
+            # an independent account and diverge from the live executor.
+            return
         if self._candles_since_warmup < self._grace_period_candles:
             return
 
@@ -1594,7 +1909,9 @@ class GridStrategyRunner:
         if not self._indicator_engine:
             return None
 
-        raw_indicators = self._indicator_engine.get_indicators(symbol) or {}
+        raw_indicators = self._indicator_engine.get_indicators(
+            symbol, parameters=self._indicator_parameters(symbol),
+        ) or {}
         indicators = {
             timeframe: dict(values)
             for timeframe, values in raw_indicators.items()
@@ -1671,7 +1988,7 @@ class GridStrategyRunner:
             self._last_close_timestamp = timestamps
         if symbol not in self._close_buffer:
             self._close_buffer[symbol] = deque(
-                maxlen=max(self._ma_period + 20, 50),
+                maxlen=GridStrategyRunner.MAX_WARMUP_CANDLES,
             )
         last_timestamp = timestamps.get(symbol)
         if last_timestamp == candle.timestamp and self._close_buffer[symbol]:
@@ -1722,7 +2039,7 @@ class GridStrategyRunner:
                     unrealized_pnl += (pos.entry_price - current_price) * pos.quantity
                 margin_used += (pos.entry_price * pos.quantity) / self._leverage
 
-        equity = self._capital + margin_used + unrealized_pnl
+        equity = self._current_account_equity()
 
         return {
             "name": self.name,

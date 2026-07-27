@@ -12,6 +12,84 @@ Attention aux quotes : utiliser `"` pour les strings Python, créer un fichier .
 
 ---
 
+## 0. Certification live (workflow autoritatif)
+
+Les commandes WFO/portfolio/robustesse historiques restent disponibles pour la recherche, mais leur grade ou verdict ne permet plus une promotion live. Le workflow détaillé est dans [docs/WORKFLOW_WFO.md](docs/WORKFLOW_WFO.md).
+
+```powershell
+# 1. Calibrer l'exécution Bitget depuis les observations live persistées
+uv run python -m scripts.calibrate_execution --strategy grid_atr --since <ISO_DATE> --until <ISO_DATE>
+
+# 2. Geler données + code + configs (worktree propre obligatoire avec --validate)
+uv run python -m scripts.create_data_snapshot --cutoff <ISO_DATE> --since <ISO_DATE> --symbols <CSV> --timeframes 1h,1m --execution-timeframe 1m --calibration-id <CALIBRATION_ID> --config-dir <YAML_SNAPSHOT_DIR> --validate
+
+# 3. WFO lié au snapshot ; reprise sûre sur le hash exact
+uv run --isolated --python 3.12 --frozen python -m scripts.optimize --strategy grid_atr --symbols <CSV> --config-dir <YAML_SNAPSHOT_DIR> --snapshot <SNAPSHOT_ID> --resume -v
+
+# 4. Vrai filtre portefeuille : paramètres et univers choisis par fenêtre IS,
+# puis rejoués chronologiquement sur son OOS externe (sans sélection post-hoc).
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio --strategy grid_atr --snapshot <SNAPSHOT_ID> --config-dir <YAML_SNAPSHOT_DIR> --capital 1000 --execution-scenario nominal
+
+# 5. Parité + fresh-capital 180/365j + robustesse + gates
+# Windows : Python 3.12 isolé obligatoire pour les replays longs
+uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy --strategy grid_atr --snapshot <SNAPSHOT_ID> --capital 1000
+
+# 6. Ingestion/revue des observations brutes forward
+uv run python -m scripts.record_forward_observations --certification-id <CERT_ID> --phase paper --input <OBSERVATIONS.jsonl>
+uv run python -m scripts.review_forward --certification-id <CERT_ID> --phase paper
+uv run python -m scripts.review_forward --certification-id <CERT_ID> --phase canary
+
+# 6. Artefact local après LIVE_APPROVED (ne modifie pas robot2)
+uv run python -m scripts.promote_strategy --certification-id <CERT_ID>
+```
+
+### grid_atr — découverte universelle (28 actifs, verdict principal 4x)
+
+Ne pas utiliser la liste d'actifs live ni un ancien `candidate_replay` pour
+répondre à la viabilité universelle de `grid_atr`. Le snapshot ci-dessous fige
+les 28 actifs de `assets.yaml`, le calendrier commun et le Top 8 IS-only.
+
+```powershell
+# Après backfill Binance 1h + funding complet, avec un worktree propre.
+uv run python -m scripts.create_data_snapshot `
+  --strategy grid_atr `
+  --universe-discovery `
+  --calendar-start "2022-01-01T00:00:00+00:00" `
+  --since "2022-01-01T00:00:00+00:00" `
+  --cutoff <ISO_DATE> `
+  --timeframes 1h `
+  --exchange binance `
+  --max-gap-bars 1 `
+  --seed 0
+
+# Exhaustif sur les 28 actifs ; --resume est sûr sur ce snapshot uniquement.
+uv run --isolated --python 3.12 --frozen python -m scripts.optimize `
+  --strategy grid_atr --all-symbols --snapshot <SNAPSHOT_ID> --resume -v
+
+# Même flux de décisions, sensibilités pré-déclarées 2x/4x/6x.
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio `
+  --strategy grid_atr --snapshot <SNAPSHOT_ID> --capital 1502.59 --all-leverages
+
+# Après un correctif du broker portfolio uniquement : réutiliser explicitement
+# un WFO déjà calculé. Le script refuse toute différence de données, config,
+# calendrier, grille ou sélection IS-only entre les deux snapshots.
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio `
+  --strategy grid_atr --snapshot <FRESH_PORTFOLIO_SNAPSHOT> `
+  --wfo-snapshot <COMPATIBLE_WFO_SNAPSHOT> --capital 1502.59 --all-leverages
+
+# Le verdict historique utilise uniquement le replay 4x.
+uv run --isolated --python 3.12 --frozen python -m scripts.certify_strategy `
+  --strategy grid_atr --snapshot <SNAPSHOT_ID> --capital 1502.59
+```
+
+Un snapshot universel incomplet, un funding manquant, une parité fast/canonique
+en échec ou un replay 4x hors seuil donne un résultat fail-closed. Aucune de
+ces commandes ne modifie `robot2`.
+
+Limitation fail-closed actuelle : le portfolio canonique grid consomme encore les barres 1h. Le gate `intrabar_execution_used` interdit donc `PAPER_READY` tant que l'exécution 1m n'est pas effectivement intégrée au broker simulé.
+
+---
+
 ## 🚨 COMMANDES D'URGENCE LIVE
 
 > Toutes les commandes suivantes s'exécutent **sur le serveur** (`ssh jack@192.168.1.200`, dans `~/scalp-radar`).
@@ -160,10 +238,9 @@ foreach ($s in @("ADA/USDT","AAVE/USDT","ARB/USDT","AVAX/USDT","BCH/USDT","BNB/U
 }
 ```
 
-### Appliquer les résultats A/B dans strategies.yaml
-```powershell
-uv run python -m scripts.optimize --all --apply
-```
+### Application directe des résultats A/B — LEGACY/BLOQUÉE
+
+`scripts.optimize --apply` retourne désormais une erreur. Une optimisation produit seulement un candidat `RESEARCH_ONLY`; utiliser le workflow de certification de la section 0.
 
 ### Flags Sprint 37 — Timeframe Coherence Guard
 
@@ -171,8 +248,8 @@ uv run python -m scripts.optimize --all --apply
 | ---- | ----------- |
 | `--force-timeframe 1h` | Restreint la grid WFO à un seul TF (override `param_grids.yaml`) |
 | `--symbols A,B,C` | Optimise plusieurs assets séparés par virgule (mutex avec `--symbol` / `--all-symbols`) |
-| `--exclude A,B` | Exclut des assets de `--apply` (les retire du YAML s'ils y sont) |
-| `--ignore-tf-conflicts` | Force `--apply` en excluant silencieusement les outliers TF |
+| `--exclude A,B` | Legacy : ancien filtre de `--apply` (promotion directe bloquée) |
+| `--ignore-tf-conflicts` | Legacy : ancien override de `--apply` (promotion directe bloquée) |
 
 **Workflow résolution conflit timeframe** (affiché automatiquement si `--apply` détecte un outlier) :
 
@@ -198,11 +275,14 @@ uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 365
 
 ### Reprendre un WFO interrompu (--resume)
 
-Skippe les assets déjà en DB (`is_latest=1`) — utile après un crash OOM/segfault.
+Sans snapshot, skippe les assets `is_latest=1`. Avec `--snapshot`, skippe uniquement les résultats non legacy portant le même `manifest_hash`, même s'ils ne sont plus `is_latest`.
 
 ```powershell
 # Reprendre grid_range_atr après crash (ex: planté à UNI/USDT)
 uv run python -m scripts.optimize --strategy grid_range_atr --all-symbols --resume
+
+# Reprise certifiable exacte
+uv run python -m scripts.optimize --strategy grid_atr --symbols <CSV> --config-dir <YAML_SNAPSHOT_DIR> --snapshot <SNAPSHOT_ID> --resume -v
 
 # Voir quels assets sont déjà faits avant de lancer
 uv run python -m scripts.optimize --strategy grid_range_atr --all-symbols --resume --dry-run
@@ -283,6 +363,9 @@ uv run python -m scripts.fetch_history --exchange binance --days 7 --symbols ADA
 uv run python -m scripts.backfill_candles --symbol BTC/USDT --timeframe 1h --days 1800
 # Depuis une date précise
 uv run python -m scripts.backfill_candles --symbol ETH/USDT --timeframe 1h --since 2022-01-01
+# Vérifie et tente aussi de réparer les trous internes ; échoue explicitement
+# si Binance ne fournit pas la bougie manquante (aucune donnée n'est inventée).
+uv run python -m scripts.backfill_candles --symbol ATOM/USDT --timeframe 1h --since 2023-03-01 --repair-gaps
 ```
 
 ### Fetch funding rates historiques (requis pour grid_funding)
@@ -545,15 +628,45 @@ uv run python -m scripts.run_backtest --strategy grid_atr --symbol BTC/USDT --ou
 
 Simule N assets avec capital partagé (même code que la prod). Voir section 2 pour les exemples WFO.
 
+Sur Windows, les replays longs doivent utiliser Python 3.12 isolé. Des
+corruptions mémoire ont été confirmées dans `python313.dll`; le CLI bloque
+donc explicitement Python 3.13/Windows. Installation unique :
+
+```powershell
+uv python install 3.12
+```
+
+Préfixe officiel à utiliser ensuite :
+
+```powershell
+uv run --isolated --python 3.12 --frozen python -m scripts.portfolio_backtest
+```
+
 ```powershell
 # Auto-détection historique (défaut) — affiche le goulot par asset
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --capital 10000
+
+# Replay local du périmètre déclaré de robot2 depuis un snapshot YAML figé.
+# Ne pousse rien vers le serveur ; utiliser Python 3.12 isolé sous Windows.
+uv run --isolated --python 3.12 --frozen python -m scripts.portfolio_backtest `
+  --strategy grid_atr `
+  --assets "ADA/USDT,ATOM/USDT,BTC/USDT,CRV/USDT,ETC/USDT,ICP/USDT,NEAR/USDT,SOL/USDT,XRP/USDT" `
+  --config-dir data/config_snapshots/robot2_20260725 `
+  --exchange binance `
+  --days 365 `
+  --capital 1502.59 `
+  --execution-scenario nominal `
+  --save `
+  --label "grid_atr_robot2_declared_365d_nominal_20260725"
 
 # grid_atr sur les Top 10 assets paper, 365 jours
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,AVAX/USDT,CRV/USDT,DOGE/USDT,DYDX/USDT,FET/USDT,GALA/USDT,ICP/USDT,NEAR/USDT --days 365 --capital 10000
 
 # Forward test grid_atr (365 derniers jours)
 uv run python -m scripts.portfolio_backtest --strategy grid_atr --assets BTC/USDT,ETH/USDT,DOGE/USDT --days 365 --capital 10000 --save --label "forward_test_2025"
+
+# Synchronisation serveur volontaire d'un résultat legacy local
+uv run python -m scripts.portfolio_backtest --strategy grid_atr --days 365 --save --label "reviewed_legacy" --push-server
 
 # grid_boltrend sur 6 assets, 730 jours
 uv run python -m scripts.portfolio_backtest --strategy grid_boltrend --assets BTC/USDT,ETH/USDT,DOGE/USDT,DYDX/USDT,LINK/USDT --capital 1000 --days 730
@@ -592,6 +705,7 @@ uv run python -m scripts.portfolio_backtest --strategy grid_atr --days auto --sa
 | `--days` | `auto` | Période (jours ou `auto` = max historique commun) |
 | `--capital` | `10000` | Capital initial ($) |
 | `--exchange` | `binance` | Source des candles |
+| `--config-dir` | `config` | Répertoire YAML isolé pour un replay reproductible |
 | `--leverage` | depuis strategies.yaml | Override leverage de tous les runners |
 | `--params` | — | Override params stratégie : `key=val,key2=val2` |
 | `--kill-switch-pct` | `45.0` | Seuil kill switch (%) |
@@ -950,8 +1064,9 @@ uv run python -m scripts.analyze_correlation --labels "label1,label2,label3"
 Mesure la corrélation des drawdowns entre stratégies (2 ou 3 labels max).
 Cible : r < 0.3. Calcule aussi l'allocation optimale minimisant le DD combiné.
 
-**Workflow post-WFO complet (étapes 0-8)** :
-```
+**Workflow post-WFO historique ci-dessous : LEGACY/RESEARCH ONLY.** Pour une décision live, utiliser la section 0.
+
+```text
 0. Leverage → calcul mathématique (AVANT le WFO)
 1. WFO      → uv run python -m scripts.optimize --strategy <n> --all-symbols --subprocess -v
 2. Apply    → uv run python -m scripts.optimize --strategy <n> --apply

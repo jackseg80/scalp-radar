@@ -160,19 +160,13 @@ class PositionManager:
         else:
             gross_pnl = (position.entry_price - exit_price) * position.quantity
 
-        # Slippage : flat cost 1 seule fois (exit seulement, sauf TP)
-        slippage_cost = 0.0
-        if exit_reason in ("sl", "signal_exit", "end_of_data", "regime_change"):
-            slippage_rate = self._config.slippage_pct
-            if regime == MarketRegime.HIGH_VOLATILITY:
-                slippage_rate *= self._config.high_vol_slippage_mult
-            slippage_cost = position.quantity * exit_price * slippage_rate
-
-        # Fee de sortie
-        if exit_reason == "tp":
-            exit_fee = position.quantity * exit_price * self._config.maker_fee
-        else:
-            exit_fee = position.quantity * exit_price * self._config.taker_fee
+        # TP/SL server-side triggers close at market on Bitget. Signal and
+        # force-close paths are market too, so all exits share taker+slippage.
+        slippage_rate = self._config.slippage_pct
+        if regime == MarketRegime.HIGH_VOLATILITY:
+            slippage_rate *= self._config.high_vol_slippage_mult
+        slippage_cost = position.quantity * exit_price * slippage_rate
+        exit_fee = position.quantity * exit_price * self._config.taker_fee
 
         fee_cost = position.entry_fee + exit_fee
         net_pnl = gross_pnl - fee_cost - slippage_cost

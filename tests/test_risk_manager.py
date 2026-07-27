@@ -544,6 +544,26 @@ class TestAuditP1DailyReset:
         # Même jour → pas de reset → cumul = -300
         assert rm._session_pnl == pytest.approx(-300.0)
 
+    def test_historical_events_reset_on_their_own_utc_day(self):
+        """A replay must not collapse every historical trade into today's session."""
+        rm = _make_rm()
+        day_one = datetime(2024, 1, 2, 23, tzinfo=timezone.utc)
+        day_two = day_one + timedelta(hours=2)
+
+        rm.record_trade_result(LiveTradeResult(
+            net_pnl=-2_400.0, timestamp=day_one,
+            symbol="BTC/USDT:USDT", direction="LONG", exit_reason="sl",
+            strategy_name="grid_atr",
+        ))
+        rm.record_trade_result(LiveTradeResult(
+            net_pnl=-200.0, timestamp=day_two,
+            symbol="BTC/USDT:USDT", direction="LONG", exit_reason="sl",
+            strategy_name="grid_atr",
+        ))
+
+        assert rm._session_pnl == pytest.approx(-200.0)
+        assert rm.is_kill_switch_triggered is False
+
 
 class TestAuditP1TelegramAlert:
     """P1 : alerte Telegram quand kill switch live déclenché."""
@@ -614,6 +634,14 @@ class TestAuditP1GlobalKillSwitch:
         # Chute à 6000 = drawdown 40%
         rm.record_balance_snapshot(6_000.0)
         assert rm.is_kill_switch_triggered is False
+
+    def test_replay_can_use_an_explicit_global_threshold(self):
+        """Portfolio CLI overrides must affect the shared canonical engine."""
+        rm = LiveRiskManager(_make_config(), global_max_loss_pct=30.0)
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        rm.record_balance_snapshot(10_000.0, timestamp=start)
+        rm.record_balance_snapshot(6_500.0, timestamp=start + timedelta(hours=1))
+        assert rm.is_kill_switch_triggered is True
 
     def test_old_snapshots_excluded(self):
         """Snapshots hors fenêtre 24h exclus du calcul peak."""

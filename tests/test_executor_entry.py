@@ -189,6 +189,31 @@ class TestOnCandle:
         executor._simulator.get_runner_context.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_skips_symbol_outside_per_asset_universe(self):
+        """Un override per_asset est aussi une whitelist d'entrées live."""
+        strategy = _make_strategy()
+        strategy._config.per_asset = {"BTC/USDT": {}}
+        executor = _make_executor(strategy=strategy)
+
+        await executor._on_candle("XLM/USDT", "1h", _make_candle())
+
+        executor._simulator.get_runner_context.assert_not_called()
+        strategy.compute_grid.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_symbol_rejected_by_adaptive_selector(self):
+        """Le sélecteur doit bloquer une entrée avant tout calcul d'ordre."""
+        executor = _make_executor()
+        executor._selector = MagicMock()
+        executor._selector.is_allowed.return_value = False
+
+        await executor._on_candle("BTC/USDT", "1h", _make_candle())
+
+        executor._selector.is_allowed.assert_called_once_with("grid_atr", "BTC/USDT")
+        executor._simulator.get_runner_context.assert_not_called()
+        executor._strategies["grid_atr"].compute_grid.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_skips_when_simulator_not_ready(self):
         executor = _make_executor()
         executor._simulator.get_runner_context.return_value = None
@@ -729,7 +754,10 @@ class TestAllocatedBalance:
     def test_get_strategy_nb_assets_returns_count(self):
         """per_asset avec 9 entries → retourne 9."""
         strat = _make_strategy()
-        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        strat._config.per_asset = {
+            symbol: {}
+            for symbol in ["BTC/USDT", *[f"ASSET{i}/USDT" for i in range(8)]]
+        }
         executor = _make_executor(strategy=strat)
         assert executor._get_strategy_nb_assets("grid_atr") == 9
 
@@ -750,7 +778,10 @@ class TestAllocatedBalance:
         """Balance 900$, 9 assets → capital compute_grid = 100$, pas 900$."""
         level = GridLevel(index=0, entry_price=49_600.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
-        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        strat._config.per_asset = {
+            symbol: {}
+            for symbol in ["BTC/USDT", *[f"ASSET{i}/USDT" for i in range(8)]]
+        }
         executor = _make_executor(strategy=strat)
         executor._exchange_balance = 900.0
         candle = _make_candle(close=50_000.0, low=49_500.0)
@@ -773,7 +804,10 @@ class TestAllocatedBalance:
         """Quantity basée sur allocated_balance (900/9=100), pas sur 900$."""
         level = GridLevel(index=0, entry_price=50_000.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
-        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        strat._config.per_asset = {
+            symbol: {}
+            for symbol in ["BTC/USDT", *[f"ASSET{i}/USDT" for i in range(8)]]
+        }
         executor = _make_executor(strategy=strat)
         executor._exchange_balance = 900.0
         candle = _make_candle(close=50_000.0, low=49_500.0)
@@ -791,7 +825,10 @@ class TestAllocatedBalance:
         """_pending_notional basé sur allocated_balance, pas sur la balance totale."""
         level = GridLevel(index=0, entry_price=50_000.0, direction=Direction.LONG, size_fraction=0.25)
         strat = _make_strategy(levels=[level])
-        strat._config.per_asset = {f"ASSET{i}/USDT": {} for i in range(9)}
+        strat._config.per_asset = {
+            symbol: {}
+            for symbol in ["BTC/USDT", *[f"ASSET{i}/USDT" for i in range(8)]]
+        }
         executor = _make_executor(strategy=strat, order_status="open")
         executor._exchange_balance = 900.0
         candle = _make_candle(close=50_000.0, low=49_500.0)

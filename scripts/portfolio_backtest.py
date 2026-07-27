@@ -18,6 +18,7 @@ import json
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from loguru import logger
 
@@ -30,6 +31,45 @@ from backend.backtesting.portfolio_engine import (
 from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
+from backend.core.experiment import revalidate_snapshot
+from backend.core.models import ExecutionSpec
+
+
+def _long_replay_runtime_error(
+    platform_name: str,
+    version_info: tuple[int, ...],
+) -> str | None:
+    """Return a fail-closed message for a known-unstable local runtime."""
+    if platform_name == "win32" and tuple(version_info[:2]) == (3, 13):
+        return (
+            "Portfolio backtest long bloqué sous Python 3.13/Windows : "
+            "des corruptions mémoire ont été confirmées dans python313.dll. "
+            "Utilisez : uv run --isolated --python 3.12 --frozen python "
+            "-m scripts.portfolio_backtest ..."
+        )
+    return None
+
+
+def _should_push_server(
+    *, requested: bool, snapshot_manifest: dict | None,
+) -> bool:
+    """Remote synchronization is explicit and forbidden for certification runs."""
+    return requested and snapshot_manifest is None
+
+
+def _load_backtest_config(config_dir: str) -> object:
+    """Load a reproducible configuration without mutating the active config.
+
+    An explicit directory is a frozen evidence input (for example a read-only
+    copy of robot2's YAML files), so local secrets and environment overrides
+    must not alter it. The default ``config`` directory keeps the historical
+    CLI behaviour.
+    """
+    path = Path(config_dir)
+    if not path.is_dir():
+        raise ValueError(f"Configuration directory not found: {path}")
+    env_file = ".env" if path == Path("config") else None
+    return get_config(path, env_file=env_file, force_reload=True)
 
 
 async def _detect_max_days(
@@ -38,6 +78,7 @@ async def _detect_max_days(
     exchange: str,
     db_path: str,
     multi_strategies: list[tuple[str, list[str]]] | None = None,
+    cutoff: datetime | None = None,
 ) -> tuple[int, dict[str, int]]:
     """Détecte le nombre de jours max couverts par tous les assets.
 
@@ -67,22 +108,16 @@ async def _detect_max_days(
     per_asset_days: dict[str, int] = {}
     latest_start: datetime | None = None  # la date de début la plus récente
 
-    exchanges_to_try = [exchange]
-    if exchange == "binance":
-        exchanges_to_try.append("bitget")
-    elif exchange == "bitget":
-        exchanges_to_try.append("binance")
+    effective_cutoff = cutoff or datetime.now(timezone.utc)
 
     for symbol in sorted(all_assets):
-        candles = None
-        for ex in exchanges_to_try:
-            candles = await db.get_candles(symbol, "1h", exchange=ex, limit=1)
-            if candles:
-                break
+        candles = await db.get_candles(
+            symbol, "1h", end=effective_cutoff, exchange=exchange, limit=1,
+        )
 
         if candles:
             first_ts = candles[0].timestamp
-            days = (datetime.now(timezone.utc) - first_ts).days
+            days = (effective_cutoff - first_ts).days
             per_asset_days[symbol] = days
             if latest_start is None or first_ts > latest_start:
                 latest_start = first_ts
@@ -94,7 +129,7 @@ async def _detect_max_days(
     if latest_start is None:
         return 90, per_asset_days
 
-    common_days = (datetime.now(timezone.utc) - latest_start).days
+    common_days = (effective_cutoff - latest_start).days
     # Soustraire le warm-up (~50 candles 1h ≈ 2 jours)
     common_days = max(common_days - 3, 30)
 
@@ -131,6 +166,10 @@ def _result_to_dict(result: PortfolioResult) -> dict:
         "min_liquidation_distance_pct": result.min_liquidation_distance_pct,
         "worst_case_sl_loss_pct": result.worst_case_sl_loss_pct,
         "funding_paid_total": result.funding_paid_total,
+        "missing_funding_events": result.missing_funding_events,
+        "order_rejections": result.order_rejections,
+        "execution_scenario": result.execution_scenario,
+        "execution_spec": result.execution_spec,
     }
     # Equity curve résumée (pas tous les snapshots)
     d["equity_curve"] = [
@@ -177,8 +216,35 @@ def _resolve_preset(preset: str, config) -> list[tuple[str, list[str]]]:
 
 async def main(args: argparse.Namespace) -> None:
     """Point d'entrée principal."""
-    setup_logging(level="INFO")
-    config = get_config()
+    # The portfolio replay is single-threaded.  On Windows, Loguru's queued
+    # file sinks create multiprocessing writer threads which have produced
+    # non-deterministic access violations during multi-year replays.  The
+    # final report is the CLI output; only warnings/errors need logging here.
+    setup_logging(level="WARNING", enqueue=False)
+    config_dir = getattr(args, "config_dir", "config")
+    config = _load_backtest_config(config_dir)
+    snapshot_manifest = None
+    snapshot_cutoff: datetime | None = None
+    if getattr(args, "snapshot", None):
+        snapshot_manifest, snapshot_errors = await revalidate_snapshot(
+            args.db,
+            args.snapshot,
+            config_dir=Path(config_dir),
+            repo_root=Path.cwd(),
+        )
+        if snapshot_errors:
+            raise ValueError(
+                f"Snapshot {args.snapshot} non reproductible : {snapshot_errors}"
+            )
+        snapshot_cutoff = datetime.fromisoformat(
+            snapshot_manifest["cutoff"].replace("Z", "+00:00")
+        )
+    base_execution_spec = ExecutionSpec.model_validate(
+        (snapshot_manifest or {}).get("metadata", {}).get("execution_spec", {})
+    )
+    execution_spec = base_execution_spec.with_scenario(
+        getattr(args, "execution_scenario", "nominal")
+    )
 
     # Résoudre les valeurs kill switch : CLI override > risk.yaml > fallback
     ks_cfg = getattr(config.risk, "kill_switch", None)
@@ -209,6 +275,23 @@ async def main(args: argparse.Namespace) -> None:
         args.label = f"{strategy_label}_{args.params.replace(',', '_').replace('=', '')}"
 
     assets = args.assets.split(",") if args.assets else None
+    if snapshot_manifest is not None:
+        snap_assets = sorted({
+            entry["key"].split(":", 2)[1]
+            for entry in snapshot_manifest.get("metadata", {}).get("series", [])
+            if entry["key"].startswith(f"{args.exchange}:")
+            and entry["key"].endswith(":1h")
+            and entry.get("row_count", 0) > 0
+        })
+        if assets is None:
+            strategy_config = getattr(config.strategies, args.strategy, None)
+            configured = set(getattr(strategy_config, "per_asset", {}).keys())
+            assets = [symbol for symbol in snap_assets if symbol in configured]
+        missing = sorted(set(assets or []) - set(snap_assets))
+        if missing:
+            raise ValueError(
+                f"Snapshot {args.snapshot} sans série {args.exchange} 1h pour {missing}"
+            )
 
     # --regime override --leverage (leverage piloté par le signal)
     if getattr(args, "regime", False) and args.leverage is not None:
@@ -269,6 +352,7 @@ async def main(args: argparse.Namespace) -> None:
             args.exchange,
             args.db,
             multi_strategies=multi_strategies,
+            cutoff=snapshot_cutoff,
         )
         if detail:
             min_days = min(detail.values()) if detail else 0
@@ -292,7 +376,7 @@ async def main(args: argparse.Namespace) -> None:
     if getattr(args, "regime", False):
         from backend.regime.btc_regime_signal import compute_regime_signal
 
-        end_dt = datetime.now(timezone.utc)
+        end_dt = snapshot_cutoff or datetime.now(timezone.utc)
         start_dt = end_dt - timedelta(days=days) if days else None
         regime_signal = await compute_regime_signal(
             db_path=args.db,
@@ -315,9 +399,10 @@ async def main(args: argparse.Namespace) -> None:
         kill_switch_window_hours=ks_hours,
         multi_strategies=multi_strategies,
         regime_signal=regime_signal,
+        execution_spec=execution_spec,
     )
 
-    end = datetime.now(timezone.utc)
+    end = snapshot_cutoff or datetime.now(timezone.utc)
     start = end - timedelta(days=days)
 
     t0 = time.monotonic()
@@ -363,25 +448,32 @@ async def main(args: argparse.Namespace) -> None:
             kill_switch_window_hours=ks_hours,
             duration_seconds=round(duration, 1),
             label=args.label,
+            manifest=snapshot_manifest,
+            result_status="RESEARCH_ONLY" if snapshot_manifest else "legacy",
         )
         logger.info("Résultat sauvegardé en DB (id={}, {:.0f}s)", result_id, duration)
 
-        # Push vers le serveur (best-effort, même pattern que WFO)
-        try:
-            import sqlite3 as _sqlite3
+        # Une expérience de certification reste strictement locale. Aucun
+        # artefact ni config ne part vers robot2 avant paper/canary/promotion.
+        if _should_push_server(
+            requested=bool(getattr(args, "push_server", False)),
+            snapshot_manifest=snapshot_manifest,
+        ):
+            try:
+                import sqlite3 as _sqlite3
 
-            from backend.backtesting.portfolio_db import push_portfolio_to_server
+                from backend.backtesting.portfolio_db import push_portfolio_to_server
 
-            _conn = _sqlite3.connect(args.db)
-            _conn.row_factory = _sqlite3.Row
-            _row = _conn.execute(
-                "SELECT * FROM portfolio_backtests WHERE id = ?", (result_id,)
-            ).fetchone()
-            _conn.close()
-            if _row:
-                push_portfolio_to_server(dict(_row))
-        except Exception as push_exc:
-            logger.warning("Push portfolio serveur échoué : {}", push_exc)
+                _conn = _sqlite3.connect(args.db)
+                _conn.row_factory = _sqlite3.Row
+                _row = _conn.execute(
+                    "SELECT * FROM portfolio_backtests WHERE id = ?", (result_id,)
+                ).fetchone()
+                _conn.close()
+                if _row:
+                    push_portfolio_to_server(dict(_row))
+            except Exception as push_exc:
+                logger.warning("Push portfolio serveur échoué : {}", push_exc)
 
     if args.json:
         output = json.dumps(_result_to_dict(result), indent=2, ensure_ascii=False)
@@ -397,6 +489,13 @@ async def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    runtime_error = _long_replay_runtime_error(
+        sys.platform,
+        tuple(sys.version_info),
+    )
+    if runtime_error:
+        raise SystemExit(runtime_error)
+
     parser = argparse.ArgumentParser(
         description="Portfolio backtest multi-asset (capital partagé)"
     )
@@ -428,6 +527,27 @@ if __name__ == "__main__":
         help="Chemin de la base de données",
     )
     parser.add_argument(
+        "--config-dir",
+        type=str,
+        default="config",
+        help=(
+            "Répertoire YAML à utiliser (défaut: config). Un répertoire "
+            "explicite est chargé sans .env local pour un replay reproductible."
+        ),
+    )
+    parser.add_argument(
+        "--snapshot",
+        type=str,
+        default=None,
+        help="Snapshot de données immuable (requis pour une certification)",
+    )
+    parser.add_argument(
+        "--execution-scenario",
+        choices=["nominal", "favorable", "adverse"],
+        default="nominal",
+        help="Hypothèses broker; adverse est obligatoire pour la certification",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="Sortie JSON au lieu de tableau"
     )
     parser.add_argument(
@@ -449,6 +569,14 @@ if __name__ == "__main__":
         "--save",
         action="store_true",
         help="Sauvegarder le résultat en DB",
+    )
+    parser.add_argument(
+        "--push-server",
+        action="store_true",
+        help=(
+            "Après --save, synchroniser explicitement un run legacy vers le "
+            "serveur. Interdit pour les runs liés à un snapshot."
+        ),
     )
     parser.add_argument(
         "--label",

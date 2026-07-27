@@ -113,9 +113,11 @@ class GridATRStrategy(BaseGridStrategy):
 
         effective_atr, floor_active = self._calculate_effective_atr(indicators)
 
-        # Log une fois par nouveau cycle si le plancher est actif
+        # Diagnostic only.  ``compute_grid`` is called on every candle while
+        # flat, so INFO here would enqueue tens of thousands of duplicate log
+        # records during a multi-year portfolio backtest.
         if floor_active and not grid_state.positions:
-             logger.info(
+             logger.debug(
                 "grid_atr — plancher ATR actif pour {} : spacing={:.1f}%",
                 ctx.symbol, self._config.min_grid_spacing_pct
             )

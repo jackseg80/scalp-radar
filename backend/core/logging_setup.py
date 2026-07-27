@@ -78,12 +78,17 @@ def get_log_buffer() -> list[dict]:
 def setup_logging(
     level: str = "DEBUG",
     log_dir: str | Path = "logs",
+    *,
+    enqueue: bool = True,
 ) -> None:
     """Configure loguru avec sortie console + fichiers.
 
     Args:
         level: Niveau de log minimum (DEBUG, INFO, WARNING, ERROR).
         log_dir: Répertoire pour les fichiers de log.
+        enqueue: Use Loguru's multiprocessing queue for file sinks.  Keep it
+            enabled for the long-running API process, but disable it for
+            single-threaded batch CLIs on Windows.
     """
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
@@ -125,7 +130,7 @@ def setup_logging(
         retention="30 days",
         compression=compression,
         serialize=True,
-        enqueue=True,
+        enqueue=enqueue,
     )
 
     # Fichier erreurs séparé
@@ -137,7 +142,7 @@ def setup_logging(
         retention="30 days",
         compression=compression,
         serialize=True,
-        enqueue=True,
+        enqueue=enqueue,
     )
 
     # Sink WS : broadcast WARNING+ vers les clients WebSocket connectés

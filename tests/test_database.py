@@ -299,6 +299,52 @@ async def test_migrate_leverage():
     await database.close()
 
 
+@pytest.mark.asyncio
+async def test_result_provenance_migration_is_idempotent(tmp_path):
+    """Old and already-migrated result tables keep legacy rows intact."""
+    import aiosqlite
+
+    db_path = str(tmp_path / "legacy.db")
+    database = Database(db_path=db_path)
+    database._conn = await aiosqlite.connect(db_path)
+    database._conn.row_factory = aiosqlite.Row
+    await database._conn.execute(
+        "CREATE TABLE portfolio_backtests (id INTEGER PRIMARY KEY, label TEXT)"
+    )
+    await database._conn.execute(
+        "INSERT INTO portfolio_backtests (id, label) VALUES (1, 'old')"
+    )
+    await database._conn.commit()
+
+    await database._migrate_result_provenance("portfolio_backtests")
+    await database._migrate_result_provenance("portfolio_backtests")
+
+    row = await database._conn.execute_fetchall(
+        "SELECT result_status, manifest_json, manifest_hash FROM portfolio_backtests"
+    )
+    assert tuple(row[0]) == ("legacy", None, None)
+    columns = await database._conn.execute_fetchall(
+        "PRAGMA table_info(portfolio_backtests)"
+    )
+    names = [column[1] for column in columns]
+    assert names.count("result_status") == 1
+    assert names.count("manifest_hash") == 1
+    await database.close()
+
+
+@pytest.mark.asyncio
+async def test_certification_tables_are_idempotent(db):
+    await db._create_certification_tables()
+    await db._create_certification_tables()
+    names = {
+        row[0]
+        for row in await db._conn.execute_fetchall(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    assert {"data_snapshots", "strategy_certifications"} <= names
+
+
 # ── Sprint 66 item E : filtre date_from get_simulation_trades ────────────────
 
 async def _insert_sim_trade(db, symbol: str, exit_time: str) -> None:

@@ -3691,15 +3691,178 @@ docs/plans/          # 30+ sprint plans (1-24b + hotfixes)
 
 ---
 
+### Sprint 68 — Reliable Backtests and Live Certification ✅
+
+**Objective**: Replace grade/static-portfolio live decisions with reproducible, fail-closed certification evidence while extending the existing WFO, portfolio, execution and database components.
+
+**Delivered**:
+
+- Immutable data snapshots with exact closed-candle validation, hashes, Git/config provenance, funding/OI inventory and Bitget execution calibration.
+- Per-asset indicator parameters and batch/incremental parity.
+- Common order/fill/execution/risk manifests; persistent grid limits, partial/missed/late fills and restart persistence.
+- Shared-account portfolio risk: compounding, `max_live_grids=4`, correlation, margin 70%, simultaneous SL loss 30%, liquidation and kill switches.
+- Snapshot-bound resumable WFO, inner/IS-only selection, chronological external-OOS portfolio and measured fast/canonical parity.
+- Empirical rolling 30-day CVaR, block bootstrap and nominal/adverse evidence persisted in the existing robustness table.
+- Certification states and strict historical, paper, canary and champion/challenger gates. `optimize --apply` is blocked; promotion writes a local artifact and never changes robot2.
+- Raw signed forward observations with idempotence and conflict detection.
+- Explicit capability matrix for all 18 strategies: grid strategies use the canonical grid path; mono-position and fast-only strategies fail closed instead of using an incompatible engine.
+- Windows long-run stability hardening: allocation-free scalar ADX in the canonical replay and removal of the per-candle `grid_atr` INFO flood that saturated Loguru's queued sinks.
+- Server-side SL parity: intrabar wicks trigger at the stop rather than becoming fill prices; only observable opening gaps degrade nominal/adverse fills. The live monitor now waits for Bitget fill confirmation before clearing a grid.
+- Mandatory fresh-capital 180/365-day certification replays prevent long-history compounding from masking the experience of a newly funded account.
+- Portfolio replay now feeds the existing account-level `LiveRiskManager` with historical event timestamps: the 25% grid session stop and 45% rolling account stop are persistent, cancel pending entries, and still let already-open positions reach their server-side TP/SL. Per-asset pseudo-account stops are disabled in portfolio mode.
+- `portfolio_backtest --save` is local-only; remote synchronization is explicit with `--push-server` and unavailable to snapshot-bound runs.
+- Autonomous entries now enforce the configured `per_asset` universe and the existing `AdaptiveSelector` before evaluating indicators or refreshing grid limits. This prevents base-config fallbacks from creating orders for every DataEngine symbol.
+- Portfolio replays accept an isolated YAML directory. This permits a local, immutable copy of the deployed configuration to be replayed without overwriting developer YAML files or inheriting the local `.env`.
+- Candle backfill can inspect and repair internal gaps, but fails closed when the exchange has no candle for a missing timestamp; certification must then bound the snapshot after the gap instead of imputing market data.
+
+**Deliberate limit**: the canonical portfolio still consumes 1h bars. `execution_timeframe_used=1h` fails the required 1m `intrabar_execution_used` gate, so no current result can be mislabeled `PAPER_READY`. True 1m broker integration is the next reliability lot.
+
+**Audit/plan**: [audit-backtest-certification-20260722.md](audit/audit-backtest-certification-20260722.md) · [sprint-68-backtest-live-certification.md](plans/sprint-68-backtest-live-certification.md)
+
+**Decision record**: [the declared `robot2` grid_atr configuration is rejected / historical fail](audit/audit-grid-atr-decision-20260726.md). The snapshot-bound WFO alternatives remain pending until their IS-selected, external-OOS canonical portfolio replay; no parameter set is promotable before that result.
+
+**Tests**: baseline 2269 passed in 212.79s; final strict suite **2352 passed in 122.84s**, 0 failures, no warnings, no new skip/xfail. The formerly intermittent WFO callback fixture passed in isolation and as part of the complete suite after the Windows CPython 3.13 forced-GC fix. The ADX hot path passed a standalone 50,000-call Windows stress run.
+
+---
+
+### Sprint 69 — grid_atr Universal Discovery WFO ✅
+
+**Objective**: distinguish an existing/live candidate replay from an unbiased
+strategy-family evaluation over every configured asset.
+
+**Delivered**:
+
+- Immutable `UniverseSelectionSpec` in the snapshot: 28 configured assets,
+  common 2022-01-01 calendar, 1h, IS 180d, embargo 7d, OOS/step 60d,
+  exhaustive search, IS-positive Top 8 and pre-declared 2x/4x/6x scenarios.
+- Per-asset late arrival without shifted or overlapping OOS windows; each
+  external window records availability, eligibility, IS rank, selected assets
+  and canonical risk/order rejections.
+- Strict WFO completeness check: an interrupted or partial universe cannot be
+  silently replayed as a smaller portfolio.
+- 4x is the only primary `external_oos` verdict at 1,502.59 USDT.  2x/6x are
+  persisted only as sensitivity scenarios and cannot accidentally promote a
+  different leverage.
+- Fast/canonical parity now covers every IS-selected WFO window, not only the
+  newest parameter choice.  Existing 9-asset candidate results remain
+  `RESEARCH_ONLY` / `candidate_replay` and are not overwritten.
+- Scenario leverage is now propagated to the runner, grid position manager and
+  strategy configuration as one atomic value.  This keeps sizing, margin,
+  liquidation risk and the displayed/persisted leverage aligned.  The three
+  first universal external-OOS reports (snapshot `snapshot-035a6e48851ac4c1`,
+  result ids 100--102) exposed the former defect because they all reported 6x;
+  they are preserved for audit but are invalid evidence and cannot be certified.
+- Corrected canonical external-OOS reused the compatible exhaustive WFO without
+  recalculation: 2x +60.4% / -22.3% DD, **4x primary +92.9% / -47.5% DD**,
+  6x +112.5% / -56.3% DD; 3x sensitivity +96.4% / -32.4% DD.
+- The 4x nominal DD gate is 30%; `grid_atr` is therefore
+  **HISTORICAL_FAIL** for the universal policy.  No post-hoc asset, parameter
+  or leverage selection may override that result.  A separate 2x candidate
+  would require a new pre-declared WFO cycle.
+- No deployment or robot2 configuration change.
+
+**Next**: retain the historical evidence and evaluate another strategy.  Even
+a future historical pass remains `RESEARCH_ONLY` until the canonical broker
+consumes 1m execution data and has calibrated Bitget observations.
+
+**Tests**: targeted universal workflow suite **113 passed**; complete suite
+**2362 passed in 131.79s**, 0 failures, no new skip or xfail.
+
+---
+
+### Sprint 70 — Remaining Strategy Backtest Certification Migration (planned)
+
+**Objective**: migrate every strategy that remains a candidate for paper or
+live trading onto the fail-closed certification workflow proven with
+`grid_atr`.  Historical grades, legacy portfolio rows and an existing live
+configuration are research evidence only; none may authorize a deployment.
+
+**Shared completion contract (applied before each strategy-specific change)**:
+
+- Inspect, reuse and extend the existing strategy, fast engine, canonical
+  runner, risk manager, data tables and tests.  Do not create a parallel
+  backtester or duplicate persistence.
+- Freeze a snapshot with closed-candle hashes, complete funding/special data,
+  configuration/code hashes, seed and the strategy's declared universe,
+  calendar, leverage and account scope.  Reject missing/inconsistent data
+  rather than falling back silently.
+- Keep fast engines for exhaustive WFO search, but prove selected-window
+  parity against the canonical event-driven engine.  A mismatch blocks the
+  historical verdict.
+- Select parameters and the universe from IS data only, then concatenate
+  chronologically aligned external OOS windows.  Asset removals, leverage
+  changes and Top-N changes after observing OOS are invalid.
+- Replay the actual shared-account constraints: signal-to-next-event order
+  timing, sizing/compounding, persistent grid orders where applicable,
+  `max_live_grids`, correlation, 70% margin, 30% simultaneous SL loss,
+  liquidation, funding, strategy/account kill switches, partial/missed fills
+  and restart recovery.
+- Apply the same gates: positive external OOS and bootstrap lower bound,
+  loss probability below 10%, nominal DD <= 30%, adverse DD <= 40%, no 45%
+  account kill switch, complete funding/intrabar data and deterministic
+  replay.  A result that fails is `HISTORICAL_FAIL`, not a configuration to
+  tune post hoc.
+- Update focused regression tests, then run the whole suite.  Record the
+  result and status in the audit/roadmap; do not alter `robot2` during
+  historical work.
+
+**Mandatory sequencing**:
+
+1. **Canonical 1m execution broker** — consume 1m bars beneath the signal
+   timeframe, including gaps, limit persistence/expiry, partial/missed fills,
+   TP market and server-side SL gaps.  Until this exists, every historical
+   pass remains `RESEARCH_ONLY`; no strategy may advance to paper.
+2. **`grid_multi_tf` (next strategy)** — validate 4h indicator closure and
+   1h execution chronology, then run a pre-declared universe-discovery WFO
+   and external-OOS portfolio.  The 4h filter must never be visible before its
+   close.  Use the same common-calendar / IS-only dynamic selection policy as
+   `grid_atr`, unless a strategy-specific documented constraint requires a
+   different frozen policy.
+3. **Other grid candidates** — `grid_boltrend`, then any deliberately
+   reactivated `grid_range_atr`, `grid_trend`, `grid_funding`,
+   `envelope_dca` or `envelope_dca_short`.  Each needs canonical order-model
+   parity before WFO; disabled/abandoned strategies remain `RESEARCH_ONLY`
+   until an explicit reactivation decision.
+4. **Mono-position strategies** — extend the canonical broker/risk ledger for
+   market entry plus server-side TP/SL, then certify the active candidates.
+   Funding/OI/liquidation strategies additionally require immutable snapshots
+   of their specialised inputs and availability checks per OOS window.
+5. **`trend_follow_daily` and other multi-timeframe paths** — validate daily
+   close visibility, 1m execution and a common account replay before any
+   historical decision.
+
+**Per-strategy deliverable**: a versioned audit containing the declared
+policy, snapshot and WFO IDs, canonical OOS results at pre-declared leverage,
+adverse evidence, pass/fail gates, data limitations and the resulting state
+(`HISTORICAL_FAIL`, `RESEARCH_ONLY` or `PAPER_READY`).  Only after a real 1m
+broker and Bitget execution calibration can a `PAPER_READY` strategy enter
+the separate 60-day paper and canary workflow.
+
+**Current decision**: `grid_atr` remains **HISTORICAL_FAIL** for its 28-asset,
+4x universal policy.  Its past/current live configuration is not a benchmark
+for selecting the next strategy and will not be changed by this sprint.
+
+---
+
 ## PROCHAINES STRATÉGIES
 
 ### Ordre de priorité
 
-1. **WFO grid_atr v2** — ✅ TERMINÉ (Sprint 47-47d) : 6 Grade A + 7 Grade B, +262% return, -6.6% DD, VIABLE
-   - `min_grid_spacing_pct` utilisé par 17/21 assets, résout les pertes fee-negative en basse vol
-   - `min_profit_pct` = 0.0 partout (WFO préfère correction en amont via spacing)
+1. **Canonical 1m execution broker** — prerequisite to any `PAPER_READY` or
+   live decision.  The current 1h canonical replay is sufficient to reject a
+   strategy but deliberately insufficient to approve one.
 
-2. **Pairs trading** — Spread mean-reversion ETH/BTC (Phase 3, refonte archi)
+2. **`grid_multi_tf` certification migration** — next strategy pilot after
+   `grid_atr`: audit/reuse the existing 4h+1h grid path, add only missing
+   parity and chronology coverage, freeze an all-asset WFO policy and run the
+   IS-only external-OOS portfolio.  No robot2 change during this work.
+
+3. **Other active/research candidates** — process only through the Sprint 70
+   shared contract, prioritising `grid_boltrend` after `grid_multi_tf`.  The
+   old `grid_atr v2` grades and legacy performance numbers remain historical
+   context, not a current viability verdict.
+
+4. **Pairs trading** — Spread mean-reversion ETH/BTC (Phase 3, refonte archi)
    - Market-neutral par construction (fonctionne tous régimes)
    - Refonte architecturale nécessaire (2 positions synchronisées)
    - Phase 3 du projet, quand l'infra mono-asset est mature
@@ -3762,7 +3925,7 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 
 - **Repo** : https://github.com/jackseg80/scalp-radar.git
 - **Serveur** : 192.168.1.200 (Docker, Bitget mainnet, LIVE_TRADING=true)
-- **Tests** : 2269 collectés, 2269 passants, 0 régression
+- **Tests** : 2352 collectés, 2352 passants, 0 régression
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget

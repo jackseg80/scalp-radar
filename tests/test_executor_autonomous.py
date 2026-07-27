@@ -219,8 +219,8 @@ class TestExitAutonomous:
         executor._close_grid_cycle.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_exit_sl_global_via_should_close_all(self):
-        """should_close_all retourne 'sl_global' → close."""
+    async def test_exit_sl_global_waits_for_exchange_fill(self):
+        """Un seuil SL local ne doit pas être confondu avec un fill Bitget."""
         executor = _make_executor()
         executor._grid_states["BTC/USDT:USDT"] = _make_grid_state()
         executor._simulator = _make_simulator_ctx()
@@ -230,9 +230,8 @@ class TestExitAutonomous:
 
         await executor._check_grid_exit("BTC/USDT:USDT")
 
-        executor._close_grid_cycle.assert_called_once()
-        event = executor._close_grid_cycle.call_args[0][0]
-        assert event.exit_reason == "sl_global"
+        executor._close_grid_cycle.assert_not_called()
+        assert "BTC/USDT:USDT" in executor._grid_states
 
     @pytest.mark.asyncio
     async def test_exit_no_simulator(self):
