@@ -7,7 +7,6 @@ Fonctions async (aiosqlite) pour l'API FastAPI.
 from __future__ import annotations
 
 import json
-import hashlib
 import math
 import sqlite3
 from typing import Any
