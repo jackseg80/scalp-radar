@@ -104,6 +104,21 @@ than interpolated; all other assets retain the same calendar.
 
 ### `grid_multi_tf` frozen certification policy (Sprint 70a)
 
+### `grid_boltrend` certification policy (Sprint 70b follow-up)
+
+`grid_boltrend` is the only active grid candidate in this workflow. `grid_atr`
+and `grid_multi_tf` are closed `HISTORICAL_FAIL` cases and must not be rerun,
+re-optimised or retrofitted. The frozen policy is: all 28 configured assets,
+Binance closed 1h signals, Bitget 1m execution/funding, calendar
+2022-01-01 UTC through the frozen cutoff, IS 180d / embargo 7d / OOS 60d /
+step 60d, exhaustive 1,296 combinations, IS-only Top 8, 1,646 USDT, primary
+5x and sensitivities 3x/5x/8x. The configured `cooldown_candles=3` is fixed.
+
+The snapshot must use `--timeframes 1h`: validation adds exactly the consumed
+Bitget 1m series, not unused Bitget 1h candles. Calibration must have at least
+30 filled and one expired/cancelled/rejected Bitget entry observation. A shared
+grid-capability calibration may be read from a separate immutable source DB.
+
 `grid_multi_tf` reuses the same universal snapshot, common-calendar WFO,
 IS-only Top-N selection, external-OOS portfolio, shared `LiveRiskManager` and
 parity evidence. Its 4h Supertrend is derived only from complete UTC Binance

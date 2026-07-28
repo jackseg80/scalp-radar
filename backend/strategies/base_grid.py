@@ -65,6 +65,9 @@ class BaseGridStrategy(BaseStrategy):
     """
 
     name: str = "base_grid"
+    # Strategies such as GridBolTrend define their ladder at the breakout.
+    # The runner must retain those limit prices until they fill or expire.
+    fixed_entry_levels: bool = False
 
     # --- Implémentations par défaut BaseStrategy (mono-position) ---
 

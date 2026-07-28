@@ -63,6 +63,7 @@ async def fetch_symbol_timeframe(
     start_date: datetime,
     end_date: datetime,
     exchange_name: str = "bitget",
+    resume: bool = True,
 ) -> int:
     """Télécharge les klines pour un (symbol, timeframe) et les persiste."""
     tf = TimeFrame.from_string(timeframe)
@@ -70,7 +71,7 @@ async def fetch_symbol_timeframe(
 
     # Vérifier les données existantes pour la reprise
     latest = await db.get_latest_candle_timestamp(symbol, timeframe, exchange=exchange_name)
-    if latest and latest.timestamp() * 1000 > start_date.timestamp() * 1000:
+    if resume and latest and latest.timestamp() * 1000 > start_date.timestamp() * 1000:
         actual_start_ms = int(latest.timestamp() * 1000) + interval_ms
         logger.info(
             "Reprise {} {} depuis {}",
@@ -152,6 +153,9 @@ async def main() -> None:
                         help="Liste de symbols séparés par des virgules, bypass assets.yaml (ex: ADA/USDT,AVAX/USDT)")
     parser.add_argument("--timeframe", type=str, help="Timeframe spécifique (ex: 5m, 1h)")
     parser.add_argument("--days", type=int, default=180, help="Nombre de jours (défaut: 180)")
+    parser.add_argument("--since", help="UTC ISO start; re-fetches the full range to repair prefix/gaps")
+    parser.add_argument("--until", help="UTC ISO end (exclusive); defaults to now")
+    parser.add_argument("--db", default="data/scalp_radar.db")
     parser.add_argument("--exchange", type=str, default="bitget", choices=["bitget", "binance"],
                         help="Exchange source (défaut: bitget)")
     parser.add_argument("--force", action="store_true", help="Supprimer les données existantes et re-fetcher")
@@ -160,13 +164,19 @@ async def main() -> None:
     config = get_config()
     setup_logging(level="INFO")
 
-    db = Database()
+    db = Database(args.db)
     await db.init()
 
     exchange = create_exchange(args.exchange)
 
-    end_date = datetime.now(tz=timezone.utc)
-    start_date = end_date - timedelta(days=args.days)
+    end_date = (
+        datetime.fromisoformat(args.until.replace("Z", "+00:00")).astimezone(timezone.utc)
+        if args.until else datetime.now(tz=timezone.utc)
+    )
+    start_date = (
+        datetime.fromisoformat(args.since.replace("Z", "+00:00")).astimezone(timezone.utc)
+        if args.since else end_date - timedelta(days=args.days)
+    )
 
     # Déterminer les paires à télécharger
     pairs: list[tuple[str, str]] = []
@@ -211,7 +221,7 @@ async def main() -> None:
     for symbol, tf in pairs:
         count = await fetch_symbol_timeframe(
             exchange, db, symbol, tf, start_date, end_date,
-            exchange_name=args.exchange,
+            exchange_name=args.exchange, resume=not bool(args.since),
         )
         total += count
         logger.info("{} {} ({}) : {} candles insérées", symbol, tf, args.exchange, count)

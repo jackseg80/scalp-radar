@@ -40,7 +40,7 @@ from loguru import logger
 from backend.core.config import get_config
 from backend.core.database import Database
 from backend.core.experiment import revalidate_snapshot
-from backend.core.models import UniverseSelectionSpec
+from backend.core.models import ExecutionSpec, UniverseSelectionSpec
 from backend.core.logging_setup import setup_logging
 from backend.optimization import STRATEGY_REGISTRY
 from backend.optimization.overfitting import OverfitDetector
@@ -269,6 +269,12 @@ async def run_optimization(
     config = _load_optimization_config(config_dir)
     optimizer = WalkForwardOptimizer(config_dir, config=config)
     main_exchange = exchange or "binance"
+    execution_spec = (
+        ExecutionSpec.model_validate(
+            snapshot_manifest.get("metadata", {}).get("execution_spec", {}),
+        )
+        if snapshot_manifest else None
+    )
     snapshot_bounds = (
         _snapshot_bounds(snapshot_manifest, main_exchange, symbol)
         if snapshot_manifest else None
@@ -307,6 +313,10 @@ async def run_optimization(
         exhaustive=bool(universe_selection),
         leverage_override=(
             universe_selection.primary_leverage if universe_selection else None
+        ),
+        funding_exchange=(execution_spec.exchange if execution_spec else None),
+        grid_order_expiry_minutes=(
+            execution_spec.grid_order_expiry_minutes if execution_spec else 120
         ),
     )
 

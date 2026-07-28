@@ -31,6 +31,7 @@ class GridBolTrendStrategy(BaseGridStrategy):
     """
 
     name = "grid_boltrend"
+    fixed_entry_levels = True
 
     def __init__(self, config: GridBolTrendConfig) -> None:
         self._config = config

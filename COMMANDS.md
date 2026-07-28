@@ -20,6 +20,12 @@ Les commandes WFO/portfolio/robustesse historiques restent disponibles pour la r
 # 1. Calibrer l'exécution Bitget depuis les observations live persistées
 uv run python -m scripts.calibrate_execution --strategy <STRATEGY> --since <ISO_DATE> --until <ISO_DATE>
 
+# grid_boltrend : calibration de capacité grid depuis une base source en lecture seule
+uv run python -m scripts.calibrate_execution --strategy-prefix grid_ --source-db <READ_ONLY_SOURCE_DB> --db data/scalp_radar.db --min-filled-observations 30 --min-unfilled-observations 1 --since <ISO_DATE> --until <ISO_DATE>
+
+# grid_boltrend : réparer/rejouer la plage Bitget 1m exacte sans supprimer les lignes existantes
+uv run python -m scripts.fetch_history --exchange bitget --symbols <ALL_28_CSV> --timeframe 1m --since "2022-01-01T00:00:00+00:00" --until "2026-07-27T00:00:00+00:00" --db data/scalp_radar.db
+
 # 2. Geler Binance 1h + Bitget 1m, code et configs.
 # --validate exige un worktree propre et interdit tout fallback 1h.
 uv run python -m scripts.create_data_snapshot --strategy <STRATEGY> --cutoff <ISO_DATE> --since <ISO_DATE> --symbols <CSV> --timeframes 1h --exchange binance --execution-timeframe 1m --calibration-id <CALIBRATION_ID> --config-dir <YAML_SNAPSHOT_DIR> --max-gap-bars 1 --validate

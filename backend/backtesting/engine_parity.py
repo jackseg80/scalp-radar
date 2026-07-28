@@ -16,6 +16,7 @@ from backend.core.database import Database
 from backend.core.models import ExecutionSpec
 from backend.optimization import create_strategy_with_params
 from backend.optimization.fast_multi_backtest import (
+    run_grid_boltrend_audit_from_cache,
     run_grid_multi_tf_audit_from_cache,
 )
 from backend.optimization.indicator_cache import (
@@ -99,6 +100,14 @@ async def _measure_wfo_window_parity(
         }
 
     strategy = create_strategy_with_params(row["strategy_name"], params)
+    spec = ExecutionSpec(
+        maker_fee_pct=config.risk.fees.maker_percent,
+        taker_fee_pct=config.risk.fees.taker_percent,
+        slippage_pct=config.risk.slippage.default_estimate_percent,
+        scenario="nominal",
+        random_seed=seed,
+    )
+    execution_exchange = spec.exchange
     db = Database(db_path)
     await db.init()
     warmup_start = start - timedelta(hours=warmup_hours)
@@ -111,7 +120,7 @@ async def _measure_wfo_window_parity(
                 exchange=exchange,
             )
         funding = await db.get_funding_rates(
-            row["asset"], exchange=exchange,
+            row["asset"], exchange=execution_exchange,
             start_ts=int(start.timestamp() * 1000),
             end_ts=int(end.timestamp() * 1000) - 1,
         )
@@ -140,6 +149,7 @@ async def _measure_wfo_window_parity(
         slippage_pct=config.risk.slippage.default_estimate_percent / 100,
         high_vol_slippage_mult=config.risk.slippage.high_volatility_multiplier,
         max_risk_per_trade=config.risk.position.max_risk_per_trade_percent / 100,
+        grid_order_expiry_minutes=spec.grid_order_expiry_minutes,
     )
     fast = run_multi_backtest_single(
         row["strategy_name"], params, trading_by_tf, bt_config, "1h",
@@ -149,7 +159,7 @@ async def _measure_wfo_window_parity(
 
     search_metrics = None
     search_trace: list[dict[str, Any]] = []
-    if row["strategy_name"] == "grid_multi_tf":
+    if row["strategy_name"] in {"grid_multi_tf", "grid_boltrend"}:
         grid_values = {
             key: value if isinstance(value, list) else [value]
             for key, value in params.items()
@@ -159,6 +169,9 @@ async def _measure_wfo_window_parity(
             grid_values,
             row["strategy_name"],
             main_tf="1h",
+            db_path=db_path,
+            symbol=row["asset"],
+            exchange=execution_exchange,
         )
         first_trading_index = next(
             (
@@ -169,23 +182,19 @@ async def _measure_wfo_window_parity(
             full_cache.n_candles,
         )
         trading_cache = slice_indicator_cache(full_cache, first_trading_index)
-        search_metrics, search_trace = run_grid_multi_tf_audit_from_cache(
-            params,
-            trading_cache,
-            bt_config,
-        )
+        if row["strategy_name"] == "grid_boltrend":
+            search_metrics, search_trace = run_grid_boltrend_audit_from_cache(
+                params, trading_cache, bt_config,
+            )
+        else:
+            search_metrics, search_trace = run_grid_multi_tf_audit_from_cache(
+                params, trading_cache, bt_config,
+            )
 
     canonical_config = copy.deepcopy(config)
     getattr(canonical_config.strategies, row["strategy_name"]).per_asset = {
         row["asset"]: copy.deepcopy(params),
     }
-    spec = ExecutionSpec(
-        maker_fee_pct=config.risk.fees.maker_percent,
-        taker_fee_pct=config.risk.fees.taker_percent,
-        slippage_pct=config.risk.slippage.default_estimate_percent,
-        scenario="nominal",
-        random_seed=seed,
-    )
     canonical = await PortfolioBacktester(
         config=canonical_config,
         initial_capital=10_000.0,

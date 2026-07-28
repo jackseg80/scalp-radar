@@ -30,6 +30,10 @@ async def run(args: argparse.Namespace) -> int:
         taker_fee_pct=config.risk.fees.taker_percent,
         default_slippage_pct=config.risk.slippage.default_estimate_percent,
         strategy_name=args.strategy,
+        strategy_prefix=args.strategy_prefix,
+        source_db_path=args.source_db,
+        min_filled_observations=args.min_filled_observations,
+        min_unfilled_observations=args.min_unfilled_observations,
         since=_date(args.since),
         until=_date(args.until),
         seed=args.seed,
@@ -44,6 +48,16 @@ async def run(args: argparse.Namespace) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Calibrate execution from Bitget fills")
     parser.add_argument("--strategy")
+    parser.add_argument(
+        "--strategy-prefix",
+        help="Shared execution capability prefix, e.g. grid_ for grid_boltrend",
+    )
+    parser.add_argument(
+        "--source-db",
+        help="Read-only source DB of persisted Bitget outcomes; output stays --db",
+    )
+    parser.add_argument("--min-filled-observations", type=int, default=30)
+    parser.add_argument("--min-unfilled-observations", type=int, default=1)
     parser.add_argument("--since")
     parser.add_argument("--until")
     parser.add_argument("--seed", type=int, default=0)

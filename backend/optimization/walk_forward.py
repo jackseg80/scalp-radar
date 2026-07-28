@@ -547,6 +547,8 @@ class WalkForwardOptimizer:
         window_schedule: list[tuple[datetime, datetime, datetime, datetime]] | None = None,
         exhaustive: bool = False,
         leverage_override: int | None = None,
+        funding_exchange: str | None = None,
+        grid_order_expiry_minutes: int = 120,
     ) -> WFOResult:
         """Walk-forward optimization complète.
 
@@ -612,6 +614,9 @@ class WalkForwardOptimizer:
         await db.init()
         if exchange is None:
             exchange = "binance"
+        # Signal candles and execution funding can intentionally come from
+        # different frozen series (Binance 1h → Bitget 1m certification).
+        funding_exchange = funding_exchange or exchange
 
         # Charger les candles depuis la DB
         logger.info(
@@ -646,8 +651,8 @@ class WalkForwardOptimizer:
         needs_extra = strategy_name in STRATEGIES_NEED_EXTRA_DATA
 
         if needs_extra:
-            logger.info("Chargement données extra (funding/OI) depuis {} ...", exchange)
-            all_funding_rates = await db.get_funding_rates(symbol, exchange=exchange)
+            logger.info("Chargement données extra (funding/OI) depuis {} ...", funding_exchange)
+            all_funding_rates = await db.get_funding_rates(symbol, exchange=funding_exchange)
             all_oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange=exchange)
             if data_bounds:
                 main_bounds = data_bounds.get(main_tf)
@@ -724,6 +729,7 @@ class WalkForwardOptimizer:
             symbol=symbol,
             start_date=data_start,
             end_date=data_end,
+            grid_order_expiry_minutes=grid_order_expiry_minutes,
         )
         # Override leverage depuis strategies.yaml (la valeur réelle, pas le default Pydantic)
         if leverage_override is not None:
@@ -763,6 +769,7 @@ class WalkForwardOptimizer:
             "max_risk_per_trade": bt_config.max_risk_per_trade,
             "max_margin_ratio": bt_config.max_margin_ratio,
             "max_wfo_drawdown_pct": bt_config.max_wfo_drawdown_pct,
+            "grid_order_expiry_minutes": bt_config.grid_order_expiry_minutes,
         }
 
         # Optimisation par fenêtre
@@ -1335,7 +1342,7 @@ class WalkForwardOptimizer:
             t0 = time.monotonic()
             cache = build_cache(
                 local_candles, param_grid_values, strategy_name, tf,
-                db_path=cache_db_path, symbol=symbol, exchange=exchange,
+                db_path=cache_db_path, symbol=symbol, exchange=funding_exchange,
             )
             cache_time = time.monotonic() - t0
             logger.info(

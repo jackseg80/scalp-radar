@@ -603,14 +603,31 @@ class TestFastEngine:
         params_short = self._default_params()
         params_short["sides"] = ["short"]
         bt_config = _make_bt_config()
-        pnls_short, _, _ = _simulate_grid_boltrend(cache, params_short, bt_config)
-        assert len(pnls_short) >= 1  # SHORT breakout détecté
+        trace: list[dict[str, Any]] = []
+        _simulate_grid_boltrend(
+            cache, params_short, bt_config, audit_trace=trace,
+        )
+        # A breakout is a signal/intent, not an immediate fill.  This
+        # synthetic crash never retraces to the fixed SHORT ladder before its
+        # 120-minute expiry, so assert the selected signal instead of a trade.
+        assert any(
+            event["event"] == "entry_candidate"
+            and event["direction"] == -1
+            for event in trace
+        )
 
         # Avec sides=["long"] → doit ignorer les breakouts SHORT
         params_long = self._default_params()
         params_long["sides"] = ["long"]
-        pnls_long, _, _ = _simulate_grid_boltrend(cache, params_long, bt_config)
-        assert len(pnls_long) == 0  # pas de LONG breakout possible
+        long_trace: list[dict[str, Any]] = []
+        _simulate_grid_boltrend(
+            cache, params_long, bt_config, audit_trace=long_trace,
+        )
+        assert not any(
+            event["event"] == "entry_candidate"
+            and event["direction"] == -1
+            for event in long_trace
+        )
 
     def test_deterministic_results(self, make_indicator_cache):
         """Deux runs avec mêmes paramètres → résultats identiques."""

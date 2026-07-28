@@ -750,9 +750,20 @@ class GridStrategyRunner:
         """Enregistre le timestamp du dernier close pour le cooldown anti-churning."""
         self._last_close_time[symbol] = close_timestamp
 
+    def _strategy_for_symbol(self, symbol: str) -> BaseGridStrategy:
+        """Resolve per-asset overrides only for the fixed-level strategy.
+
+        Keeping the legacy object for other grid runners preserves their
+        established runner contract (including test doubles) while the new
+        GridBolTrend execution path obtains one immutable effective config.
+        """
+        if self.name == "grid_boltrend":
+            return self._strategy.for_symbol(symbol)
+        return self._strategy
+
     def _get_sl_percent(self, symbol: str) -> float:
         """Résout le sl_percent pour un symbol (avec override per_asset)."""
-        config = self._strategy._config
+        config = self._strategy_for_symbol(symbol)._config
         default_sl = getattr(config, "sl_percent", 25.0)
         per_asset = getattr(config, "per_asset", {})
         if isinstance(per_asset, dict):
@@ -763,14 +774,7 @@ class GridStrategyRunner:
 
     def _get_num_levels(self, symbol: str) -> int:
         """Résout num_levels pour un symbol (avec override per_asset)."""
-        config = self._strategy._config
-        default = self._strategy.max_positions
-        per_asset = getattr(config, "per_asset", {})
-        if isinstance(per_asset, dict):
-            overrides = per_asset.get(symbol, {})
-            if isinstance(overrides, dict) and "num_levels" in overrides:
-                return int(overrides["num_levels"])
-        return default
+        return self._strategy_for_symbol(symbol).max_positions
 
     def _get_per_asset_float(self, symbol: str, param: str, default: float) -> float:
         """Résout un paramètre float pour un symbol (avec override per_asset)."""
@@ -786,7 +790,7 @@ class GridStrategyRunner:
 
     def _indicator_parameters(self, symbol: str) -> dict[str, int]:
         """Resolve core indicator periods from the effective asset config."""
-        effective = self._strategy.for_symbol(symbol)
+        effective = self._strategy_for_symbol(symbol)
         config = effective._config
         return {
             "atr_period": int(getattr(config, "atr_period", 14)),
@@ -839,30 +843,13 @@ class GridStrategyRunner:
         effective_max: int,
     ) -> list[GridLevel]:
         """Calcule les niveaux avec les overrides per-asset, sans les exécuter."""
-        original_num_levels = self._strategy._config.num_levels
-        original_spacing = getattr(
-            self._strategy._config, "min_grid_spacing_pct", 0.0,
-        )
-        original_min_atr = getattr(
-            self._strategy._config, "min_atr_pct", 0.0,
-        )
-        self._strategy._config.num_levels = effective_max
-        if hasattr(self._strategy._config, "min_grid_spacing_pct"):
-            self._strategy._config.min_grid_spacing_pct = self._get_per_asset_float(
-                symbol, "min_grid_spacing_pct", original_spacing,
+        strategy = self._strategy_for_symbol(symbol)
+        if strategy.max_positions != effective_max:
+            config = strategy._config.model_copy(
+                update={"num_levels": effective_max},
             )
-        if hasattr(self._strategy._config, "min_atr_pct"):
-            self._strategy._config.min_atr_pct = self._get_per_asset_float(
-                symbol, "min_atr_pct", original_min_atr,
-            )
-        try:
-            return self._strategy.compute_grid(ctx, grid_state)
-        finally:
-            self._strategy._config.num_levels = original_num_levels
-            if hasattr(self._strategy._config, "min_grid_spacing_pct"):
-                self._strategy._config.min_grid_spacing_pct = original_spacing
-            if hasattr(self._strategy._config, "min_atr_pct"):
-                self._strategy._config.min_atr_pct = original_min_atr
+            strategy = type(strategy)(config)
+        return strategy.compute_grid(ctx, grid_state)
 
     def _plan_next_bar(
         self,
@@ -881,13 +868,14 @@ class GridStrategyRunner:
             return
 
         positions = self._positions.get(symbol, [])
+        strategy = self._strategy_for_symbol(symbol)
         grid_state = self._gpm.compute_grid_state(positions, candle.close)
         created_at = self._bar_close_time(candle)
 
         if positions:
             self._planned_grid_exits[symbol] = PlannedGridExit(
-                tp_price=self._strategy.get_tp_price(grid_state, main_ind),
-                sl_price=self._strategy.get_sl_price(grid_state, main_ind),
+                tp_price=strategy.get_tp_price(grid_state, main_ind),
+                sl_price=strategy.get_sl_price(grid_state, main_ind),
                 created_at=created_at,
             )
         else:
@@ -915,10 +903,16 @@ class GridStrategyRunner:
         ):
             self._pending_grid_orders.pop(symbol, None)
             return
+        if strategy.fixed_entry_levels and (positions or existing):
+            # Breakout levels are immutable: only the 1m broker may fill,
+            # partially fill, or expire them.  Repricing here would turn a
+            # closed 1h signal into a fresh order on every bar.
+            self._pending_grid_orders[symbol] = list(existing.values())
+            return
         if not self._should_allow_new_grid(symbol):
             return
 
-        raw_cd = getattr(self._strategy._config, "cooldown_candles", 0)
+        raw_cd = getattr(strategy._config, "cooldown_candles", 0)
         cooldown = raw_cd if isinstance(raw_cd, (int, float)) else 0
         if not positions and cooldown > 0 and symbol in self._last_close_time:
             elapsed = (
@@ -1398,15 +1392,16 @@ class GridStrategyRunner:
                 self._hwm[symbol] = position.entry_price
             signal_indicators = self._last_signal_indicators.get(symbol)
             if signal_indicators is not None:
+                strategy = self._strategy_for_symbol(symbol)
                 protected_positions = self._positions.get(symbol, [])
                 protected_state = self._gpm.compute_grid_state(
                     protected_positions, position.entry_price,
                 )
                 self._planned_grid_exits[symbol] = PlannedGridExit(
-                    tp_price=self._strategy.get_tp_price(
+                    tp_price=strategy.get_tp_price(
                         protected_state, signal_indicators,
                     ),
-                    sl_price=self._strategy.get_sl_price(
+                    sl_price=strategy.get_sl_price(
                         protected_state, signal_indicators,
                     ),
                     created_at=candle.timestamp,
@@ -1818,7 +1813,7 @@ class GridStrategyRunner:
         self._update_close_buffer(symbol, candle)
 
         # Calculer SMA
-        effective_strategy = self._strategy.for_symbol(symbol)
+        effective_strategy = self._strategy_for_symbol(symbol)
         effective_ma_period = int(
             getattr(effective_strategy._config, "ma_period", self._ma_period),
         )
@@ -1846,7 +1841,7 @@ class GridStrategyRunner:
             candle_buf = buffers.get((symbol, self._strategy_tf), [])
             if candle_buf:
                 try:
-                    extra = self._strategy.compute_live_indicators(
+                    extra = effective_strategy.compute_live_indicators(
                         list(candle_buf),
                     )
                     for tf_key, tf_data in extra.items():
@@ -1931,8 +1926,8 @@ class GridStrategyRunner:
                 sl_price = planned_exit.sl_price
             else:
                 # Backward compatibility et première bougie après migration.
-                tp_price = self._strategy.get_tp_price(grid_state, main_ind)
-                sl_price = self._strategy.get_sl_price(grid_state, main_ind)
+                tp_price = effective_strategy.get_tp_price(grid_state, main_ind)
+                sl_price = effective_strategy.get_sl_price(grid_state, main_ind)
 
             # Check via OHLC heuristic
             exit_reason, exit_price = self._gpm.check_global_tp_sl(
@@ -1941,17 +1936,7 @@ class GridStrategyRunner:
 
             # Si pas de TP/SL OHLC, check should_close_all (signal)
             if exit_reason is None:
-                # Patcher min_profit_pct per_asset avant l'appel
-                original_min_profit = getattr(self._strategy._config, "min_profit_pct", 0.0)
-                if hasattr(self._strategy._config, "min_profit_pct"):
-                    self._strategy._config.min_profit_pct = self._get_per_asset_float(
-                        symbol, "min_profit_pct", original_min_profit
-                    )
-                try:
-                    close_reason = self._strategy.should_close_all(ctx, grid_state)
-                finally:
-                    if hasattr(self._strategy._config, "min_profit_pct"):
-                        self._strategy._config.min_profit_pct = original_min_profit
+                close_reason = effective_strategy.should_close_all(ctx, grid_state)
                 if close_reason:
                     exit_reason = close_reason
                     exit_price = candle.close
@@ -2008,18 +1993,7 @@ class GridStrategyRunner:
                 return
 
         if positions and self._intrabar_execution:
-            original_min_profit = getattr(
-                self._strategy._config, "min_profit_pct", 0.0,
-            )
-            if hasattr(self._strategy._config, "min_profit_pct"):
-                self._strategy._config.min_profit_pct = self._get_per_asset_float(
-                    symbol, "min_profit_pct", original_min_profit,
-                )
-            try:
-                close_reason = self._strategy.should_close_all(ctx, grid_state)
-            finally:
-                if hasattr(self._strategy._config, "min_profit_pct"):
-                    self._strategy._config.min_profit_pct = original_min_profit
+            close_reason = effective_strategy.should_close_all(ctx, grid_state)
             if close_reason and symbol not in self._pending_grid_exits:
                 created_at = self._bar_close_time(candle)
                 intent_id = (
@@ -2076,7 +2050,7 @@ class GridStrategyRunner:
 
         # Phase 2 : cooldown anti-churning — bloquer si close récent
         if not self._chronological_execution and not positions:
-            raw_cd = getattr(self._strategy._config, "cooldown_candles", 0)
+            raw_cd = getattr(effective_strategy._config, "cooldown_candles", 0)
             cooldown = raw_cd if isinstance(raw_cd, (int, float)) else 0
             if cooldown > 0 and symbol in self._last_close_time:
                 tf_seconds = TF_SECONDS.get(self._strategy_tf, 3600)

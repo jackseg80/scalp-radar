@@ -4034,3 +4034,10 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 - **Stack** : Python 3.13 (FastAPI, ccxt, numpy, aiosqlite, numba), React (Vite), Docker
 - **Bitget API** : https://www.bitget.com/api-doc/
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
+# Sprint 70b follow-up — grid_boltrend certification preparation (2026-07-28)
+
+- `grid_atr` and `grid_multi_tf` remain closed `HISTORICAL_FAIL`; no rerun or retrofit.
+- Corrected `grid_boltrend` fast WFO semantics: closed-bar indicators, immutable breakout ladder, T→T+1 intent activation, maker limit fills, 120-minute expiry and protective SL priority.
+- Canonical runner now retains fixed `grid_boltrend` levels and resolves effective per-asset configuration without shared config mutation.
+- Snapshot/WFO contracts now freeze Binance 1h plus exactly consumed Bitget 1m, use Bitget funding for the fast cache, preserve order expiry, and require qualifying calibration (30 filled + 1 unfilled).
+- Pending local user runs: data repair/backfill, calibration, immutable snapshot, exhaustive WFO, external OOS portfolio and certification. No verdict is claimed before those runs.

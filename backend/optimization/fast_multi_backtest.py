@@ -681,7 +681,8 @@ def _simulate_grid_range(
 
     # Positions : (slot_idx, direction, entry_price, qty, entry_fee, entry_sma)
     positions: list[tuple[int, int, float, float, float, float]] = []
-    cooldown_candles = params.get("cooldown_candles", 0)
+    # Keep the canonical GridBolTrend default when WFO does not optimise it.
+    cooldown_candles = params.get("cooldown_candles", 3)
     last_exit_candle_idx = -999  # cooldown tracking
 
     # Funding settlement mask (00:00, 08:00, 16:00 UTC)
@@ -1105,6 +1106,8 @@ def _simulate_grid_boltrend(
     cache: IndicatorCache,
     params: dict[str, Any],
     bt_config: BacktestConfig,
+    *,
+    audit_trace: list[dict[str, Any]] | None = None,
 ) -> tuple[list[float], list[float], float]:
     """Simulation Grid BolTrend (DCA event-driven sur breakout Bollinger).
 
@@ -1137,6 +1140,7 @@ def _simulate_grid_boltrend(
     long_ma = cache.bb_sma[long_ma_window]
     atr_arr = cache.atr_by_period[atr_period]
 
+    opens = cache.opens
     closes = cache.closes
     highs = cache.highs
     lows = cache.lows
@@ -1144,6 +1148,7 @@ def _simulate_grid_boltrend(
     capital = bt_config.initial_capital
     initial_capital = capital
     leverage = bt_config.leverage
+    maker_fee = bt_config.maker_fee
     taker_fee = bt_config.taker_fee
     slippage_pct = bt_config.slippage_pct
     max_margin_ratio = bt_config.max_margin_ratio  # Sprint 56: margin guard
@@ -1166,9 +1171,13 @@ def _simulate_grid_boltrend(
     positions: list[tuple[int, float, float, float]] = []
     entry_levels: list[float] = []  # prix d'entrée fixés au breakout
     direction = 0  # 0=inactif, 1=LONG, -1=SHORT
-    breakout_candle_idx = -1  # candle index du breakout (= première entrée possible)
+    breakout_candle_idx = -1  # première entrée effective (pas le signal)
+    first_entry_candle_idx = -1
+    entry_expiry_index = -1
+    pending_market_exit: str | None = None
     max_hold = params.get("max_hold_candles", 0)
-    cooldown_candles = params.get("cooldown_candles", 0)
+    # Match GridBolTrendConfig when cooldown is not part of the WFO grid.
+    cooldown_candles = params.get("cooldown_candles", 3)
     last_exit_candle_idx = -999  # cooldown tracking
 
     # Start index : besoin de SMA long terme valide
@@ -1178,6 +1187,45 @@ def _simulate_grid_boltrend(
         close_i = closes[i]
         if math.isnan(close_i):
             continue
+
+        # A closed 1h signal creates an order intent, never a same-bar fill.
+        # Market exits follow the same rule and execute at T+1 open.
+        if pending_market_exit is not None and positions:
+            exit_reason = pending_market_exit
+            exit_price = opens[i]
+            margin_to_return = sum(
+                ep * qty / leverage for _l, ep, qty, _fee in positions
+            )
+            capital += margin_to_return
+            pnl = _calc_grid_pnl(
+                positions, exit_price, taker_fee, slippage_pct, direction,
+            )
+            trade_pnls.append(pnl)
+            if capital > 0:
+                trade_returns.append(pnl / capital)
+            capital += pnl
+            if audit_trace is not None:
+                audit_trace.append({
+                    "event": "exit",
+                    "entry_candle_index": first_entry_candle_idx,
+                    "timestamp_ms": (
+                        int(cache.candle_timestamps[i])
+                        if cache.candle_timestamps is not None else None
+                    ),
+                    "direction": direction,
+                    "reason": exit_reason,
+                })
+            positions = []
+            used_margin = 0.0
+            entry_levels = []
+            direction = 0
+            breakout_candle_idx = -1
+            first_entry_candle_idx = -1
+            entry_expiry_index = -1
+            pending_market_exit = None
+            last_exit_candle_idx = i
+            continue
+        pending_market_exit = None
 
         # === 1. CHECK EXITS (si positions ouvertes) ===
         if positions:
@@ -1205,14 +1253,12 @@ def _simulate_grid_boltrend(
             exit_reason = None
             exit_price = close_i
             if sl_hit and tp_hit:
-                is_green = closes[i] >= cache.opens[i]
-                if direction == 1:
-                    # Bougie verte LONG → signal_exit gagne, rouge → SL
-                    exit_reason = "signal_exit" if is_green else "sl_global"
-                    exit_price = close_i if is_green else sl_price
-                else:
-                    exit_reason = "signal_exit" if not is_green else "sl_global"
-                    exit_price = close_i if not is_green else sl_price
+                # The canonical broker gives its persistent protective order
+                # priority over a later 1m market exit.  A 1h OHLC bar cannot
+                # reconstruct the intrabar order, so use the conservative
+                # protective outcome and let the 1m parity audit quantify it.
+                exit_reason = "sl_global"
+                exit_price = sl_price
             elif sl_hit:
                 exit_reason = "sl_global"
                 exit_price = sl_price
@@ -1234,6 +1280,12 @@ def _simulate_grid_boltrend(
                         exit_price = close_i
 
             if exit_reason is not None:
+                # Inverse and time exits are observed only at the closed 1h
+                # signal and become reduce-only market intents for T+1.  A
+                # server SL remains an active protection on the current bar.
+                if exit_reason in {"signal_exit", "time_stop"}:
+                    pending_market_exit = exit_reason
+                    continue
                 # Sprint 56: SL gap slippage — fill défavorable si le prix a gappé
                 if exit_reason == "sl_global":
                     if direction == 1:
@@ -1257,12 +1309,27 @@ def _simulate_grid_boltrend(
                 if capital > 0:
                     trade_returns.append(pnl / capital)
                 capital += pnl
+                exit_direction = direction
+                exit_entry_candle_idx = first_entry_candle_idx
                 positions = []
                 used_margin = 0.0
                 entry_levels = []
                 direction = 0
                 breakout_candle_idx = -1
+                first_entry_candle_idx = -1
+                entry_expiry_index = -1
                 last_exit_candle_idx = i
+                if audit_trace is not None:
+                    audit_trace.append({
+                        "event": "exit",
+                        "entry_candle_index": exit_entry_candle_idx,
+                        "timestamp_ms": (
+                            int(cache.candle_timestamps[i])
+                            if cache.candle_timestamps is not None else None
+                        ),
+                        "direction": exit_direction,
+                        "reason": exit_reason,
+                    })
                 # Sprint 53 : kill switch — perte depuis capital initial
                 if capital > peak_capital:
                     peak_capital = capital
@@ -1285,6 +1352,17 @@ def _simulate_grid_boltrend(
 
         # === 4. DCA filling (si grid actif, pas kill switch) ===
         if direction != 0 and entry_levels and not kill_switch_triggered:
+            if entry_expiry_index >= 0 and i >= entry_expiry_index:
+                if audit_trace is not None:
+                    audit_trace.append({"event": "entry_expired", "candle_index": i})
+                entry_levels = []
+                if not positions:
+                    direction = 0
+                    breakout_candle_idx = -1
+                    first_entry_candle_idx = -1
+                # Existing filled positions remain protected; only unfilled
+                # persistent limit intents expire.
+                continue
             filled = {p[0] for p in positions}
             candle_capital = capital  # Snapshot pour parité executor
             for lvl in range(num_levels):
@@ -1308,8 +1386,9 @@ def _simulate_grid_boltrend(
                     total_equity = capital + used_margin
                     if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
                         break  # Plus de marge disponible pour ce cycle
-                    # Sprint 56: slippage à l'entrée (prix d'exécution défavorable)
-                    actual_ep = ep * (1 + slippage_pct) if direction == 1 else ep * (1 - slippage_pct)
+                    # Canonical grid entries are persistent maker limits at the
+                    # declared price.  Do not model market slippage here.
+                    actual_ep = ep
                     notional = candle_capital * (1.0 / num_levels) * leverage
                     qty = notional / actual_ep
                     if qty <= 0:
@@ -1320,8 +1399,18 @@ def _simulate_grid_boltrend(
                         continue
                     capital -= margin
                     used_margin += margin
-                    entry_fee = qty * actual_ep * taker_fee
+                    entry_fee = qty * actual_ep * maker_fee
                     positions.append((lvl, actual_ep, qty, entry_fee))
+                    if first_entry_candle_idx < 0:
+                        first_entry_candle_idx = i
+                        breakout_candle_idx = i
+                    if audit_trace is not None:
+                        audit_trace.append({
+                            "event": "entry",
+                            "candle_index": i,
+                            "direction": direction,
+                            "level": lvl,
+                        })
 
         # === 5. Breakout detection (si grid inactif) ===
         # Cooldown flag — bloque uniquement le breakout detection, pas les exits
@@ -1337,8 +1426,11 @@ def _simulate_grid_boltrend(
             prev_lower = bb_lower[i - 1]
             curr_upper = bb_upper[i]
             curr_lower = bb_lower[i]
-            long_ma_val = long_ma[i - 1]  # Sprint 56: look-ahead fix
-            atr_val = atr_arr[i - 1]       # Sprint 56: look-ahead fix
+            # The current indicator values are causal because candle i is
+            # closed when the intent is created.  Using i-1 incorrectly made
+            # fast WFO differ from GridBolTrendStrategy.compute_grid().
+            long_ma_val = long_ma[i]
+            atr_val = atr_arr[i]
 
             if any(math.isnan(v) for v in [prev_close, prev_upper, prev_lower, curr_upper, curr_lower, long_ma_val, atr_val]):
                 continue
@@ -1379,26 +1471,21 @@ def _simulate_grid_boltrend(
                         entry_levels.append(close_i - k * spacing)
                     else:
                         entry_levels.append(close_i + k * spacing)
-
-                # Level 0 = close → trigger immédiat (lows[i] <= close toujours vrai LONG)
-                ep0 = entry_levels[0]
-                if ep0 > 0 and capital > 0:
-                    # Sprint 56: margin guard
-                    total_equity = capital + used_margin
-                    if total_equity > 0 and used_margin / total_equity >= max_margin_ratio:
-                        pass  # Plus de marge disponible
-                    else:
-                        # Sprint 56: slippage à l'entrée
-                        actual_ep0 = ep0 * (1 + slippage_pct) if direction == 1 else ep0 * (1 - slippage_pct)
-                        notional = capital * (1.0 / num_levels) * leverage
-                        qty = notional / actual_ep0
-                        margin = notional / leverage
-                        if qty > 0 and capital >= margin:
-                            capital -= margin
-                            used_margin += margin
-                            entry_fee = qty * actual_ep0 * taker_fee
-                            positions.append((0, actual_ep0, qty, entry_fee))
-                            breakout_candle_idx = i
+                # Intent becomes active at the next 1h boundary and keeps the
+                # canonical 120-minute (or calibrated) time in force.
+                expiry_bars = max(
+                    1,
+                    int(math.ceil(bt_config.grid_order_expiry_minutes / 60)),
+                )
+                entry_expiry_index = i + 1 + expiry_bars
+                if audit_trace is not None:
+                    audit_trace.append({
+                        "event": "entry_candidate",
+                        "candle_index": i,
+                        "activation_candle_index": i + 1,
+                        "selected": True,
+                        "direction": direction,
+                    })
 
     # Force close fin de données — capital mis à jour, mais exclu des métriques
     if positions:
@@ -2252,6 +2339,30 @@ def run_grid_multi_tf_audit_from_cache(
     """Run the production fast loop and retain its selected-candidate trace."""
     trace: list[dict[str, Any]] = []
     trade_pnls, trade_returns, final_capital = _simulate_grid_multi_tf(
+        cache,
+        params,
+        bt_config,
+        audit_trace=trace,
+    )
+    metrics = _compute_fast_metrics(
+        params,
+        trade_pnls,
+        trade_returns,
+        final_capital,
+        bt_config.initial_capital,
+        cache.total_days,
+    )
+    return metrics, trace
+
+
+def run_grid_boltrend_audit_from_cache(
+    params: dict[str, Any],
+    cache: IndicatorCache,
+    bt_config: BacktestConfig,
+) -> tuple[_ISResult, list[dict[str, Any]]]:
+    """Run the production Grid BolTrend fast loop with a causal trace."""
+    trace: list[dict[str, Any]] = []
+    trade_pnls, trade_returns, final_capital = _simulate_grid_boltrend(
         cache,
         params,
         bt_config,

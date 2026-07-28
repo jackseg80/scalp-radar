@@ -43,6 +43,9 @@ class BacktestConfig:
     max_risk_per_trade: float = 0.02  # 2%
     max_margin_ratio: float = 0.70   # 70% — aligné avec risk.yaml (margin guard WFO)
     max_wfo_drawdown_pct: float = 80.0  # Guard DD max — arrêt si capital chute de 80% du peak
+    # Shared with the canonical persistent-limit broker.  Fast WFO remains a
+    # 1h approximation, but it must not leave grid intents alive forever.
+    grid_order_expiry_minutes: int = 120
 
 
 @dataclass

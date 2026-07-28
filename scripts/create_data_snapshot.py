@@ -76,17 +76,6 @@ async def main(args: argparse.Namespace) -> int:
                 else config.risk.initial_capital
             ),
         )
-    series = [
-        (args.exchange, symbol, timeframe)
-        for symbol in symbols
-        for timeframe in timeframes
-    ]
-    if args.validate:
-        series.extend(
-            (args.calibration_exchange, symbol, timeframe)
-            for symbol in symbols
-            for timeframe in sorted(set(timeframes + [args.execution_timeframe]))
-        )
     if args.calibration_id:
         spec_data = load_execution_calibration(
             args.db, args.calibration_id,
@@ -113,6 +102,23 @@ async def main(args: argparse.Namespace) -> int:
             partial_fill_probability=args.partial_fill_probability,
             random_seed=args.seed,
         )
+    # Freeze only the actual consumers: closed signal candles on the declared
+    # source plus execution candles on the canonical broker.  In particular,
+    # do not add an unused Bitget 1h series merely because validation is on.
+    signal_timeframes = [
+        timeframe for timeframe in timeframes
+        if timeframe != args.execution_timeframe
+    ]
+    series = [
+        (args.exchange, symbol, timeframe)
+        for symbol in symbols
+        for timeframe in signal_timeframes
+    ]
+    series.extend(
+        (spec.exchange, symbol, spec.execution_timeframe.value)
+        for symbol in symbols
+    )
+    series = list(dict.fromkeys(series))
     snapshot_id, manifest = await create_snapshot(
         db_path=args.db,
         series=series,

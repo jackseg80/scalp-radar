@@ -21,11 +21,18 @@ def calibrate_execution(
     taker_fee_pct: float,
     default_slippage_pct: float,
     strategy_name: str | None = None,
+    strategy_prefix: str | None = None,
+    source_db_path: str | None = None,
+    min_filled_observations: int = 30,
+    min_unfilled_observations: int = 1,
     since: datetime | None = None,
     until: datetime | None = None,
     seed: int = 0,
 ) -> tuple[str, ExecutionSpec]:
     """Calibrate nominal medians and adverse p95 from real order outcomes."""
+    source_path = source_db_path or db_path
+    source_conn = sqlite3.connect(source_path)
+    source_conn.row_factory = sqlite3.Row
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -40,13 +47,16 @@ def calibrate_execution(
         if strategy_name:
             conditions.append("strategy_name=?")
             params.append(strategy_name)
+        if strategy_prefix:
+            conditions.append("strategy_name LIKE ?")
+            params.append(f"{strategy_prefix}%")
         if since:
             conditions.append("timestamp>=?")
             params.append(since.astimezone(timezone.utc).isoformat())
         if until:
             conditions.append("timestamp<=?")
             params.append(until.astimezone(timezone.utc).isoformat())
-        rows = conn.execute(
+        rows = source_conn.execute(
             "SELECT * FROM live_trades WHERE " + " AND ".join(conditions)
             + " ORDER BY timestamp, order_id",
             params,
@@ -68,11 +78,15 @@ def calibrate_execution(
         partial = [
             row for row in filled if float(row.get("fill_ratio") or 0) < 0.99
         ]
-        if not filled:
-            raise ValueError("No complete filled execution observations")
-        if not unfilled:
+        if len(unfilled) < min_unfilled_observations:
             raise ValueError(
-                "No confirmed unfilled observations; missed-fill calibration is incomplete"
+                "Insufficient confirmed unfilled observations: "
+                f"{len(unfilled)} < required {min_unfilled_observations}"
+            )
+        if len(filled) < min_filled_observations:
+            raise ValueError(
+                "Insufficient filled execution observations: "
+                f"{len(filled)} < required {min_filled_observations}"
             )
 
         latency = np.asarray([float(row["latency_ms"]) for row in filled])
@@ -114,6 +128,8 @@ def calibrate_execution(
         identity = canonical_json({
             "observation_hash": observation_hash,
             "strategy_name": strategy_name,
+            "strategy_prefix": strategy_prefix,
+            "source_db_path": source_path,
             "spec": spec.model_dump(mode="json"),
         })
         calibration_id = f"cal-{hashlib.sha256(identity.encode()).hexdigest()[:16]}"
@@ -134,6 +150,7 @@ def calibrate_execution(
         conn.commit()
         return calibration_id, spec
     finally:
+        source_conn.close()
         conn.close()
 
 
