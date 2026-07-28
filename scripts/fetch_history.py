@@ -69,11 +69,12 @@ async def fetch_bitget_uta_history_page(
             "Bitget UTA history failed for "
             f"{symbol} {timeframe}: {response.get('code')} {response.get('msg')}"
         )
-    # The raw UTA payload is already OHLCV-shaped except for string values.
+    # Normalize the raw string payload to CCXT-shaped numeric OHLCV rows.
     # Keep only the requested half-open interval so a rounded endpoint result
     # can never insert a candle beyond the declared cutoff.
     return [
-        row for row in response.get("data", [])
+        [int(row[0]), *(float(value) for value in row[1:6])]
+        for row in response.get("data", [])
         if start_ms <= int(row[0]) < end_ms
     ]
 

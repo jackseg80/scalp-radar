@@ -32,4 +32,5 @@ async def test_bitget_uta_history_page_normalizes_and_bounds_rows():
         FakeExchange(), "BTC/USDT", "1m", 1000, 2000,
     )
 
-    assert [int(row[0]) for row in rows] == [1000, 1999]
+    assert [row[0] for row in rows] == [1000, 1999]
+    assert all(isinstance(value, float) for row in rows for value in row[1:])
