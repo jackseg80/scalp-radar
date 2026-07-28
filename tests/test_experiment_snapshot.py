@@ -231,6 +231,101 @@ async def test_snapshot_has_no_silent_exchange_fallback(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_certification_snapshot_rejects_stale_series_coverage(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for name in CONFIG_FILES:
+        (config_dir / name).write_text("{}\n", encoding="utf-8")
+    db_path = str(tmp_path / "stale.db")
+    db = Database(db_path)
+    await db.init()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await db.insert_candles_batch([
+        Candle(
+            timestamp=base,
+            open=100,
+            high=101,
+            low=99,
+            close=100,
+            volume=10,
+            symbol="BTC/USDT",
+            timeframe=TimeFrame.H1,
+            exchange="binance",
+        ),
+    ])
+    await db.close()
+
+    _, manifest = await create_snapshot(
+        db_path=db_path,
+        series=[("binance", "BTC/USDT", "1h")],
+        cutoff=base + timedelta(hours=2),
+        config_dir=config_dir,
+        repo_root=__import__("pathlib").Path.cwd(),
+        require_execution_timeframe=False,
+    )
+
+    assert manifest["validation_status"] == "INVALID"
+    assert any("coverage ends at" in error for error in manifest["validation_errors"])
+
+
+@pytest.mark.asyncio
+async def test_certification_snapshot_requires_execution_from_signal_start(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for name in CONFIG_FILES:
+        (config_dir / name).write_text("{}\n", encoding="utf-8")
+    db_path = str(tmp_path / "execution-coverage.db")
+    db = Database(db_path)
+    await db.init()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    signal = [
+        Candle(
+            timestamp=base + timedelta(hours=index),
+            open=100,
+            high=101,
+            low=99,
+            close=100,
+            volume=10,
+            symbol="BTC/USDT",
+            timeframe=TimeFrame.H1,
+            exchange="binance",
+        )
+        for index in range(2)
+    ]
+    execution = [
+        Candle(
+            timestamp=base + timedelta(minutes=index),
+            open=100,
+            high=101,
+            low=99,
+            close=100,
+            volume=10,
+            symbol="BTC/USDT",
+            timeframe=TimeFrame.M1,
+            exchange="bitget",
+        )
+        for index in range(1, 120)
+    ]
+    await db.insert_candles_batch(signal + execution)
+    await db.close()
+
+    _, manifest = await create_snapshot(
+        db_path=db_path,
+        series=[
+            ("binance", "BTC/USDT", "1h"),
+            ("bitget", "BTC/USDT", "1m"),
+        ],
+        cutoff=base + timedelta(hours=2),
+        config_dir=config_dir,
+        repo_root=__import__("pathlib").Path.cwd(),
+        execution_spec=ExecutionSpec(exchange="bitget", execution_timeframe="1m"),
+    )
+
+    assert manifest["validation_status"] == "INVALID"
+    assert any("after signal coverage begins" in error for error in manifest["validation_errors"])
+
+
+@pytest.mark.asyncio
 async def test_certification_snapshot_rejects_dirty_worktree(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
     config_dir.mkdir()

@@ -119,6 +119,14 @@ Bitget 1m series, not unused Bitget 1h candles. Calibration must have at least
 30 filled and one expired/cancelled/rejected Bitget entry observation. A shared
 grid-capability calibration may be read from a separate immutable source DB.
 
+For this full historical range, use `scripts.fetch_history --exchange bitget
+--bitget-uta-history --timeframe 1m`: the explicit Bitget UTA v3 route retrieves
+history older than the short classic-CCXT 1m retention. A certification snapshot
+fails closed when any series does not reach the last closed candle before the
+cutoff, or when Bitget execution starts after its Binance signal series. Run
+snapshot creation in a separate clean Git worktree when the development
+worktree contains user-owned edits; do not stash or alter those edits.
+
 `grid_multi_tf` reuses the same universal snapshot, common-calendar WFO,
 IS-only Top-N selection, external-OOS portfolio, shared `LiveRiskManager` and
 parity evidence. Its 4h Supertrend is derived only from complete UTC Binance

@@ -280,6 +280,11 @@ async def create_snapshot(
             validations.append(validation)
             if validation.row_count == 0:
                 errors.append(f"{validation.key}: no closed candles")
+            elif validation.last_timestamp != latest_open.isoformat():
+                errors.append(
+                    f"{validation.key}: coverage ends at {validation.last_timestamp}, "
+                    f"expected closed candle at {latest_open.isoformat()}"
+                )
             if validation.divergent_duplicate_count:
                 errors.append(f"{validation.key}: divergent duplicates")
             if validation.invalid_ohlc_count:
@@ -306,6 +311,33 @@ async def create_snapshot(
             errors.append(
                 f"execution timeframe {execution_tf} missing for: {', '.join(intrabar_missing)}"
             )
+
+        if require_execution_timeframe:
+            execution_validations = {
+                validation.key.split(":", 2)[1]: validation
+                for validation in validations
+                if validation.key.startswith(f"{execution_spec.exchange}:")
+                and validation.key.endswith(f":{execution_tf}")
+            }
+            for symbol, execution_validation in execution_validations.items():
+                signal_validations = [
+                    validation for validation in validations
+                    if validation.key.split(":", 2)[1] == symbol
+                    and not validation.key.endswith(f":{execution_tf}")
+                    and validation.row_count > 0
+                ]
+                if not signal_validations or execution_validation.row_count == 0:
+                    continue
+                first_signal = min(
+                    validation.first_timestamp for validation in signal_validations
+                    if validation.first_timestamp is not None
+                )
+                if execution_validation.first_timestamp > first_signal:
+                    errors.append(
+                        f"{execution_validation.key}: coverage begins at "
+                        f"{execution_validation.first_timestamp}, after signal coverage "
+                        f"begins at {first_signal}"
+                    )
 
         special_data: dict[str, dict[str, Any]] = {}
         cutoff_ms = int(cutoff.timestamp() * 1000)
@@ -503,6 +535,7 @@ async def revalidate_snapshot(
             errors.append(f"snapshot status is {row['validation_status']}")
 
         metadata = manifest.get("metadata", {})
+        cutoff = _parse_timestamp(str(manifest["cutoff"]))
         for expected in metadata.get("series", []):
             try:
                 exchange, symbol, timeframe = expected["key"].split(":", 2)
@@ -529,6 +562,13 @@ async def revalidate_snapshot(
                 errors.append(f"{expected['key']}: series hash changed")
             if actual.row_count != int(expected.get("row_count", -1)):
                 errors.append(f"{expected['key']}: row count changed")
+            timeframe_ms = TimeFrame.from_string(timeframe).to_milliseconds()
+            latest_open = cutoff - timedelta(milliseconds=timeframe_ms)
+            if actual.row_count and actual.last_timestamp != latest_open.isoformat():
+                errors.append(
+                    f"{expected['key']}: coverage no longer reaches "
+                    f"{latest_open.isoformat()}"
+                )
             if (
                 actual.divergent_duplicate_count
                 or actual.invalid_ohlc_count
@@ -537,7 +577,6 @@ async def revalidate_snapshot(
             ):
                 errors.append(f"{expected['key']}: validation no longer passes")
 
-        cutoff = _parse_timestamp(str(manifest["cutoff"]))
         cutoff_ms = int(cutoff.timestamp() * 1000)
         start_raw = metadata.get("start")
         start_ms = int(_parse_timestamp(start_raw).timestamp() * 1000) if start_raw else None

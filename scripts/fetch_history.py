@@ -39,6 +39,45 @@ async def fetch_ohlcv(
     )
 
 
+async def fetch_bitget_uta_history_page(
+    exchange: ccxt.bitget,
+    symbol: str,
+    timeframe: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[list]:
+    """Fetch one bounded page from Bitget's long-history UTA endpoint.
+
+    CCXT's standard Bitget OHLCV route uses the classic endpoint, whose 1m
+    retention is short.  The UTA v3 history endpoint is public, supports
+    candles older than 90 days, and accepts 100 rows per request.  Keeping
+    this mode explicit prevents an accidental multi-year download during
+    ordinary scanner history refreshes.
+    """
+    intervals = {"1h": "1H", "4h": "4H", "6h": "6H", "12h": "12H", "1d": "1D"}
+    response = exchange.publicUtaGetV3MarketHistoryCandles({
+        "category": "USDT-FUTURES",
+        "symbol": symbol.replace("/", ""),
+        "interval": intervals.get(timeframe, timeframe),
+        "startTime": str(start_ms),
+        "endTime": str(end_ms),
+        "limit": "100",
+        "type": "market",
+    })
+    if response.get("code") != "00000":
+        raise RuntimeError(
+            "Bitget UTA history failed for "
+            f"{symbol} {timeframe}: {response.get('code')} {response.get('msg')}"
+        )
+    # The raw UTA payload is already OHLCV-shaped except for string values.
+    # Keep only the requested half-open interval so a rounded endpoint result
+    # can never insert a candle beyond the declared cutoff.
+    return [
+        row for row in response.get("data", [])
+        if start_ms <= int(row[0]) < end_ms
+    ]
+
+
 def create_exchange(exchange_name: str) -> ccxt.Exchange:
     """Crée une instance ccxt pour l'exchange demandé."""
     if exchange_name == "bitget":
@@ -64,6 +103,7 @@ async def fetch_symbol_timeframe(
     end_date: datetime,
     exchange_name: str = "bitget",
     resume: bool = True,
+    bitget_uta_history: bool = False,
 ) -> int:
     """Télécharge les klines pour un (symbol, timeframe) et les persiste."""
     tf = TimeFrame.from_string(timeframe)
@@ -99,15 +139,29 @@ async def fetch_symbol_timeframe(
 
     while current_ms < end_ms:
         try:
-            ohlcv_list = await fetch_ohlcv(
-                exchange, symbol, timeframe, current_ms, limit=1000
-            )
+            if bitget_uta_history:
+                page_end_ms = min(current_ms + interval_ms * 100, end_ms)
+                ohlcv_list = await fetch_bitget_uta_history_page(
+                    exchange, symbol, timeframe, current_ms, page_end_ms,
+                )
+            else:
+                ohlcv_list = await fetch_ohlcv(
+                    exchange, symbol, timeframe, current_ms, limit=1000
+                )
         except Exception as e:
             logger.error("Erreur fetch {} {} : {}", symbol, timeframe, e)
             await asyncio.sleep(2)
             continue
 
         if not ohlcv_list:
+            if bitget_uta_history:
+                # Continue over an empty page.  The certification snapshot
+                # will reject any resulting gap, but a late-listed contract
+                # must not prevent collection of its later history.
+                skipped_bars = (page_end_ms - current_ms) // interval_ms
+                current_ms = page_end_ms
+                pbar.update(skipped_bars)
+                continue
             break
 
         candles = []
@@ -136,7 +190,7 @@ async def fetch_symbol_timeframe(
             pbar.update(len(candles))
 
         # Avancer au timestamp suivant
-        last_ts = ohlcv_list[-1][0]
+        last_ts = max(int(item[0]) for item in ohlcv_list)
         current_ms = last_ts + interval_ms
 
         # Petit délai pour respecter le rate limit
@@ -159,7 +213,14 @@ async def main() -> None:
     parser.add_argument("--exchange", type=str, default="bitget", choices=["bitget", "binance"],
                         help="Exchange source (défaut: bitget)")
     parser.add_argument("--force", action="store_true", help="Supprimer les données existantes et re-fetcher")
+    parser.add_argument(
+        "--bitget-uta-history", action="store_true",
+        help="Use Bitget UTA v3 long-history endpoint (explicit, public, Bitget only)",
+    )
     args = parser.parse_args()
+
+    if args.bitget_uta_history and args.exchange != "bitget":
+        parser.error("--bitget-uta-history requires --exchange bitget")
 
     config = get_config()
     setup_logging(level="INFO")
@@ -222,6 +283,7 @@ async def main() -> None:
         count = await fetch_symbol_timeframe(
             exchange, db, symbol, tf, start_date, end_date,
             exchange_name=args.exchange, resume=not bool(args.since),
+            bitget_uta_history=args.bitget_uta_history,
         )
         total += count
         logger.info("{} {} ({}) : {} candles insérées", symbol, tf, args.exchange, count)

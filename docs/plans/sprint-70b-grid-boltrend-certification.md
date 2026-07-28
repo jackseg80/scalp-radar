@@ -18,3 +18,12 @@ Date: 2026-07-28
 3. On a clean implementation commit, freeze a validated snapshot (Binance 1h + exactly Bitget 1m).
 4. Run exhaustive snapshot-bound WFO, then `external_oos_portfolio`, then `certify_strategy`.
 5. Accept only the emitted precedence verdict: `HISTORICAL_FAIL`, `RESEARCH_ONLY` or `PAPER_READY`; no parameter/universe/risk adjustment afterwards.
+## Follow-up: invalid snapshot recovery (2026-07-28)
+
+The first frozen snapshot was rejected before WFO because Bitget 1m coverage
+was stale/incomplete. The approved remediation is deterministic data recovery,
+not a policy change: repair Binance 1h gaps, backfill Bitget 1m through the
+explicit public UTA v3 long-history endpoint, preserve the fixed calibration
+and recreate the snapshot from a clean sibling worktree. Snapshot validation
+now requires every series to reach the last closed candle before cutoff and
+requires Bitget execution coverage to begin no later than its signal series.
