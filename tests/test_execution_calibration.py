@@ -30,7 +30,8 @@ async def test_calibration_is_traceable_and_deterministic(tmp_path):
             "filled_quantity": 1.0 if index else 0.5,
             "fill_timestamp": (intent + timedelta(milliseconds=100 + index)).isoformat(),
             "latency_ms": 100 + index, "slippage_pct": 0.05,
-            "fill_ratio": 1.0 if index else 0.5, "order_status": "filled",
+            "fill_ratio": 1.0 if index else 0.5,
+            "order_status": "canceled" if index == 0 else "filled",
         })
     for index in range(2):
         intent = base + timedelta(hours=1, minutes=index)
@@ -56,9 +57,10 @@ async def test_calibration_is_traceable_and_deterministic(tmp_path):
     second_id, second = calibrate_execution(**kwargs)
     assert first_id == second_id
     assert first.calibration_sample_size == 30
-    assert first.calibration_unfilled_sample_size == 2
+    # The first cancelled partial has a confirmed unfilled remainder.
+    assert first.calibration_unfilled_sample_size == 3
     assert first.calibration_partial_sample_size == 1
-    assert first.missed_fill_probability == pytest.approx(2 / 32)
+    assert first.missed_fill_probability == pytest.approx(3 / 32)
     assert first.calibration_observation_hash
     assert second == first
     assert load_execution_calibration(db_path, first_id) == first

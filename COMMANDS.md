@@ -23,6 +23,9 @@ uv run python -m scripts.calibrate_execution --strategy <STRATEGY> --since <ISO_
 # grid_boltrend : calibration de capacité grid depuis une base source en lecture seule
 uv run python -m scripts.calibrate_execution --strategy-prefix grid_ --source-db <READ_ONLY_SOURCE_DB> --db data/scalp_radar.db --min-filled-observations 30 --min-unfilled-observations 1 --since <ISO_DATE> --until <ISO_DATE>
 
+# Importer un export privé Bitget déjà récupéré en lecture seule, puis calibrer.
+uv run python -m scripts.import_bitget_execution_history --input data/bitget_grid_atr_private_orders_<DATE>.json --strategy grid_atr
+
 # grid_boltrend : réparer/rejouer la plage Bitget 1m exacte sans supprimer les lignes existantes
 uv run python -m scripts.fetch_history --exchange bitget --symbols <ALL_28_CSV> --timeframe 1m --since "2022-01-01T00:00:00+00:00" --until "2026-07-27T00:00:00+00:00" --db data/scalp_radar.db
 

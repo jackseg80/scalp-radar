@@ -16,6 +16,17 @@ Reviewed the strategy, fast WFO engine, canonical `GridStrategyRunner`, snapshot
 
 Current status: `RESEARCH_ONLY` pending immutable data repair, qualifying Bitget calibration and user-run WFO/OOS/certification evidence. This is not a performance verdict. Existing local Bitget 1m/funding coverage was previously insufficient, so no snapshot may be represented as certifiable until the validation command succeeds.
 
+### Read-only Bitget order evidence recovered
+
+On 2026-07-28, a private read-only history query through the existing robot2
+`grid_atr` credential returned 48 closed limit fills and five cancelled limit
+orders. Three cancelled partial orders fell before the 2026-07-27 cutoff and
+have a confirmed non-filled remainder. The local importer stores the raw order
+identifier, intent/fill timestamps, prices, quantities and status without
+writing to robot2. Calibration `cal-1b1bb1cce72e7cd8` therefore meets the
+30-filled / one-confirmed-unfilled requirement. It is operational evidence,
+not a performance verdict.
+
 ## Test evidence
 
 `tests/test_grid_boltrend.py`, `tests/test_grid_boltrend_parity.py` and `tests/test_grid_runner.py`: 105 passed after the implementation changes. The repository-wide suite remains required before commit.

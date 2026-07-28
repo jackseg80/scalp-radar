@@ -70,7 +70,11 @@ def calibrate_execution(
         ]
         unfilled = [
             row for row in observations
-            if float(row.get("filled_quantity") or 0) <= 0
+            # A cancelled partial order contains a confirmed non-filled
+            # remainder.  Count it once for missed-fill calibration while it
+            # remains separately represented in the partial-fill sample.
+            if float(row.get("requested_quantity") or 0)
+            > float(row.get("filled_quantity") or 0)
             and row.get("order_status") in {
                 "canceled", "cancelled", "expired", "rejected",
             }
