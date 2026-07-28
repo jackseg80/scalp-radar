@@ -26,6 +26,9 @@ uv run python -m scripts.calibrate_execution --strategy-prefix grid_ --source-db
 # grid_boltrend : réparer/rejouer la plage Bitget 1m exacte sans supprimer les lignes existantes
 uv run python -m scripts.fetch_history --exchange bitget --symbols <ALL_28_CSV> --timeframe 1m --since "2022-01-01T00:00:00+00:00" --until "2026-07-27T00:00:00+00:00" --db data/scalp_radar.db
 
+# Même fenêtre de funding Bitget UTC réellement consommée par le broker
+uv run python -m scripts.fetch_funding --exchange bitget --symbols <ALL_28_CSV> --since "2022-01-01T00:00:00+00:00" --until "2026-07-27T00:00:00+00:00" --db data/scalp_radar.db
+
 # 2. Geler Binance 1h + Bitget 1m, code et configs.
 # --validate exige un worktree propre et interdit tout fallback 1h.
 uv run python -m scripts.create_data_snapshot --strategy <STRATEGY> --cutoff <ISO_DATE> --since <ISO_DATE> --symbols <CSV> --timeframes 1h --exchange binance --execution-timeframe 1m --calibration-id <CALIBRATION_ID> --config-dir <YAML_SNAPSHOT_DIR> --max-gap-bars 1 --validate

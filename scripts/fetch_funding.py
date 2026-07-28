@@ -26,8 +26,13 @@ from backend.core.database import Database
 from backend.core.logging_setup import setup_logging
 
 
-def create_exchange() -> ccxt.Exchange:
-    """Crée une instance ccxt Binance futures."""
+def create_exchange(exchange_name: str) -> ccxt.Exchange:
+    """Create a futures client for the requested persisted funding source."""
+    if exchange_name == "bitget":
+        return ccxt.bitget({
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap"},
+        })
     return ccxt.binance({
         "enableRateLimit": True,
         "options": {"defaultType": "future"},
@@ -40,11 +45,13 @@ async def fetch_funding_for_symbol(
     symbol: str,
     since_ms: int,
     end_ms: int,
+    exchange_name: str,
+    resume: bool = True,
 ) -> int:
     """Fetch incrémental des funding rates pour un symbol."""
     # Reprise incrémentale
-    latest_ts = await db.get_latest_funding_timestamp(symbol, "binance")
-    if latest_ts is not None and latest_ts > since_ms:
+    latest_ts = await db.get_latest_funding_timestamp(symbol, exchange_name)
+    if resume and latest_ts is not None and latest_ts > since_ms:
         since_ms = latest_ts + 1
 
     if since_ms >= end_ms:
@@ -74,7 +81,7 @@ async def fetch_funding_for_symbol(
         for r in rates:
             batch.append({
                 "symbol": symbol,
-                "exchange": "binance",
+                "exchange": exchange_name,
                 "timestamp": r["timestamp"],
                 "funding_rate": r["fundingRate"] * 100,  # → en %, cohérent DataEngine
             })
@@ -92,35 +99,50 @@ async def fetch_funding_for_symbol(
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch historical funding rates from Binance")
+    parser = argparse.ArgumentParser(description="Fetch historical funding rates")
     parser.add_argument("--symbol", type=str, help="Symbol spécifique (ex: BTC/USDT)")
     parser.add_argument("--days", type=int, default=720, help="Nombre de jours (défaut: 720)")
+    parser.add_argument("--since", help="UTC ISO start; re-fetches the requested range")
+    parser.add_argument("--until", help="UTC ISO end (exclusive); defaults to now")
+    parser.add_argument("--symbols", help="CSV symbols; bypass assets.yaml")
+    parser.add_argument("--exchange", choices=["binance", "bitget"], default="binance")
+    parser.add_argument("--db", default="data/scalp_radar.db")
     parser.add_argument("--force", action="store_true", help="Supprimer et re-fetcher")
     args = parser.parse_args()
 
     config = get_config()
     setup_logging(level="INFO")
 
-    db = Database()
+    db = Database(args.db)
     await db.init()
 
-    exchange = create_exchange()
+    exchange = create_exchange(args.exchange)
 
-    end_date = datetime.now(tz=timezone.utc)
-    start_date = end_date - timedelta(days=args.days)
+    end_date = (
+        datetime.fromisoformat(args.until.replace("Z", "+00:00")).astimezone(timezone.utc)
+        if args.until else datetime.now(tz=timezone.utc)
+    )
+    start_date = (
+        datetime.fromisoformat(args.since.replace("Z", "+00:00")).astimezone(timezone.utc)
+        if args.since else end_date - timedelta(days=args.days)
+    )
     since_ms = int(start_date.timestamp() * 1000)
     end_ms = int(end_date.timestamp() * 1000)
 
     # Déterminer les assets
-    symbols = []
-    for asset in config.assets:
-        if args.symbol and asset.symbol != args.symbol:
-            continue
-        symbols.append(asset.symbol)
+    symbols = (
+        [value.strip() for value in args.symbols.split(",") if value.strip()]
+        if args.symbols else []
+    )
+    if not symbols:
+        for asset in config.assets:
+            if args.symbol and asset.symbol != args.symbol:
+                continue
+            symbols.append(asset.symbol)
 
     logger.info(
-        "Fetch funding rates Binance : {} asset(s) sur {} jours ({} → {})",
-        len(symbols), args.days,
+        "Fetch funding rates {} : {} asset(s) sur {} jours ({} → {})",
+        args.exchange, len(symbols), args.days,
         start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"),
     )
 
@@ -130,12 +152,15 @@ async def main() -> None:
     total = 0
     for symbol in symbols:
         start = since_ms if args.force else since_ms
-        count = await fetch_funding_for_symbol(exchange, db, symbol, start, end_ms)
+        count = await fetch_funding_for_symbol(
+            exchange, db, symbol, start, end_ms,
+            exchange_name=args.exchange, resume=not bool(args.since),
+        )
         total += count
         logger.info("{} : {} funding rates insérés", symbol, count)
 
     await db.close()
-    logger.info("Terminé : {} funding rates au total", total)
+    logger.info("Terminé : {} funding rates au total ({})", total, args.exchange)
 
 
 if __name__ == "__main__":
