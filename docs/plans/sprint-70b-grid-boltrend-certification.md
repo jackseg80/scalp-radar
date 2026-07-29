@@ -27,3 +27,5 @@ explicit public UTA v3 long-history endpoint, preserve the fixed calibration
 and recreate the snapshot from a clean sibling worktree. Snapshot validation
 now requires every series to reach the last closed candle before cutoff and
 requires Bitget execution coverage to begin no later than its signal series.
+UTA requests are bounded at 16 concurrent pages per second and persisted in
+1,600-candle batches to make the 28-asset range operationally tractable.

@@ -39,7 +39,7 @@ async def fetch_ohlcv(
     )
 
 
-async def fetch_bitget_uta_history_page(
+def _fetch_bitget_uta_history_page_sync(
     exchange: ccxt.bitget,
     symbol: str,
     timeframe: str,
@@ -79,6 +79,45 @@ async def fetch_bitget_uta_history_page(
     ]
 
 
+async def fetch_bitget_uta_history_page(
+    exchange: ccxt.bitget,
+    symbol: str,
+    timeframe: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[list]:
+    """Run the synchronous CCXT request outside the event-loop thread."""
+    return await asyncio.to_thread(
+        _fetch_bitget_uta_history_page_sync,
+        exchange, symbol, timeframe, start_ms, end_ms,
+    )
+
+
+async def fetch_bitget_uta_history_batch(
+    exchange: ccxt.bitget,
+    symbol: str,
+    timeframe: str,
+    start_ms: int,
+    end_ms: int,
+    *,
+    concurrency: int,
+) -> list[list]:
+    """Fetch adjacent UTA pages concurrently, returning ordered candles."""
+    interval_ms = TimeFrame.from_string(timeframe).to_milliseconds()
+    page_span_ms = interval_ms * 100
+    page_starts = range(start_ms, end_ms, page_span_ms)
+    pages = await asyncio.gather(*(
+        fetch_bitget_uta_history_page(
+            exchange, symbol, timeframe,
+            page_start, min(page_start + page_span_ms, end_ms),
+        )
+        for page_start in list(page_starts)[:concurrency]
+    ))
+    return sorted(
+        (candle for page in pages for candle in page), key=lambda candle: candle[0],
+    )
+
+
 def create_exchange(exchange_name: str) -> ccxt.Exchange:
     """Crée une instance ccxt pour l'exchange demandé."""
     if exchange_name == "bitget":
@@ -105,6 +144,7 @@ async def fetch_symbol_timeframe(
     exchange_name: str = "bitget",
     resume: bool = True,
     bitget_uta_history: bool = False,
+    bitget_uta_concurrency: int = 16,
 ) -> int:
     """Télécharge les klines pour un (symbol, timeframe) et les persiste."""
     tf = TimeFrame.from_string(timeframe)
@@ -139,11 +179,20 @@ async def fetch_symbol_timeframe(
     )
 
     while current_ms < end_ms:
+        batch_started = asyncio.get_running_loop().time()
         try:
             if bitget_uta_history:
-                page_end_ms = min(current_ms + interval_ms * 100, end_ms)
-                ohlcv_list = await fetch_bitget_uta_history_page(
+                # Bitget UTA allows 100 rows/request and 20 requests/s.  A
+                # bounded 16-page batch stays under that public limit while
+                # avoiding one SQLite transaction and one network round-trip
+                # per 100 candles.
+                page_end_ms = min(
+                    current_ms + interval_ms * 100 * bitget_uta_concurrency,
+                    end_ms,
+                )
+                ohlcv_list = await fetch_bitget_uta_history_batch(
                     exchange, symbol, timeframe, current_ms, page_end_ms,
+                    concurrency=bitget_uta_concurrency,
                 )
             else:
                 ohlcv_list = await fetch_ohlcv(
@@ -162,6 +211,9 @@ async def fetch_symbol_timeframe(
                 skipped_bars = (page_end_ms - current_ms) // interval_ms
                 current_ms = page_end_ms
                 pbar.update(skipped_bars)
+                await asyncio.sleep(max(0.0, 1.0 - (
+                    asyncio.get_running_loop().time() - batch_started
+                )))
                 continue
             break
 
@@ -188,14 +240,24 @@ async def fetch_symbol_timeframe(
         if candles:
             inserted = await db.insert_candles_batch(candles)
             total_inserted += inserted
-            pbar.update(len(candles))
+            pbar.update(
+                (page_end_ms - current_ms) // interval_ms
+                if bitget_uta_history else len(candles)
+            )
 
         # Avancer au timestamp suivant
-        last_ts = max(int(item[0]) for item in ohlcv_list)
-        current_ms = last_ts + interval_ms
+        if bitget_uta_history:
+            current_ms = page_end_ms
+            await asyncio.sleep(max(0.0, 1.0 - (
+                asyncio.get_running_loop().time() - batch_started
+            )))
+        else:
+            last_ts = max(int(item[0]) for item in ohlcv_list)
+            current_ms = last_ts + interval_ms
 
         # Petit délai pour respecter le rate limit
-        await asyncio.sleep(0.06)
+        if not bitget_uta_history:
+            await asyncio.sleep(0.06)
 
     pbar.close()
     return total_inserted
@@ -218,10 +280,16 @@ async def main() -> None:
         "--bitget-uta-history", action="store_true",
         help="Use Bitget UTA v3 long-history endpoint (explicit, public, Bitget only)",
     )
+    parser.add_argument(
+        "--bitget-uta-concurrency", type=int, default=16,
+        help="Concurrent UTA pages per second (1-16; default: 16)",
+    )
     args = parser.parse_args()
 
     if args.bitget_uta_history and args.exchange != "bitget":
         parser.error("--bitget-uta-history requires --exchange bitget")
+    if not 1 <= args.bitget_uta_concurrency <= 16:
+        parser.error("--bitget-uta-concurrency must be between 1 and 16")
 
     config = get_config()
     setup_logging(level="INFO")
@@ -285,6 +353,7 @@ async def main() -> None:
             exchange, db, symbol, tf, start_date, end_date,
             exchange_name=args.exchange, resume=not bool(args.since),
             bitget_uta_history=args.bitget_uta_history,
+            bitget_uta_concurrency=args.bitget_uta_concurrency,
         )
         total += count
         logger.info("{} {} ({}) : {} candles insérées", symbol, tf, args.exchange, count)
