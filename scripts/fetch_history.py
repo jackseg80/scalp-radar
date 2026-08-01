@@ -118,6 +118,84 @@ async def fetch_bitget_uta_history_batch(
     )
 
 
+def _parse_utc_timestamp(raw: str) -> datetime:
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+async def find_missing_candle_ranges(
+    db: Database,
+    *,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    start_date: datetime,
+    end_date: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """Return exact half-open ranges absent from an existing candle series.
+
+    This scans indexed SQLite timestamps instead of re-fetching a complete
+    multi-year range after an interrupted UTA backfill.  Prefixes, internal
+    gaps and the final suffix remain visible to the certification snapshot.
+    """
+    assert db._conn is not None
+    interval_ms = TimeFrame.from_string(timeframe).to_milliseconds()
+    interval = timedelta(milliseconds=interval_ms)
+    start_date = start_date.astimezone(timezone.utc)
+    end_date = end_date.astimezone(timezone.utc)
+    first_closed = start_date.isoformat()
+    last_closed = (end_date - interval).isoformat()
+    params = (exchange, symbol, timeframe, first_closed, last_closed)
+
+    boundary = await (
+        await db._conn.execute(
+            """SELECT MIN(timestamp) AS first_timestamp, MAX(timestamp) AS last_timestamp
+               FROM candles
+               WHERE exchange=? AND symbol=? AND timeframe=?
+                 AND timestamp>=? AND timestamp<=?""",
+            params,
+        )
+    ).fetchone()
+    if boundary is None or boundary["first_timestamp"] is None:
+        return [(start_date, end_date)]
+
+    ranges: list[tuple[datetime, datetime]] = []
+    first = _parse_utc_timestamp(str(boundary["first_timestamp"]))
+    last = _parse_utc_timestamp(str(boundary["last_timestamp"]))
+    if first > start_date:
+        ranges.append((start_date, first))
+
+    interval_seconds = interval_ms // 1000
+    gaps = await (
+        await db._conn.execute(
+            """WITH ordered AS (
+                   SELECT timestamp,
+                          LEAD(timestamp) OVER (ORDER BY timestamp) AS next_timestamp
+                   FROM candles
+                   WHERE exchange=? AND symbol=? AND timeframe=?
+                     AND timestamp>=? AND timestamp<=?
+               )
+               SELECT timestamp, next_timestamp FROM ordered
+               WHERE next_timestamp IS NOT NULL
+                 AND CAST(strftime('%s', next_timestamp) AS INTEGER)
+                     - CAST(strftime('%s', timestamp) AS INTEGER) > ?""",
+            (*params, interval_seconds),
+        )
+    ).fetchall()
+    for row in gaps:
+        gap_start = _parse_utc_timestamp(str(row["timestamp"])) + interval
+        gap_end = _parse_utc_timestamp(str(row["next_timestamp"]))
+        if gap_start < gap_end:
+            ranges.append((gap_start, gap_end))
+
+    suffix_start = last + interval
+    if suffix_start < end_date:
+        ranges.append((suffix_start, end_date))
+    return ranges
+
+
 def create_exchange(exchange_name: str) -> ccxt.Exchange:
     """Crée une instance ccxt pour l'exchange demandé."""
     if exchange_name == "bitget":
@@ -270,7 +348,10 @@ async def main() -> None:
                         help="Liste de symbols séparés par des virgules, bypass assets.yaml (ex: ADA/USDT,AVAX/USDT)")
     parser.add_argument("--timeframe", type=str, help="Timeframe spécifique (ex: 5m, 1h)")
     parser.add_argument("--days", type=int, default=180, help="Nombre de jours (défaut: 180)")
-    parser.add_argument("--since", help="UTC ISO start; re-fetches the full range to repair prefix/gaps")
+    parser.add_argument(
+        "--since",
+        help="UTC ISO start; Bitget UTA repairs only missing ranges on resume",
+    )
     parser.add_argument("--until", help="UTC ISO end (exclusive); defaults to now")
     parser.add_argument("--db", default="data/scalp_radar.db")
     parser.add_argument("--exchange", type=str, default="bitget", choices=["bitget", "binance"],
@@ -349,14 +430,37 @@ async def main() -> None:
 
     total = 0
     for symbol, tf in pairs:
-        count = await fetch_symbol_timeframe(
-            exchange, db, symbol, tf, start_date, end_date,
-            exchange_name=args.exchange, resume=not bool(args.since),
-            bitget_uta_history=args.bitget_uta_history,
-            bitget_uta_concurrency=args.bitget_uta_concurrency,
+        ranges = [(start_date, end_date)]
+        if args.bitget_uta_history and args.since:
+            ranges = await find_missing_candle_ranges(
+                db,
+                exchange=args.exchange,
+                symbol=symbol,
+                timeframe=tf,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if not ranges:
+                logger.info("{} {} ({}) : couverture déjà complète", symbol, tf, args.exchange)
+                continue
+            logger.info(
+                "{} {} ({}) : réparation de {} plage(s) manquante(s)",
+                symbol, tf, args.exchange, len(ranges),
+            )
+        symbol_total = 0
+        for range_start, range_end in ranges:
+            count = await fetch_symbol_timeframe(
+                exchange, db, symbol, tf, range_start, range_end,
+                exchange_name=args.exchange,
+                resume=not bool(args.since),
+                bitget_uta_history=args.bitget_uta_history,
+                bitget_uta_concurrency=args.bitget_uta_concurrency,
+            )
+            symbol_total += count
+        total += symbol_total
+        logger.info(
+            "{} {} ({}) : {} candles insérées", symbol, tf, args.exchange, symbol_total,
         )
-        total += count
-        logger.info("{} {} ({}) : {} candles insérées", symbol, tf, args.exchange, count)
 
     await db.close()
 

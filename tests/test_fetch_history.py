@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
+from backend.core.database import Database
+from backend.core.models import Candle, TimeFrame
 from scripts.fetch_history import (
     fetch_bitget_uta_history_batch,
     fetch_bitget_uta_history_page,
+    find_missing_candle_ranges,
 )
 
 
@@ -54,3 +59,34 @@ async def test_bitget_uta_history_batch_orders_concurrent_pages():
     )
 
     assert [row[0] for row in rows] == [0, 6_000_000, 12_000_000]
+
+
+@pytest.mark.asyncio
+async def test_missing_ranges_detect_prefix_internal_gap_and_suffix(tmp_path):
+    db = Database(str(tmp_path / "candles.db"))
+    await db.init()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await db.insert_candles_batch([
+        Candle(
+            timestamp=base + timedelta(minutes=index),
+            open=1, high=1, low=1, close=1, volume=1,
+            symbol="BTC/USDT", timeframe=TimeFrame.M1, exchange="bitget",
+        )
+        for index in (1, 2, 4)
+    ])
+
+    ranges = await find_missing_candle_ranges(
+        db,
+        exchange="bitget",
+        symbol="BTC/USDT",
+        timeframe="1m",
+        start_date=base,
+        end_date=base + timedelta(minutes=6),
+    )
+    await db.close()
+
+    assert ranges == [
+        (base, base + timedelta(minutes=1)),
+        (base + timedelta(minutes=3), base + timedelta(minutes=4)),
+        (base + timedelta(minutes=5), base + timedelta(minutes=6)),
+    ]

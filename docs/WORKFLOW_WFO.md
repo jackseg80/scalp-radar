@@ -123,7 +123,9 @@ For this full historical range, use `scripts.fetch_history --exchange bitget
 --bitget-uta-history --timeframe 1m`: the explicit Bitget UTA v3 route retrieves
 history older than the short classic-CCXT 1m retention. It retrieves bounded
 16-page batches (1,600 candles) and commits each batch once, while remaining
-below Bitget's 20-request/s public limit. A certification snapshot
+below Bitget's 20-request/s public limit. On interruption, rerun the exact
+same command: it queries SQLite and downloads only missing prefixes, internal
+gaps and suffixes in the declared window. A certification snapshot
 fails closed when any series does not reach the last closed candle before the
 cutoff, or when Bitget execution starts after its Binance signal series. Run
 snapshot creation in a separate clean Git worktree when the development

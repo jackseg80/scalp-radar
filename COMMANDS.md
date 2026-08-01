@@ -28,6 +28,8 @@ uv run python -m scripts.import_bitget_execution_history --input data/bitget_gri
 
 # grid_boltrend : backfill Bitget UTA v3 long-history 1m sur les 28 actifs.
 # Le flag est obligatoire : le route CCXT classique a une rétention 1m courte.
+# Après interruption, la même commande ne re-télécharge que les préfixes,
+# trous internes et suffixes absents de la fenêtre demandée.
 uv run --isolated --python 3.12 --frozen python -m scripts.fetch_history --exchange bitget --bitget-uta-history --timeframe 1m --since "2022-01-01T00:00:00+00:00" --until "2026-07-27T00:00:00+00:00" --db data/scalp_radar.db
 
 # Même fenêtre de funding Bitget UTC réellement consommée par le broker

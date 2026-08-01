@@ -29,4 +29,4 @@ not a performance verdict.
 
 ## Test evidence
 
-`tests/test_grid_boltrend.py`, `tests/test_grid_boltrend_parity.py` and `tests/test_grid_runner.py`: 105 passed after the implementation changes. `tests/test_experiment_snapshot.py` and `tests/test_fetch_history.py`: 14 passed for the UTA v3 path, concurrent batching and cutoff guard. The repository-wide suite remains required before commit.
+`tests/test_grid_boltrend.py`, `tests/test_grid_boltrend_parity.py` and `tests/test_grid_runner.py`: 105 passed after the implementation changes. `tests/test_experiment_snapshot.py` and `tests/test_fetch_history.py`: 15 passed for the UTA v3 path, concurrent batching, interrupted-range resume and cutoff guard. The repository-wide suite remains required before commit.
