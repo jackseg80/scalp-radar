@@ -133,8 +133,10 @@ worktree contains user-owned edits; do not stash or alter those edits.
 
 Bitget funding uses its public UTA v3 cursor endpoint rather than the generic
 CCXT history wrapper, which can silently return only a recent 15-row sample.
-The persisted rows must cover the same frozen interval as the Bitget 1m
-execution series.
+Observed UTA retention is still approximately 90 days (270 8h records), so it
+cannot by itself certify the 2022–2026 calendar. An immutable Bitget funding
+archive covering each selected signal period is mandatory; the snapshot rejects
+a recent-only sample and must not be bypassed with Binance funding.
 
 `grid_multi_tf` reuses the same universal snapshot, common-calendar WFO,
 IS-only Top-N selection, external-OOS portfolio, shared `LiveRiskManager` and

@@ -33,3 +33,5 @@ Interrupted runs scan the requested range and resume only missing intervals;
 they never re-download a complete symbol merely because `--since` is present.
 Funding uses the UTA v3 cursor history too; a 15-row CCXT sample cannot qualify
 as frozen 2022–2026 funding evidence.
+Measured UTA retention is only about 90 days, so an immutable full-period
+Bitget funding archive is a hard prerequisite before snapshot/WFO execution.

@@ -10,6 +10,7 @@ from backend.core.database import Database
 from backend.core.experiment import (
     CONFIG_FILES,
     create_snapshot,
+    funding_coverage_errors,
     require_snapshot_execution_series,
     revalidate_snapshot,
     validate_candle_rows,
@@ -323,6 +324,18 @@ async def test_certification_snapshot_requires_execution_from_signal_start(tmp_p
 
     assert manifest["validation_status"] == "INVALID"
     assert any("after signal coverage begins" in error for error in manifest["validation_errors"])
+
+
+def test_funding_coverage_rejects_recent_only_broker_sample():
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    errors = funding_coverage_errors(
+        [(int((base + timedelta(hours=25)).timestamp() * 1000), 0.01)],
+        key="bitget:BTC/USDT:funding",
+        coverage_start_ms=int(base.timestamp() * 1000),
+        cutoff_ms=int((base + timedelta(hours=48)).timestamp() * 1000),
+    )
+
+    assert any("funding coverage begins" in error for error in errors)
 
 
 @pytest.mark.asyncio

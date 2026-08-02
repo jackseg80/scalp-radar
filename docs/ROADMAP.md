@@ -4045,3 +4045,4 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 - UTA pagination was then made concurrent and batch-persistent (16 pages / 1,600 candles per bounded batch); the former one-request/one-transaction loop was impractical for the 67M-row frozen range.
 - Interrupted UTA collection now scans the immutable requested range and resumes only missing prefix/gap/suffix intervals; reusing `--since` no longer restarts completed assets.
 - Bitget funding history now uses the paginated UTA v3 endpoint. The prior CCXT wrapper returned only 15 recent rows per symbol despite a 2022–2026 request and is not qualifying evidence.
+- Live verification shows UTA funding itself retains only ~90 days (270 records/asset). Snapshot validation now rejects funding that starts after signal coverage, ends before cutoff or has a gap above 24h. A full immutable Bitget funding archive is the remaining external evidence blocker for `grid_boltrend`.

@@ -16,6 +16,8 @@ Reviewed the strategy, fast WFO engine, canonical `GridStrategyRunner`, snapshot
 
 Current status: `RESEARCH_ONLY` pending immutable data repair and user-run WFO/OOS/certification evidence. This is not a performance verdict. Calibration `cal-1b1bb1cce72e7cd8` is qualifying (30 filled, 3 partial/cancelled remainders), but the first snapshot attempt, `snapshot-5a23b693c8fb56af`, was `INVALID` before WFO: local Bitget 1m ended on 2026-02-21, seven configured series were empty and source rows included gaps. The explicit Bitget UTA v3 long-history fetch and cutoff-coverage guard now fail closed instead of allowing a stale end-of-series to appear usable.
 
+Bitget's public UTA funding endpoint was also measured after pagination: it yields only 270 records per asset (about 90 days), not the required 2022–2026 funding history. The snapshot now fails closed on a missing/recent/gapped broker-funding series. Certification remains blocked pending an immutable full-period Bitget funding archive; Binance funding is not an admissible substitute.
+
 ### Read-only Bitget order evidence recovered
 
 On 2026-07-28, a private read-only history query through the existing robot2
@@ -29,4 +31,4 @@ not a performance verdict.
 
 ## Test evidence
 
-`tests/test_grid_boltrend.py`, `tests/test_grid_boltrend_parity.py` and `tests/test_grid_runner.py`: 105 passed after the implementation changes. `tests/test_experiment_snapshot.py` and `tests/test_fetch_history.py`: 16 passed for the UTA v3 candle/funding paths, concurrent batching, interrupted-range resume and cutoff guard. The repository-wide suite remains required before commit.
+`tests/test_grid_boltrend.py`, `tests/test_grid_boltrend_parity.py` and `tests/test_grid_runner.py`: 105 passed after the implementation changes. `tests/test_experiment_snapshot.py` and `tests/test_fetch_history.py`: 17 passed for the UTA v3 candle/funding paths, concurrent batching, interrupted-range resume and cutoff guard. The repository-wide suite remains required before commit.

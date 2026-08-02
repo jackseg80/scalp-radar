@@ -223,6 +223,35 @@ def validate_candle_rows(
     )
 
 
+def funding_coverage_errors(
+    values: list[tuple[int, float]],
+    *,
+    key: str,
+    coverage_start_ms: int,
+    cutoff_ms: int,
+) -> list[str]:
+    """Reject incomplete broker funding instead of freezing a recent sample."""
+    if not values:
+        return [f"{key}: no funding rates"]
+    timestamps = sorted(timestamp for timestamp, _ in values)
+    max_allowed_gap_ms = 24 * 60 * 60 * 1000
+    errors: list[str] = []
+    if timestamps[0] > coverage_start_ms + max_allowed_gap_ms:
+        errors.append(
+            f"{key}: funding coverage begins after required signal coverage"
+        )
+    if timestamps[-1] < cutoff_ms - max_allowed_gap_ms:
+        errors.append(
+            f"{key}: funding coverage ends before snapshot cutoff"
+        )
+    if any(
+        right - left > max_allowed_gap_ms
+        for left, right in zip(timestamps, timestamps[1:])
+    ):
+        errors.append(f"{key}: funding gap exceeds 24 hours")
+    return errors
+
+
 async def create_snapshot(
     *,
     db_path: str,
@@ -342,6 +371,12 @@ async def create_snapshot(
         special_data: dict[str, dict[str, Any]] = {}
         cutoff_ms = int(cutoff.timestamp() * 1000)
         start_ms = int(start.timestamp() * 1000) if start is not None else None
+        signal_starts = {
+            validation.key.split(":", 2)[1]: validation.first_timestamp
+            for validation in validations
+            if validation.row_count > 0
+            and not validation.key.endswith(f":{execution_tf}")
+        }
         for exchange, symbol in sorted({(item[0], item[1]) for item in series}):
             funding_query = (
                 "SELECT timestamp, funding_rate FROM funding_rates "
@@ -362,8 +397,25 @@ async def create_snapshot(
             funding_key = f"{exchange}:{symbol}:funding"
             funding_hash = sha256_text(canonical_json(funding_values))
             special_data[funding_key] = {
-                "row_count": len(funding_values), "hash": funding_hash,
+                "row_count": len(funding_values),
+                "hash": funding_hash,
+                "first_timestamp": funding_values[0][0] if funding_values else None,
+                "last_timestamp": funding_values[-1][0] if funding_values else None,
             }
+            if (
+                require_execution_timeframe
+                and exchange == execution_spec.exchange
+                and symbol in signal_starts
+            ):
+                coverage_start_ms = int(
+                    _parse_timestamp(str(signal_starts[symbol])).timestamp() * 1000
+                )
+                errors.extend(funding_coverage_errors(
+                    funding_values,
+                    key=funding_key,
+                    coverage_start_ms=coverage_start_ms,
+                    cutoff_ms=cutoff_ms,
+                ))
 
             oi_query = (
                 "SELECT timeframe, timestamp, oi, oi_value FROM open_interest "
@@ -536,6 +588,9 @@ async def revalidate_snapshot(
 
         metadata = manifest.get("metadata", {})
         cutoff = _parse_timestamp(str(manifest["cutoff"]))
+        execution_spec = ExecutionSpec.model_validate(
+            metadata.get("execution_spec", {}),
+        )
         for expected in metadata.get("series", []):
             try:
                 exchange, symbol, timeframe = expected["key"].split(":", 2)
@@ -622,6 +677,26 @@ async def revalidate_snapshot(
                 errors.append(f"{key}: data hash changed")
             if len(values) != int(expected.get("row_count", -1)):
                 errors.append(f"{key}: row count changed")
+            if kind == "funding" and exchange == execution_spec.exchange:
+                signal_starts = [
+                    entry.get("first_timestamp")
+                    for entry in metadata.get("series", [])
+                    if entry.get("key", "").split(":", 2)[1:2] == [symbol]
+                    and not entry.get("key", "").endswith(
+                        f":{execution_spec.execution_timeframe.value}"
+                    )
+                    and entry.get("first_timestamp")
+                ]
+                if signal_starts:
+                    coverage_start_ms = int(
+                        _parse_timestamp(min(signal_starts)).timestamp() * 1000
+                    )
+                    errors.extend(funding_coverage_errors(
+                        values,
+                        key=key,
+                        coverage_start_ms=coverage_start_ms,
+                        cutoff_ms=cutoff_ms,
+                    ))
 
         if check_environment:
             if config_dir is None or repo_root is None:
