@@ -131,6 +131,11 @@ cutoff, or when Bitget execution starts after its Binance signal series. Run
 snapshot creation in a separate clean Git worktree when the development
 worktree contains user-owned edits; do not stash or alter those edits.
 
+Bitget funding uses its public UTA v3 cursor endpoint rather than the generic
+CCXT history wrapper, which can silently return only a recent 15-row sample.
+The persisted rows must cover the same frozen interval as the Bitget 1m
+execution series.
+
 `grid_multi_tf` reuses the same universal snapshot, common-calendar WFO,
 IS-only Top-N selection, external-OOS portfolio, shared `LiveRiskManager` and
 parity evidence. Its 4h Supertrend is derived only from complete UTC Binance

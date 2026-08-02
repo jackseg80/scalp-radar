@@ -11,6 +11,7 @@ from scripts.fetch_history import (
     fetch_bitget_uta_history_page,
     find_missing_candle_ranges,
 )
+from scripts.fetch_funding import fetch_bitget_uta_funding_history
 
 
 @pytest.mark.asyncio
@@ -90,3 +91,31 @@ async def test_missing_ranges_detect_prefix_internal_gap_and_suffix(tmp_path):
         (base + timedelta(minutes=3), base + timedelta(minutes=4)),
         (base + timedelta(minutes=5), base + timedelta(minutes=6)),
     ]
+
+
+@pytest.mark.asyncio
+async def test_bitget_uta_funding_history_pages_to_requested_range():
+    class FakeExchange:
+        def __init__(self):
+            self.cursors: list[str] = []
+
+        def publicUtaGetV3MarketHistoryFundRate(self, params):
+            self.cursors.append(params["cursor"])
+            pages = {
+                "1": [
+                    {"fundingRateTimestamp": "2000", "fundingRate": "0.001"},
+                    {"fundingRateTimestamp": "1500", "fundingRate": "0.002"},
+                ],
+                "2": [
+                    {"fundingRateTimestamp": "999", "fundingRate": "0.003"},
+                ],
+            }
+            return {"code": "00000", "data": {"resultList": pages[params["cursor"]]}}
+
+    exchange = FakeExchange()
+    rates = await fetch_bitget_uta_funding_history(
+        exchange, "BTC/USDT", 1000, 2000,
+    )
+
+    assert exchange.cursors == ["1"]
+    assert rates == [{"fundingRateTimestamp": "1500", "fundingRate": "0.002"}]

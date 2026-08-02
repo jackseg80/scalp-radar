@@ -39,6 +39,45 @@ def create_exchange(exchange_name: str) -> ccxt.Exchange:
     })
 
 
+async def fetch_bitget_uta_funding_history(
+    exchange: ccxt.Exchange,
+    symbol: str,
+    since_ms: int,
+    end_ms: int,
+) -> list[dict]:
+    """Fetch the complete bounded Bitget UTA funding history.
+
+    The generic CCXT method currently returns only Bitget's default 15 rows
+    despite a supplied ``since``.  UTA v3 exposes a public 100-row cursor API,
+    which is sufficient for the full certification window at an 8h cadence.
+    """
+    collected: list[dict] = []
+    for cursor in range(1, 101):
+        response = exchange.publicUtaGetV3MarketHistoryFundRate({
+            "category": "USDT-FUTURES",
+            "symbol": symbol.replace("/", ""),
+            "limit": "100",
+            "cursor": str(cursor),
+        })
+        if response.get("code") != "00000":
+            raise RuntimeError(
+                "Bitget UTA funding history failed for "
+                f"{symbol}: {response.get('code')} {response.get('msg')}"
+            )
+        page = response.get("data", {}).get("resultList", [])
+        if not page:
+            break
+        timestamps = [int(item["fundingRateTimestamp"]) for item in page]
+        collected.extend(
+            item for item, timestamp in zip(page, timestamps)
+            if since_ms <= timestamp < end_ms
+        )
+        if min(timestamps) < since_ms or len(page) < 100:
+            break
+        await asyncio.sleep(0.05)
+    return collected
+
+
 async def fetch_funding_for_symbol(
     exchange: ccxt.Exchange,
     db: Database,
@@ -64,6 +103,21 @@ async def fetch_funding_for_symbol(
     pbar = tqdm(total=max(expected, 1), desc=f"{symbol} funding", unit="rates", leave=False)
 
     batch: list[dict] = []
+    if exchange_name == "bitget":
+        rates = await fetch_bitget_uta_funding_history(
+            exchange, symbol, since_ms, end_ms,
+        )
+        for rate in rates:
+            batch.append({
+                "symbol": symbol,
+                "exchange": exchange_name,
+                "timestamp": int(rate["fundingRateTimestamp"]),
+                "funding_rate": float(rate["fundingRate"]) * 100,
+            })
+        pbar.update(len(rates))
+        pbar.close()
+        return await db.insert_funding_rates_batch(batch) if batch else 0
+
     current = since_ms
     while current < end_ms:
         try:

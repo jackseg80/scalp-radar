@@ -32,7 +32,9 @@ uv run python -m scripts.import_bitget_execution_history --input data/bitget_gri
 # trous internes et suffixes absents de la fenêtre demandée.
 uv run --isolated --python 3.12 --frozen python -m scripts.fetch_history --exchange bitget --bitget-uta-history --timeframe 1m --since "2022-01-01T00:00:00+00:00" --until "2026-07-27T00:00:00+00:00" --db data/scalp_radar.db
 
-# Même fenêtre de funding Bitget UTC réellement consommée par le broker
+# Même fenêtre de funding Bitget UTC réellement consommée par le broker.
+# Le script utilise l'historique UTA v3 paginé (100 lignes/page), pas le
+# wrapper CCXT limité à la fenêtre récente.
 uv run python -m scripts.fetch_funding --exchange bitget --symbols <ALL_28_CSV> --since "2022-01-01T00:00:00+00:00" --until "2026-07-27T00:00:00+00:00" --db data/scalp_radar.db
 
 # 2. Geler Binance 1h + Bitget 1m, code et configs.

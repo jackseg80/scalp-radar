@@ -31,3 +31,5 @@ UTA requests are bounded at 16 concurrent pages per second and persisted in
 1,600-candle batches to make the 28-asset range operationally tractable.
 Interrupted runs scan the requested range and resume only missing intervals;
 they never re-download a complete symbol merely because `--since` is present.
+Funding uses the UTA v3 cursor history too; a 15-row CCXT sample cannot qualify
+as frozen 2022–2026 funding evidence.
