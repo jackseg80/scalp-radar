@@ -498,6 +498,39 @@ GET http://127.0.0.1:8000/health
 GET http://127.0.0.1:8000/api/simulator/trades?limit=20
 ```
 
+### Reconciled paper metrics (local code; no deployment implied)
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/arena/strategy/grid_boltrend" |
+  Select-Object -ExpandProperty performance
+
+uv run python -m pytest tests/test_paper_reporting.py tests/test_arena.py tests/test_api_simulator.py tests/test_database.py tests/test_adaptive_selector.py --tb=short -q
+```
+
+`history_status` must be `reconciled` before interpreting PF/DD. Otherwise
+inspect `history_reason`; missing metrics are null, not zero. Window dates and
+`history_trade_count` describe the persisted trades reconciled to the current
+runner counters. This is a legacy inferred window, not a certified session ID.
+`metrics_basis` explicitly excludes funding and unrealized PnL from closed-trade
+PF/DD; `net_pnl` includes cumulative funding. An all-win sample reports
+`profit_factor_unbounded=true` rather than non-JSON infinity.
+This inspection does not reset paper, download data, optimize or certify.
+
+**Test isolation (2026-09-26, local correction):** `tests/conftest.py` blocks
+repository SQLite access, data/config mutations, external sockets and real WFO
+workers. The worker protocol and callback tests use synthetic dependencies;
+lifespan tests use a temporary working directory. Do not bypass these guards
+to make a test pass: supply temporary data and mock its external transport.
+The incident cleanup archive is in `data/test-incident-20260926`; it is not
+certification evidence. See the dated audit for actual validation results.
+
+**Certification gate (2026-09-26):** the full guarded suite passes 2428 tests.
+Do not restart grid_boltrend WFO from the old INVALID snapshot. First resolve
+missing historical Bitget funding and FET/OP/SUI price-series starts, then validate
+and freeze a new snapshot without changing the pre-registered experiment.
+See `docs/audit/audit-grid-boltrend-readiness-20260926.md` for the exact evidence
+and limits; endpoint checks alone do not validate the full candle history.
+
 ### Voir les conditions de marché
 ```
 GET http://127.0.0.1:8000/api/simulator/conditions

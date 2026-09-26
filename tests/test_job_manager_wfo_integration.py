@@ -1,14 +1,28 @@
-"""Tests d'intégration Bloc C — Worker loop réel avec WFO."""
+"""Real worker subprocess/protocol with a synthetic optimization dependency."""
 
 from __future__ import annotations
 
 import asyncio
 import sqlite3
+import subprocess
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
 from backend.optimization.job_manager import JobManager
+
+
+@pytest.fixture(autouse=True)
+def isolated_worker(monkeypatch):
+    original = subprocess.Popen
+    fixture = Path(__file__).parent / "fixtures" / "protocol_worker.py"
+
+    def launch(command, **kwargs):
+        assert Path(command[1]).name == "wfo_worker.py"
+        return original([command[0], str(fixture), *command[2:]], **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
 
 
 def _create_tables(db_path: str) -> None:
@@ -46,7 +60,7 @@ def temp_db(tmp_path):
 
 @pytest_asyncio.fixture
 async def manager_with_wfo(temp_db):
-    """JobManager avec worker loop démarré (WFO réel)."""
+    """JobManager with a real process and synthetic optimization dependency."""
     mgr = JobManager(db_path=temp_db, ws_broadcast=None)
     await mgr.start()
     yield mgr
@@ -54,12 +68,8 @@ async def manager_with_wfo(temp_db):
 
 
 @pytest.mark.asyncio
-@pytest.mark.slow  # Marquer comme slow pour skip en CI rapide
-async def test_worker_real_wfo_short_window(manager_with_wfo):
-    """Le worker loop exécute un vrai WFO (fenêtre ultra-courte pour test rapide).
-
-    Ce test nécessite des candles en DB. Si pas de candles, skip.
-    """
+async def test_worker_process_protocol(manager_with_wfo):
+    """Actual worker framing, progress and completion; no candles required."""
     # Params override pour réduire drastiquement la grille (test rapide)
     override = {
         "ma_period": [7],         # 1 seule valeur
@@ -69,28 +79,18 @@ async def test_worker_real_wfo_short_window(manager_with_wfo):
         "sl_percent": [20.0],     # 1 seule valeur
     }
 
-    try:
-        job_id = await manager_with_wfo.submit_job(
-            "envelope_dca", "BTC/USDT", params_override=override
-        )
-    except ValueError as exc:
-        if "non optimisable" in str(exc):
-            pytest.skip("Stratégie non disponible")
-        raise
+    job_id = await manager_with_wfo.submit_job(
+        "envelope_dca", "BTC/USDT", params_override=override
+    )
 
-    # Attendre que le worker traite le job (timeout 5 min — un WFO court ~ 2-3 min)
-    for _ in range(300):  # 300 × 1s = 5 min max
-        await asyncio.sleep(1)
+    # Real subprocess startup, but no market data or real optimization.
+    for _ in range(100):
+        await asyncio.sleep(0.1)
         job = await manager_with_wfo.get_job(job_id)
         if job.status in ("completed", "failed", "cancelled"):
             break
 
     job = await manager_with_wfo.get_job(job_id)
-
-    # Vérifier que le job a abouti (completed ou failed si pas de candles)
-    err = job.error_message or ""
-    if job.status == "failed" and ("Pas de candles" in err or "Pas assez de donn" in err):
-        pytest.skip(f"Données insuffisantes en DB pour ce test : {err}")
 
     # Si completed : vérifier les champs
     if job.status == "completed":
@@ -99,8 +99,7 @@ async def test_worker_real_wfo_short_window(manager_with_wfo):
         assert job.duration_seconds > 0
         assert job.started_at is not None
         assert job.completed_at is not None
-        # result_id peut être None si save_report échoue, mais le job est completed
-        # (on ne teste pas la DB optimization_results ici, juste le flow job)
+        assert job.result_id == 12345
 
     else:
         # Si failed pour une autre raison, logger et fail
@@ -127,16 +126,12 @@ async def test_progress_updates_via_callback(temp_db):
         "sl_percent": [20.0],
     }
 
-    try:
-        job_id = await mgr.submit_job(
-            "envelope_dca", "BTC/USDT", params_override=override
-        )
-    except ValueError:
-        pytest.skip("Stratégie non disponible ou pas de candles")
+    job_id = await mgr.submit_job(
+        "envelope_dca", "BTC/USDT", params_override=override
+    )
 
-    # Attendre la complétion (timeout 5 min)
-    for _ in range(300):
-        await asyncio.sleep(1)
+    for _ in range(100):
+        await asyncio.sleep(0.1)
         job = await mgr.get_job(job_id)
         if job.status in ("completed", "failed", "cancelled"):
             break
@@ -145,9 +140,8 @@ async def test_progress_updates_via_callback(temp_db):
 
     job = await mgr.get_job(job_id)
 
-    err = job.error_message or ""
-    if job.status == "failed" and ("Pas de candles" in err or "Pas assez de donn" in err):
-        pytest.skip(f"Données insuffisantes en DB : {err}")
+    assert job.status == "completed", job.error_message
+    assert job.result_id == 12345
 
     # Vérifier que le broadcast a été appelé plusieurs fois (running + progress + completed)
     assert len(broadcasts) >= 3, f"Expected ≥3 broadcasts, got {len(broadcasts)}"

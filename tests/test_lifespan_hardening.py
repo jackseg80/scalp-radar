@@ -14,6 +14,12 @@ import pytest
 from backend.api.server import _safe_stop, lifespan
 
 
+@pytest.fixture(autouse=True)
+def isolated_lifespan_directory(tmp_path, monkeypatch):
+    """Lock files and state files belong to this test, never the running app."""
+    monkeypatch.chdir(tmp_path)
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────
 
 

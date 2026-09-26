@@ -72,6 +72,10 @@ def mock_app():
         "trades": [],
         "performance": {"name": "vwap_rsi", "net_pnl": 200.0},
     }
+    arena.get_reporting_ranking.return_value = [
+        StrategyArena._perf_to_dict(p) for p in arena.get_ranking.return_value
+    ]
+    arena.get_reporting_detail.return_value = arena.get_strategy_detail.return_value
 
     # DB mock avec get_simulation_trades async
     db = MagicMock()

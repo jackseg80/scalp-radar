@@ -4,6 +4,24 @@ This is the authoritative path from historical research to live trading. Grades 
 
 ## Core rules
 
+Paper dashboards are diagnostic evidence, not a substitute for this protocol.
+Since the 2026-09-26 local reporting correction, Arena HTTP PF/DD must use a
+persisted trade window reconciled with runner counters and cumulative funding.
+`history_status=unavailable` means PF/DD are unknown, not zero. A reconciled
+legacy latest-N window does not prove session identity or unchanged parameters.
+PF/DD are closed-trade metrics net of trading costs, excluding funding timing
+and unrealized PnL; realized return includes the runner's cumulative funding.
+See `docs/audit/audit-paper-reporting-20260926.md`. No robot2 deployment is implied.
+
+The 2026-09-26 follow-up resolved the six failures: funding-source propagation
+in the shared WFO dispatcher/cache and an incorrectly configured runner test
+double. The full guarded suite passes **2428 tests**. Keep research data and
+external I/O behind the test guards rather than bypassing them for a test.
+This is technical validation, not historical certification: the local Bitget
+funding archive remains incomplete, three price-series starts need evidence,
+and the grid_boltrend snapshot remains INVALID. Do not launch candidate runs
+before resolving these gates. See `docs/audit/audit-grid-boltrend-readiness-20260926.md`.
+
 - Research may use the existing fast engines; certification must replay the selected candidates through the canonical event-driven engine.
 - A certification is bound to an immutable data snapshot, Git commit, complete config hashes, execution calibration and random seed.
 - Candidate selection uses nested walk-forward. Parameters and the asset universe are selected from inner/IS data only; portfolio results are concatenated from untouched external OOS windows.

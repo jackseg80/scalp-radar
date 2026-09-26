@@ -822,6 +822,7 @@ class WalkForwardOptimizer:
                     extra_data_map=is_extra_data_map,
                     db_path=db_path, exchange=exchange,
                     cancel_event=cancel_event,
+                    funding_exchange=funding_exchange,
                 )
 
                 if exhaustive:
@@ -845,6 +846,7 @@ class WalkForwardOptimizer:
                             extra_data_map=is_extra_data_map,
                             db_path=db_path, exchange=exchange,
                             cancel_event=cancel_event,
+                            funding_exchange=funding_exchange,
                         )
                         all_is_results = coarse_results + fine_results
                     else:
@@ -905,6 +907,7 @@ class WalkForwardOptimizer:
                         extra_data_map=oos_extra_data_map,
                         db_path=db_path, exchange=exchange,
                         cancel_event=cancel_event,
+                        funding_exchange=funding_exchange,
                     )
 
                     # Index les résultats IS et OOS par params_key
@@ -1209,6 +1212,7 @@ class WalkForwardOptimizer:
         db_path: str | None = None,
         exchange: str | None = None,
         cancel_event: threading.Event | None = None,
+        funding_exchange: str | None = None,
     ) -> list[_ISResult]:
         """Lance les backtests avec chaîne de fallback :
 
@@ -1223,6 +1227,7 @@ class WalkForwardOptimizer:
                 results = self._run_fast(
                     grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
                     db_path=db_path, symbol=symbol, exchange=exchange,
+                    funding_exchange=funding_exchange,
                 )
                 # Trier par métrique
                 metric_idx = {"sharpe_ratio": 1, "net_return_pct": 2, "profit_factor": 3}
@@ -1281,6 +1286,7 @@ class WalkForwardOptimizer:
         db_path: str | None = None,
         symbol: str | None = None,
         exchange: str | None = None,
+        funding_exchange: str | None = None,
     ) -> list[_ISResult]:
         """Fast engine : pré-calcul indicateurs + boucle de trades minimale.
 
@@ -1342,7 +1348,8 @@ class WalkForwardOptimizer:
             t0 = time.monotonic()
             cache = build_cache(
                 local_candles, param_grid_values, strategy_name, tf,
-                db_path=cache_db_path, symbol=symbol, exchange=funding_exchange,
+                db_path=cache_db_path, symbol=symbol,
+                exchange=funding_exchange or exchange,
             )
             cache_time = time.monotonic() - t0
             logger.info(

@@ -3,6 +3,69 @@
 import os
 os.environ["PYTHON_JIT"] = "0"
 
+import ipaddress
+from pathlib import Path
+import sys
+from urllib.parse import unquote, urlsplit
+
+_REPO = Path(__file__).resolve().parents[1]
+
+
+def _protected_test_path(value):
+    if not isinstance(value, (str, bytes, os.PathLike)):
+        return False
+    path = Path(os.fsdecode(value)).resolve()
+    return any(path.is_relative_to(_REPO / name) for name in ("data", "config"))
+
+
+def _test_io_guard(event, args):
+    """Test-only guard, active during collection and inside background threads."""
+    if event == "open":
+        path, mode, flags = args
+        writing = (mode and any(c in mode for c in "wax+")) or (
+            flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        )
+        if writing and _protected_test_path(path):
+            raise RuntimeError("Test isolation: repository data/config writes forbidden; use tmp_path")
+    elif event in ("os.remove", "os.rmdir", "os.rename", "os.mkdir"):
+        paths = args[:2] if event == "os.rename" else args[:1]
+        if any(_protected_test_path(path) for path in paths):
+            raise RuntimeError("Test isolation: repository data/config mutation forbidden; use tmp_path")
+    elif event == "sqlite3.connect":
+        raw = os.fsdecode(args[0])
+        if raw == ":memory:" or raw.startswith("file::memory:"):
+            return
+        if raw.startswith("file:"):
+            parts = urlsplit(raw)
+            if "mode=memory" in parts.query:
+                return
+            raw = unquote(parts.path)
+            if os.name == "nt" and raw.startswith("/") and len(raw) > 2 and raw[2] == ":":
+                raw = raw[1:]
+        if Path(raw).resolve().is_relative_to(_REPO / "data"):
+            raise RuntimeError("Test isolation: repository database access forbidden; use tmp_path")
+    elif event in ("socket.connect", "socket.getaddrinfo", "socket.sendto"):
+        address = args[0] if event == "socket.getaddrinfo" else args[-1]
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(host, bytes):
+            host = host.decode()
+        if host in (None, "localhost", "127.0.0.1", "::1"):
+            return  # Includes asyncio's Windows wakeup channel.
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return
+        except ValueError:
+            pass
+        raise RuntimeError("Test isolation: external network forbidden; mock the transport")
+    elif event == "subprocess.Popen":
+        command = args[1]
+        parts = command if isinstance(command, (list, tuple)) else [command]
+        if any("wfo_worker.py" in str(part) for part in parts):
+            raise RuntimeError("Test isolation: real WFO worker forbidden; use the protocol fixture")
+
+
+sys.addaudithook(_test_io_guard)
+
 import numpy as np
 import pytest
 

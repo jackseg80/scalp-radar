@@ -1345,7 +1345,7 @@ class Database:
         query = "SELECT * FROM simulation_trades"
         if wheres:
             query += " WHERE " + " AND ".join(wheres)
-        query += " ORDER BY exit_time DESC LIMIT ?"
+        query += " ORDER BY exit_time DESC, id DESC LIMIT ?"
         params.append(limit)
 
         cursor = await self._conn.execute(query, params)

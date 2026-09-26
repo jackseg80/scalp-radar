@@ -4036,6 +4036,43 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 - **ccxt Bitget** : https://docs.ccxt.com/#/exchanges/bitget
 # Sprint 70b follow-up — grid_boltrend certification preparation (2026-07-28)
 
+## Paper reporting follow-up (2026-09-26, local only)
+
+- Read-only robot2 review confirmed a positive current `grid_boltrend` paper
+  (+120.37 USDT realized after funding; 65 trades), but PF/DD displayed only
+  11 post-restart trades. This is a reporting-window defect, not a new verdict.
+- Shared HTTP reporting now reconciles persisted history, runner counters,
+  in-memory trade identities and funding; missing/mismatched history yields
+  null metrics and an explicit reason. Closed-trade PF/DD exclude funding and
+  unrealized PnL. Legacy window inference is disclosed.
+- No strategy, risk, engine, automatic selector, production config or historical
+  verdict changes; no deployment or candidate certification run. The attempted
+  full test suite unexpectedly launched an unrelated local WFO; it was stopped
+  and its side effects are documented in the audit (not silently cleaned up).
+- Plan: `docs/plans/paper-reporting-reconciliation-20260926.md`.
+  Audit: `docs/audit/audit-paper-reporting-20260926.md`.
+- Authorized follow-up: incident result 2466, three combo rows and two reports
+  archived then removed from active results; previous result 2465 re-selected
+  using the documented latest-run policy. No research history reset.
+- Tests now block repository data/config mutations, external network calls and
+  real WFO workers; protocol/callback tests use synthetic dependencies.
+- Initial validation: changed-scope suite **129 passed**; full suite **2417 passed,
+  6 failed**. Subsequent diagnosis found four failures from missing funding-source
+  propagation and two from a truthy mock attribute, not a runner-order defect.
+- Authorized shared correction now forwards the funding source through coarse,
+  fine and OOS batches, preserving the legacy exchange fallback. Runner behavior
+  is unchanged; its test double now matches the base fixed-level contract.
+- Final validation: **109 targeted tests and 2428 full-suite tests passed**.
+- Read-only readiness check: all 28 price-series pairs reach the frozen cutoff,
+  but endpoints do not prove gap-free coverage. Bitget funding starts only on
+  2026-05-04; FET/OP/SUI Bitget prices start later than their Binance signals.
+  Existing grid_boltrend snapshot remains INVALID; no certification row exists.
+  Research only pending data evidence, not a new historical failure or PAPER_READY.
+- Plan: `docs/plans/shared-certification-regressions-20260926.md`.
+  Audit: `docs/audit/audit-grid-boltrend-readiness-20260926.md`.
+
+## Original preparation record (2026-07-28)
+
 - `grid_atr` and `grid_multi_tf` remain closed `HISTORICAL_FAIL`; no rerun or retrofit.
 - Corrected `grid_boltrend` fast WFO semantics: closed-bar indicators, immutable breakout ladder, T→T+1 intent activation, maker limit fills, 120-minute expiry and protective SL priority.
 - Canonical runner now retains fixed `grid_boltrend` levels and resolves effective per-asset configuration without shared config mutation.

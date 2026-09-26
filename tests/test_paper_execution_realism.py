@@ -47,6 +47,9 @@ def _candle(
 def _runner() -> GridStrategyRunner:
     strategy = MagicMock()
     strategy.name = "grid_multi_tf"
+    # Match BaseGridStrategy's boolean contract; an unspecified MagicMock
+    # would incorrectly select GridBolTrend's immutable-ladder branch.
+    strategy.fixed_entry_levels = False
     strategy.min_candles = {"1h": 50}
     strategy.max_positions = 2
     strategy._config.timeframe = "1h"

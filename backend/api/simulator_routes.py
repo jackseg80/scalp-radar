@@ -100,23 +100,9 @@ async def simulator_performance(request: Request) -> dict:
     if arena is None:
         return {"ranking": []}
 
-    ranking = arena.get_ranking()
-    return {
-        "ranking": [
-            {
-                "name": p.name,
-                "capital": p.capital,
-                "net_pnl": p.net_pnl,
-                "net_return_pct": p.net_return_pct,
-                "total_trades": p.total_trades,
-                "win_rate": p.win_rate,
-                "profit_factor": p.profit_factor,
-                "max_drawdown_pct": p.max_drawdown_pct,
-                "is_active": p.is_active,
-            }
-            for p in ranking
-        ]
-    }
+    return {"ranking": await arena.get_reporting_ranking(
+        getattr(request.app.state, "db", None),
+    )}
 
 
 @router.post("/kill-switch/reset", dependencies=[Depends(verify_executor_key)])

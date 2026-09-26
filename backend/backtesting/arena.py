@@ -6,9 +6,13 @@ du Simulator. Capital isolé par stratégie.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
+import math
+import sqlite3
 
-from backend.backtesting.simulator import LiveStrategyRunner, Simulator
+from backend.backtesting.simulator import GridStrategyRunner, LiveStrategyRunner, Simulator
+from backend.core.database import Database
 from backend.core.position_manager import TradeResult
 
 
@@ -72,6 +76,105 @@ class StrategyArena:
                 }
         return None
 
+    async def get_reporting_ranking(self, db: Database | None) -> list[dict]:
+        """Persisted, reconciled reporting; never used by automatic selection."""
+        ranking = [
+            (await self._reporting_detail(runner, db))["performance"]
+            for runner in self._simulator.runners
+        ]
+        return sorted(ranking, key=lambda p: p["net_return_pct"], reverse=True)
+
+    async def get_reporting_detail(self, name: str, db: Database | None) -> dict | None:
+        for runner in self._simulator.runners:
+            if runner.name == name:
+                return await self._reporting_detail(runner, db)
+        return None
+
+    async def _reporting_detail(
+        self, runner: LiveStrategyRunner | GridStrategyRunner, db: Database | None,
+    ) -> dict:
+        # Freeze before the first await: persistence can lag or a new trade can
+        # arrive during the query. Any mismatch fails closed for this response.
+        stats = replace(runner.get_stats())
+        status = runner.get_status()
+        funding = getattr(runner, "_total_funding_cost", 0.0)
+        memory_keys = Counter(
+            (symbol, t.entry_time.isoformat(), t.exit_time.isoformat(), t.net_pnl)
+            for symbol, t in runner.get_trades()
+        )
+        perf = self._perf_to_dict(self._compute_performance(runner))
+        perf.update(
+            profit_factor=None,
+            profit_factor_unbounded=False,
+            max_drawdown_pct=None,
+            history_status="unavailable",
+            history_reason="database_unavailable",
+            history_trade_count=0,
+            history_first_entry=None,
+            history_first_exit=None,
+            history_last_exit=None,
+            history_window="latest_count_reconciled_not_session_id",
+            metrics_basis="closed_trades_net_of_trading_costs_excluding_funding_and_unrealized",
+            funding_cost=funding,
+        )
+        result = {"status": status, "trades": [], "performance": perf}
+        if db is None:
+            return result
+        try:
+            rows = await db.get_simulation_trades(
+                strategy_name=runner.name, limit=stats.total_trades,
+            ) if stats.total_trades else []
+        except (sqlite3.Error, OSError):
+            perf["history_reason"] = "database_read_failed"
+            return result
+
+        perf["history_trade_count"] = len(rows)
+        if (runner.get_stats() != stats
+                or getattr(runner, "_total_funding_cost", 0.0) != funding):
+            perf["history_reason"] = "runner_changed_during_read"
+            return result
+        if len(rows) != stats.total_trades:
+            perf["history_reason"] = "trade_count_mismatch"
+            return result
+        # Database returns descending (exit_time, id); reverse to preserve ties.
+        rows = list(reversed(rows))
+        if any(row["strategy"] != runner.name for row in rows):
+            perf["history_reason"] = "strategy_mismatch"
+            return result
+        persisted_keys = Counter(
+            (r["symbol"], r["entry_time"], r["exit_time"], r["net_pnl"])
+            for r in rows
+        )
+        if memory_keys - persisted_keys:
+            perf["history_reason"] = "in_memory_trades_mismatch"
+            return result
+        pnls = [row["net_pnl"] for row in rows]
+        if not all(math.isfinite(p) for p in [*pnls, funding, stats.net_pnl]):
+            perf["history_reason"] = "non_finite_pnl"
+            return result
+        if (sum(p > 0 for p in pnls) != stats.wins
+                or sum(p <= 0 for p in pnls) != stats.losses):
+            perf["history_reason"] = "win_loss_mismatch"
+            return result
+        if not math.isclose(
+            math.fsum(pnls) - funding, stats.net_pnl, rel_tol=1e-9, abs_tol=1e-6,
+        ):
+            perf["history_reason"] = "pnl_funding_mismatch"
+            return result
+        pf = self._profit_factor_from_pnls(pnls)
+        perf.update(
+            # JSON cannot encode infinity; explicitly describe an all-win sample.
+            profit_factor=pf if math.isfinite(pf) else None,
+            profit_factor_unbounded=not math.isfinite(pf),
+            max_drawdown_pct=self._drawdown_from_pnls(pnls, stats.initial_capital),
+            history_status="reconciled", history_reason=None,
+            history_first_entry=min((r["entry_time"] for r in rows), default=None),
+            history_first_exit=rows[0]["exit_time"] if rows else None,
+            history_last_exit=rows[-1]["exit_time"] if rows else None,
+        )
+        result["trades"] = rows
+        return result
+
     def _compute_performance(self, runner: LiveStrategyRunner) -> StrategyPerformance:
         """Calcule les métriques de performance d'un runner."""
         stats = runner.get_stats()
@@ -108,8 +211,12 @@ class StrategyArena:
     @staticmethod
     def _calc_profit_factor(trades: list[TradeResult]) -> float:
         """Profit factor = gross_wins / gross_losses. 0.0 si pas de pertes."""
-        gross_wins = sum(t.net_pnl for t in trades if t.net_pnl > 0)
-        gross_losses = abs(sum(t.net_pnl for t in trades if t.net_pnl <= 0))
+        return StrategyArena._profit_factor_from_pnls([t.net_pnl for t in trades])
+
+    @staticmethod
+    def _profit_factor_from_pnls(pnls: list[float]) -> float:
+        gross_wins = sum(p for p in pnls if p > 0)
+        gross_losses = abs(sum(p for p in pnls if p <= 0))
         if gross_losses == 0:
             return 0.0 if gross_wins == 0 else float("inf")
         return gross_wins / gross_losses
@@ -118,16 +225,19 @@ class StrategyArena:
     def _calc_max_drawdown_pct(
         trades: list[TradeResult], initial_capital: float
     ) -> float:
-        """Max drawdown en % du capital initial."""
-        if not trades:
-            return 0.0
+        """Closed-trade drawdown as a percentage of the preceding peak."""
+        return StrategyArena._drawdown_from_pnls(
+            [t.net_pnl for t in trades], initial_capital,
+        )
 
+    @staticmethod
+    def _drawdown_from_pnls(pnls: list[float], initial_capital: float) -> float:
         equity = initial_capital
         peak = equity
         max_dd = 0.0
 
-        for trade in trades:
-            equity += trade.net_pnl
+        for pnl in pnls:
+            equity += pnl
             if equity > peak:
                 peak = equity
             dd = (peak - equity) / peak * 100 if peak > 0 else 0.0
