@@ -45,3 +45,12 @@ Read-only indexed checks establish price endpoints but not full continuity;
 funding history and three price-series starts remain blockers. The old snapshot
 is INVALID and no grid_boltrend certification record exists. Exact evidence and
 next gate: `docs/audit/audit-grid-boltrend-readiness-20260926.md`.
+
+## Bounded source investigation follow-up
+
+On user continuation, inspect official documentation and only small public GET
+samples; do not backfill, alter the frozen experiment or contact providers.
+Completed: nine BTC funding-page probes and six first-candle probes, plus public
+archive catalogue checks. No qualifying full-range funding archive identified.
+Record evidence in `docs/audit/audit-bitget-history-recoverability-20260926.md`.
+Next action requires an archive/support decision from the user, not a code bypass.

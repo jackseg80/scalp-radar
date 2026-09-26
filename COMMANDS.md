@@ -531,6 +531,11 @@ and freeze a new snapshot without changing the pre-registered experiment.
 See `docs/audit/audit-grid-boltrend-readiness-20260926.md` for the exact evidence
 and limits; endpoint checks alone do not validate the full candle history.
 
+**Source check:** `docs/audit/audit-bitget-history-recoverability-20260926.md`
+records bounded public probes. Repeating `fetch_funding --since 2022...` cannot
+recover years outside the observed API window. No bulk retry or certification
+command is currently unblocked; obtain an archive and resolve availability first.
+
 ### Voir les conditions de marché
 ```
 GET http://127.0.0.1:8000/api/simulator/conditions

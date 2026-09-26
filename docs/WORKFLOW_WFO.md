@@ -156,6 +156,13 @@ cannot by itself certify the 2022–2026 calendar. An immutable Bitget funding
 archive covering each selected signal period is mandatory; the snapshot rejects
 a recent-only sample and must not be bypassed with Binance funding.
 
+The 2026-09-26 bounded source review confirms this limit in official v3 docs
+and BTC v2/v3 page probes. FET/OP/SUI sampled API first-candle boundaries match
+the local series; official listing notices do not establish exact tradable UTC
+minutes. Do not bypass coverage validation using these notices. See
+`docs/audit/audit-bitget-history-recoverability-20260926.md`. Obtain a qualified
+archive or explicitly pre-register a separate experiment before new long runs.
+
 `grid_multi_tf` reuses the same universal snapshot, common-calendar WFO,
 IS-only Top-N selection, external-OOS portfolio, shared `LiveRiskManager` and
 parity evidence. Its 4h Supertrend is derived only from complete UTC Binance

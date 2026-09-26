@@ -4070,6 +4070,12 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
   Research only pending data evidence, not a new historical failure or PAPER_READY.
 - Plan: `docs/plans/shared-certification-regressions-20260926.md`.
   Audit: `docs/audit/audit-grid-boltrend-readiness-20260926.md`.
+- Source follow-up: official v3 funding documentation and nine BTC funding-page
+  probes confirm a 90-day public window; six candle probes reproduce the local
+  FET/OP/SUI boundaries. Listing notices do not prove exact first tradable times.
+  No complete qualified archive identified; no backfill or protocol relaxation.
+  Next gate is an archive/support decision, not another WFO launch. Evidence:
+  `docs/audit/audit-bitget-history-recoverability-20260926.md`.
 
 ## Original preparation record (2026-07-28)
 

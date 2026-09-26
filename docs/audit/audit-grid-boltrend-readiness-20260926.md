@@ -74,6 +74,12 @@ not revalidated. There is no grid_boltrend row in `strategy_certifications`.
 
 ## Frozen experiment and next gate
 
+Subsequent bounded source checks are recorded in
+`audit-bitget-history-recoverability-20260926.md`: the official v3 documentation
+and BTC v2/v3 probes confirm a 90-day funding window; sampled first-candle
+boundaries match the local FET/OP/SUI series. Listing announcements are not precise
+enough to authorize new availability rules. No complete archive was qualified.
+
 Unchanged: 28 assets, IS-only Top 8; 2022-01-01 to 2026-07-27 exclusive;
 IS 180d / embargo 7d / OOS 60d / step 60d; 1,296 combinations; 1,646 USDT;
 primary 5x, sensitivities 3x/5x/8x; closed Binance 1h signals, Bitget 1m
