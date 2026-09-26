@@ -6,6 +6,7 @@ import argparse
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from itertools import product
 
 from backend.backtesting.external_oos import (
     build_external_window_plans,
@@ -25,6 +26,22 @@ from backend.core.experiment import (
     wfo_reuse_fingerprint,
 )
 from backend.core.models import ExecutionSpec, UniverseSelectionSpec
+from backend.core.funding_research import (
+    FUNDING_RESEARCH_SCENARIOS, require_central_research_strategy,
+)
+
+
+def _execution_specs_for_study(base_spec: ExecutionSpec, scenario: str) -> list[ExecutionSpec]:
+    research = base_spec.research_funding
+    if research is None:
+        return [base_spec.with_scenario(scenario)]
+    require_central_research_strategy("grid_boltrend", research)
+    if scenario != "nominal" or base_spec.funding_multiplier != 1:
+        raise ValueError("Funding study uses nominal execution and no funding multiplier")
+    return [
+        base_spec.model_copy(update={"research_funding": research.for_scenario(name)})
+        for name in FUNDING_RESEARCH_SCENARIOS
+    ]
 
 
 def _load_external_oos_config(config_dir: str) -> object:
@@ -105,14 +122,19 @@ async def run(args: argparse.Namespace) -> int:
     )
     config = _load_external_oos_config(args.config_dir)
     base_spec = ExecutionSpec.model_validate(manifest["metadata"]["execution_spec"])
-    execution_spec = base_spec.with_scenario(args.execution_scenario)
+    execution_specs = _execution_specs_for_study(base_spec, args.execution_scenario)
+    if base_spec.research_funding is not None:
+        if (not selection or args.strategy != "grid_boltrend" or args.leverage is not None
+                or args.exchange != "binance" or args.kill_switch != 45.0
+                or args.kill_switch_window != 24):
+            raise ValueError("Funding study requires its frozen universe, risk and all leverages")
     if args.all_leverages and not selection:
         raise ValueError("--all-leverages requires a universe-discovery snapshot")
     leverages = (
-        selection.leverage_scenarios if args.all_leverages else
+        selection.leverage_scenarios if args.all_leverages or base_spec.research_funding else
         [args.leverage or (selection.primary_leverage if selection else None)]
     )
-    for leverage in leverages:
+    for leverage, execution_spec in product(leverages, execution_specs):
         result = await run_external_oos(
             config=config,
             strategy_name=args.strategy,
@@ -138,6 +160,10 @@ async def run(args: argparse.Namespace) -> int:
         evaluation_scope = "external_oos"
         if selection and leverage != selection.primary_leverage:
             evaluation_scope = f"universe_sensitivity_{leverage}x"
+        if execution_spec.research_funding is not None:
+            funding_name = execution_spec.research_funding.scenario
+            evaluation_scope = f"funding_research_{funding_name}_{leverage}x"
+            label = f"{label}_funding_{funding_name}_{leverage}x"
         result_id = save_result_sync(
             db_path=args.db,
             result=result,

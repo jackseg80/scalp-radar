@@ -29,6 +29,10 @@ def evaluate_historical_gates(
     metadata = snapshot.get("metadata", {})
     universe_selection = metadata.get("universe_selection") or {}
     execution_spec = _load_json(backtest.get("execution_spec_json"), {})
+    synthetic_funding = bool(
+        execution_spec.get("research_funding")
+        or metadata.get("execution_spec", {}).get("research_funding")
+    )
     adverse_dd = robustness.get("adverse_max_drawdown_pct")
     degraded_return = robustness.get("degraded_cost_return_pct")
     external_return = robustness.get("external_oos_return_pct")
@@ -54,6 +58,8 @@ def evaluate_historical_gates(
     }
 
     gates = [
+        _gate("observed_funding", not synthetic_funding, not synthetic_funding,
+              "no synthetic funding hypotheses"),
         _gate("snapshot_valid", snapshot.get("validation_status"),
               snapshot.get("validation_status") == "VALID", "VALID"),
         _gate("certifiable_result", backtest.get("result_status"),
@@ -218,7 +224,9 @@ def evaluate_historical_gates(
         for gate in gates
         if gate["passed"] is not True and gate["name"] not in performance_gate_names
     ]
-    if performance_failed:
+    if synthetic_funding:
+        status = CertificationStatus.RESEARCH_ONLY
+    elif performance_failed:
         status = CertificationStatus.HISTORICAL_FAIL
     elif missing or capability_blockers:
         status = CertificationStatus.RESEARCH_ONLY

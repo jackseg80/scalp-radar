@@ -33,6 +33,7 @@ from backend.backtesting.extra_data_builder import build_extra_data_map
 from backend.backtesting.metrics import _classify_regime, calculate_metrics
 from backend.core.config import AppConfig, get_config
 from backend.core.database import Database
+from backend.core.funding_research import ResearchFundingSpec
 from backend.core.models import Candle, TimeFrame, UniverseSelectionSpec
 from backend.core.position_manager import TradeResult
 
@@ -549,12 +550,16 @@ class WalkForwardOptimizer:
         leverage_override: int | None = None,
         funding_exchange: str | None = None,
         grid_order_expiry_minutes: int = 120,
+        research_funding: ResearchFundingSpec | None = None,
     ) -> WFOResult:
         """Walk-forward optimization complète.
 
         Args:
             params_override: Sous-grille custom {param_name: [values]} fusionnée dans "default".
         """
+        if research_funding is not None:
+            from backend.core.funding_research import require_central_research_strategy
+            require_central_research_strategy(strategy_name, research_funding)
         opt_config = self._grids.get("optimization", {})
         is_window_days = opt_config.get("is_window_days", is_window_days)
         oos_window_days = opt_config.get("oos_window_days", oos_window_days)
@@ -648,9 +653,15 @@ class WalkForwardOptimizer:
         from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
         all_funding_rates: list[dict] = []
         all_oi_records: list[dict] = []
-        needs_extra = strategy_name in STRATEGIES_NEED_EXTRA_DATA
+        needs_extra = strategy_name in STRATEGIES_NEED_EXTRA_DATA or research_funding is not None
 
-        if needs_extra:
+        if research_funding is not None:
+            all_funding_rates = [
+                {"timestamp": int(c.timestamp.timestamp() * 1000),
+                 "funding_rate": research_funding.rate_pct(c.timestamp)}
+                for c in all_candles_by_tf[main_tf]
+            ]
+        elif needs_extra:
             logger.info("Chargement données extra (funding/OI) depuis {} ...", funding_exchange)
             all_funding_rates = await db.get_funding_rates(symbol, exchange=funding_exchange)
             all_oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange=exchange)
@@ -823,6 +834,7 @@ class WalkForwardOptimizer:
                     db_path=db_path, exchange=exchange,
                     cancel_event=cancel_event,
                     funding_exchange=funding_exchange,
+                    research_funding=research_funding,
                 )
 
                 if exhaustive:
@@ -847,6 +859,7 @@ class WalkForwardOptimizer:
                             db_path=db_path, exchange=exchange,
                             cancel_event=cancel_event,
                             funding_exchange=funding_exchange,
+                            research_funding=research_funding,
                         )
                         all_is_results = coarse_results + fine_results
                     else:
@@ -908,6 +921,7 @@ class WalkForwardOptimizer:
                         db_path=db_path, exchange=exchange,
                         cancel_event=cancel_event,
                         funding_exchange=funding_exchange,
+                        research_funding=research_funding,
                     )
 
                     # Index les résultats IS et OOS par params_key
@@ -1005,6 +1019,8 @@ class WalkForwardOptimizer:
                 ))
 
             except Exception as exc:
+                if research_funding is not None:
+                    raise
                 logger.error(
                     "Fenêtre {}/{} ERREUR: {} — skip",
                     w_idx + 1, len(windows), exc,
@@ -1213,6 +1229,7 @@ class WalkForwardOptimizer:
         exchange: str | None = None,
         cancel_event: threading.Event | None = None,
         funding_exchange: str | None = None,
+        research_funding: ResearchFundingSpec | None = None,
     ) -> list[_ISResult]:
         """Lance les backtests avec chaîne de fallback :
 
@@ -1228,6 +1245,7 @@ class WalkForwardOptimizer:
                     grid, candles_by_tf, strategy_name, bt_config_dict, main_tf,
                     db_path=db_path, symbol=symbol, exchange=exchange,
                     funding_exchange=funding_exchange,
+                    **({"research_funding": research_funding} if research_funding else {}),
                 )
                 # Trier par métrique
                 metric_idx = {"sharpe_ratio": 1, "net_return_pct": 2, "profit_factor": 3}
@@ -1235,6 +1253,8 @@ class WalkForwardOptimizer:
                 results.sort(key=lambda r: r[sort_idx], reverse=True)
                 return results
             except Exception as exc:
+                if research_funding is not None:
+                    raise
                 logger.warning(
                     "Fast engine échoué ({}), fallback pool/séquentiel...",
                     exc,
@@ -1287,6 +1307,7 @@ class WalkForwardOptimizer:
         symbol: str | None = None,
         exchange: str | None = None,
         funding_exchange: str | None = None,
+        research_funding: ResearchFundingSpec | None = None,
     ) -> list[_ISResult]:
         """Fast engine : pré-calcul indicateurs + boucle de trades minimale.
 
@@ -1342,7 +1363,12 @@ class WalkForwardOptimizer:
                         param_grid_values[k].append(v)
 
             # Skip funding pour les timeframes non-1h
-            cache_db_path = db_path if tf == "1h" else None
+            cache_db_path = db_path if tf == "1h" and research_funding is None else None
+            if research_funding is not None:
+                from backend.core.funding_research import require_central_research_strategy
+                require_central_research_strategy(strategy_name, research_funding)
+                if tf != "1h":
+                    raise ValueError("Synthetic funding WFO requires 1h signals")
 
             # Construire le cache pour ce timeframe
             t0 = time.monotonic()
@@ -1351,6 +1377,11 @@ class WalkForwardOptimizer:
                 db_path=cache_db_path, symbol=symbol,
                 exchange=funding_exchange or exchange,
             )
+            if research_funding is not None:
+                cache.funding_rates_1h = np.array([
+                    research_funding.rate_pct(c.timestamp) / 100
+                    for c in local_candles[tf]
+                ], dtype=float)
             cache_time = time.monotonic() - t0
             logger.info(
                 "  Fast cache [{}]: {} bougies, {:.1f}ms",

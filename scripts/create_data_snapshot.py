@@ -13,6 +13,7 @@ from backend.core.experiment import create_snapshot
 from backend.core.execution_calibration import load_execution_calibration
 from backend.core.database import Database
 from backend.core.models import ExecutionSpec, UniverseSelectionSpec
+from backend.core.funding_research import ResearchFundingSpec
 
 
 def _utc_datetime(raw: str) -> datetime:
@@ -102,6 +103,8 @@ async def main(args: argparse.Namespace) -> int:
             partial_fill_probability=args.partial_fill_probability,
             random_seed=args.seed,
         )
+    if getattr(args, "research_funding", None):
+        spec = spec.model_copy(update={"research_funding": ResearchFundingSpec()})
     # Freeze only the actual consumers: closed signal candles on the declared
     # source plus execution candles on the canonical broker.  In particular,
     # do not add an unused Bitget 1h series merely because validation is on.
@@ -182,4 +185,8 @@ if __name__ == "__main__":
         help="YAML directory; an explicit directory ignores the local .env",
     )
     parser.add_argument("--validate", action="store_true")
+    parser.add_argument(
+        "--research-funding", choices=["boltrend_funding_v1"],
+        help="Separate synthetic-funding study; permanently ineligible for certification",
+    )
     raise SystemExit(asyncio.run(main(parser.parse_args())))

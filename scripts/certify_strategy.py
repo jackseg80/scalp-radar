@@ -159,6 +159,8 @@ async def main(args: argparse.Namespace) -> int:
     )
     if snapshot_errors:
         raise ValueError("Snapshot non reproductible: " + "; ".join(snapshot_errors))
+    from backend.core.funding_research import require_observed_funding
+    require_observed_funding(manifest)
     selection_raw = manifest.get("metadata", {}).get("universe_selection")
     selection = UniverseSelectionSpec.model_validate(selection_raw) if selection_raw else None
     if selection and selection.strategy_name != args.strategy:

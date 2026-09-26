@@ -89,3 +89,36 @@ async def test_funding_source_reaches_coarse_fine_and_oos(synthetic_optimizer, m
     assert len(calls) == 3 * len(result.windows)
     assert all(call.kwargs["funding_exchange"] == "bitget" for call in calls)
     assert all(call.kwargs["exchange"] == "binance" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_research_funding_reaches_all_search_stages_and_winner(synthetic_optimizer, monkeypatch):
+    from backend.core.funding_research import ResearchFundingSpec
+    optimizer = synthetic_optimizer
+    optimizer._grids["grid_boltrend"] = {"default": {
+        "bol_window": [5, 7], "bol_std": [2.], "long_ma_window": [10], "num_levels": [2],
+    }}
+    fine = {"bol_window": 6, "bol_std": 2., "long_ma_window": 10, "num_levels": 2}
+    monkeypatch.setattr("backend.optimization.walk_forward._fine_grid_around_top", lambda *a, **k: [fine])
+    winner = MagicMock(return_value=SimpleNamespace(trades=[]))
+    monkeypatch.setattr("backend.backtesting.multi_engine.run_multi_backtest_single", winner)
+    spec = ResearchFundingSpec()
+    result = await optimizer.optimize("grid_boltrend", "BTC/USDT", research_funding=spec)
+    calls = optimizer._parallel_backtest.call_args_list
+    assert len(calls) == 3 * len(result.windows)
+    assert all(call.kwargs["research_funding"] == spec for call in calls)
+    assert winner.call_count == len(result.windows)
+    assert all(extra["funding_rate"] == .0001
+               for call in winner.call_args_list
+               for extra in call.kwargs["extra_data_by_timestamp"].values())
+
+
+@pytest.mark.asyncio
+async def test_research_wfo_rejects_other_strategies_or_sensitivity_optimization(synthetic_optimizer):
+    from backend.core.funding_research import ResearchFundingSpec
+    with pytest.raises(ValueError, match="grid_boltrend central"):
+        await synthetic_optimizer.optimize("grid_atr", "BTC/USDT", research_funding=ResearchFundingSpec())
+    with pytest.raises(ValueError, match="grid_boltrend central"):
+        await synthetic_optimizer.optimize("grid_boltrend", "BTC/USDT",
+                                           research_funding=ResearchFundingSpec(scenario="positive_stress"))
+    synthetic_optimizer._parallel_backtest.assert_not_called()

@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from backend.core.funding_research import ResearchFundingSpec
+
 
 # ─── ENUMS ──────────────────────────────────────────────────────────────────
 
@@ -302,6 +304,7 @@ class ExecutionSpec(BaseModel):
     fee_multiplier: float = Field(default=1.0, gt=0)
     slippage_multiplier: float = Field(default=1.0, ge=0)
     funding_multiplier: float = Field(default=1.0, ge=0)
+    research_funding: ResearchFundingSpec | None = None
     sl_gap_fill_fraction: float = Field(default=0.5, ge=0, le=1)
     calibration_id: Optional[str] = None
     calibration_sample_size: int = Field(default=0, ge=0)

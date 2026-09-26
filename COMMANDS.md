@@ -536,7 +536,87 @@ records bounded public probes. Repeating `fetch_funding --since 2022...` cannot
 recover years outside the observed API window. No bulk retry or certification
 command is currently unblocked; obtain an archive and resolve availability first.
 
-### Voir les conditions de marché
+### grid_boltrend — etude separee de funding synthetique
+
+**Prepare, pas lance. Ne pas executer les etapes longues avant resolution des
+ecarts de couverture des bougies, notamment FET/OP/SUI.** Ce mode ne rend pas
+l'ancien snapshot valide. Il ne permet jamais de certifier ni de deployer.
+Les hypotheses sont figees dans `docs/plans/boltrend-funding-research-20260926.md`.
+
+Preparation dans le checkout de certification existant, seulement s'il est propre.
+Ne jamais nettoyer/stasher le checkout principal pour cette operation. Le chemin
+`data` doit designer la base historique existante : le WFO commun utilise encore
+ce chemin relatif (un simple `DATABASE_URL` ne suffit pas pour tous ses lecteurs).
+
+```powershell
+$worktree = "D:\Python\scalp-radar-certification"
+$sourceData = "D:\Python\scalp-radar\data"
+if (@(git -C $worktree status --porcelain).Count -ne 0) {
+    throw "Checkout modifie : conserver les fichiers et faire verifier avant de continuer."
+}
+git -C $worktree fetch origin
+if ($LASTEXITCODE -ne 0) { throw "Fetch echoue" }
+git -C $worktree checkout --detach origin/codex/backtest-live-certification
+if ($LASTEXITCODE -ne 0) { throw "Checkout echoue" }
+Set-Location $worktree
+$dataLink = Join-Path $worktree "data"
+if (-not (Test-Path -LiteralPath $dataLink)) {
+    New-Item -ItemType Junction -Path $dataLink -Target $sourceData | Out-Null
+}
+$item = Get-Item -LiteralPath $dataLink
+if ($item.LinkType -ne "Junction" -or @($item.Target)[0] -ne $sourceData) {
+    throw "Verifier le chemin data existant; ne rien supprimer ni remplacer."
+}
+$dbPath = Join-Path $dataLink "scalp_radar.db"
+if (-not (Test-Path -LiteralPath $dbPath)) { throw "Base historique absente" }
+$configDir = Join-Path $worktree "config"
+$env:DATABASE_URL = "sqlite:///data/scalp_radar.db"
+$env:SYNC_ENABLED = "false"
+uv run python -m scripts.create_data_snapshot --help
+```
+
+**Apres resolution du blocage prix uniquement** : geler un NOUVEAU snapshot.
+La validation complete des series 1m peut etre longue. Le code exige une calibration
+existante; celle referencee ci-dessous doit toujours etre presente et qualifiante.
+Ne pas enchainer si cette commande echoue, meme pour une etude approximative.
+
+```powershell
+$json = uv run --isolated --python 3.12 --frozen python -m scripts.create_data_snapshot `
+  --strategy grid_boltrend --universe-discovery `
+  --calendar-start "2022-01-01T00:00:00+00:00" `
+  --since "2022-01-01T00:00:00+00:00" --cutoff "2026-07-27T00:00:00+00:00" `
+  --is-window-days 180 --embargo-days 7 --oos-window-days 60 --step-days 60 `
+  --top-n 8 --primary-leverage 5 --leverage-scenarios "3,5,8" --portfolio-capital 1646 `
+  --exchange binance --timeframes 1h --execution-timeframe 1m --seed 0 --max-gap-bars 0 `
+  --calibration-id "cal-1b1bb1cce72e7cd8" --research-funding boltrend_funding_v1 `
+  --config-dir $configDir --db $dbPath --validate
+if ($LASTEXITCODE -ne 0) { throw "Snapshot invalide : arret avant WFO" }
+$snapshot = ($json -join "`n") | ConvertFrom-Json
+if ($snapshot.validation_status -ne "VALID") { throw "Snapshot non valide" }
+$snapshotId = $snapshot.snapshot_id
+Write-Host "Snapshot recherche : $snapshotId"
+
+# Calculs longs a executer par l'utilisateur, uniquement avec le snapshot valide.
+uv run --isolated --python 3.12 --frozen python -m scripts.optimize `
+  --strategy grid_boltrend --all-symbols --snapshot $snapshotId `
+  --exchange binance --config-dir $configDir --resume -v
+if ($LASTEXITCODE -ne 0) { throw "WFO echoue" }
+
+# Verifie les 28 resultats WFO; rejoue les memes selections sous 5 hypotheses x 3 leviers.
+uv run --isolated --python 3.12 --frozen python -m scripts.external_oos_portfolio `
+  --strategy grid_boltrend --snapshot $snapshotId --exchange binance `
+  --execution-scenario nominal --all-leverages --capital 1646 `
+  --config-dir $configDir --db $dbPath
+if ($LASTEXITCODE -ne 0) { throw "Matrice de recherche incomplete" }
+# STOP : aucune commande certify_strategy / promote / deploy pour cette etude.
+```
+
+Ne pas changer code/config/base entre snapshot et runs. Les 15 resultats doivent
+etre lus ensemble, y compris les pertes; un resultat incomplet n'est pas une
+preuve de robustesse. Les hypotheses et leur scenario sont dans `execution_spec_json`;
+les scopes `funding_research_*` ne sont pas des certifications `external_oos`.
+
+### Voir les conditions de marché (API)
 ```
 GET http://127.0.0.1:8000/api/simulator/conditions
 ```

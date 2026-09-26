@@ -315,6 +315,7 @@ async def run_optimization(
             universe_selection.primary_leverage if universe_selection else None
         ),
         funding_exchange=(execution_spec.exchange if execution_spec else None),
+        research_funding=(execution_spec.research_funding if execution_spec else None),
         grid_order_expiry_minutes=(
             execution_spec.grid_order_expiry_minutes if execution_spec else 120
         ),
@@ -413,7 +414,14 @@ async def run_optimization(
     # Charger extra_data (funding/OI) si nécessaire pour la stabilité
     from backend.optimization import STRATEGIES_NEED_EXTRA_DATA
     stability_extra_data = None
-    if strategy_name in STRATEGIES_NEED_EXTRA_DATA and stab_candles:
+    if execution_spec and execution_spec.research_funding and stab_candles:
+        from backend.backtesting.extra_data_builder import build_extra_data_map
+        stability_extra_data = build_extra_data_map(stab_candles, [
+            {"timestamp": int(c.timestamp.timestamp() * 1000),
+             "funding_rate": execution_spec.research_funding.rate_pct(c.timestamp)}
+            for c in stab_candles
+        ], [])
+    elif strategy_name in STRATEGIES_NEED_EXTRA_DATA and stab_candles:
         from backend.backtesting.extra_data_builder import build_extra_data_map
         funding_rates = await db.get_funding_rates(symbol, exchange=main_exchange)
         oi_records = await db.get_open_interest(symbol, timeframe="5m", exchange=main_exchange)

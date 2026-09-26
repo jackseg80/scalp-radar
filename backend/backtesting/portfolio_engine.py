@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
+    from backend.core.funding_research import ResearchFundingSpec
     from backend.regime.btc_regime_signal import RegimeSignal
 
 from loguru import logger
@@ -215,6 +216,22 @@ class HistoricalFundingProvider:
 # ---------------------------------------------------------------------------
 
 
+class ResearchFundingProvider:
+    """Same runner interface, but rates come only from a signed hypothesis."""
+
+    def __init__(self, spec: "ResearchFundingSpec") -> None:
+        self._spec = spec
+        self._timestamp: datetime | None = None
+
+    def set_timestamp(self, timestamp: datetime) -> None:
+        self._timestamp = timestamp
+
+    def get_funding_rate(self, symbol: str) -> float:
+        if self._timestamp is None:
+            raise ValueError("Research funding clock has not been set")
+        return self._spec.rate_pct(self._timestamp)
+
+
 class PortfolioBacktester:
     """Orchestre N GridStrategyRunners avec capital partagé.
 
@@ -251,6 +268,9 @@ class PortfolioBacktester:
         self._leverage_override = leverage  # None = utilise le leverage de strategies.yaml
         self._regime_signal = regime_signal  # Sprint 50b : leverage dynamique
         self._execution_spec = execution_spec or ExecutionSpec()
+        if self._execution_spec.research_funding is not None:
+            if strategy_name != "grid_boltrend" or multi_strategies:
+                raise ValueError("Synthetic funding study is grid_boltrend only")
         self._execution_timeframe_used = "1h"
         self._execution_candles_processed = 0
         self._intrabar_max_gap_bars = 0
@@ -352,16 +372,19 @@ class PortfolioBacktester:
         execution_candles_by_symbol = await self._load_execution_candles(
             db, start, query_end,
         )
-        funding_records = await asyncio.gather(*[
-            db.get_funding_rates(
-                symbol,
-                exchange=self._execution_spec.exchange,
-                start_ts=int(start.timestamp() * 1000),
-                end_ts=int(query_end.timestamp() * 1000),
-            )
-            for symbol in self._assets
-        ])
-        funding_provider = HistoricalFundingProvider(dict(zip(self._assets, funding_records)))
+        if self._execution_spec.research_funding is not None:
+            funding_provider = ResearchFundingProvider(self._execution_spec.research_funding)
+        else:
+            funding_records = await asyncio.gather(*[
+                db.get_funding_rates(
+                    symbol,
+                    exchange=self._execution_spec.exchange,
+                    start_ts=int(start.timestamp() * 1000),
+                    end_ts=int(query_end.timestamp() * 1000),
+                )
+                for symbol in self._assets
+            ])
+            funding_provider = HistoricalFundingProvider(dict(zip(self._assets, funding_records)))
 
         # Sprint 27 : Charger les profils régime WFO avant fermeture DB
         regime_profiles_by_strategy: dict[str, dict[str, dict]] = {}
@@ -1763,6 +1786,9 @@ def format_portfolio_report(result: PortfolioResult) -> str:
     lines.append("")
     lines.append(sep)
     lines.append("  PORTFOLIO BACKTEST REPORT")
+    research = result.execution_spec.get("research_funding")
+    if research:
+        lines.append(f"  RESEARCH_ONLY / SYNTHETIC FUNDING: {research['scenario']}")
     lines.append(sep)
     lines.append("")
 

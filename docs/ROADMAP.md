@@ -4077,6 +4077,22 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
   Next gate is an archive/support decision, not another WFO launch. Evidence:
   `docs/audit/audit-bitget-history-recoverability-20260926.md`.
 
+## Separate synthetic-funding research preparation (2026-09-26)
+
+- User approved a separate approximate funding study, not a bypass of strict
+  historical certification. `boltrend_funding_v1` freezes five signed-rate
+  hypotheses before OOS; central WFO selection is reused across all sensitivities.
+- Shared ExecutionSpec, snapshots, WFO caches, external OOS portfolio and runner
+  settlement/risk paths are reused. No new trading engine or generated market DB
+  rates. Research provenance blocks certification and promotion.
+- Original universe/calendar/capital/leverage policy and all price-data gates
+  remain; FET/OP/SUI availability must still be resolved before long runs.
+- No candidate run or deployment. Plan:
+  `docs/plans/boltrend-funding-research-20260926.md`; audit:
+  `docs/audit/audit-boltrend-funding-research-20260926.md`.
+- Validation: **2452 tests passed** in the complete guarded suite, including
+  24 new research tests; preparation CLI help and `git diff --check` pass.
+
 ## Original preparation record (2026-07-28)
 
 - `grid_atr` and `grid_multi_tf` remain closed `HISTORICAL_FAIL`; no rerun or retrofit.

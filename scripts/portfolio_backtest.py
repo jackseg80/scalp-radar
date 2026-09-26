@@ -248,6 +248,8 @@ async def main(args: argparse.Namespace) -> None:
     execution_spec = base_execution_spec.with_scenario(
         getattr(args, "execution_scenario", "nominal")
     )
+    if execution_spec.research_funding is not None:
+        raise ValueError("Funding research requires scripts.external_oos_portfolio and fixed IS selections")
 
     # Résoudre les valeurs kill switch : CLI override > risk.yaml > fallback
     ks_cfg = getattr(config.risk, "kill_switch", None)

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from backend.core.database import Database
+from backend.core.funding_research import require_central_research_strategy
 from backend.core.models import (
     ExecutionSpec,
     ExperimentManifest,
@@ -89,6 +90,9 @@ def wfo_reuse_fingerprint(manifest: dict[str, Any]) -> str:
             )
         },
     }
+    research = metadata.get("execution_spec", {}).get("research_funding")
+    if research:
+        payload["research_funding"] = research
     return sha256_text(canonical_json(payload))
 
 
@@ -273,6 +277,16 @@ async def create_snapshot(
     """
     cutoff = cutoff.astimezone(timezone.utc)
     execution_spec = execution_spec or ExecutionSpec(random_seed=seed)
+    if execution_spec.research_funding is not None:
+        if universe_selection is None or not require_execution_timeframe:
+            raise ValueError("Funding research requires validated universe snapshot inputs")
+        require_central_research_strategy(
+            universe_selection.strategy_name, execution_spec.research_funding,
+        )
+        if (execution_spec.scenario != "nominal" or execution_spec.funding_multiplier != 1
+                or execution_spec.exchange != "bitget"
+                or execution_spec.execution_timeframe != TimeFrame.M1):
+            raise ValueError("Funding study requires nominal Bitget 1m execution")
     if universe_selection is not None:
         expected_symbols = sorted({symbol for _, symbol, _ in series})
         if universe_selection.universe_symbols != expected_symbols:
@@ -404,6 +418,7 @@ async def create_snapshot(
             }
             if (
                 require_execution_timeframe
+                and execution_spec.research_funding is None
                 and exchange == execution_spec.exchange
                 and symbol in signal_starts
             ):
@@ -677,7 +692,8 @@ async def revalidate_snapshot(
                 errors.append(f"{key}: data hash changed")
             if len(values) != int(expected.get("row_count", -1)):
                 errors.append(f"{key}: row count changed")
-            if kind == "funding" and exchange == execution_spec.exchange:
+            if (kind == "funding" and exchange == execution_spec.exchange
+                    and execution_spec.research_funding is None):
                 signal_starts = [
                     entry.get("first_timestamp")
                     for entry in metadata.get("series", [])

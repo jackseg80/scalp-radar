@@ -32,6 +32,30 @@ before resolving these gates. See `docs/audit/audit-grid-boltrend-readiness-2026
 
 ## Current capability status
 
+### Separate synthetic-funding study (2026-09-26)
+
+The user-approved `boltrend_funding_v1` study is research-only, not a relaxation
+of strict certification. Snapshot preparation uses the explicit
+`--research-funding boltrend_funding_v1` option together with `--validate` and
+universe discovery. It signs all assumptions and exempts only observed funding
+coverage. A VALID research snapshot means reproducible research inputs, not
+certification eligibility. All price-series and provenance checks still apply.
+
+WFO uses only central +0.01% per 8h settlement. External OOS automatically
+replays fixed IS selections under central, +/-0.03% constant and +/-0.10% monthly
+shock scenarios, across all declared leverages, with nominal execution. These
+are hypotheses, not estimated means or guaranteed worst cases. Funding affects
+capital inside existing engines; no post-hoc PnL subtraction or observed-data
+rewrite. Results have separate scopes and permanently remain RESEARCH_ONLY.
+
+Do not run `certify_strategy` for this study. Do not run WFO while the snapshot
+is INVALID or select a preferred rate after inspecting OOS. The independent
+FET/OP/SUI price-availability gate remains open. Plan and limits:
+`docs/plans/boltrend-funding-research-20260926.md` and
+`docs/audit/audit-boltrend-funding-research-20260926.md`.
+
+### Canonical execution
+
 The canonical shared-account replay is available for the nine registered grid strategies. Unsupported mono-position strategies and `trend_follow_daily` fail closed as `RESEARCH_ONLY`; they are never routed through a grid engine.
 
 The canonical grid portfolio now evaluates strategies only on closed 1h
