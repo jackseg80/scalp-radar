@@ -134,6 +134,7 @@ async def main(args: argparse.Namespace) -> int:
         require_execution_timeframe=args.validate,
         execution_spec=spec,
         universe_selection=universe_selection,
+        research_common_availability=getattr(args, "research_common_availability", False),
     )
     print(json.dumps({"snapshot_id": snapshot_id, **manifest}, indent=2, ensure_ascii=False))
     return 0 if manifest.get("validation_status", "VALID") == "VALID" else 1
@@ -185,6 +186,10 @@ if __name__ == "__main__":
         help="YAML directory; an explicit directory ignores the local .env",
     )
     parser.add_argument("--validate", action="store_true")
+    parser.add_argument(
+        "--research-common-availability", action="store_true",
+        help="Freeze common hourly price starts for the synthetic grid_boltrend study only",
+    )
     parser.add_argument(
         "--research-funding", choices=["boltrend_funding_v1"],
         help="Separate synthetic-funding study; permanently ineligible for certification",

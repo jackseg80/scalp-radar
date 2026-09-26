@@ -4093,6 +4093,20 @@ Les stratégies viables (`grid_atr`, `grid_multi_tf`, `grid_boltrend`) partagent
 - Validation: **2452 tests passed** in the complete guarded suite, including
   24 new research tests; preparation CLI help and `git diff --check` pass.
 
+## Research availability amendment (2026-09-26)
+
+- User approved `common_hour_v1` before any OOS. Explicit research-only snapshot
+  opt-in clips consumed series to the next complete common hour; preserves raw DB
+  rows, all 28 assets and the original shared calendar. Observed start metadata
+  is signed and included in WFO reuse identity. Strict certification is unchanged.
+- Existing WFO coverage selection admits late assets only with full 180d IS,
+  7d embargo and full OOS; no separate engine or performance-based date selection.
+- Full data validation remains a user-run prerequisite. No historical run or
+  robot2 intervention. Plan: `docs/plans/boltrend-common-availability-20260926.md`.
+- Validation: **2468 tests passed**, including 16 new availability tests; Ruff F,
+  CLI help and diff checks pass. Audit:
+  `docs/audit/audit-boltrend-common-availability-20260926.md`.
+
 ## Original preparation record (2026-07-28)
 
 - `grid_atr` and `grid_multi_tf` remain closed `HISTORICAL_FAIL`; no rerun or retrofit.

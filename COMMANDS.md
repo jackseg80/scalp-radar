@@ -538,8 +538,9 @@ command is currently unblocked; obtain an archive and resolve availability first
 
 ### grid_boltrend — etude separee de funding synthetique
 
-**Prepare, pas lance. Ne pas executer les etapes longues avant resolution des
-ecarts de couverture des bougies, notamment FET/OP/SUI.** Ce mode ne rend pas
+**Prepare, pas lance. Commencer par la validation du nouveau snapshot; ne lancer
+le WFO que si elle reussit.** La regle approuvee de disponibilite commune traite
+les prefixes FET/OP/SUI, sans tolerer les trous internes. Ce mode ne rend pas
 l'ancien snapshot valide. Il ne permet jamais de certifier ni de deployer.
 Les hypotheses sont figees dans `docs/plans/boltrend-funding-research-20260926.md`.
 
@@ -575,7 +576,7 @@ $env:SYNC_ENABLED = "false"
 uv run python -m scripts.create_data_snapshot --help
 ```
 
-**Apres resolution du blocage prix uniquement** : geler un NOUVEAU snapshot.
+**Premiere execution utilisateur** : geler un NOUVEAU snapshot.
 La validation complete des series 1m peut etre longue. Le code exige une calibration
 existante; celle referencee ci-dessous doit toujours etre presente et qualifiante.
 Ne pas enchainer si cette commande echoue, meme pour une etude approximative.
@@ -589,13 +590,21 @@ $json = uv run --isolated --python 3.12 --frozen python -m scripts.create_data_s
   --top-n 8 --primary-leverage 5 --leverage-scenarios "3,5,8" --portfolio-capital 1646 `
   --exchange binance --timeframes 1h --execution-timeframe 1m --seed 0 --max-gap-bars 0 `
   --calibration-id "cal-1b1bb1cce72e7cd8" --research-funding boltrend_funding_v1 `
+  --research-common-availability `
   --config-dir $configDir --db $dbPath --validate
 if ($LASTEXITCODE -ne 0) { throw "Snapshot invalide : arret avant WFO" }
 $snapshot = ($json -join "`n") | ConvertFrom-Json
 if ($snapshot.validation_status -ne "VALID") { throw "Snapshot non valide" }
 $snapshotId = $snapshot.snapshot_id
 Write-Host "Snapshot recherche : $snapshotId"
+```
 
+Arreter ici pour examiner le statut et les bornes dans
+`metadata.research_availability`. La couverture complete n'a pas ete verifiee
+par l'agent. Les etapes suivantes sont separees volontairement : ne pas les
+lancer avec un snapshot INVALID. Garder la meme session PowerShell.
+
+```powershell
 # Calculs longs a executer par l'utilisateur, uniquement avec le snapshot valide.
 uv run --isolated --python 3.12 --frozen python -m scripts.optimize `
   --strategy grid_boltrend --all-symbols --snapshot $snapshotId `

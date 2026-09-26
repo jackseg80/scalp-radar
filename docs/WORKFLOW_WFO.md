@@ -50,7 +50,14 @@ rewrite. Results have separate scopes and permanently remain RESEARCH_ONLY.
 
 Do not run `certify_strategy` for this study. Do not run WFO while the snapshot
 is INVALID or select a preferred rate after inspecting OOS. The independent
-FET/OP/SUI price-availability gate remains open. Plan and limits:
+FET/OP/SUI prefix mismatch now has an approved research-only rule, enabled by
+`--research-common-availability`: freeze both observed starts, round their maximum
+up to a full UTC hour, and hash/consume both series from that boundary. Keep all
+assets and the global calendar; the existing WFO filter requires complete
+IS/embargo/OOS coverage. Internal gaps and incomplete tails still fail; do not
+interpret the observed boundary as a confirmed listing date. A new fully validated
+snapshot is still required before WFO. Amendment:
+`docs/plans/boltrend-common-availability-20260926.md`. Original plan and limits:
 `docs/plans/boltrend-funding-research-20260926.md` and
 `docs/audit/audit-boltrend-funding-research-20260926.md`.
 

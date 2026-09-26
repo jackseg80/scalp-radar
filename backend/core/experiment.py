@@ -93,6 +93,8 @@ def wfo_reuse_fingerprint(manifest: dict[str, Any]) -> str:
     research = metadata.get("execution_spec", {}).get("research_funding")
     if research:
         payload["research_funding"] = research
+    if metadata.get("research_availability"):
+        payload["research_availability"] = metadata["research_availability"]
     return sha256_text(canonical_json(payload))
 
 
@@ -256,6 +258,13 @@ def funding_coverage_errors(
     return errors
 
 
+def _common_hour_start(observed: dict[str, str]) -> datetime:
+    """Availability proxy only, never an inferred exchange listing date."""
+    latest = max(_parse_timestamp(value) for value in observed.values())
+    hour = latest.replace(minute=0, second=0, microsecond=0)
+    return hour if latest == hour else hour + timedelta(hours=1)
+
+
 async def create_snapshot(
     *,
     db_path: str,
@@ -269,6 +278,7 @@ async def create_snapshot(
     execution_spec: ExecutionSpec | None = None,
     start: datetime | None = None,
     universe_selection: UniverseSelectionSpec | None = None,
+    research_common_availability: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Create or reuse an immutable snapshot manifest.
 
@@ -277,6 +287,11 @@ async def create_snapshot(
     """
     cutoff = cutoff.astimezone(timezone.utc)
     execution_spec = execution_spec or ExecutionSpec(random_seed=seed)
+    if research_common_availability and (
+        execution_spec.research_funding is None or start is None
+        or max_gap_bars != 0
+    ):
+        raise ValueError("Common availability requires synthetic research, explicit start and zero gaps")
     if execution_spec.research_funding is not None:
         if universe_selection is None or not require_execution_timeframe:
             raise ValueError("Funding research requires validated universe snapshot inputs")
@@ -302,8 +317,32 @@ async def create_snapshot(
     assert db._conn is not None
     validations: list[SeriesValidation] = []
     errors: list[str] = []
+    availability: dict[str, Any] | None = None
 
     try:
+        if research_common_availability:
+            availability = {"policy": "common_hour_v1", "assets": {}}
+            for symbol in sorted({symbol for _, symbol, _ in series}):
+                sources = {(ex, tf) for ex, sym, tf in series if sym == symbol}
+                if sources != {("binance", "1h"), ("bitget", "1m")}:
+                    raise ValueError("Common availability requires Binance 1h and Bitget 1m only")
+                observed = {}
+                for exchange, timeframe in sorted(sources):
+                    last = cutoff - timedelta(milliseconds=TimeFrame.from_string(timeframe).to_milliseconds())
+                    row = await (await db._conn.execute(
+                        "SELECT MIN(timestamp) AS first FROM candles WHERE exchange=? "
+                        "AND symbol=? AND timeframe=? AND timestamp>=? AND timestamp<=?",
+                        (exchange, symbol, timeframe, start.astimezone(timezone.utc).isoformat(), last.isoformat()),
+                    )).fetchone()
+                    if row["first"] is not None:
+                        observed[f"{exchange}:{symbol}:{timeframe}"] = row["first"]
+                if len(observed) != 2:
+                    errors.append(f"{symbol}: missing common availability source")
+                    continue
+                availability["assets"][symbol] = {
+                    "observed_starts": observed,
+                    "available_from": _common_hour_start(observed).isoformat(),
+                }
         for exchange, symbol, timeframe in sorted(set(series)):
             tf = TimeFrame.from_string(timeframe)
             latest_open = cutoff - timedelta(milliseconds=tf.to_milliseconds())
@@ -312,9 +351,12 @@ async def create_snapshot(
                 "WHERE exchange=? AND symbol=? AND timeframe=? AND timestamp<=?"
             )
             params: list[Any] = [exchange, symbol, timeframe, latest_open.isoformat()]
-            if start is not None:
+            series_start = start
+            if availability and symbol in availability["assets"]:
+                series_start = _parse_timestamp(availability["assets"][symbol]["available_from"])
+            if series_start is not None:
                 query += " AND timestamp>=?"
-                params.append(start.astimezone(timezone.utc).isoformat())
+                params.append(series_start.astimezone(timezone.utc).isoformat())
             query += " ORDER BY timestamp ASC"
             rows = await (await db._conn.execute(query, params)).fetchall()
             validation = validate_candle_rows(
@@ -328,6 +370,8 @@ async def create_snapshot(
                     f"{validation.key}: coverage ends at {validation.last_timestamp}, "
                     f"expected closed candle at {latest_open.isoformat()}"
                 )
+            if availability and symbol in availability["assets"] and validation.first_timestamp != series_start.isoformat():
+                errors.append(f"{validation.key}: missing common boundary candle")
             if validation.divergent_duplicate_count:
                 errors.append(f"{validation.key}: divergent duplicates")
             if validation.invalid_ohlc_count:
@@ -483,6 +527,9 @@ async def create_snapshot(
             ),
         }
         content_hash = sha256_text(canonical_json(content))
+        if availability is not None:
+            content["research_availability"] = availability
+            content_hash = sha256_text(canonical_json(content))
         snapshot_id = f"snapshot-{content_hash[:16]}"
         manifest_model = ExperimentManifest(
             snapshot_id=snapshot_id,
@@ -509,6 +556,8 @@ async def create_snapshot(
             },
         )
         manifest = manifest_model.model_dump(mode="json")
+        if availability is not None:
+            manifest["metadata"]["research_availability"] = availability
         manifest_json = canonical_json(manifest)
         manifest_hash = sha256_text(manifest_json)
         status = "VALID" if not errors else "INVALID"
@@ -606,6 +655,21 @@ async def revalidate_snapshot(
         execution_spec = ExecutionSpec.model_validate(
             metadata.get("execution_spec", {}),
         )
+        availability = metadata.get("research_availability")
+        if availability is not None:
+            if (execution_spec.research_funding is None
+                    or availability.get("policy") != "common_hour_v1"
+                    or metadata.get("max_gap_bars") != 0):
+                errors.append("invalid research availability policy")
+            expected_symbols = {s["key"].split(":", 2)[1] for s in metadata.get("series", [])}
+            if set(availability.get("assets", {})) != expected_symbols:
+                errors.append("incomplete research availability assets")
+            for symbol, entry in availability.get("assets", {}).items():
+                observed = entry.get("observed_starts", {})
+                if set(observed) != {f"binance:{symbol}:1h", f"bitget:{symbol}:1m"}:
+                    errors.append(f"{symbol}: invalid availability sources")
+                elif entry.get("available_from") != _common_hour_start(observed).isoformat():
+                    errors.append(f"{symbol}: invalid common boundary")
         for expected in metadata.get("series", []):
             try:
                 exchange, symbol, timeframe = expected["key"].split(":", 2)
@@ -628,6 +692,9 @@ async def revalidate_snapshot(
             actual = validate_candle_rows(
                 rows, exchange=exchange, symbol=symbol, timeframe=timeframe,
             )
+            if availability and symbol in availability.get("assets", {}):
+                if actual.first_timestamp != availability["assets"][symbol]["available_from"]:
+                    errors.append(f"{expected['key']}: common boundary changed")
             if actual.series_hash != expected.get("series_hash"):
                 errors.append(f"{expected['key']}: series hash changed")
             if actual.row_count != int(expected.get("row_count", -1)):
